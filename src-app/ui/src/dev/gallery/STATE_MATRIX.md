@@ -7,8 +7,8 @@
 
 ## Summary
 
-- **335** surfaces carry at least one renderable-state signal.
-- **2045** signals total: 1599 branch, 136 empty, 117 error, 94 loading, 96 overlay, 3 panel.
+- **336** surfaces carry at least one renderable-state signal.
+- **2053** signals total: 1607 branch, 136 empty, 117 error, 94 loading, 96 overlay, 3 panel.
 - **3** right-panel renderers registered (each a right-panel-open state).
 - **35** slot registrations (sidebar / settings / chat mount points).
 
@@ -393,11 +393,11 @@ Required states: `empty`
 |---|---|---|
 | branch | `isStreaming \|\| wasStreamingRef.current \|\| isActiveMatch` | 60 |
 | empty | `contents.length === 0 && !showEmptyCompletionNotice` | 88 |
-| branch | `attachmentBlocks.length > 0` | 178 |
-| branch | `bubbleBlocks.length > 0` | 207 |
-| branch | `offerCollapse` | 233 |
-| branch | `showEmptyCompletionNotice` | 253 |
-| branch | `isUser` | 272 |
+| branch | `attachmentBlocks.length > 0` | 189 |
+| branch | `bubbleBlocks.length > 0` | 218 |
+| branch | `offerCollapse` | 244 |
+| branch | `showEmptyCompletionNotice` | 264 |
+| branch | `renderAsUser` | 283 |
 
 ### `modules/chat/components/CollapsibleBlock`
 
@@ -496,10 +496,10 @@ Required states: _(branch-only — proven via dynamic coverage)_
 | kind | condition | line |
 |---|---|---|
 | branch | `!msg` | 26 |
-| branch | `!text` | 46 |
-| branch | `isRegenerating \|\| isBusy` | 73 |
-| branch | `isUser` | 102 |
-| branch | `isAssistant` | 115 |
+| branch | `!text` | 55 |
+| branch | `isRegenerating \|\| isBusy` | 82 |
+| branch | `isUser && !isObservation` | 111 |
+| branch | `isAssistant` | 124 |
 
 ### `modules/chat/components/MessageList`
 
@@ -817,6 +817,14 @@ Required states: _(branch-only — proven via dynamic coverage)_
 |---|---|---|
 | branch | `!messageId` | 46 |
 
+### `modules/chat/extensions/text/components/ObservationContent`
+
+Required states: _(branch-only — proven via dynamic coverage)_
+
+| kind | condition | line |
+|---|---|---|
+| branch | `!text` | 25 |
+
 ### `modules/chat/extensions/text/components/TextContent`
 
 Required states: _(branch-only — proven via dynamic coverage)_
@@ -908,36 +916,36 @@ Required states: `delayed`, `empty`, `error`
 | branch | `Math.abs(dy) < 6` | 494 |
 | branch | `!chat.$.conversation` | 514 |
 | branch | `pane && pane.paneId !== SplitViewStore.$.focusedPaneId` | 518 |
-| branch | `!conversationId` | 560 |
-| branch | `didSeedApprovalsRef.current` | 616 |
-| branch | `conversation?.id !== conversationId` | 617 |
-| branch | `!hasNewApproval` | 652 |
-| branch | `pendingAnchorRef.current \|\| hasMoreAfter \|\| conversation?.id !== conversationId \|\| initialScrollConvIdRef.current !== conversationId` | 656 |
-| branch | `!sentinel` | 684 |
-| branch | `!entries[0]?.isIntersecting` | 688 |
-| branch | `!chat.$.hasMoreBefore \|\| chat.$.loadingOlder` | 691 |
-| branch | `!sentinel` | 726 |
-| branch | `!entries[0]?.isIntersecting` | 730 |
-| branch | `!chat.$.hasMoreAfter \|\| chat.$.isStreaming` | 731 |
-| loading | `!pending` | 746 |
-| loading | `!currentFirst \|\| currentFirst === pending.prevFirstId` | 749 |
-| branch | `!conversation?.id` | 758 |
-| branch | `!m` | 762 |
-| branch | `!found \|\| chat.$.conversation?.id !== conversation.id` | 765 |
-| loading | `(loading \|\| loadPending) && !conversation` | 801 |
-| branch | `pane && !conversationId && !conversation` | 811 |
-| loading | `!loading && !conversation` | 818 |
-| error | `error` | 821 |
-| branch | `!isPopoutWindow` | 871 |
-| branch | `md` | 872 |
-| branch | `splitViewPanes.length < SPLIT_LIMITS.MAX_PANES` | 885 |
-| branch | `pane && !useMobileShell` | 922 |
-| branch | `!md` | 945 |
-| branch | `!md` | 970 |
-| error | `error` | 996 |
-| branch | `!md && dropZone` | 1024 |
-| branch | `dropZone === z` | 1053 |
-| branch | `nativeScroll && !composerHidden` | 1149 |
+| branch | `!conversationId` | 567 |
+| branch | `didSeedApprovalsRef.current` | 623 |
+| branch | `conversation?.id !== conversationId` | 624 |
+| branch | `!hasNewApproval` | 659 |
+| branch | `pendingAnchorRef.current \|\| hasMoreAfter \|\| conversation?.id !== conversationId \|\| initialScrollConvIdRef.current !== conversationId` | 663 |
+| branch | `!sentinel` | 691 |
+| branch | `!entries[0]?.isIntersecting` | 695 |
+| branch | `!chat.$.hasMoreBefore \|\| chat.$.loadingOlder` | 698 |
+| branch | `!sentinel` | 733 |
+| branch | `!entries[0]?.isIntersecting` | 737 |
+| branch | `!chat.$.hasMoreAfter \|\| chat.$.isStreaming` | 738 |
+| loading | `!pending` | 753 |
+| loading | `!currentFirst \|\| currentFirst === pending.prevFirstId` | 756 |
+| branch | `!conversation?.id` | 765 |
+| branch | `!m` | 769 |
+| branch | `!found \|\| chat.$.conversation?.id !== conversation.id` | 772 |
+| loading | `(loading \|\| loadPending) && !conversation` | 808 |
+| branch | `pane && !conversationId && !conversation` | 818 |
+| loading | `!loading && !conversation` | 825 |
+| error | `error` | 828 |
+| branch | `!isPopoutWindow` | 878 |
+| branch | `md` | 879 |
+| branch | `splitViewPanes.length < SPLIT_LIMITS.MAX_PANES` | 892 |
+| branch | `pane && !useMobileShell` | 929 |
+| branch | `!md` | 952 |
+| branch | `!md` | 977 |
+| error | `error` | 1003 |
+| branch | `!md && dropZone` | 1031 |
+| branch | `dropZone === z` | 1060 |
+| branch | `nativeScroll && !composerHidden` | 1156 |
 
 ### `modules/chat/widgets/RecentConversationsWidget`
 
@@ -1756,14 +1764,14 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `currentTabSlot` | 159 |
-| branch | `hubVersion` | 167 |
-| branch | `useMobileLayout` | 212 |
-| branch | `canRefresh` | 214 |
-| branch | `!useMobileLayout` | 251 |
-| branch | `canRefresh` | 260 |
-| branch | `urlSegmentIsForbidden` | 280 |
-| branch | `currentTabSlot` | 307 |
+| branch | `currentTabSlot` | 192 |
+| branch | `hubVersion` | 200 |
+| branch | `useMobileLayout` | 245 |
+| branch | `canRefresh` | 247 |
+| branch | `!useMobileLayout` | 284 |
+| branch | `canRefresh` | 293 |
+| branch | `urlSegmentIsForbidden` | 313 |
+| branch | `currentTabSlot` | 340 |
 
 ### `modules/hub/modules/assistants/components/AssistantDetailsDrawer`
 
@@ -3334,25 +3342,31 @@ Required states: `delayed`, `open`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!projectId` | 169 |
-| overlay | `<Confirm open>` | 280 |
-| branch | `cached !== undefined && (cached === null \|\| cached.name)` | 336 |
-| branch | `cancelled` | 338 |
-| branch | `event.data.conversationId !== conversationId` | 356 |
-| branch | `event.data.conversationId !== conversationId` | 370 |
-| branch | `!canUseProjects` | 384 |
-| loading | `state.kind === 'loading'` | 386 |
-| branch | `state.kind === 'in_project'` | 390 |
-| overlay | `<AddToProjectModal open>` | 427 |
-| branch | `loaded` | 473 |
-| branch | `cancelled` | 475 |
-| branch | `event.data.conversationId !== conversation.id` | 492 |
-| branch | `event.data.conversationId !== conversation.id` | 502 |
-| branch | `!project` | 523 |
-| branch | `!ok` | 530 |
-| branch | `project` | 542 |
-| branch | `loaded` | 559 |
-| overlay | `<AddToProjectModal open>` | 572 |
+| branch | `!conversation?.id` | 162 |
+| branch | `!conversation?.id` | 169 |
+| branch | `!conversation?.id` | 172 |
+| branch | `getCached(conversation.id) !== undefined` | 173 |
+| branch | `cancelled` | 175 |
+| branch | `!conversation?.id \|\| !project?.name` | 183 |
+| branch | `!projectId` | 224 |
+| overlay | `<Confirm open>` | 346 |
+| branch | `cached !== undefined && (cached === null \|\| cached.name)` | 402 |
+| branch | `cancelled` | 404 |
+| branch | `event.data.conversationId !== conversationId` | 422 |
+| branch | `event.data.conversationId !== conversationId` | 436 |
+| branch | `!canUseProjects` | 450 |
+| loading | `state.kind === 'loading'` | 452 |
+| branch | `state.kind === 'in_project'` | 456 |
+| overlay | `<AddToProjectModal open>` | 493 |
+| branch | `loaded` | 539 |
+| branch | `cancelled` | 541 |
+| branch | `event.data.conversationId !== conversation.id` | 558 |
+| branch | `event.data.conversationId !== conversation.id` | 568 |
+| branch | `!project` | 589 |
+| branch | `!ok` | 596 |
+| branch | `project` | 608 |
+| branch | `loaded` | 625 |
+| overlay | `<AddToProjectModal open>` | 638 |
 
 ### `modules/projects/components/AddToProjectModal`
 
@@ -3461,12 +3475,13 @@ Required states: `delayed`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!allowed` | 34 |
-| loading | `!pending` | 128 |
-| loading | `pending && !timedOut` | 136 |
-| branch | `!layoutDef` | 169 |
-| branch | `guards.length > 0` | 240 |
-| branch | `protectedRoutes.length > 0` | 255 |
+| branch | `!allowed` | 51 |
+| loading | `!pending` | 137 |
+| loading | `pending && !timedOut` | 145 |
+| branch | `forbidden` | 146 |
+| branch | `!layoutDef` | 179 |
+| branch | `guards.length > 0` | 250 |
+| branch | `protectedRoutes.length > 0` | 265 |
 
 ### `modules/scheduler/components/ScheduleBuilder`
 
