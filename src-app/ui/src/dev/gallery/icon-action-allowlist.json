@@ -11,7 +11,7 @@
       "testid": "desktop-layout-drawer-close",
       "file": "Drawer.desktop",
       "action": "close",
-      "reason": "The desktop Drawer's close control uses a directional back-chevron (ChevronLeft), preserving the prior react-icons IoIosArrowBack glyph (visual-parity mandate) and matching the web @ziee/shell Drawer close affordance. Whether it should standardize to X is a pre-existing design question predating this migration — see HUMAN_FEEDBACK FB-1."
+      "reason": "The desktop Drawer's close control uses a directional back-chevron (ChevronLeft), preserving the prior react-icons IoIosArrowBack glyph (visual-parity mandate) and matching the web @ziee/shell Drawer close affordance. Whether it should standardize to X is a pre-existing design question predating this migration (both drawers used the back-chevron before); left as-is for visual parity, surfaced to the human for review."
     }
   ]
 }
