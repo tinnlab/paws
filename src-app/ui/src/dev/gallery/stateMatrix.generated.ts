@@ -559,10 +559,10 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     requiredStates: ["empty"],
     signals: [
       { kind: "branch", condition: "!state", line: 140 },
-      { kind: "branch", condition: "this.initialized", line: 422 },
-      { kind: "empty", condition: "extensions.length === 0", line: 600 },
-      { kind: "empty", condition: "extensions.length === 0", line: 633 },
-      { kind: "empty", condition: "!registered || registered.length === 0", line: 923 },
+      { kind: "branch", condition: "this.initialized", line: 431 },
+      { kind: "empty", condition: "extensions.length === 0", line: 609 },
+      { kind: "empty", condition: "extensions.length === 0", line: 642 },
+      { kind: "empty", condition: "!registered || registered.length === 0", line: 932 },
     ],
   },
   "modules/chat/core/extensions/utils": {

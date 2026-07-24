@@ -649,10 +649,10 @@ Required states: `empty`
 | kind | condition | line |
 |---|---|---|
 | branch | `!state` | 140 |
-| branch | `this.initialized` | 422 |
-| empty | `extensions.length === 0` | 600 |
-| empty | `extensions.length === 0` | 633 |
-| empty | `!registered \|\| registered.length === 0` | 923 |
+| branch | `this.initialized` | 431 |
+| empty | `extensions.length === 0` | 609 |
+| empty | `extensions.length === 0` | 642 |
+| empty | `!registered \|\| registered.length === 0` | 932 |
 
 ### `modules/chat/core/extensions/utils`
 
