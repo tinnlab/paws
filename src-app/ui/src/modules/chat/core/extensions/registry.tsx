@@ -109,6 +109,39 @@ export class ChatExtensionRegistry {
   > = new Map()
 
   /**
+   * Synchronous accessor for the PRIMARY chat store's mutable state object,
+   * pushed here by the chat store module at load (`setPrimaryChatStateAccessor`)
+   * — an inversion so `register()` can seed the primary pane's extension store
+   * SYNCHRONOUSLY without a circular static import of the chat store. When the
+   * text extension registers (inside the `chatExtensionsReady` chain the composer
+   * gates on), its `TextStore` must be present on the primary store the INSTANT
+   * `chatExtensionsReady` resolves — a deferred async seed would land a tick
+   * later, after the readiness gate has already let the composer read
+   * `Chat.TextStore` (→ the "TextStore undefined" crash).
+   */
+  private primaryChatStateAccessor:
+    | (() => Record<string, unknown>)
+    | null = null
+
+  /** Register the primary chat store's state accessor (see field doc). Called
+   *  once by the chat store module at load. */
+  setPrimaryChatStateAccessor(accessor: () => Record<string, unknown>): void {
+    this.primaryChatStateAccessor = accessor
+    // Seed any extensions already registered before the store module loaded, so
+    // an out-of-order load (store after some extensions) still ends up seeded.
+    this.seedPrimaryStore()
+  }
+
+  /** Idempotently inject every registered extension store into the primary chat
+   *  store, if the accessor is available. No-op until the store module registers
+   *  its accessor. */
+  private seedPrimaryStore(): void {
+    const state = this.primaryChatStateAccessor?.()
+    if (!state) return
+    this.injectExtensionStores(state)
+  }
+
+  /**
    * Register a new extension
    * Extensions are automatically sorted by priority
    * Supports re-registration for HMR (Hot Module Replacement)
@@ -132,23 +165,42 @@ export class ChatExtensionRegistry {
     // (split panes seed their OWN via `injectExtensionStores` in each store's
     // init — see that method). Idempotent so it can't race/overwrite the
     // init-time injection: whichever runs first wins, the other skips.
+    //
+    // SYNCHRONOUS via the store-registered accessor (`setPrimaryChatStateAccessor`).
+    // The composer (`ChatInput`) gates on `chatExtensionsReady`, which resolves
+    // once every extension's `register()` has returned — so the seed MUST happen
+    // synchronously inside `register()`, not on a later microtask, or the gate
+    // opens before `Chat.TextStore` exists (→ "TextStore undefined"). The async
+    // dynamic import is kept ONLY as a fallback for the (unexpected) case where an
+    // extension registers before the chat store module has pushed its accessor.
     if (extension.store) {
-      // Lazy import useChatStore to avoid circular dependency
-      // Import happens at runtime when register() is called, not at module load time
-      import('../stores/chat').then(({ useChatStore }) => {
-        // Inject store at root level of Chat store for reactive access via ChatStore.{storeName}
-        // Direct mutation is safe now that Immer middleware has been removed
-        const stateObject = useChatStore.getState() as unknown as Record<
-          string,
-          unknown
-        >
-        if (!stateObject[extension.store!.name]) {
-          stateObject[extension.store!.name] = extension.store!.createStore()
-          console.log(
-            `[ChatExtensions] Injected store "${extension.store!.name}" for extension: ${extension.name}`,
-          )
+      const state = this.primaryChatStateAccessor?.()
+      if (state) {
+        if (!state[extension.store.name]) {
+          state[extension.store.name] = extension.store.createStore()
         }
-      })
+      } else {
+        // Accessor not yet available — defer via a lazy import (avoids a circular
+        // static import of the chat store). Idempotent with the accessor seed.
+        // This path is NOT expected: every extension.tsx statically imports the
+        // chat store, so the store module (which pushes the accessor at load) is
+        // evaluated before any register() runs. If it ever fires, the seed is
+        // deferred a microtask and can miss the `chatExtensionsReady` gate the
+        // composer waits on — re-exposing the "TextStore undefined" crash — so
+        // WARN loudly rather than fail silently.
+        console.warn(
+          `[ChatExtensions] primary chat-store accessor not registered when seeding "${extension.store.name}"; falling back to a deferred async seed (composer may briefly miss it). This indicates a module-load-order regression.`,
+        )
+        import('../stores/chat').then(({ useChatStore }) => {
+          const stateObject = useChatStore.getState() as unknown as Record<
+            string,
+            unknown
+          >
+          if (!stateObject[extension.store!.name]) {
+            stateObject[extension.store!.name] = extension.store!.createStore()
+          }
+        })
+      }
     }
 
     // Register content type components in content type registry
