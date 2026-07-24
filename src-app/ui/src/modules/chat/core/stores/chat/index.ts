@@ -736,3 +736,13 @@ export const Chat = defineStore<ChatInitialState, Actions>('Chat', chatStoreConf
 export const ChatPaneStore = defineLocalStore<ChatInitialState, Actions>(chatStoreConfig)
 
 export const useChatStore = Chat.store
+
+// Push the primary store's state accessor into the extension registry so a chat
+// extension's `register()` can seed its store (e.g. the composer `TextStore`)
+// onto the primary pane SYNCHRONOUSLY — the composer gates on
+// `chatExtensionsReady`, which resolves the instant every `register()` returns,
+// so a deferred async seed would leave `Chat.TextStore` undefined at first
+// composer render. IoC (store → registry) avoids a circular static import.
+chatExtensionRegistry.setPrimaryChatStateAccessor(
+  () => useChatStore.getState() as unknown as Record<string, unknown>,
+)

@@ -71,11 +71,11 @@ Required states: `empty`, `open`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!conversationId` | 24 |
-| branch | `!picked \|\| Array.isArray(picked)` | 43 |
-| branch | `draft.some((m) => m.host_path === picked)` | 44 |
-| empty | `draft.length === 0` | 67 |
-| overlay | `<Popover open>` | 118 |
+| branch | `!conversationId` | 25 |
+| branch | `!picked \|\| Array.isArray(picked)` | 44 |
+| branch | `draft.some((m) => m.host_path === picked)` | 45 |
+| empty | `draft.length === 0` | 68 |
+| overlay | `<Popover open>` | 119 |
 
 ### `modules/host-mount/project-extension/components/ProjectMountsPanel`
 
@@ -83,11 +83,11 @@ Required states: `delayed`, `empty`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!project` | 41 |
-| branch | `!picked \|\| Array.isArray(picked)` | 49 |
-| branch | `draft.some((m) => m.host_path === picked)` | 50 |
-| loading | `loading && draft.length === 0` | 102 |
-| empty | `draft.length === 0` | 107 |
+| branch | `!project` | 42 |
+| branch | `!picked \|\| Array.isArray(picked)` | 50 |
+| branch | `draft.some((m) => m.host_path === picked)` | 51 |
+| loading | `loading && draft.length === 0` | 103 |
+| empty | `draft.length === 0` | 108 |
 
 ### `modules/remote-access/pages/RemoteAccessPage`
 
@@ -125,7 +125,7 @@ Required states: _(branch-only — proven via dynamic coverage)_
 | branch | `!token` | 71 |
 | branch | `exchangingToken === token && !exchangeError` | 84 |
 | branch | `exchangeError` | 93 |
-| branch | `Stores.Auth.$.isAuthenticated` | 99 |
+| branch | `Auth.$.isAuthenticated` | 99 |
 
 ### `modules/tunnel-auth/PhoneAuthPage`
 
@@ -144,10 +144,10 @@ Required states: `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!available \|\| dismissed` | 32 |
-| branch | `version` | 44 |
-| branch | `installing` | 51 |
-| error | `error` | 79 |
+| branch | `!available \|\| dismissed` | 31 |
+| branch | `version` | 43 |
+| branch | `installing` | 50 |
+| error | `error` | 78 |
 
 ### `modules/updater/pages/AboutPage`
 

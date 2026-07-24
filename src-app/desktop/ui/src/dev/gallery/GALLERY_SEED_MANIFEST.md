@@ -8,7 +8,7 @@ A module with a user-facing surface (a non-skip route `path:` or a user-facing
 slot) MUST own a `src/modules/<X>/gallery.tsx` (`export const gallery`), or be
 listed in `GALLERY_SEED_EXCEPTIONS.md` with a structural reason + sign-off.
 
-10 modules · 4 with a gallery.tsx · 1 allow-listed.
+11 modules · 4 with a gallery.tsx · 1 allow-listed.
 
 | Module | User surface? | Seed status |
 |---|---|---|
@@ -20,5 +20,6 @@ listed in `GALLERY_SEED_EXCEPTIONS.md` with a structural reason + sign-off.
 | `memory` | yes | — allow-listed (no-seed) |
 | `remote-access` | yes | ✓ gallery.tsx |
 | `tunnel-auth` | yes | ✓ gallery.tsx |
+| `tunnelAuth` | no | — no user surface |
 | `updater` | yes | ✓ gallery.tsx |
 | `window` | no | — no user surface |
