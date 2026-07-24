@@ -144,6 +144,7 @@ export const GALLERY_COVERAGE = {
   "modules/chat/extensions/text/components/TextContent": { kind: 'via', reason: 'rendered within the chat module page' },
   "modules/chat/extensions/text/components/TextInput": { kind: 'via', reason: 'rendered within the chat module page' },
   "modules/chat/extensions/text/components/ThinkingContent": { kind: 'via', reason: 'rendered within the chat module page' },
+  "modules/chat/extensions/text/components/ObservationContent": { kind: 'via', reason: 'rendered within the chat module page' },
   "modules/chat/extensions/text/extension": { kind: 'via', reason: 'rendered within the chat module page' },
   "modules/chat/extensions/title/extension": { kind: 'via', reason: 'rendered within the chat module page' },
   "modules/chat/extensions/voice/components/MicButton": { kind: 'pending', reason: 'mic idle/recording/transcribing/error/not-ready states — gallery cells deferred (DRIFT-1); covered by the 14-voice e2e specs' },

@@ -7,6 +7,7 @@ import {
 } from '@/modules/chat/core/extensions'
 import { TextContent } from '@/modules/chat/extensions/text/components/TextContent'
 import { ThinkingContent } from '@/modules/chat/extensions/text/components/ThinkingContent'
+import { ObservationContent } from '@/modules/chat/extensions/text/components/ObservationContent'
 import { TextInput } from '@/modules/chat/extensions/text/components/TextInput'
 import { createTextStore } from '@/modules/chat/extensions/text/textStore'
 import { clearDraft, getDraft, makeDraftKey } from '@/modules/chat/extensions/text/chatDrafts'
@@ -150,6 +151,7 @@ const textExtension: ChatExtension = createExtension({
   contentTypes: {
     text: TextContent as React.ComponentType<ContentRendererProps>,
     thinking: ThinkingContent as React.ComponentType<ContentRendererProps>,
+    observation: ObservationContent as React.ComponentType<ContentRendererProps>,
   },
 
   /**

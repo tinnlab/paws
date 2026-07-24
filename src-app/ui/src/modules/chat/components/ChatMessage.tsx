@@ -99,6 +99,17 @@ export const ChatMessage = memo(function ChatMessage({
     (a, b) => a.sequence_order - b.sequence_order,
   )
 
+  // A SYSTEM/observation message (e.g. a background sub-agent result injected by
+  // push-to-resume) rides a user-ROLE message on the wire (so the model sees it as
+  // context), but must NOT render as a right-aligned user bubble — it renders as a
+  // distinct full-width observation card. The bubble geometry is otherwise keyed
+  // purely on the role, so gate every layout decision on `renderAsUser` (role user
+  // AND not an observation message) rather than the raw role.
+  const isObservation =
+    contents.length > 0 &&
+    contents.every(c => c.content_type === 'observation')
+  const renderAsUser = isUser && !isObservation
+
   // For user messages, file attachments lift OUT of the text bubble and render
   // as a single horizontal row ABOVE it (outside the bordered box) that
   // x-scrolls when it overflows, instead of wrapping or stacking vertically.
@@ -110,7 +121,7 @@ export const ChatMessage = memo(function ChatMessage({
     c.content_type === 'file_attachment' ||
     (c.content_type === 'image' &&
       (c.content as MessageContentDataImage).source?.type === 'file')
-  const attachmentBlocks = isUser ? sortedContents.filter(isAttachmentBlock) : []
+  const attachmentBlocks = renderAsUser ? sortedContents.filter(isAttachmentBlock) : []
   // Relocate each tool_result adjacent to its producing tool_use (by
   // tool_use_id) so a run of tool calls is contiguous regardless of where an
   // artifact tool_result physically landed (streaming-appended-at-end or
@@ -118,7 +129,7 @@ export const ChatMessage = memo(function ChatMessage({
   // "N tools called" card instead of leaving it stranded next to the group. Pure
   // — never mutates the store array (operates on the sorted copy).
   const bubbleBlocks = normalizeToolResultOrder(
-    isUser
+    renderAsUser
       ? sortedContents.filter(c => !isAttachmentBlock(c))
       : sortedContents,
   )
@@ -135,7 +146,7 @@ export const ChatMessage = memo(function ChatMessage({
     const key = block.id || `blk-${i}`
     const res = chatExtensionRegistry.renderContent({
       content: block,
-      isUser,
+      isUser: renderAsUser,
       blocks: bubbleBlocks,
       index: i,
     })
@@ -144,7 +155,7 @@ export const ChatMessage = memo(function ChatMessage({
       i += res.consumed
     } else {
       bubbleNodes.push(
-        <ContentRenderer key={key} content={block} isUser={isUser} />,
+        <ContentRenderer key={key} content={block} isUser={renderAsUser} />,
       )
       i += 1
     }
@@ -159,7 +170,7 @@ export const ChatMessage = memo(function ChatMessage({
         // centered); assistant messages stay flush-left and full-width. This is
         // what lets a reader — and the C7 role-signature check — tell them apart.
         'flex flex-col overflow-visible group scroll-mt-24',
-        isUser ? 'items-end self-end w-fit max-w-[85%]' : 'items-start w-full',
+        renderAsUser ? 'items-end self-end w-fit max-w-[85%]' : 'items-start w-full',
         // Transient highlight for the active in-conversation find match (ITEM-1).
         isActiveMatch && 'rounded-lg ring-2 ring-primary ring-offset-2 ring-offset-background transition-shadow',
       )}
@@ -194,7 +205,7 @@ export const ChatMessage = memo(function ChatMessage({
               <ContentRenderer
                 key={`${content.id || `att-${index}`}`}
                 content={content}
-                isUser={isUser}
+                isUser={renderAsUser}
               />
             ))}
           </div>
@@ -212,7 +223,7 @@ export const ChatMessage = memo(function ChatMessage({
             // User: a subtle token-driven tint (reads as a "bubble" in both
             // themes) hugging its content. Assistant: flush, borderless,
             // full-width — no avatar, no card.
-            isUser
+            renderAsUser
               ? 'bg-primary/10 w-fit max-w-full px-3 py-2'
               : 'bg-transparent w-full p-0',
           )}
@@ -269,7 +280,7 @@ export const ChatMessage = memo(function ChatMessage({
           {/* The branch switcher sits on the message's OUTER edge: user rows are
               right-aligned so it goes last (far right, after copy+edit);
               assistant rows are left-aligned so it goes first (far left). */}
-          {isUser ? (
+          {renderAsUser ? (
             <>
               <MessageActions />
               <BranchNavigator />

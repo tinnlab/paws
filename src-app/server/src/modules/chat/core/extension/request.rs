@@ -34,6 +34,15 @@ pub struct SendMessageRequest {
     /// Only used when create_branch_from_message_id is set. Defaults to 'user'.
     #[serde(default = "default_fork_level")]
     pub fork_level: String,
+
+    /// SERVER-INTERNAL ONLY (never client-settable — `#[serde(skip)]` keeps it out
+    /// of the wire body AND the OpenAPI schema, and it is `Default`-false on
+    /// deserialize). When a server-internal injector (background push-to-resume)
+    /// sets this true, the message's `content` is persisted as an `observation`
+    /// content block (renders as a distinct system/observation card) instead of a
+    /// plain `text` block, while still wire-mapping to user-role text for the model.
+    #[serde(skip)]
+    pub content_as_observation: bool,
 }
 
 fn default_fork_level() -> String {

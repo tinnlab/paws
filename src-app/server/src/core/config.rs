@@ -55,6 +55,11 @@ pub struct Config {
     pub control_mcp: Option<ControlMcpConfig>,
     #[serde(default)]
     pub js_tool: Option<JsToolConfig>,
+    /// Background-run backbone (`background_mcp`) tunables. Absent = all defaults
+    /// (auto-resume ON). Deploy-level opt-out for push-to-resume:
+    /// `background_mcp: { resume_enabled: false }`.
+    #[serde(default)]
+    pub background_mcp: Option<BackgroundMcpConfig>,
     /// Chat-token SSE stream transport caps (per-user / global concurrent
     /// connections). A low-level resource knob (like `jwt.*`), NOT an admin
     /// settings row — see the split-chat DEC-34. Always present with defaults.
@@ -222,6 +227,37 @@ impl Default for LitSearchConfig {
     fn default() -> Self {
         Self {
             enabled: default_lit_search_enabled(),
+        }
+    }
+}
+
+/// Configuration for the `background_mcp` built-in (the detached background-run
+/// backbone: `spawn_background` / `check_status` / `collect_result`).
+///
+/// The module itself is always registered (its tools are the mechanism); this
+/// config only carries operational tunables. `resume_enabled` is the
+/// **deploy-level kill switch for PUSH-TO-RESUME**: when false, a completed
+/// conversation-bound sub-agent no longer auto-injects its result + re-invokes the
+/// chat loop — the result still lands in the run row + the inbox notification, and
+/// `collect_result` still works, so nothing is lost; only the automatic
+/// re-engagement is suppressed. Defaults to true (preserves the resume behavior).
+/// There is intentionally NO admin/runtime toggle — this is an operator opt-out.
+#[derive(Debug, Deserialize, Clone)]
+pub struct BackgroundMcpConfig {
+    /// Master switch for push-to-resume. When false, auto-resume is OFF entirely.
+    /// Defaults to true.
+    #[serde(default = "default_background_resume_enabled")]
+    pub resume_enabled: bool,
+}
+
+fn default_background_resume_enabled() -> bool {
+    true
+}
+
+impl Default for BackgroundMcpConfig {
+    fn default() -> Self {
+        Self {
+            resume_enabled: default_background_resume_enabled(),
         }
     }
 }

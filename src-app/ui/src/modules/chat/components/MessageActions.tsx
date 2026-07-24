@@ -27,13 +27,22 @@ export function MessageActions() {
 
   const isUser = msg.role === 'user'
   const isAssistant = msg.role === 'assistant'
+  // A system/observation message rides a user role but is NOT user-authored — it
+  // must never offer the "Edit" affordance (the user can't rewrite a system-
+  // reported background result as their own message).
+  const isObservation =
+    msg.contents.length > 0 &&
+    msg.contents.every(c => c.content_type === 'observation')
   const isBusy = isStreaming || sending
 
-  /** Extract plain text from a message's contents */
+  /** Extract plain text from a message's contents (incl. observation blocks) */
   const extractText = () => {
     for (const content of msg.contents) {
       const data = content.content as any
-      if (data?.type === 'text' && typeof data.text === 'string') {
+      if (
+        (data?.type === 'text' || data?.type === 'observation') &&
+        typeof data.text === 'string'
+      ) {
         return data.text
       }
     }
@@ -99,7 +108,7 @@ export function MessageActions() {
         />
       </Tooltip>
 
-      {isUser && (
+      {isUser && !isObservation && (
         <Tooltip content="Edit message">
           <Button
             variant="ghost"
