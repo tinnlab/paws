@@ -61,12 +61,19 @@ fn role_of(msg: &Json) -> String {
 }
 
 /// Set up a stub-model conversation and spawn a `subagent` background run on it.
-/// Returns `(user, conversation_id)`. Deliberately does NOT poll check_status or
-/// collect_result — the whole point is that the model needs neither.
-async fn spawn_subagent_on_stub_conversation(server: &TestServer, name: &str) -> (TestUser, Uuid) {
+/// Returns `(stub, user, conversation_id)`. The caller MUST keep the returned
+/// `StubEngine` alive for the whole test — it is the model the DETACHED sub-agent
+/// turn calls asynchronously AFTER this fn returns; dropping it kills the stub
+/// server and the sub-agent turn fails with a network error. Deliberately does NOT
+/// poll check_status or collect_result — the whole point is that the model needs
+/// neither.
+async fn spawn_subagent_on_stub_conversation(
+    server: &TestServer,
+    name: &str,
+) -> (crate::common::stub_engine::StubEngine, TestUser, Uuid) {
     let user = resume_user(server, name).await;
 
-    let (_stub, model) = crate::chat::helpers::create_stub_model(server, &user.user_id).await;
+    let (stub, model) = crate::chat::helpers::create_stub_model(server, &user.user_id).await;
     let model_id = Uuid::parse_str(model["id"].as_str().unwrap()).unwrap();
     let conv = crate::chat::helpers::create_conversation(
         server,
@@ -93,7 +100,7 @@ async fn spawn_subagent_on_stub_conversation(server: &TestServer, name: &str) ->
     .await;
     let sc = super::structured(&spawn);
     assert_eq!(sc["status"], "pending", "spawn returns a pending handle: {sc}");
-    (user, conv_id)
+    (stub, user, conv_id)
 }
 
 /// Wait until the conversation has ≥ `min` messages (the resume injects a
@@ -105,14 +112,26 @@ async fn wait_for_messages(
     min: usize,
     within: Duration,
 ) -> Vec<Json> {
+    wait_for_messages_where(server, user, conv_id, within, |msgs| msgs.len() >= min).await
+}
+
+/// Poll the conversation messages until `pred` holds or the deadline elapses;
+/// returns the latest snapshot either way (the caller asserts). Used to wait for
+/// a MEANINGFUL condition — e.g. an assistant reply whose content has streamed in
+/// — rather than merely a row count (an assistant message row is created empty at
+/// turn start and its text is persisted a moment later).
+async fn wait_for_messages_where(
+    server: &TestServer,
+    user: &TestUser,
+    conv_id: Uuid,
+    within: Duration,
+    pred: impl Fn(&[Json]) -> bool,
+) -> Vec<Json> {
     let deadline = Instant::now() + within;
     loop {
         let msgs = conversation_messages(server, &user.token, conv_id).await;
-        if msgs.len() >= min {
+        if pred(&msgs) || Instant::now() >= deadline {
             return msgs;
-        }
-        if Instant::now() >= deadline {
-            return msgs; // return whatever we have; the caller asserts
         }
         tokio::time::sleep(Duration::from_millis(300)).await;
     }
@@ -125,12 +144,20 @@ async fn wait_for_messages(
 #[tokio::test]
 async fn resume_injects_new_turn_without_polling() {
     let server = TestServer::start().await;
-    let (user, conv_id) = spawn_subagent_on_stub_conversation(&server, "bg_resume_push").await;
+    // `_stub` MUST stay bound for the whole test — the detached sub-agent calls it.
+    let (_stub, user, conv_id) =
+        spawn_subagent_on_stub_conversation(&server, "bg_resume_push").await;
 
     // The conversation began empty (the detached sub-agent writes nothing to it);
-    // the ONLY thing that can add messages is the automatic resume. Wait for the
-    // injected user+assistant pair. NO check_status / collect_result is called.
-    let msgs = wait_for_messages(&server, &user, conv_id, 2, Duration::from_secs(45)).await;
+    // the ONLY thing that can add messages is the automatic resume. Wait until the
+    // resumed turn's ASSISTANT reply has streamed in with real content (a row count
+    // of 2 alone would race the still-empty assistant row). NO check_status /
+    // collect_result is called.
+    let msgs = wait_for_messages_where(&server, &user, conv_id, Duration::from_secs(45), |msgs| {
+        msgs.iter()
+            .any(|m| role_of(m) == "assistant" && message_text(m).contains("Hello from stub"))
+    })
+    .await;
     assert!(
         msgs.len() >= 2,
         "push-to-resume must inject a user+assistant turn into the conversation; got {} message(s): {msgs:?}",
@@ -177,7 +204,9 @@ async fn resume_injects_new_turn_without_polling() {
 #[tokio::test]
 async fn resume_fires_exactly_once_per_completion() {
     let server = TestServer::start().await;
-    let (user, conv_id) = spawn_subagent_on_stub_conversation(&server, "bg_resume_once").await;
+    // `_stub` MUST stay bound for the whole test — the detached sub-agent calls it.
+    let (_stub, user, conv_id) =
+        spawn_subagent_on_stub_conversation(&server, "bg_resume_once").await;
 
     // Wait for the resume to land.
     let _ = wait_for_messages(&server, &user, conv_id, 2, Duration::from_secs(45)).await;
@@ -251,7 +280,7 @@ async fn resume_skipped_when_model_access_revoked() {
     // about the revoke branch, not the no-poll contract), then grace-wait so any
     // (erroneous) resume would have injected a turn by now.
     let deadline = Instant::now() + Duration::from_secs(45);
-    loop {
+    let terminal = loop {
         let body = super::jsonrpc(
             &server,
             &user.token,
@@ -260,12 +289,21 @@ async fn resume_skipped_when_model_access_revoked() {
             json!({ "name": "check_status", "arguments": { "run_id": run_id } }),
         )
         .await;
-        if super::structured(&body)["terminal"].as_bool().unwrap_or(false) {
-            break;
+        let sc = super::structured(&body).clone();
+        if sc["terminal"].as_bool().unwrap_or(false) {
+            break sc;
         }
         assert!(Instant::now() < deadline, "run did not reach terminal in 45s");
         tokio::time::sleep(Duration::from_millis(300)).await;
-    }
+    };
+    // The sub-agent turn only needs provider.enabled (still true), so it COMPLETES
+    // — proving that the absent resume below is due to the fire-time access
+    // re-check skipping it, NOT a failed sub-agent run (robustness: without this
+    // the injected==0 assertion could pass spuriously on a Failed run).
+    assert_eq!(
+        terminal["status"], "completed",
+        "the sub-agent run itself must complete (only provider.enabled is required to run it): {terminal}"
+    );
     tokio::time::sleep(Duration::from_secs(3)).await;
 
     let msgs = conversation_messages(&server, &user.token, conv_id).await;
