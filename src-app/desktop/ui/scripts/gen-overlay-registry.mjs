@@ -56,11 +56,7 @@ const PRIMITIVES = [
 // The kit modules an overlay primitive is legitimately imported from. A local
 // component that happens to share a name (imported from elsewhere) is NOT an
 // overlay primitive and must not trip the gate.
-// The kit moved into the SDK submodule (`@ziee/kit`); overlay primitives are now
-// imported from there, not the legacy `@/components/ui`. Recognize BOTH so a
-// controlled Popover/Dialog/Drawer/Sheet imported from `@ziee/kit` is still
-// detected as an overlay host (mirrors the shared SDK gen's `overlayKitImports`).
-const KIT_IMPORT_RE = /from\s+'(@ziee\/kit|@ziee\/kit\/[^']*|@\/components\/ui|@\/components\/ui\/[^']*|@\/modules\/layouts\/app-layout\/components\/Drawer)'/
+const KIT_IMPORT_RE = /from\s+'(@\/components\/ui|@\/components\/ui\/[^']*|@\/modules\/layouts\/app-layout\/components\/Drawer)'/
 
 const ROOTS = [
   { dir: path.join(SRC, 'modules'), skip: f => f === 'module.tsx' },

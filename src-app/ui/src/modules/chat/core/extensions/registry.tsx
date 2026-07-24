@@ -182,6 +182,15 @@ export class ChatExtensionRegistry {
       } else {
         // Accessor not yet available — defer via a lazy import (avoids a circular
         // static import of the chat store). Idempotent with the accessor seed.
+        // This path is NOT expected: every extension.tsx statically imports the
+        // chat store, so the store module (which pushes the accessor at load) is
+        // evaluated before any register() runs. If it ever fires, the seed is
+        // deferred a microtask and can miss the `chatExtensionsReady` gate the
+        // composer waits on — re-exposing the "TextStore undefined" crash — so
+        // WARN loudly rather than fail silently.
+        console.warn(
+          `[ChatExtensions] primary chat-store accessor not registered when seeding "${extension.store.name}"; falling back to a deferred async seed (composer may briefly miss it). This indicates a module-load-order regression.`,
+        )
         import('../stores/chat').then(({ useChatStore }) => {
           const stateObject = useChatStore.getState() as unknown as Record<
             string,
