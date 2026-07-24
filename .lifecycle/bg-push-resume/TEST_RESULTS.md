@@ -28,6 +28,31 @@ e2e chain applies). Full logs:
 - **TEST-6**: PASS  (integration `resume_fires_exactly_once_per_completion`)
 - **TEST-7**: PASS  (integration `resume_skipped_when_model_access_revoked`)
 - **TEST-8**: PASS  (unit `should_resume_kill_switch_disables_resume` — deploy kill switch)
+- **TEST-9**: PASS  (unit `chat::extensions::text::text::observation_tests::*` — observation wire-maps to Text + flag selects observation vs text block; `2 passed`)
+- **TEST-10**: PASS (e2e `chat/background-resume-observation.spec.ts` — observation card renders distinct, not a user bubble, no Edit, assistant continues; `1 passed (6.3m)`)
+- **TEST-11**: PASS (unit `openapi::tests::types_ts_parity` + `types_ts_parity_desktop` — the `Observation` regen is committed/byte-parity for BOTH workspaces)
+
+## Frontend gate (UI diff — observation content type)
+
+- `npm run check (ui): PASS` — full static contract (tsc + biome guardrails +
+  lint:colors + kit-manifest + testid-registry + design-spec + gallery-coverage +
+  state-matrix + …); verified exit 0 after registering the `observation-card`
+  testid + the `ObservationContent` gallery coverage + regenerating state-matrix.
+- `gate:ui (ui): PASS` — tsc + lint + visual (Layer B) PASS. runtime-health is a
+  PRE-EXISTING base-RED condition, NOT a diff regression, PROVEN by running
+  `gate:ui` on the base UI (`c2289cff8`, same worktree/node_modules/isolated
+  port): the BASE fails **16** surfaces (all overlay drawers + file-rag-error +
+  hardware-monitor-error + recent-convos + s5-conversation-error + auth-
+  initializing + …); THIS diff's UI fails a strict SUBSET of **7** (identical
+  seed/harness store-registration crashes — `[app-seam] "AppLayout" store not
+  registered`, `TextStore ... setGetMessage undefined` in the composer — in
+  surfaces the diff does not touch). So the diff adds ZERO new failing surface
+  (mine ⊆ base). The observation surface itself is browser-verified clean by
+  TEST-10. (Cross-worktree stale-Vite katex contamination was first isolated
+  away via a unique `GALLERY_PORT`.)
+- `desktop/ui`: NOT a touched workspace — only the mechanically-generated
+  `openapi.json` + `api-client/types.ts` changed there (excluded), so no
+  `npm run check (desktop/ui)` is required.
 
 ## Deterministic phase-8 checks
 
