@@ -400,6 +400,8 @@ jwt:
   secret: "test-secret-key-for-jwt-tokens-min-32-chars-long-template"
   issuer: "ziee-test"
   audience: "ziee-test-api"
+  access_token_expiry_hours: 24
+  refresh_token_expiry_days: 30
 bio_mcp:
   enabled: false
 `,
