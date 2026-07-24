@@ -55,14 +55,14 @@ for spawn and the chat pipeline's own gating for the resumed turn). No migration
   the hook lives only in `execute_subagent_run`, never `execute_sandbox_run`
   (sandbox stays notification-only). The completion fires exactly once → the
   resume is idempotent by construction.
-- **ITEM-6** (iteration round): Deploy-level kill switch for push-to-resume.
+- **ITEM-6**: (iteration round) Deploy-level kill switch for push-to-resume.
   Add `Config.background_mcp: Option<BackgroundMcpConfig>` with `resume_enabled:
   bool` (default true, mirroring `BioMcpConfig`/`LitSearchConfig`); read it via
   `resume::resume_enabled_from_config()` and gate it into `should_resume(resume_enabled,
   conversation_id, final_text)`; the `Completed`-branch spawn passes the flag.
   Operator opt-out only (no admin/runtime row, no migration). Preserves current
   behavior by default. (User-directed via the coordinator; see DEC-5.)
-- **ITEM-7** (iteration round): [DESCOPED] Render the injected result as a distinct
+- **ITEM-7**: [DESCOPED] (iteration round) Render the injected result as a distinct
   SYSTEM/observation turn instead of a USER message (DEC-1). Investigated →
   BLOCKED: both turn-start paths hardcode `MessageRole::User`, `MessageRole` has
   no observation role, and System-role messages are dropped from the LLM context,

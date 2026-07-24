@@ -5,9 +5,9 @@ All decisions are resolved up front so implementation runs nonstop.
 - DESCOPED: ITEM-7 — the system/observation-role injected turn (DEC-1) is BLOCKED on non-trivial new shared chat-pipeline + context-builder + UI plumbing (both turn-start paths hardcode MessageRole::User; System-role messages are dropped from the LLM context, so the resumed model would be blind to the result). Cut this round per the coordinator's explicit "STOP and report BLOCKED rather than force it" guardrail; the user-role interim is retained. [approved: coordinator/2026-07-24]
 
 ### DEC-1: What ROLE/appearance does the injected result take on the resumed turn?
-**Resolution (iteration round — user chose SYSTEM/observation over the convention
-default; investigated → BLOCKED for now, interim keeps user-role):** The user
-directed that the injected result render as a distinct SYSTEM/observation turn,
+**Resolution:** (iteration round — user chose SYSTEM/observation over the
+convention default; investigated → BLOCKED for now, interim keeps user-role) The
+user directed that the injected result render as a distinct SYSTEM/observation turn,
 not a USER message (rationale: a user-role injection reads as if the human typed
 it and pollutes history). Investigation of the chat pipeline shows this cannot be
 done minimally and hits the pre-agreed BLOCKED guardrail:
@@ -87,7 +87,7 @@ guarded transitions); `allow_delegate:false` depth cap on detached sub-agents;
 `spawn_background` approval gate on every launch.
 
 ### DEC-5: Bounded-wait + resume-enable — fixed const or admin-configurable? (ITEM-5)
-**Resolution (iteration round — user chose to ADD a deploy-level kill switch):**
+**Resolution:** (iteration round — user chose to ADD a deploy-level kill switch)
 The wait bound stays a FIXED const (`RESUME_MAX_IDLE_WAIT = 5min` +
 `RESUME_POLL_INTERVAL`), BUT — per the user's direction — a **deploy-level config
 kill switch** now turns auto-resume OFF entirely: `background_mcp: {
