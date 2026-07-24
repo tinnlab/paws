@@ -28,4 +28,13 @@ define_extension_content! {
         #[serde(skip_serializing_if = "Option::is_none")]
         metadata: Option<ThinkingMetadata>,
     } => "thinking",
+
+    // A ziee-INTERNAL system/observation block: content the SYSTEM injects into a
+    // conversation (e.g. a completed background sub-agent's result). It RENDERS as
+    // a distinct observation card (not a user bubble), but on the wire it maps to a
+    // plain-text block on its (user-role) message so EVERY provider sees it as
+    // context (never System, which is dropped). The LLM never produces this block.
+    Observation {
+        text: String,
+    } => "observation",
 }

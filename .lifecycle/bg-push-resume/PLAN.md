@@ -62,14 +62,28 @@ for spawn and the chat pipeline's own gating for the resumed turn). No migration
   conversation_id, final_text)`; the `Completed`-branch spawn passes the flag.
   Operator opt-out only (no admin/runtime row, no migration). Preserves current
   behavior by default. (User-directed via the coordinator; see DEC-5.)
-- **ITEM-7**: [DESCOPED] (iteration round) Render the injected result as a distinct
-  SYSTEM/observation turn instead of a USER message (DEC-1). Investigated →
-  BLOCKED: both turn-start paths hardcode `MessageRole::User`, `MessageRole` has
-  no observation role, and System-role messages are dropped from the LLM context,
-  so it needs non-trivial new shared-pipeline + context-builder + UI plumbing.
-  Reported to the coordinator per the pre-agreed STOP-and-report-BLOCKED guardrail;
-  the interim keeps the user-role delivery. Cut this round (no code shipped) — see
-  the DESCOPED disposition in DECISIONS.md.
+- **ITEM-7**: (iteration round 2 — UN-DESCOPED) Deliver the injected result as a
+  ziee-INTERNAL `observation` content TYPE that renders as a distinct
+  system/observation card but WIRE-serializes to plain `user`-role text (DEC-1,
+  revised). Backend: add an `Observation { text }` variant to the text extension
+  (`MessageContentDataVariants` + the `TextContent` mirror), `handled_content_types`
+  += `observation`, `process_content_for_llm(Observation) → ContentBlock::Text`
+  (so the model sees it as user-role context — the block rides a user-role message;
+  never System, which is dropped). Injection: a server-internal `#[serde(skip)]`
+  `content_as_observation` flag on `SendMessageRequest` (not client-settable, not
+  in OpenAPI), set by the resume; the text extension's `provide_user_message_content`
+  emits an `Observation` block when set. Agent-core reuses the same shared wire
+  converter (no separate handling).
+- **ITEM-8**: (iteration round 2) Frontend observation renderer + distinct-card
+  rendering. New `ObservationContent.tsx` (mirrors `ThinkingContent`), registered
+  in the text extension's `contentTypes` map. `ChatMessage.tsx`: an
+  all-`observation` message renders full-width as the card (NOT a right-aligned
+  user bubble) via a `renderAsUser = isUser && !isObservation` gate.
+  `MessageActions.tsx`: suppress the "Edit" affordance for an observation message
+  (it's system-authored, not user-authored) + let Copy read observation text.
+- **ITEM-9**: (iteration round 2) OpenAPI regen (both `ui/` + `desktop/ui/`) — the
+  `MessageContentData` union gains `Observation`; mechanical, keeps the golden
+  `types_ts_parity` test green.
 - **ITEM-5**: [DEC] Bounded-wait + resume-enable disposition — resolved in
   DECISIONS.md as fixed named consts `RESUME_MAX_IDLE_WAIT` +
   `RESUME_POLL_INTERVAL` (mirroring the scheduler's `TERMINAL_WAIT`/`POLL_INTERVAL`
@@ -90,6 +104,39 @@ for spawn and the chat pipeline's own gating for the resumed turn). No migration
   (add `mod resume;`).
 - `src-app/server/tests/background_mcp/resume.rs` — NEW, integration test proving
   a completed conversation-bound sub-agent injects a NEW turn without polling.
+
+## Files to touch (iteration round 2 — observation content type)
+
+- `src-app/server/src/modules/chat/extensions/text/{types.rs,extension.rs,text.rs}` —
+  the `Observation` variant + wire mapping + injection branch.
+- `src-app/server/src/modules/chat/core/extension/request.rs` — the `#[serde(skip)]`
+  `content_as_observation` flag.
+- `src-app/server/src/modules/background_mcp/resume.rs` — set the flag.
+- `src-app/ui/src/modules/chat/extensions/text/components/ObservationContent.tsx` (NEW)
+  + `.../text/extension.tsx` (register) + `components/ChatMessage.tsx` +
+  `components/MessageActions.tsx`.
+- `src-app/ui/openapi/openapi.json` + `src-app/ui/src/api-client/types.ts` +
+  `src-app/desktop/ui/openapi/openapi.json` + `.../api-client/types.ts` (regen).
+- `src-app/ui/tests/e2e/chat/background-resume-observation.spec.ts` (NEW e2e).
+
+## UI-surface plan checklist (observation card)
+
+- **Precedent** — twin of the `thinking` card (`ThinkingContent.tsx`): same
+  `Card size="sm"` + icon + label header shape, so it reads as the same class of
+  system-process affordance. Distinct accent (info token) + a distinct icon/label
+  ("System update") mark it as a system report, not reasoning.
+- **Scale / cardinality** — one observation block per resumed turn; no list. The
+  card shows the framed result text (already char-capped at 100k by the backend
+  `build_resume_message` truncation), full-width, wraps.
+- **Responsive** — inherits the assistant-message full-width geometry (no
+  right-align, no fixed width); the card is `w-full` and text wraps, so it behaves
+  at 390px exactly like the thinking card.
+- **Populated render** — the gallery/e2e render exercises the card WITH the real
+  framed text (`[Background task complete]…Result:…`), not an empty state.
+- **JTBD** — the user wants to SEE, in-thread, that "the system delivered a
+  background result and the assistant is continuing from it" — clearly NOT
+  something they typed. The card + the following assistant reply express that. They
+  must not be able to Edit it as their own message (affordance removed).
 
 ## Patterns to follow
 

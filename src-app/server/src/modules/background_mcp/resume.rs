@@ -214,8 +214,13 @@ pub async fn resume_conversation_with_result(req: ResumeRequest) -> Result<(), A
         "branch_id": branch_id,
         "enable_mcp": true,
     });
-    let request: SendMessageRequest = serde_json::from_value(req_json)
+    let mut request: SendMessageRequest = serde_json::from_value(req_json)
         .map_err(|e| AppError::internal_error(format!("resume: build request: {e}")))?;
+    // Deliver the result as a distinct system/observation turn (DEC-1): the message
+    // renders as an observation card (not a user bubble), while wire-mapping to
+    // user-role text so the resumed model sees the result. Set server-side only —
+    // the field is `#[serde(skip)]`, so this is never client-reachable.
+    request.content_as_observation = true;
 
     let registry = Arc::new(auto_register_extensions(pool.clone(), config));
     let service = StreamingService::new(pool).with_extensions(registry);

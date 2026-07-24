@@ -3881,6 +3881,10 @@ export interface MessageContentDataThinking {
   metadata?: ThinkingMetadata | null
   thinking: string
 }
+export interface MessageContentDataObservation {
+  type: 'observation'
+  text: string
+}
 export interface MessageContentDataImage {
   type: 'image'
   alt_text?: string | null
@@ -3977,7 +3981,7 @@ export interface MessageContentDataElicitationRequest {
  *  Extensions add variants by defining MessageContentDataVariants enums in their
  *  extension.rs files. The compose_message_content_variants macro merges them at compile time.
  */
-export type MessageContentData = MessageContentDataText | MessageContentDataThinking | MessageContentDataImage | MessageContentDataFileAttachment | MessageContentDataToolUse | MessageContentDataToolResult | MessageContentDataElicitationRequest
+export type MessageContentData = MessageContentDataText | MessageContentDataThinking | MessageContentDataObservation | MessageContentDataImage | MessageContentDataFileAttachment | MessageContentDataToolUse | MessageContentDataToolResult | MessageContentDataElicitationRequest
 
 /**
  * Query params for `GET /conversations/{id}/messages`.

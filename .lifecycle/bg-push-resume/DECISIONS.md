@@ -2,15 +2,37 @@
 
 All decisions are resolved up front so implementation runs nonstop.
 
-- DESCOPED: ITEM-7 — the system/observation-role injected turn (DEC-1) is BLOCKED on non-trivial new shared chat-pipeline + context-builder + UI plumbing (both turn-start paths hardcode MessageRole::User; System-role messages are dropped from the LLM context, so the resumed model would be blind to the result). Cut this round per the coordinator's explicit "STOP and report BLOCKED rather than force it" guardrail; the user-role interim is retained. [approved: coordinator/2026-07-24]
+(ITEM-7 was previously descoped as BLOCKED; the coordinator then chose to build it
+as a content-type that wire-maps to user role — see DEC-1's revised resolution
+below. The descope is WITHDRAWN and ITEM-7/8/9 are implemented this round.)
 
 ### DEC-1: What ROLE/appearance does the injected result take on the resumed turn?
-**Resolution:** (iteration round — user chose SYSTEM/observation over the
-convention default; investigated → BLOCKED for now, interim keeps user-role) The
-user directed that the injected result render as a distinct SYSTEM/observation turn,
-not a USER message (rationale: a user-role injection reads as if the human typed
-it and pollutes history). Investigation of the chat pipeline shows this cannot be
-done minimally and hits the pre-agreed BLOCKED guardrail:
+**Resolution:** (iteration round 2 — BUILT) The injected result is delivered as a
+ziee-INTERNAL `observation` content TYPE (mirroring how `thinking` is a content
+type of the text extension). It RENDERS as a distinct system/observation card
+(NOT a user bubble), but on the wire it maps to a plain-text block on a
+`user`-role message, so EVERY provider (OpenAI/Anthropic/Gemini/local) sees it as
+context — never System (which is dropped at streaming.rs:1032). Mechanism:
+- Backend content type: `Observation { text }` added to the text extension
+  (`MessageContentDataVariants` + `TextContent`); `handled_content_types` +=
+  `observation`; `process_content_for_llm(Observation) → ContentBlock::Text`. The
+  provider ROLE is set by the DB message's `role` column (user), NOT the content
+  type — so an observation block on a user-role message becomes `Role::User` text.
+- Injection: a SERVER-INTERNAL `#[serde(skip)]` `content_as_observation` flag on
+  `SendMessageRequest` (not client-settable → no spoofing, not in OpenAPI). The
+  resume sets it; the text extension's `provide_user_message_content` emits an
+  `Observation` block instead of `Text`.
+- Frontend: an `ObservationContent` card renderer (mirrors `ThinkingContent`),
+  registered in the text extension's `contentTypes`; `ChatMessage.tsx` renders an
+  all-`observation` message full-width as the card via `renderAsUser = isUser &&
+  !isObservation` (the bubble geometry is otherwise keyed purely on role);
+  `MessageActions` hides "Edit" for it (system-authored, not user-authored).
+- Agent-core reuses the SAME shared wire converter
+  (`convert_history_to_messages_with_extensions`), so no second path to handle.
+This is the provider-reality-constrained realization of the earlier request:
+distinct rendering + guaranteed context-visibility on every provider.
+
+**Superseded investigation (why the naive System role was rejected):**
 - **Both turn-start paths hardcode the incoming role to `User`** — legacy
   `send_message` (`chat/core/services/streaming.rs:107`,
   `MessageRole::User.as_str()`) and agent-core
@@ -28,17 +50,18 @@ done minimally and hits the pre-agreed BLOCKED guardrail:
   turn-start + context-building plumbing in wire-format-invariant-tested code.
 - No existing "observation/developer/included-system" message machinery exists to
   reuse (searched).
-**Interim:** keep the current USER-role delivery (with the explicit
-`[Background task complete]` + run-id + untrusted-content-guard framing) so the
-feature keeps working, and report Change-1 to the coordinator as a **BLOCKED
-product/architecture decision** (per the coordinator's explicit instruction:
-"STOP and report BLOCKED rather than forcing it — don't hack a fake role the
-renderer won't handle"). A follow-up feature can add a first-class
-observation-turn role (persisted + context-included + UI-rendered) across both
-chat loops if the product wants it.
-**Basis:** user (chose system/observation) + codebase (the pipeline can't seed a
-context-visible non-user role without new shared plumbing — file:line evidence
-above). Recorded as BLOCKED, not silently reverted.
+
+**How the content-type solution sidesteps all of the above:** it does NOT seed a
+non-user ROLE at all — the message stays `role: user` (so the shared wire
+converter emits `Role::User` text with zero new turn-start plumbing, and the model
+sees it on every provider), and the DISTINCTION lives entirely in the CONTENT-TYPE
+(`observation`) which the content-block converter maps to `ContentBlock::Text` and
+the FE renders as a distinct card. The only FE change is gating the bubble geometry
+on the content type (`renderAsUser`), not inventing a role. No context-builder
+change, no provider role-mapping, no `MessageRole` enum change.
+**Basis:** user (chose to build the observation role) + codebase (the content-type
+seam mirrors `thinking` exactly and the wire role is set by the message row's role,
+which we keep as user — file:line evidence above and in the resolution).
 
 ### DEC-2: Is the resumed turn UNATTENDED (deny-approvals) like the scheduler?
 **Resolution:** NO. The resume runs as a normal foreground turn (no

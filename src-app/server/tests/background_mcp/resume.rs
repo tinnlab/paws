@@ -164,12 +164,12 @@ async fn resume_injects_new_turn_without_polling() {
         msgs.len()
     );
 
-    // The injected USER message carries the [Background task complete] framing +
-    // the sub-agent's real result ("Hello from stub").
+    // The injected message carries the [Background task complete] framing + the
+    // sub-agent's real result ("Hello from stub").
     let injected = msgs
         .iter()
-        .find(|m| role_of(m) == "user" && message_text(m).contains("[Background task complete]"))
-        .unwrap_or_else(|| panic!("no injected [Background task complete] user message: {msgs:?}"));
+        .find(|m| message_text(m).contains("[Background task complete]"))
+        .unwrap_or_else(|| panic!("no injected [Background task complete] message: {msgs:?}"));
     let injected_text = message_text(injected);
     assert!(
         injected_text.contains("Hello from stub"),
@@ -178,6 +178,23 @@ async fn resume_injects_new_turn_without_polling() {
     assert!(
         injected_text.contains("Say a one-line hello."),
         "the injected turn names the completed task: {injected_text}"
+    );
+    // DEC-1 (revised): the injected turn is delivered as an `observation` content
+    // block — the distinct system-turn type — NOT a plain user-text block. (It
+    // rides a user-role message so it still wire-maps to user-visible context; the
+    // assistant-continued assertion below proves the model saw it.)
+    let injected_types: Vec<String> = injected["contents"]
+        .as_array()
+        .map(|blocks| {
+            blocks
+                .iter()
+                .filter_map(|b| b["content_type"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(
+        injected_types.iter().any(|t| t == "observation"),
+        "the injected turn is an `observation`-typed system card, not plain user text: {injected_types:?}"
     );
 
     // And the loop actually RAN on it → a fresh assistant reply with REAL content
