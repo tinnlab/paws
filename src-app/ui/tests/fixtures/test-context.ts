@@ -213,6 +213,10 @@ export const test = base.extend<TestFixtures & TestOptions>({
     )
     const postgresConfig = JSON.parse(readFileSync(postgresConfigPath, 'utf-8'))
     const postgresPort = postgresConfig.port
+    // Optional migrated template DB built once in global-setup. When present,
+    // the per-test DB is CLONED from it (schema ready → no per-boot migrations);
+    // when absent, fall back to a raw CREATE DATABASE (server migrates on boot).
+    const templateName: string | undefined = postgresConfig.templateName
 
     console.log(`\n🔧 Setting up test infrastructure for: ${testInfo.title}`)
     console.log(`   Database: ${databaseName}`)
@@ -234,8 +238,33 @@ export const test = base.extend<TestFixtures & TestOptions>({
     })
 
     try {
-      await pool.query(`CREATE DATABASE ${databaseName}`)
-      console.log(`✅ Created database: ${databaseName}`)
+      if (templateName) {
+        // Clone the fully-migrated template. Postgres locks the template during
+        // a copy, so a concurrent clone (raised PLAYWRIGHT_WORKERS) can transiently
+        // fail with 55006 "source database is being accessed by other users" —
+        // bounded-retry it. Per-test DB name stays unique → isolation preserved.
+        let created = false
+        let lastErr: unknown
+        for (let attempt = 0; attempt < 5 && !created; attempt++) {
+          try {
+            await pool.query(`CREATE DATABASE ${databaseName} TEMPLATE ${templateName}`)
+            created = true
+          } catch (err) {
+            lastErr = err
+            const code = (err as { code?: string })?.code
+            if (code === '55006') {
+              await new Promise(r => setTimeout(r, 200))
+              continue
+            }
+            throw err
+          }
+        }
+        if (!created) throw lastErr
+        console.log(`✅ Created database ${databaseName} from template ${templateName}`)
+      } else {
+        await pool.query(`CREATE DATABASE ${databaseName}`)
+        console.log(`✅ Created database: ${databaseName}`)
+      }
     } catch (error) {
       console.error(`❌ Failed to create database ${databaseName}:`, error)
       throw error
@@ -319,6 +348,14 @@ logging:
   level: "info"
   format: "json"
 
+# Skip the per-boot api.github.com "latest release" update-check. It's a
+# notification-only poll (server_update module) that adds ~110ms to every one of
+# the hundreds of per-test backend boots and — sharing one egress IP across a run
+# — risks tripping GitHub's unauthenticated rate limit. Nothing in E2E depends on
+# it. (UpdateCheckConfig.enabled; default true in production.)
+update_check:
+  enabled: false
+
 jwt:
   secret: "test-secret-key-for-jwt-tokens-min-32-chars-long-${testId}"
   issuer: "ziee-test"
@@ -366,6 +403,30 @@ ${
         ? `${process.env.USERPROFILE}\\.cargo\\bin\\cargo`
         : `${process.env.HOME}/.cargo/bin/cargo`
 
+    // Spawn the PREBUILT server binary (warmed once in global-setup) rather than
+    // `cargo run` per test. `cargo run` pays a per-test cargo graph-check and
+    // contends on the cross-worktree build lock; the binary boots in ~0.8s. The
+    // binary lives at src-app/target/debug/ziee (this file is at
+    // src-app/ui/tests/fixtures/ → ../../../target). Mirrors the Rust harness
+    // (ziee-test-harness/src/lib.rs:471-503). Fall back to `cargo run` if the
+    // binary is absent (warmup skipped/failed) — same server code either way, so
+    // per-test isolation is identical.
+    const serverBinary = resolve(
+      __dirname,
+      '../../../target/debug',
+      process.platform === 'win32' ? 'ziee.exe' : 'ziee',
+    )
+    const usePrebuilt = existsSync(serverBinary)
+    const spawnCmd = usePrebuilt ? serverBinary : cargoPath
+    const spawnArgs = usePrebuilt
+      ? ['--config-file', configPath]
+      : ['run', '--bin', 'ziee', '--', '--config-file', configPath]
+    console.log(
+      usePrebuilt
+        ? `   Spawning prebuilt binary: ${serverBinary}`
+        : `   Prebuilt binary absent — falling back to cargo run`,
+    )
+
     // Isolate the hub catalog dir per test. The hub catalog
     // (`current/`) is durable global state; a refresh/activate in one
     // spec would otherwise rotate the shared dir and leak the new
@@ -374,8 +435,8 @@ ${
     const hubDataDir = resolve(configDir, `hub-${testId}`)
 
     const serverProcess = spawn(
-      cargoPath,
-      ['run', '--bin', 'ziee', '--', '--config-file', configPath],
+      spawnCmd,
+      spawnArgs,
       {
         cwd: resolve(__dirname, '../../../server'),
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -431,8 +492,9 @@ ${
       }
     })
 
-    // Wait for backend to be STABLY ready (120s budget covers cargo compilation
-    // on first run). Deep gate (not just a single 200): a cold-loading server
+    // Wait for backend to be STABLY ready (120s budget; the prebuilt binary
+    // boots in ~1s, but the budget also covers the `cargo run` fallback's
+    // compile). Deep gate (not just a single 200): a cold-loading server
     // answers /api/health while still churning, and SSE streams opened in that
     // window get reset → flaky `waitFor` timeouts. Require a stable, fast window.
     const backendReady = await waitForServerStable(
@@ -628,30 +690,16 @@ export default defineConfig({
     clearInterval(infrastructure.heartbeatInterval)
     console.log(`💔 Heartbeat stopped`)
 
-    // Kill backend server process (cargo and rust binary)
-    try {
-      serverProcess.kill('SIGTERM')
-    } catch {}
-
-    // Kill Vite process
-    try {
-      viteProcess.kill('SIGTERM')
-    } catch {}
-
-    // Wait for graceful shutdown
-    await new Promise(resolve => setTimeout(resolve, 1500))
-
-    // Force kill if still running
-    try {
-      serverProcess.kill('SIGKILL')
-    } catch {}
-
-    try {
-      viteProcess.kill('SIGKILL')
-    } catch {}
-
-    // Wait a bit for process cleanup
-    await new Promise(resolve => setTimeout(resolve, 500))
+    // Graceful shutdown driven by the child `exit` EVENT rather than a fixed
+    // sleep: SIGTERM, then await the process actually exiting (bounded); on
+    // timeout escalate to SIGKILL and await again (bounded). This returns as
+    // soon as the process is gone instead of always burning ~2s. The
+    // killProcessOnPort() calls below remain the unconditional port-release
+    // guarantee, so no port can leak even if a wait times out.
+    await Promise.all([
+      terminateChild(serverProcess),
+      terminateChild(viteProcess),
+    ])
 
     // Kill any remaining processes on our ports (handles orphaned processes)
     console.log(
@@ -710,6 +758,57 @@ export default defineConfig({
 
 export { expect } from '@playwright/test'
 
+/**
+ * Terminate a child process, driven by its `exit` event instead of a fixed
+ * sleep. Sends SIGTERM and waits up to `graceMs` for the process to exit; if it
+ * is still alive, escalates to SIGKILL and waits up to `killMs`. Resolves as
+ * soon as the process has exited (or the bounded waits elapse) — a clean
+ * shutdown returns almost immediately rather than always waiting the full grace.
+ *
+ * Note: this bounds the WAIT only. The caller still force-kills anything left on
+ * the ports afterwards (killProcessOnPort), which is the real port-release
+ * guarantee; this helper never weakens it.
+ */
+async function terminateChild(
+  child: ChildProcess,
+  graceMs = 4000,
+  killMs = 2000,
+): Promise<void> {
+  // Already exited (exitCode/signalCode set) — nothing to wait for.
+  if (child.exitCode !== null || child.signalCode !== null) return
+
+  const waitForExit = (timeoutMs: number): Promise<boolean> =>
+    new Promise<boolean>(resolveExit => {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        resolveExit(true)
+        return
+      }
+      let done = false
+      const finish = (exited: boolean) => {
+        if (done) return
+        done = true
+        clearTimeout(timer)
+        child.removeListener('exit', onExit)
+        resolveExit(exited)
+      }
+      const onExit = () => finish(true)
+      const timer = setTimeout(() => finish(false), timeoutMs)
+      child.once('exit', onExit)
+    })
+
+  try {
+    child.kill('SIGTERM')
+  } catch {}
+  const exited = await waitForExit(graceMs)
+  if (exited) return
+
+  // Still running after the grace window — force kill and confirm exit.
+  try {
+    child.kill('SIGKILL')
+  } catch {}
+  await waitForExit(killMs)
+}
+
 async function waitForServer(
   url: string,
   maxAttempts: number,
@@ -756,7 +855,11 @@ async function waitForServerStable(
     stabilizeSeconds?: number
   } = {},
 ): Promise<boolean> {
-  const consecutive = opts.consecutive ?? 6
+  // 3 consecutive fast/healthy probes (~750ms window) is still a deep gate
+  // (strictly stronger than the old single-200 check) but ~1s cheaper per boot
+  // than the previous 6. The blip-reset + best-effort stabilizeSeconds fallback
+  // below keep it from ever becoming a new "failed to start".
+  const consecutive = opts.consecutive ?? 3
   const intervalMs = opts.intervalMs ?? 250
   const fastMs = opts.fastMs ?? 800
   const abortMs = opts.abortMs ?? 3000

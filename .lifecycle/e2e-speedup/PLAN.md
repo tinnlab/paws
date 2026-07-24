@@ -40,8 +40,11 @@ NO API/type changes, NO new permissions, NO UI surfaces.
   `CREATE DATABASE` that forces the server to run all migrations on boot. Build the
   template ONCE in `global-setup.ts` (after the binary warmup) by booting the
   prebuilt server against a `ziee_test_template_<runId>` DB so its boot migrates
-  it, then shutting it down; publish the template name in
-  `.test-configs/postgres-<runId>.json`. In `test-context.ts` create the per-test
+  it, then shutting it down; publish the template name by RE-WRITING
+  `.test-configs/postgres-<runId>.json` (first written pre-warmup) with a
+  `templateName` field after the template build. An `E2E_SKIP_DB_TEMPLATE=1`
+  opt-out (mirroring the existing `E2E_SKIP_BUILD` / `E2E_SKIP_SERVER_WARMUP`
+  idiom) skips the template. In `test-context.ts` create the per-test
   DB with `CREATE DATABASE <db> TEMPLATE <template>` (with a bounded retry on the
   transient "source database is being accessed by other users" conflict). Per-test
   DB stays uniquely named (`ziee_test_<testId>`) → isolation unchanged.
