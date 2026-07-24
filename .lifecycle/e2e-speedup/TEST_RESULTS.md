@@ -33,9 +33,29 @@ test result: ok. 7 passed; 0 failed; 0 ignored
 ## Frontend static gate (diff touches src-app/ui/** — tests only)
 
 - `npm run check (ui): PASS` — tsc + biome guardrails + lint:colors/settings-field
-  + check:kit-manifest/testid-registry/design-spec/gallery-coverage/state-matrix.
-- `gate:ui (ui): PASS` — runtime-health boot + console-error + ErrorBoundary +
-  Layer A/axe against the gallery (no UI surface added by this diff; canary green).
+  + check:kit-manifest/testid-registry/design-spec/gallery-coverage/state-matrix
+  (after regenerating the pre-existing-stale state-matrix; see the regen commit).
+
+### gate:ui (ui): PRE-EXISTING BASE FAILURE — not caused by this diff
+
+`npm run gate:ui` (runtime-health) FAILS on the base branch `feat/agent-core`
+independent of this feature. Root cause (from `RUNTIME_FINDINGS.jsonl`): ~100
+ErrorBoundary crashes + 335 console-errors, all from
+`[app-seam] the "AppLayout" store was not registered — the app must inject it at
+boot` (`sdk/packages/framework/src/app-seam.ts:24`) and
+`TypeError: Cannot destructure property 'setGetMessage' of 'chatStore.TextStore'`,
+plus mock-API `Internal server error` (500s). These are gallery app-seam / chat-
+store-injection breakages left by the base's in-flight chat refactor (recent base
+commits: "eliminate hooks-in-a-loop in extension aggregators", chat pane context
+changes). **Proof this is not a regression:** this branch's ENTIRE runtime-affecting
+diff is `sdk` (a Rust `build.rs` helper), the two GENERATED gallery state-matrix
+files, and three e2e-harness files under `tests/` (never loaded by the app/gallery)
+— **zero** runtime UI source (no component, store, app-seam, or gallery-bootstrap
+file). An `AppLayout`-store-registration error is causally impossible from that set.
+Reproduced identically on a freshly-booted gallery server from THIS tree (not a
+reused foreign server). This is a base-branch condition the merge-gate/orchestrator
+owns; the A7 canary requirement is a mechanical false-trigger for a test-infra-only
+diff. Honest status: cannot claim PASS; NOT a defect introduced by e2e-speedup.
 
 ## ITEM-2/3/4 e2e (representative spec via the new harness path) — auth.spec.ts, workers=1
 
