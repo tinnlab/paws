@@ -14,3 +14,5 @@ src-app/ui/tests/global-setup.ts	2	2	correctness,modularity,maintainability
 src-app/ui/tests/global-setup.ts	5	5	correctness,modularity,maintainability
 src-app/ui/tests/global-setup.ts	11	16	correctness,modularity,maintainability
 src-app/ui/tests/global-setup.ts	333	473	correctness,concurrency,security,error-handling,state-management,tests-quality
+src-app/ui/src/dev/gallery/STATE_MATRIX.md	1	3480	correctness,patterns-conformance,maintainability
+src-app/ui/src/dev/gallery/stateMatrix.generated.ts	1	3180	correctness,patterns-conformance,maintainability
