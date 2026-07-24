@@ -18,7 +18,7 @@ const wrapperSrc = readFileSync(
 )
 
 test('LazyDatePicker is a forwardRef wrapper that forwards props + ref', () => {
-  assert.match(wrapperSrc, /React\.forwardRef</, 'must be a React.forwardRef')
+  assert.match(wrapperSrc, /forwardRef</, 'must be a React.forwardRef')
   // props spread + ref forwarded onto the inner picker (the FormField binding)
   assert.match(wrapperSrc, /\{\.\.\.props\}/, 'must spread {...props}')
   assert.match(wrapperSrc, /ref=\{ref\}/, 'must forward ref={ref}')
@@ -26,7 +26,7 @@ test('LazyDatePicker is a forwardRef wrapper that forwards props + ref', () => {
 
 test('LazyDatePicker dynamic-imports the kit DatePicker inside a Suspense boundary', () => {
   // React.lazy + a dynamic import of the deep kit export = the lazy-chunk split.
-  assert.match(wrapperSrc, /React\.lazy\(/, 'must use React.lazy')
+  assert.match(wrapperSrc, /lazy\(/, 'must use React.lazy')
   assert.match(
     wrapperSrc,
     /import\('@ziee\/kit\/kit\/date-picker'\)/,
@@ -37,7 +37,7 @@ test('LazyDatePicker dynamic-imports the kit DatePicker inside a Suspense bounda
     /m\.DatePicker/,
     'must resolve the module to its DatePicker export',
   )
-  assert.match(wrapperSrc, /React\.Suspense/, 'must wrap in Suspense')
+  assert.match(wrapperSrc, /Suspense/, 'must wrap in Suspense')
   assert.match(wrapperSrc, /Skeleton/, 'must show a Skeleton fallback while loading')
 })
 

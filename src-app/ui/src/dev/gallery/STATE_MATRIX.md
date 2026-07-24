@@ -8,7 +8,7 @@
 ## Summary
 
 - **335** surfaces carry at least one renderable-state signal.
-- **2045** signals total: 1599 branch, 136 empty, 117 error, 94 loading, 96 overlay, 3 panel.
+- **2052** signals total: 1606 branch, 136 empty, 117 error, 94 loading, 96 overlay, 3 panel.
 - **3** right-panel renderers registered (each a right-panel-open state).
 - **35** slot registrations (sidebar / settings / chat mount points).
 
@@ -594,8 +594,8 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `isEditing` | 93 |
-| branch | `showBackButton` | 139 |
+| branch | `isEditing` | 92 |
+| branch | `showBackButton` | 138 |
 
 ### `modules/chat/components/VirtualizedConversationList`
 
@@ -908,36 +908,36 @@ Required states: `delayed`, `empty`, `error`
 | branch | `Math.abs(dy) < 6` | 494 |
 | branch | `!chat.$.conversation` | 514 |
 | branch | `pane && pane.paneId !== SplitViewStore.$.focusedPaneId` | 518 |
-| branch | `!conversationId` | 560 |
-| branch | `didSeedApprovalsRef.current` | 616 |
-| branch | `conversation?.id !== conversationId` | 617 |
-| branch | `!hasNewApproval` | 652 |
-| branch | `pendingAnchorRef.current \|\| hasMoreAfter \|\| conversation?.id !== conversationId \|\| initialScrollConvIdRef.current !== conversationId` | 656 |
-| branch | `!sentinel` | 684 |
-| branch | `!entries[0]?.isIntersecting` | 688 |
-| branch | `!chat.$.hasMoreBefore \|\| chat.$.loadingOlder` | 691 |
-| branch | `!sentinel` | 726 |
-| branch | `!entries[0]?.isIntersecting` | 730 |
-| branch | `!chat.$.hasMoreAfter \|\| chat.$.isStreaming` | 731 |
-| loading | `!pending` | 746 |
-| loading | `!currentFirst \|\| currentFirst === pending.prevFirstId` | 749 |
-| branch | `!conversation?.id` | 758 |
-| branch | `!m` | 762 |
-| branch | `!found \|\| chat.$.conversation?.id !== conversation.id` | 765 |
-| loading | `(loading \|\| loadPending) && !conversation` | 801 |
-| branch | `pane && !conversationId && !conversation` | 811 |
-| loading | `!loading && !conversation` | 818 |
-| error | `error` | 821 |
-| branch | `!isPopoutWindow` | 871 |
-| branch | `md` | 872 |
-| branch | `splitViewPanes.length < SPLIT_LIMITS.MAX_PANES` | 885 |
-| branch | `pane && !useMobileShell` | 922 |
-| branch | `!md` | 945 |
-| branch | `!md` | 970 |
-| error | `error` | 996 |
-| branch | `!md && dropZone` | 1024 |
-| branch | `dropZone === z` | 1053 |
-| branch | `nativeScroll && !composerHidden` | 1149 |
+| branch | `!conversationId` | 567 |
+| branch | `didSeedApprovalsRef.current` | 623 |
+| branch | `conversation?.id !== conversationId` | 624 |
+| branch | `!hasNewApproval` | 659 |
+| branch | `pendingAnchorRef.current \|\| hasMoreAfter \|\| conversation?.id !== conversationId \|\| initialScrollConvIdRef.current !== conversationId` | 663 |
+| branch | `!sentinel` | 691 |
+| branch | `!entries[0]?.isIntersecting` | 695 |
+| branch | `!chat.$.hasMoreBefore \|\| chat.$.loadingOlder` | 698 |
+| branch | `!sentinel` | 733 |
+| branch | `!entries[0]?.isIntersecting` | 737 |
+| branch | `!chat.$.hasMoreAfter \|\| chat.$.isStreaming` | 738 |
+| loading | `!pending` | 753 |
+| loading | `!currentFirst \|\| currentFirst === pending.prevFirstId` | 756 |
+| branch | `!conversation?.id` | 765 |
+| branch | `!m` | 769 |
+| branch | `!found \|\| chat.$.conversation?.id !== conversation.id` | 772 |
+| loading | `(loading \|\| loadPending) && !conversation` | 808 |
+| branch | `pane && !conversationId && !conversation` | 818 |
+| loading | `!loading && !conversation` | 825 |
+| error | `error` | 828 |
+| branch | `!isPopoutWindow` | 878 |
+| branch | `md` | 879 |
+| branch | `splitViewPanes.length < SPLIT_LIMITS.MAX_PANES` | 892 |
+| branch | `pane && !useMobileShell` | 929 |
+| branch | `!md` | 952 |
+| branch | `!md` | 977 |
+| error | `error` | 1003 |
+| branch | `!md && dropZone` | 1031 |
+| branch | `dropZone === z` | 1060 |
+| branch | `nativeScroll && !composerHidden` | 1156 |
 
 ### `modules/chat/widgets/RecentConversationsWidget`
 
@@ -1756,14 +1756,14 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `currentTabSlot` | 159 |
-| branch | `hubVersion` | 167 |
-| branch | `useMobileLayout` | 212 |
-| branch | `canRefresh` | 214 |
-| branch | `!useMobileLayout` | 251 |
-| branch | `canRefresh` | 260 |
-| branch | `urlSegmentIsForbidden` | 280 |
-| branch | `currentTabSlot` | 307 |
+| branch | `currentTabSlot` | 191 |
+| branch | `hubVersion` | 199 |
+| branch | `useMobileLayout` | 244 |
+| branch | `canRefresh` | 246 |
+| branch | `!useMobileLayout` | 283 |
+| branch | `canRefresh` | 292 |
+| branch | `urlSegmentIsForbidden` | 312 |
+| branch | `currentTabSlot` | 339 |
 
 ### `modules/hub/modules/assistants/components/AssistantDetailsDrawer`
 
@@ -2475,14 +2475,14 @@ Required states: `delayed`, `error`
 
 | kind | condition | line |
 |---|---|---|
-| loading | `loading` | 141 |
-| error | `error && providers.length === 0` | 147 |
-| branch | `!currentProvider` | 159 |
-| branch | `currentProvider.provider_type === 'local'` | 169 |
-| branch | `!windowMinSize.sm` | 180 |
-| branch | `windowMinSize.sm` | 198 |
-| branch | `item.key === 'add-provider'` | 208 |
-| branch | `currentProvider` | 232 |
+| loading | `loading` | 140 |
+| error | `error && providers.length === 0` | 146 |
+| branch | `!currentProvider` | 158 |
+| branch | `currentProvider.provider_type === 'local'` | 168 |
+| branch | `!windowMinSize.sm` | 179 |
+| branch | `windowMinSize.sm` | 197 |
+| branch | `item.key === 'add-provider'` | 207 |
+| branch | `currentProvider` | 231 |
 
 ### `modules/llm-provider/components/LocalProviderSettings`
 
@@ -3334,25 +3334,31 @@ Required states: `delayed`, `open`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!projectId` | 169 |
-| overlay | `<Confirm open>` | 280 |
-| branch | `cached !== undefined && (cached === null \|\| cached.name)` | 336 |
-| branch | `cancelled` | 338 |
-| branch | `event.data.conversationId !== conversationId` | 356 |
-| branch | `event.data.conversationId !== conversationId` | 370 |
-| branch | `!canUseProjects` | 384 |
-| loading | `state.kind === 'loading'` | 386 |
-| branch | `state.kind === 'in_project'` | 390 |
-| overlay | `<AddToProjectModal open>` | 427 |
-| branch | `loaded` | 473 |
-| branch | `cancelled` | 475 |
-| branch | `event.data.conversationId !== conversation.id` | 492 |
-| branch | `event.data.conversationId !== conversation.id` | 502 |
-| branch | `!project` | 523 |
-| branch | `!ok` | 530 |
-| branch | `project` | 542 |
-| branch | `loaded` | 559 |
-| overlay | `<AddToProjectModal open>` | 572 |
+| branch | `!conversation?.id` | 162 |
+| branch | `!conversation?.id` | 169 |
+| branch | `!conversation?.id` | 172 |
+| branch | `getCached(conversation.id) !== undefined` | 173 |
+| branch | `cancelled` | 175 |
+| branch | `!conversation?.id \|\| !project?.name` | 183 |
+| branch | `!projectId` | 224 |
+| overlay | `<Confirm open>` | 346 |
+| branch | `cached !== undefined && (cached === null \|\| cached.name)` | 402 |
+| branch | `cancelled` | 404 |
+| branch | `event.data.conversationId !== conversationId` | 422 |
+| branch | `event.data.conversationId !== conversationId` | 436 |
+| branch | `!canUseProjects` | 450 |
+| loading | `state.kind === 'loading'` | 452 |
+| branch | `state.kind === 'in_project'` | 456 |
+| overlay | `<AddToProjectModal open>` | 493 |
+| branch | `loaded` | 539 |
+| branch | `cancelled` | 541 |
+| branch | `event.data.conversationId !== conversation.id` | 558 |
+| branch | `event.data.conversationId !== conversation.id` | 568 |
+| branch | `!project` | 589 |
+| branch | `!ok` | 596 |
+| branch | `project` | 608 |
+| branch | `loaded` | 625 |
+| overlay | `<AddToProjectModal open>` | 638 |
 
 ### `modules/projects/components/AddToProjectModal`
 
@@ -3461,12 +3467,13 @@ Required states: `delayed`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!allowed` | 34 |
-| loading | `!pending` | 128 |
-| loading | `pending && !timedOut` | 136 |
-| branch | `!layoutDef` | 169 |
-| branch | `guards.length > 0` | 240 |
-| branch | `protectedRoutes.length > 0` | 255 |
+| branch | `!allowed` | 51 |
+| loading | `!pending` | 137 |
+| loading | `pending && !timedOut` | 145 |
+| branch | `forbidden` | 146 |
+| branch | `!layoutDef` | 179 |
+| branch | `guards.length > 0` | 250 |
+| branch | `protectedRoutes.length > 0` | 265 |
 
 ### `modules/scheduler/components/ScheduleBuilder`
 
@@ -3594,13 +3601,13 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `adminSettingsItems.length > 0` | 81 |
-| branch | `adminSettingsItems.length > 0` | 114 |
-| branch | `useMobileLayout` | 236 |
-| branch | `key === '__onboarding__'` | 253 |
-| branch | `key === '__help__'` | 257 |
-| branch | `!useMobileLayout` | 289 |
-| branch | `forbiddenSection` | 327 |
+| branch | `adminSettingsItems.length > 0` | 86 |
+| branch | `adminSettingsItems.length > 0` | 119 |
+| branch | `useMobileLayout` | 241 |
+| branch | `key === '__onboarding__'` | 258 |
+| branch | `key === '__help__'` | 262 |
+| branch | `!useMobileLayout` | 294 |
+| branch | `forbiddenSection` | 332 |
 
 ### `modules/settings/components/SettingsFormActions`
 
@@ -3772,19 +3779,19 @@ Required states: `delayed`, `empty`, `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!selectedId` | 61 |
-| branch | `!key \|\| key === KEY_DISPLAY_PLACEHOLDER` | 63 |
-| branch | `!selectedId` | 77 |
-| loading | `loading` | 113 |
-| error | `error` | 121 |
-| empty | `providers.length === 0` | 135 |
-| branch | `!currentProvider` | 151 |
-| branch | `hasUserKey` | 170 |
-| branch | `currentProvider.api_key_configured` | 172 |
-| branch | `hasUserKey` | 202 |
-| branch | `!windowMinSize.sm` | 221 |
-| branch | `windowMinSize.sm && providers.length > 0` | 239 |
-| branch | `currentProvider` | 248 |
+| branch | `!selectedId` | 60 |
+| branch | `!key \|\| key === KEY_DISPLAY_PLACEHOLDER` | 62 |
+| branch | `!selectedId` | 76 |
+| loading | `loading` | 112 |
+| error | `error` | 120 |
+| empty | `providers.length === 0` | 134 |
+| branch | `!currentProvider` | 150 |
+| branch | `hasUserKey` | 169 |
+| branch | `currentProvider.api_key_configured` | 171 |
+| branch | `hasUserKey` | 201 |
+| branch | `!windowMinSize.sm` | 220 |
+| branch | `windowMinSize.sm && providers.length > 0` | 238 |
+| branch | `currentProvider` | 247 |
 
 ### `modules/user-llm-providers/chat-extension/components/ModelSelector`
 
