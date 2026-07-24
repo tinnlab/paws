@@ -71,7 +71,6 @@ export default defineConfig(async () => {
         '@ant-design/icons',
         'i18next',
         'react-i18next',
-        'react-icons',
         'react-use',
         'dayjs',
         'immer',
@@ -105,6 +104,24 @@ export default defineConfig(async () => {
 
     build: {
       outDir: '../dist',
+      rollupOptions: {
+        output: {
+          // Stable vendor chunk — mirrors src-app/ui/vite.config.ts (Vite 8 /
+          // rolldown advancedChunks.groups). Group the large framework libs into
+          // ONE cached `vendor-<hash>.js`. react + react-dom + scheduler stay in
+          // the SAME group (a split React instance breaks hooks). Excludes
+          // react-day-picker/date-fns (kept lazy) and react-icons (removed).
+          advancedChunks: {
+            groups: [
+              {
+                name: 'vendor',
+                test: /node_modules[\\/](react|react-dom|scheduler|react-router|react-router-dom|@base-ui|@floating-ui|tslib)[\\/]/,
+                priority: 1,
+              },
+            ],
+          },
+        },
+      },
     },
   }
 })

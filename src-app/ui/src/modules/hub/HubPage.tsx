@@ -13,8 +13,7 @@ import {
   message,
 } from '@ziee/kit'
 import type { MenuItem } from '@ziee/kit/kit/menu'
-import { RotateCw } from 'lucide-react'
-import { IoIosArrowDown } from 'react-icons/io'
+import { RotateCw, ChevronDown } from 'lucide-react'
 import { evaluatePermission, type PermissionExpr } from '@/core/permissions'
 import { Permissions } from '@/api-client/permissions'
 import { HeaderBarContainer } from '@/modules/layouts/app-layout/components/HeaderBarContainer'
@@ -268,7 +267,7 @@ export function HubPage() {
                     aria-haspopup="menu"
                     aria-expanded={mobileMenuOpen}
                   >
-                    {currentTabLabel} <IoIosArrowDown />
+                    {currentTabLabel} <ChevronDown size="1em" />
                   </Button>
                 </Dropdown>
               </>

@@ -34,7 +34,10 @@ Entry `index-Bvqcj6U0.js` = 1,040,856 B (gzip 333 KB). Top eager node_modules
 - `src-app/ui/src/modules/llm-provider/constants.tsx` — swap Fa/Bs icons → lucide, brand icons → custom SVG components (ITEM-2).
 - `src-app/ui/src/modules/llm-provider/icons/OpenAI.tsx`, `Anthropic.tsx`, `Gemini.tsx`, `HuggingFace.tsx` (+ `icons/index.ts` re-exports) — NEW custom brand-icon SVG components (ITEM-2).
 - `src-app/desktop/ui/src/modules/desktop-base/overrides/hardware-monitor.tsx` — swap react-icons → lucide (ITEM-2, desktop override).
+- `sdk/packages/shell/src/components/Drawer.tsx` — swap `IoIosArrowBack` → lucide `ChevronLeft` (ITEM-2). **[amended — see DRIFT-1]**: the `@ziee/shell` Drawer (used app-wide via the `layouts/app-layout/components/Drawer.tsx` shim) was the LAST live react-icons importer; it must be swapped or react-icons can't leave the dependency graph (it lingers in the entry sourcemap).
+- `sdk/packages/shell/package.json` — remove `react-icons`, add `lucide-react` (ITEM-2, amended).
 - `src-app/ui/package.json`, `src-app/desktop/ui/package.json` — remove `react-icons`; add `lucide-react` to desktop (ITEM-2).
+- `src-app/desktop/ui/vite.config.ts`, `src-app/ui/tests/global-setup.ts` — drop the now-dead `'react-icons'` entry from the `resolve.dedupe` lists (ITEM-2, amended).
 - `src-app/ui/src/components/common/LazyDatePicker.tsx` — NEW shared lazy forwardRef wrapper (ITEM-3).
 - `src-app/ui/src/modules/workflow/components/WorkflowElicitForm.tsx`, `src-app/ui/src/modules/mcp/chat-extension/components/elicitationFields.tsx` — use `LazyDatePicker` instead of the eager barrel `DatePicker` (ITEM-3).
 - `src-app/ui/tests/e2e/perf/entry-slimming.spec.ts` — NEW regression-guard e2e (ITEM-2/3).

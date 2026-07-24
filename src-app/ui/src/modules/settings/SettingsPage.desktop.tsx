@@ -27,7 +27,7 @@ import { Button, Dropdown, Flex, Menu, Title } from '@ziee/kit'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useElementMinSize } from '@/modules/layouts/app-layout/hooks/useWindowMinSize'
 import { HeaderBarContainer } from '@/modules/layouts/app-layout/components/HeaderBarContainer'
-import { IoIosArrowDown, IoMdSettings } from 'react-icons/io'
+import { ChevronDown, Settings } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import { ModuleSystem } from '@ziee/framework/stores'
 
@@ -164,7 +164,7 @@ export default function SettingsPage() {
     const currentItem = menuItems.find(
       item => 'key' in item && item.key === currentSection,
     )
-    return currentItem || { icon: <IoMdSettings />, label: 'Settings' }
+    return currentItem || { icon: <Settings size="1em" />, label: 'Settings' }
   }
 
   const SettingsMenu = () => (
@@ -211,7 +211,7 @@ export default function SettingsPage() {
               >
                 <Button data-testid="desktop-settings-section-dropdown-btn" variant="ghost" className="mt-[2px]">
                   {getCurrentSectionInfo().icon} {getCurrentSectionInfo().label}{' '}
-                  <IoIosArrowDown />
+                  <ChevronDown size="1em" />
                 </Button>
               </Dropdown>
             </div>

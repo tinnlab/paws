@@ -132,6 +132,22 @@ export default defineConfig(async () => {
     outDir: '../../dist/ui',
     rollupOptions: {
       output: {
+        // Stable vendor chunk (Vite 8 / rolldown API: advancedChunks.groups —
+        // NOT Rollup's manualChunks). Group the large, rarely-changing framework
+        // libs into ONE cached `vendor-<hash>.js` so it is re-fetched only when a
+        // framework version bumps, not on every app-code deploy. react + react-dom
+        // + scheduler stay in the SAME group (a split React instance breaks hooks).
+        // Deliberately EXCLUDES react-day-picker/date-fns (kept lazy, see
+        // components/common/LazyDatePicker.tsx) and react-icons (removed).
+        advancedChunks: {
+          groups: [
+            {
+              name: 'vendor',
+              test: /node_modules[\\/](react|react-dom|scheduler|react-router|react-router-dom|@base-ui|@floating-ui|tslib)[\\/]/,
+              priority: 1,
+            },
+          ],
+        },
         // Name each module-boundary chunk after its module (e.g.
         // `assets/module.chat-<hash>.js`) instead of the default collision-hashed
         // `module-<hash>.js`. This makes the smart-loader's per-module network
