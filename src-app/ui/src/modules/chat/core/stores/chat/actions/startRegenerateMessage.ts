@@ -25,7 +25,13 @@ export default (set: ChatSet, getRaw: () => ChatInitialState) => {
       const userText = (() => {
         for (const content of precedingUserMsg.contents) {
           const data = content.content as any
-          if (data?.type === 'text' && typeof data.text === 'string') {
+          // Include `observation` (a system-injected background result rides a
+          // user-role message with no plain text block) so regenerating the reply
+          // that followed it re-sends the result rather than empty content.
+          if (
+            (data?.type === 'text' || data?.type === 'observation') &&
+            typeof data.text === 'string'
+          ) {
             return data.text
           }
         }

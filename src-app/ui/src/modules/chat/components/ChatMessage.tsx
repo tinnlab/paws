@@ -155,7 +155,7 @@ export const ChatMessage = memo(function ChatMessage({
       i += res.consumed
     } else {
       bubbleNodes.push(
-        <ContentRenderer key={key} content={block} isUser={isUser} />,
+        <ContentRenderer key={key} content={block} isUser={renderAsUser} />,
       )
       i += 1
     }
@@ -205,7 +205,7 @@ export const ChatMessage = memo(function ChatMessage({
               <ContentRenderer
                 key={`${content.id || `att-${index}`}`}
                 content={content}
-                isUser={isUser}
+                isUser={renderAsUser}
               />
             ))}
           </div>

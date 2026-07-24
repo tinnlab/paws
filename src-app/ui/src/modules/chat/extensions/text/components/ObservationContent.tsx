@@ -31,7 +31,7 @@ export const ObservationContent = memo(function ObservationContent({
       <div className="flex items-center gap-2 min-w-0">
         <Radio className="size-4 text-info shrink-0" />
         <Text strong className="truncate text-info">
-          System update
+          Background result
         </Text>
       </div>
       <div className="mt-2 text-sm text-muted-foreground whitespace-pre-wrap">

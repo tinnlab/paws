@@ -19,7 +19,13 @@ function extractMessageText(message: MessageWithContent): string {
   }
 
   return message.contents
-    .filter(content => content.content_type === 'text')
+    .filter(
+      content =>
+        content.content_type === 'text' ||
+        // A system-injected `observation` (background result) is part of the
+        // conversation and belongs in the exported transcript.
+        content.content_type === 'observation',
+    )
     .map(content => {
       const textData = content.content as { text?: string }
       return textData.text || ''
