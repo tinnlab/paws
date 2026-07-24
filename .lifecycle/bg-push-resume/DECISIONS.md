@@ -2,18 +2,43 @@
 
 All decisions are resolved up front so implementation runs nonstop.
 
+- DESCOPED: ITEM-7 — the system/observation-role injected turn (DEC-1) is BLOCKED on non-trivial new shared chat-pipeline + context-builder + UI plumbing (both turn-start paths hardcode MessageRole::User; System-role messages are dropped from the LLM context, so the resumed model would be blind to the result). Cut this round per the coordinator's explicit "STOP and report BLOCKED rather than force it" guardrail; the user-role interim is retained. [approved: coordinator/2026-07-24]
+
 ### DEC-1: What ROLE/appearance does the injected result take on the resumed turn?
-**Resolution:** A USER-role message with explicit `[Background task complete]`
-framing. `start_generation` (legacy path, streaming.rs) persists the request
-`content` as a user-role message, so the injected result reads as a user turn
-that hands the sub-agent's result back to the model with a clear machine-authored
-header. No new "system/observation" role machinery is added.
-**Basis:** convention — this is the exact shape the scheduler uses for its
-headless prompt firing (`scheduler/dispatch.rs:377-396` builds `content` and
-calls `start_generation`; it becomes a user message on the bound conversation).
-The clear `[Background task complete]` header disambiguates authorship for both
-the model and the human reading the thread. A distinct role is more machinery for
-no MVP benefit; deferred.
+**Resolution (iteration round — user chose SYSTEM/observation over the convention
+default; investigated → BLOCKED for now, interim keeps user-role):** The user
+directed that the injected result render as a distinct SYSTEM/observation turn,
+not a USER message (rationale: a user-role injection reads as if the human typed
+it and pollutes history). Investigation of the chat pipeline shows this cannot be
+done minimally and hits the pre-agreed BLOCKED guardrail:
+- **Both turn-start paths hardcode the incoming role to `User`** — legacy
+  `send_message` (`chat/core/services/streaming.rs:107`,
+  `MessageRole::User.as_str()`) and agent-core
+  (`chat/agent_host/dispatcher.rs:340`). Seeding any non-user role needs a new
+  role parameter threaded through `SendMessageRequest` → `send_message` /
+  `start_generation` AND the agent-core dispatcher — shared-pipeline plumbing.
+- **`MessageRole` has only `{User, Assistant, System}`** (`models/message.rs:13`)
+  — no `developer`/`observation` role — and **System messages are DROPPED from
+  the LLM context** (`streaming.rs:1032` "Skip system messages" → `continue`;
+  `1136`/`1674` map `System => continue`/`return`). So an injected System message
+  would render distinctly but leave the resumed model BLIND to the result,
+  defeating the feature's purpose. Delivering an observation message the model
+  ALSO sees requires changing the shared context-builder (both paths) + a provider
+  role-mapping decision + a UI renderer for the new turn kind — non-trivial new
+  turn-start + context-building plumbing in wire-format-invariant-tested code.
+- No existing "observation/developer/included-system" message machinery exists to
+  reuse (searched).
+**Interim:** keep the current USER-role delivery (with the explicit
+`[Background task complete]` + run-id + untrusted-content-guard framing) so the
+feature keeps working, and report Change-1 to the coordinator as a **BLOCKED
+product/architecture decision** (per the coordinator's explicit instruction:
+"STOP and report BLOCKED rather than forcing it — don't hack a fake role the
+renderer won't handle"). A follow-up feature can add a first-class
+observation-turn role (persisted + context-included + UI-rendered) across both
+chat loops if the product wants it.
+**Basis:** user (chose system/observation) + codebase (the pipeline can't seed a
+context-visible non-user role without new shared plumbing — file:line evidence
+above). Recorded as BLOCKED, not silently reverted.
 
 ### DEC-2: Is the resumed turn UNATTENDED (deny-approvals) like the scheduler?
 **Resolution:** NO. The resume runs as a normal foreground turn (no
@@ -62,7 +87,22 @@ guarded transitions); `allow_delegate:false` depth cap on detached sub-agents;
 `spawn_background` approval gate on every launch.
 
 ### DEC-5: Bounded-wait + resume-enable — fixed const or admin-configurable? (ITEM-5)
-**Resolution:** FIXED named consts, no settings row, no separate kill switch.
+**Resolution (iteration round — user chose to ADD a deploy-level kill switch):**
+The wait bound stays a FIXED const (`RESUME_MAX_IDLE_WAIT = 5min` +
+`RESUME_POLL_INTERVAL`), BUT — per the user's direction — a **deploy-level config
+kill switch** now turns auto-resume OFF entirely: `background_mcp: {
+resume_enabled: false }` (`Config.background_mcp: Option<BackgroundMcpConfig>`,
+`resume_enabled: bool`, default TRUE). It follows the repo's `Option<XxxConfig>` +
+`enabled`-bool convention (mirrors `BioMcpConfig`/`LitSearchConfig`/`JsToolConfig`)
+and is checked in the resume gate: `resume_enabled_from_config()` feeds
+`should_resume(resume_enabled, …)`, which is where the resume is wired (the
+`Completed`-branch spawn), per CODING_GUIDELINES §16. Default preserves current
+behavior (resume ON). There is intentionally NO admin/runtime settings row — this
+is an OPERATOR opt-out only, so no migration / REST / sync / admin card is added
+(the module's tools stay registered; only auto-resume is suppressed). Unit-tested
+(TEST-8: `resume_enabled=false` disables the resume; default reads ON).
+Original fixed-const rationale for the WAIT bound (unchanged):
+FIXED named consts, no settings row for the timeout.
 - `RESUME_MAX_IDLE_WAIT: Duration = Duration::from_secs(5 * 60)` — best-effort
   bound on how long a resume waits for the conversation to become idle before
   giving up (logs + returns; the result still lives in the run row + inbox

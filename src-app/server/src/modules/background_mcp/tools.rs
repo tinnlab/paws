@@ -354,7 +354,11 @@ async fn execute_subagent_run(
         //    conversation-bound + non-empty result (the subagent-only gate is
         //    structural — this driver is never the sandbox path). A resume failure
         //    must NEVER fail the already-completed run — log + continue (DEC-7). ──
-        if super::resume::should_resume(conversation_id, &final_text) {
+        // Deploy-level kill switch (`background_mcp.resume_enabled`, default true):
+        // an operator can turn auto-resume OFF entirely — the result still lives in
+        // the run row + inbox; only the automatic re-engagement is suppressed.
+        let resume_enabled = super::resume::resume_enabled_from_config();
+        if super::resume::should_resume(resume_enabled, conversation_id, &final_text) {
             let cid = conversation_id.expect("should_resume guarantees Some");
             let resume = super::resume::ResumeRequest {
                 pool: pool.clone(),

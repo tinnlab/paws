@@ -51,12 +51,24 @@ const RESUME_POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// smaller.
 const RESUME_RESULT_MAX_CHARS: usize = 100_000;
 
+/// The deploy-level push-to-resume switch, read from the stashed deployment
+/// `Config` (`background_mcp.resume_enabled`). Defaults to TRUE when the config
+/// section — or the whole config — is absent (preserves the resume behavior;
+/// operators opt OUT with `background_mcp: { resume_enabled: false }`). This is
+/// the kill switch's read side; the guard is applied in [`should_resume`].
+pub fn resume_enabled_from_config() -> bool {
+    background_mcp_config()
+        .and_then(|c| c.background_mcp.as_ref().map(|b| b.resume_enabled))
+        .unwrap_or(true)
+}
+
 /// Whether a completed sub-agent run should push-resume its conversation: only
-/// when it is conversation-bound AND produced a non-empty result. The
-/// subagent-ONLY gate is structural (this path is reached only from
-/// `execute_subagent_run`, never the sandbox driver). Pure → unit-tested.
-pub fn should_resume(conversation_id: Option<Uuid>, final_text: &str) -> bool {
-    conversation_id.is_some() && !final_text.trim().is_empty()
+/// when auto-resume is enabled deploy-wide (`resume_enabled`, the kill switch) AND
+/// it is conversation-bound AND produced a non-empty result. The subagent-ONLY
+/// gate is structural (this path is reached only from `execute_subagent_run`,
+/// never the sandbox driver). Pure → unit-tested (incl. the disabled-switch case).
+pub fn should_resume(resume_enabled: bool, conversation_id: Option<Uuid>, final_text: &str) -> bool {
+    resume_enabled && conversation_id.is_some() && !final_text.trim().is_empty()
 }
 
 /// The inputs for a single push-to-resume (grouped into a struct so the four
@@ -270,13 +282,28 @@ mod tests {
         assert!(RESUME_RESULT_MAX_CHARS > 0);
     }
 
-    // TEST-4: the resume gate — only conversation-bound + non-empty result resumes.
+    // TEST-4: the resume gate — only when enabled AND conversation-bound AND the
+    // result is non-empty does it resume.
     #[test]
     fn should_resume_requires_conversation_and_nonempty_result() {
         let cid = Some(Uuid::new_v4());
-        assert!(should_resume(cid, "a real answer"), "bound + non-empty → resume");
-        assert!(!should_resume(None, "a real answer"), "no conversation → skip");
-        assert!(!should_resume(cid, ""), "empty result → skip");
-        assert!(!should_resume(cid, "   \n\t "), "whitespace-only result → skip");
+        assert!(should_resume(true, cid, "a real answer"), "enabled + bound + non-empty → resume");
+        assert!(!should_resume(true, None, "a real answer"), "no conversation → skip");
+        assert!(!should_resume(true, cid, ""), "empty result → skip");
+        assert!(!should_resume(true, cid, "   \n\t "), "whitespace-only result → skip");
+    }
+
+    // TEST-8: the deploy-level kill switch — with `resume_enabled = false`, an
+    // otherwise-resumable completion does NOT resume (operator opt-out).
+    #[test]
+    fn should_resume_kill_switch_disables_resume() {
+        let cid = Some(Uuid::new_v4());
+        assert!(
+            !should_resume(false, cid, "a real answer"),
+            "resume_enabled=false must disable the resume even for a bound, non-empty result"
+        );
+        // And the default read (no config stashed in a unit test) preserves the
+        // resume behavior — the kill switch is OFF (i.e. resume ON) by default.
+        assert!(resume_enabled_from_config(), "auto-resume defaults to ON when unconfigured");
     }
 }
