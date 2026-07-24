@@ -17,7 +17,8 @@ src-app/ui/src/modules/chat/components/findMatches.ts	30	45	correctness,maintain
 src-app/ui/src/modules/chat/core/stores/chat/actions/startRegenerateMessage.ts	24	40	correctness,state-management,maintainability
 src-app/ui/src/modules/chat/extensions/export/extension.tsx	14	30	correctness,maintainability,patterns-conformance
 src-app/ui/src/dev/gallery/coverage.ts	140	155	patterns-conformance,precedent-fidelity,maintainability
-src-app/ui/src/dev/gallery/STATE_MATRIX.md	1	600	generated-derived,patterns-conformance,maintainability
+sdk	1	1	generated-derived,patterns-conformance,maintainability
+src-app/ui/src/dev/gallery/STATE_MATRIX.md	1	4000	generated-derived,patterns-conformance,maintainability
 src-app/ui/src/dev/gallery/stateMatrix.generated.ts	1	4000	generated-derived,patterns-conformance,maintainability
 src-app/ui/src/dev/gallery/galleryCoverage.generated.ts	1	500	generated-derived,patterns-conformance,maintainability
 src-app/ui/tests/e2e/chat/background-resume-observation.spec.ts	1	140	tests-quality,test-reality,precedent-fidelity
