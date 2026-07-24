@@ -1,4 +1,4 @@
-import { Plus } from 'lucide-react'
+import { Plus, ChevronDown } from 'lucide-react'
 import {
   Button,
   Dropdown,
@@ -20,7 +20,6 @@ import { LlmProviderDrawer } from '@/modules/llm-provider/components/LlmProvider
 import { LocalProviderSettings } from '@/modules/llm-provider/components/LocalProviderSettings'
 import { RemoteProviderSettings } from '@/modules/llm-provider/components/RemoteProviderSettings'
 import { useWindowMinSize } from '@/modules/layouts/app-layout/hooks/useWindowMinSize'
-import { IoIosArrowDown } from 'react-icons/io'
 import { LlmProviderDrawer as LlmProviderDrawerStore } from '@/modules/llm-provider/components/llmProviderDrawer'
 import { LlmProvider } from '@/modules/llm-provider/stores/llmProvider'
 
@@ -242,7 +241,7 @@ export function LlmProviderSettings() {
                         ) : (
                           'Select Provider'
                         )}
-                        <IoIosArrowDown />
+                        <ChevronDown size="1em" />
                       </Button>
                     </Dropdown>
                   </div>

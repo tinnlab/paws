@@ -1,5 +1,5 @@
 import { createModule } from '@ziee/framework'
-import { MdOutlineMonitorHeart } from 'react-icons/md'
+import { HeartPulse } from 'lucide-react'
 import { SettingsLayoutDef } from '@/modules/settings/SettingsLayout'
 import '@/modules/hardware/types'
 import { BlankLayout } from '@/modules/layouts/blank' // Import type augmentation
@@ -42,7 +42,7 @@ export default createModule({
     settingsAdminPages: [
       {
         id: 'hardware',
-        icon: <MdOutlineMonitorHeart />,
+        icon: <HeartPulse size="1em" />,
         label: 'Hardware',
         path: 'hardware',
         order: 30,

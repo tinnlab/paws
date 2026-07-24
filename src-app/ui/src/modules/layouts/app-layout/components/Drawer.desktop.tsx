@@ -30,7 +30,7 @@ import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { Button, Title } from '@ziee/kit'
 import { ResizeHandle } from '@/modules/layouts/app-layout/components/ResizeHandle'
 import { useWindowMinSize } from '@/modules/layouts/app-layout/hooks/useWindowMinSize'
-import { IoIosArrowBack } from 'react-icons/io'
+import { ChevronLeft } from 'lucide-react'
 import { DivScrollY } from '@/components/common/DivScrollY'
 import { isTauriView, isMacOS, isLinux } from '@ziee/desktop/core/platform'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -332,7 +332,7 @@ export const Drawer: React.FC<DrawerProps> = ({
                 {extra != null && <div>{extra}</div>}
                 {closable && (
                   <Button variant="ghost" size="icon" tooltip="Close" aria-label="Close drawer" onClick={onClose} className="w-[30px]" data-testid="desktop-layout-drawer-close">
-                    <span className="text-xl"><IoIosArrowBack aria-hidden="true" /></span>
+                    <span className="text-xl"><ChevronLeft size="1em" aria-hidden="true" /></span>
                   </Button>
                 )}
               </div>

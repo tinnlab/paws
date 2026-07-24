@@ -4,7 +4,7 @@
 //
 // Uses the app's shared Drawer wrapper (custom mask + resize handle +
 // themed chrome) at default size. The wrapper's title slot accepts a
-// ReactNode and prepends an IoIosArrowBack close button automatically,
+// ReactNode and prepends a ChevronLeft back/close button automatically,
 // so we pass [filename + FilePanelHeaderActions] as title — the Download
 // (or viewer-specific HeaderActions) sit in the same row as the back
 // arrow and filename. FilePanel runs with `hideHeader` to avoid

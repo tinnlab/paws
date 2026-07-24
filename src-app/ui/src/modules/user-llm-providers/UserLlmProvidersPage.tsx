@@ -17,8 +17,7 @@ import {
   Menu,
   message,
 } from '@ziee/kit'
-import { CircleCheck } from 'lucide-react'
-import { IoIosArrowDown } from 'react-icons/io'
+import { CircleCheck, ChevronDown } from 'lucide-react'
 import { PROVIDER_ICONS } from '@/modules/llm-provider/constants'
 import { useWindowMinSize } from '@/modules/layouts/app-layout/hooks/useWindowMinSize'
 import { UserLlmProviders } from '@/modules/user-llm-providers/userLlmProviders'
@@ -256,7 +255,7 @@ export default function UserLlmProvidersPage() {
                     ) : (
                       'Select Provider'
                     )}
-                    <IoIosArrowDown />
+                    <ChevronDown size="1em" />
                   </Button>
                 </Dropdown>
               </div>

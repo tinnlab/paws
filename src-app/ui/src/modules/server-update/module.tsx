@@ -1,5 +1,5 @@
 import { createModule } from '@ziee/framework'
-import { MdInfoOutline } from 'react-icons/md'
+import { Info } from 'lucide-react'
 import { SettingsLayoutDef } from '@/modules/settings/SettingsLayout'
 import { ServerUpdateBanner } from '@/modules/server-update/ServerUpdateBanner'
 import { lazyWithPreload } from '@/utils/lazyWithPreload'
@@ -32,7 +32,7 @@ export default createModule({
     settingsAdminPages: [
       {
         id: 'about',
-        icon: <MdInfoOutline />,
+        icon: <Info size="1em" />,
         label: 'About',
         path: 'about',
         order: 100,

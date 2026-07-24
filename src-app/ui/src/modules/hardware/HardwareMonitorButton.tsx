@@ -1,5 +1,5 @@
 import { Button, message } from '@ziee/kit'
-import { MdOutlineMonitorHeart } from 'react-icons/md'
+import { HeartPulse } from 'lucide-react'
 import { usePermission } from '@/core/permissions'
 import { Permissions } from '@/api-client/permissions'
 import { Seam } from '@ziee/framework/overrides'
@@ -53,7 +53,7 @@ export function HardwareMonitorButton() {
 
   return (
     <Seam id="hardware.monitor-button">
-      <Button data-testid="hardware-monitor-btn" icon={<MdOutlineMonitorHeart />} onClick={handleClick}>
+      <Button data-testid="hardware-monitor-btn" icon={<HeartPulse size="1em" />} onClick={handleClick}>
         Monitor
       </Button>
     </Seam>

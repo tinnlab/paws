@@ -8,8 +8,7 @@ import {
   zodResolver,
 } from '@ziee/kit'
 import { z } from 'zod'
-import { Pencil, Check, X } from 'lucide-react'
-import { IoIosArrowBack } from 'react-icons/io'
+import { Pencil, Check, X, ChevronLeft } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { chatExtensionRegistry } from '@/modules/chat/core/extensions'
 import { useIsPopoutWindow } from '@/modules/chat/core/popout/useIsPopoutWindow'
@@ -144,7 +143,7 @@ export function TitleEditor() {
           aria-label="Back to conversation list"
           data-testid="conversation-back-button"
         >
-          <IoIosArrowBack className="text-md" />
+          <ChevronLeft size="1em" className="text-md" />
         </Button>
       )}
       <Title

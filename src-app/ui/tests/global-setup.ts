@@ -257,7 +257,6 @@ export default defineConfig({
       '@ant-design/icons',
       'i18next',
       'react-i18next',
-      'react-icons',
       'react-use',
       'dayjs',
       'immer',

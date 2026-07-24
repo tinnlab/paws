@@ -4,8 +4,13 @@ import { useElementMinSize } from '@/modules/layouts/app-layout/hooks/useWindowM
 import { useNativeScroll } from '@/modules/layouts/app-layout/hooks/useNativeScroll'
 import { HeaderBarContainer } from '@/modules/layouts/app-layout/components/HeaderBarContainer'
 import { cn } from '@/lib/utils'
-import { IoIosArrowDown, IoMdSettings } from 'react-icons/io'
-import { BookOpen, Compass, ExternalLink } from 'lucide-react'
+import {
+  BookOpen,
+  Compass,
+  ExternalLink,
+  ChevronDown,
+  Settings,
+} from 'lucide-react'
 import { AppLayout as AppLayoutStore } from '@/modules/layouts/app-layout/appLayout'
 import { Auth } from '@/modules/auth/Auth.store'
 import { ModuleSystem } from '@ziee/framework/stores'
@@ -85,7 +90,7 @@ export default function SettingsPage() {
             type: 'group' as const,
             label: (
               <span className="flex items-center gap-1">
-                <IoMdSettings />
+                <Settings size="1em" />
                 Admin
               </span>
             ),
@@ -204,7 +209,7 @@ export default function SettingsPage() {
       ...userSettingsItems,
       ...adminSettingsItems,
     ]
-    return flat.find(item => item.path === currentSection) || { icon: <IoMdSettings />, label: 'Settings' }
+    return flat.find(item => item.path === currentSection) || { icon: <Settings size="1em" />, label: 'Settings' }
   }
 
   const SettingsMenu = () => (
@@ -271,7 +276,7 @@ export default function SettingsPage() {
                   aria-expanded={mobileMenuOpen}
                 >
                   {getCurrentSectionInfo().icon} {getCurrentSectionInfo().label}{' '}
-                  <IoIosArrowDown />
+                  <ChevronDown size="1em" />
                 </Button>
               </Dropdown>
             </div>

@@ -16,7 +16,7 @@
  */
 
 import { Button, Tooltip } from '@ziee/kit'
-import { GoSidebarCollapse, GoSidebarExpand } from 'react-icons/go'
+import { PanelLeft, PanelRight } from 'lucide-react'
 import { isTauriView, isMacOS } from '@ziee/desktop/core/platform'
 import { TauriDragRegion } from '@ziee/desktop/components/TauriDragRegion.tsx'
 import { AppLayout } from '@/modules/layouts/app-layout/appLayout'
@@ -73,10 +73,14 @@ export function SidebarToggleButton() {
           aria-expanded={!isSidebarCollapsed}
           aria-controls="app-sidebar"
         >
+          {/* Left sidebar: PanelLeft depicts the visible left panel when open;
+              PanelRight when collapsed. size-5 (20px) — lucide icons don't scale
+              with the button's fontSize the way the old react-icons glyphs did.
+              Mirrors the web SidebarToggleButton.tsx sibling. */}
           {isSidebarCollapsed ? (
-            <GoSidebarCollapse aria-hidden="true" />
+            <PanelRight className="size-5" aria-hidden="true" />
           ) : (
-            <GoSidebarExpand aria-hidden="true" />
+            <PanelLeft className="size-5" aria-hidden="true" />
           )}
         </Button>
         </Tooltip>

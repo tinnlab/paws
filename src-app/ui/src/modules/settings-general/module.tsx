@@ -1,5 +1,5 @@
 import { createModule } from '@ziee/framework'
-import { IoMdPerson } from 'react-icons/io'
+import { UserRound } from 'lucide-react'
 import { SettingsLayoutDef } from '@/modules/settings/SettingsLayout'
 import { lazyWithPreload } from '@/utils/lazyWithPreload'
 import '@/modules/settings/types/SettingsSlots' // Register settings slot types
@@ -27,7 +27,7 @@ export default createModule({
     settingsUserPages: [
       {
         id: 'general',
-        icon: <IoMdPerson />,
+        icon: <UserRound size="1em" />,
         label: 'General',
         path: 'general',
         order: 10,
