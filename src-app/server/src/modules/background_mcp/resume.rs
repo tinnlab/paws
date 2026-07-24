@@ -294,7 +294,12 @@ mod tests {
     }
 
     // TEST-8: the deploy-level kill switch — with `resume_enabled = false`, an
-    // otherwise-resumable completion does NOT resume (operator opt-out).
+    // otherwise-resumable completion does NOT resume (operator opt-out), and with
+    // `true` it still resumes. Deterministic + pure — no coupling to the global
+    // config OnceCell. (The default-ON behavior of `resume_enabled_from_config()`
+    // when the config is absent is exercised end-to-end by the integration tests
+    // TEST-5/6, which run with the cell set and NO `background_mcp` config → resume
+    // ON.)
     #[test]
     fn should_resume_kill_switch_disables_resume() {
         let cid = Some(Uuid::new_v4());
@@ -302,8 +307,9 @@ mod tests {
             !should_resume(false, cid, "a real answer"),
             "resume_enabled=false must disable the resume even for a bound, non-empty result"
         );
-        // And the default read (no config stashed in a unit test) preserves the
-        // resume behavior — the kill switch is OFF (i.e. resume ON) by default.
-        assert!(resume_enabled_from_config(), "auto-resume defaults to ON when unconfigured");
+        assert!(
+            should_resume(true, cid, "a real answer"),
+            "resume_enabled=true still resumes a bound, non-empty result"
+        );
     }
 }
