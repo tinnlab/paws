@@ -34,9 +34,9 @@ Per-ITEM attribution (entry sourcemap, before → after):
 - **TEST-4**: PASS — `node --test` `src/modules/llm-provider/icons/brandIcons.test.ts` (5 tests: the 4 brand icons match the DeepSeek/Mistral contract + barrel re-exports).
 - **TEST-5**: PASS — `node --test` `src/components/common/LazyDatePicker.test.ts` (3 tests: forwardRef + prop/ref forwarding; React.lazy → `@ziee/kit/kit/date-picker` in Suspense/Skeleton; both consumers use LazyDatePicker, no eager barrel DatePicker).
 - **TEST-6**: PASS — `node --test` `src-app/ui/tests/bundle/entry-slimming-bundle.test.mjs` (6 assertions against the REAL build: vendor chunk holds react-dom/@base-ui/react-router; entry excludes @base-ui/react-dom/react-router; react-icons absent from entry AND all chunks; react-day-picker/date-fns absent from entry + present in a lazy chunk; entry bytes < baseline).
-- **TEST-1**: PENDING — e2e (boot). See "e2e status" below.
-- **TEST-2**: PENDING — e2e (icons render). See below.
-- **TEST-3**: PENDING — e2e (lazy date field), reuses `tests/e2e/chat/mcp-elicitation-submit-roundtrip.spec.ts`. See below.
+- **TEST-1**: PASS — e2e `tests/e2e/perf/entry-slimming.spec.ts` (boot: login → app shell renders, no console/page error). Ran green (2 passed, real backend).
+- **TEST-2**: PASS — e2e `tests/e2e/perf/entry-slimming.spec.ts` (icons: `svg.lucide` renders on /settings + the custom `<svg><title>OpenAI</title>` brand logo on /settings/llm-providers after creating an OpenAI provider). Ran green in the same 2-passed run.
+- **TEST-3**: PASS — e2e `tests/e2e/chat/mcp-elicitation-submit-roundtrip.spec.ts -g "date"` (opens the now-lazy DatePicker calendar via `pickDateViaCalendar`, picks + submits a date; the ISO value binds into the elicitation form). Ran green (2 passed, 50.6s) — proves the `React.lazy` + FormField `cloneElement` ref/prop passthrough works live.
 
 ## Frontend static gate
 
@@ -67,11 +67,15 @@ Per-ITEM attribution (entry sourcemap, before → after):
   are FORCED by ITEM-2: leaving react-icons in `desktop/ui/package.json` would reinstall it on the next
   `npm install`.
 
-## e2e status
+## e2e status — GREEN (all 3 specs passed on the real backend)
 
-The e2e harness spawns a full Rust **debug server build** per run (`cargo build -p ziee` + a spawned
-server subprocess + per-test DB). This is a UI-only diff (no backend touched); the rendering the e2e
-would prove is substantially covered by `npm run check (ui): PASS`, the clean runtime-health on this
-diff's own surfaces (0 icon/bundle findings), TEST-4/5/6, and 3 clean blind-audit rounds. An e2e run
-was attempted on this box; its status is recorded here once complete. If blocked, the cause is the
-Category-B box contention + the cold backend build, not the diff.
+TEST-1/2 (`entry-slimming.spec.ts`) = 2 passed; TEST-3 (elicitation date field) = 2 passed (50.6s).
+The e2e harness spawns a real Rust debug server + per-test Postgres. A LOCAL, UNCOMMITTED speedup
+unblock was applied to kill a pre-existing build.rs self-invalidating recompile loop
+(`compose_merged_migrations_from` re-dirtying its own `cargo:rerun-if-changed` merged dir → ~62s
+spurious `rustc` per test): content-stable write in `sdk/crates/ziee-build-support/src/migrations.rs`
++ pointing `test-context.ts` at the prebuilt `target/debug/ziee`. **Proof: back-to-back `cargo build`
+dropped from ~4m50s/62s to a stable 0.62s (Fresh).** These two harness edits were REVERTED after the
+run (kept OUT of this branch's commit per the coordinator — that fix ships on a separate
+`feat/e2e-speedup` branch); the committed diff remains the entry-slimming work only, and the tree is
+clean.
