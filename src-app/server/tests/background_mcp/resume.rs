@@ -153,12 +153,15 @@ async fn resume_injects_new_turn_without_polling() {
         "the injected turn names the completed task: {injected_text}"
     );
 
-    // And the loop actually RAN on it → a fresh assistant reply exists after the
-    // injected user turn (the stub answers again).
-    let has_assistant_reply = msgs.iter().any(|m| role_of(m) == "assistant");
+    // And the loop actually RAN on it → a fresh assistant reply with REAL content
+    // exists (not just a started-but-empty row): the stub answers "Hello from
+    // stub" again on the resumed turn.
+    let assistant_answered = msgs
+        .iter()
+        .any(|m| role_of(m) == "assistant" && message_text(m).contains("Hello from stub"));
     assert!(
-        has_assistant_reply,
-        "the resumed turn produced an assistant reply: {msgs:?}"
+        assistant_answered,
+        "the resumed turn produced a real assistant reply (stub answer), not an empty row: {msgs:?}"
     );
 }
 

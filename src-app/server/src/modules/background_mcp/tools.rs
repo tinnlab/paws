@@ -205,11 +205,13 @@ async fn spawn_subagent(
         .to_string();
 
     // Resolve the model the detached sub-agent runs on: the originating
-    // conversation's model (re-checked under the owner's RBAC at turn time by
-    // `create_provider_from_model_id`). A conversation with no model set — or a
-    // spawn with no conversation context — has nothing to run on, so reject
-    // clearly instead of launching a doomed run. Recorded on the run row so the
-    // choice is durable + auditable.
+    // conversation's model. (`create_provider_from_model_id` at turn time verifies
+    // the provider is ENABLED, but NOT the user's group access — that fire-time
+    // access re-check is done explicitly by the push-to-resume path, mirroring the
+    // scheduler.) A conversation with no model set — or a spawn with no
+    // conversation context — has nothing to run on, so reject clearly instead of
+    // launching a doomed run. Recorded on the run row so the choice is durable +
+    // auditable.
     let model_id = match conversation_id {
         Some(cid) => crate::core::Repos
             .chat
@@ -354,19 +356,17 @@ async fn execute_subagent_run(
         //    must NEVER fail the already-completed run — log + continue (DEC-7). ──
         if super::resume::should_resume(conversation_id, &final_text) {
             let cid = conversation_id.expect("should_resume guarantees Some");
-            let resume_pool = pool.clone();
-            let resume_task = task.to_string();
+            let resume = super::resume::ResumeRequest {
+                pool: pool.clone(),
+                user_id,
+                conversation_id: cid,
+                run_id,
+                model_id,
+                task: task.to_string(),
+                final_text,
+            };
             tokio::spawn(async move {
-                if let Err(e) = super::resume::resume_conversation_with_result(
-                    resume_pool,
-                    user_id,
-                    cid,
-                    model_id,
-                    resume_task,
-                    final_text,
-                )
-                .await
-                {
+                if let Err(e) = super::resume::resume_conversation_with_result(resume).await {
                     tracing::warn!(
                         "background_mcp: push-to-resume failed for run {run_id} \
                          (conversation {cid}); result remains in the run row + inbox: {e:?}"

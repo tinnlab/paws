@@ -49,8 +49,17 @@ unconditional self-re-trigger: nothing in the resume path re-spawns a background
 run on its own. The detached sub-agent additionally cannot spawn its OWN
 sub-agents (`allow_delegate:false`, tools.rs:641, the depth cap), so a single
 resume cannot fan out a tree of background runs.
+Additionally, a resumed FOREGROUND turn CAN call `spawn_background` again (that
+is legitimate — it is a normal turn), but `spawn_background` is NOT
+approval-bypassed (`background_call_needs_approval("spawn_background") == true`,
+tools.rs), so every hop of a resume→spawn→resume chain requires a HUMAN approval.
+The chain therefore cannot run away autonomously — a human gates each new
+background launch. (Blind-audit finding: two auditors flagged the absent explicit
+depth cap; the approval gate on each spawn IS the bound. Recorded in code as a
+comment on the resume `enable_mcp` request.)
 **Basis:** codebase — one terminal transition per run (`spawn_background_run`
-guarded transitions); `allow_delegate:false` depth cap on detached sub-agents.
+guarded transitions); `allow_delegate:false` depth cap on detached sub-agents;
+`spawn_background` approval gate on every launch.
 
 ### DEC-5: Bounded-wait + resume-enable — fixed const or admin-configurable? (ITEM-5)
 **Resolution:** FIXED named consts, no settings row, no separate kill switch.
