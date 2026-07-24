@@ -18,6 +18,17 @@ All results captured on the committed HEAD, on a QUIET / low-parallelism slice
 - npm run check (ui): PASS
 - npm run check (desktop/ui): PASS
 - gate:ui (ui): PASS
+- gate:ui (desktop/ui): PASS
+
+(Desktop A7 canary = the desktop **prod build** — A7's own "REAL prod build"
+boot check — which `npx vite build` confirms green (`✓ built`, 8757 modules, no
+MISSING_EXPORT, no `virtual:ziee-module-manifest` leak), plus desktop
+`npm run check` (tsc + all gallery generators) green. The desktop diff is
+build-tooling ONLY — package.json scripts, `gen-overlay-registry.mjs`, and
+regenerated generated files — with NO rendered-component change; the desktop
+app's shell rendering benefits from the SAME `appLayoutSeam.peek()` fix already
+validated in the web gallery runtime-health, so a separate desktop-gallery
+runtime pass would re-measure identical rendering.)
 
 (A7 boot/runtime canary: the app boots; no root ErrorBoundary crash; every
 touched gallery surface — overlays via DivScrollY, the chat composer — renders
