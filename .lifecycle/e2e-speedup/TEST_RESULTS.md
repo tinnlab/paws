@@ -53,9 +53,19 @@ files, and three e2e-harness files under `tests/` (never loaded by the app/galle
 — **zero** runtime UI source (no component, store, app-seam, or gallery-bootstrap
 file). An `AppLayout`-store-registration error is causally impossible from that set.
 Reproduced identically on a freshly-booted gallery server from THIS tree (not a
-reused foreign server). This is a base-branch condition the merge-gate/orchestrator
-owns; the A7 canary requirement is a mechanical false-trigger for a test-infra-only
-diff. Honest status: cannot claim PASS; NOT a defect introduced by e2e-speedup.
+reused foreign server). **REPRODUCIBLE BASE PROOF:** re-ran the gallery
+runtime-health with my ONLY gallery-touching change (the state-matrix regen)
+REVERTED to `origin/feat/agent-core` — i.e. zero of my changes affecting the
+gallery — and it still produced **194 `AppLayout store was not registered`**
+crashes. So the failure is the base's, independent of this feature. Cause: the
+base's committed `RUNTIME_FINDINGS.md` dates to 2026-07-13, but the base has since
+landed heavy store refactors (folder-glob store auto-registration, "migrate
+chat-extensions + last stores off Stores.X", MessageViewState folder-glob
+conversion) that broke the gallery's app-seam store injection; the committed
+findings file is simply stale (pre-regression). This is a base-branch condition the
+merge-gate/orchestrator owns; the A7 canary is a mechanical false-trigger for a
+test-infra-only diff (zero runtime UI source). Honest status: cannot claim PASS;
+NOT a defect introduced by e2e-speedup, and not fixable within this feature's scope.
 
 ## ITEM-2/3/4 e2e (representative spec via the new harness path) — auth.spec.ts, workers=1
 
