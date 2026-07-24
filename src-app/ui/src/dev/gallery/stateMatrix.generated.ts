@@ -4,7 +4,7 @@
 // renders + overlay triggers + panel/slot registrations) that the reconciliation
 // gate (scripts/reconcile-state-matrix.mjs) checks the gallery entries against.
 //
-// 335 surfaces carry renderable-state signals; 2053 signals total.
+// 336 surfaces carry renderable-state signals; 2054 signals total.
 
 /** A signal is one mechanically-detected render fork (a state the surface can be in). */
 export interface StateSignal {
@@ -325,11 +325,11 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     signals: [
       { kind: "branch", condition: "isStreaming || wasStreamingRef.current || isActiveMatch", line: 60 },
       { kind: "empty", condition: "contents.length === 0 && !showEmptyCompletionNotice", line: 88 },
-      { kind: "branch", condition: "attachmentBlocks.length > 0", line: 178 },
-      { kind: "branch", condition: "bubbleBlocks.length > 0", line: 207 },
-      { kind: "branch", condition: "offerCollapse", line: 233 },
-      { kind: "branch", condition: "showEmptyCompletionNotice", line: 253 },
-      { kind: "branch", condition: "isUser", line: 272 },
+      { kind: "branch", condition: "attachmentBlocks.length > 0", line: 189 },
+      { kind: "branch", condition: "bubbleBlocks.length > 0", line: 218 },
+      { kind: "branch", condition: "offerCollapse", line: 244 },
+      { kind: "branch", condition: "showEmptyCompletionNotice", line: 264 },
+      { kind: "branch", condition: "renderAsUser", line: 283 },
     ],
   },
   "modules/chat/components/CollapsibleBlock": {
@@ -419,10 +419,10 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     requiredStates: [],
     signals: [
       { kind: "branch", condition: "!msg", line: 26 },
-      { kind: "branch", condition: "!text", line: 46 },
-      { kind: "branch", condition: "isRegenerating || isBusy", line: 73 },
-      { kind: "branch", condition: "isUser", line: 102 },
-      { kind: "branch", condition: "isAssistant", line: 115 },
+      { kind: "branch", condition: "!text", line: 55 },
+      { kind: "branch", condition: "isRegenerating || isBusy", line: 82 },
+      { kind: "branch", condition: "isUser && !isObservation", line: 111 },
+      { kind: "branch", condition: "isAssistant", line: 124 },
     ],
   },
   "modules/chat/components/MessageList": {
@@ -509,8 +509,8 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/chat/components/TitleEditor",
     requiredStates: [],
     signals: [
-      { kind: "branch", condition: "isEditing", line: 93 },
-      { kind: "branch", condition: "showBackButton", line: 139 },
+      { kind: "branch", condition: "isEditing", line: 92 },
+      { kind: "branch", condition: "showBackButton", line: 138 },
     ],
   },
   "modules/chat/components/VirtualizedConversationList": {
@@ -641,9 +641,9 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/chat/extensions/export/extension",
     requiredStates: ["empty"],
     signals: [
-      { kind: "branch", condition: "!conversation", line: 36 },
-      { kind: "branch", condition: "!conversation", line: 78 },
-      { kind: "empty", condition: "messages.length === 0", line: 165 },
+      { kind: "branch", condition: "!conversation", line: 42 },
+      { kind: "branch", condition: "!conversation", line: 84 },
+      { kind: "empty", condition: "messages.length === 0", line: 171 },
     ],
   },
   "modules/chat/extensions/keyboard/extension": {
@@ -709,6 +709,13 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     requiredStates: [],
     signals: [
       { kind: "branch", condition: "!messageId", line: 46 },
+    ],
+  },
+  "modules/chat/extensions/text/components/ObservationContent": {
+    surface: "modules/chat/extensions/text/components/ObservationContent",
+    requiredStates: [],
+    signals: [
+      { kind: "branch", condition: "!text", line: 25 },
     ],
   },
   "modules/chat/extensions/text/components/TextContent": {
@@ -1579,14 +1586,14 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/hub/HubPage",
     requiredStates: [],
     signals: [
-      { kind: "branch", condition: "currentTabSlot", line: 192 },
-      { kind: "branch", condition: "hubVersion", line: 200 },
-      { kind: "branch", condition: "useMobileLayout", line: 245 },
-      { kind: "branch", condition: "canRefresh", line: 247 },
-      { kind: "branch", condition: "!useMobileLayout", line: 284 },
-      { kind: "branch", condition: "canRefresh", line: 293 },
-      { kind: "branch", condition: "urlSegmentIsForbidden", line: 313 },
-      { kind: "branch", condition: "currentTabSlot", line: 340 },
+      { kind: "branch", condition: "currentTabSlot", line: 191 },
+      { kind: "branch", condition: "hubVersion", line: 199 },
+      { kind: "branch", condition: "useMobileLayout", line: 244 },
+      { kind: "branch", condition: "canRefresh", line: 246 },
+      { kind: "branch", condition: "!useMobileLayout", line: 283 },
+      { kind: "branch", condition: "canRefresh", line: 292 },
+      { kind: "branch", condition: "urlSegmentIsForbidden", line: 312 },
+      { kind: "branch", condition: "currentTabSlot", line: 339 },
     ],
   },
   "modules/hub/modules/assistants/components/AssistantDetailsDrawer": {
@@ -2247,14 +2254,14 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/llm-provider/components/LlmProviderSettings",
     requiredStates: ["delayed","error"],
     signals: [
-      { kind: "loading", condition: "loading", line: 141 },
-      { kind: "error", condition: "error && providers.length === 0", line: 147 },
-      { kind: "branch", condition: "!currentProvider", line: 159 },
-      { kind: "branch", condition: "currentProvider.provider_type === 'local'", line: 169 },
-      { kind: "branch", condition: "!windowMinSize.sm", line: 180 },
-      { kind: "branch", condition: "windowMinSize.sm", line: 198 },
-      { kind: "branch", condition: "item.key === 'add-provider'", line: 208 },
-      { kind: "branch", condition: "currentProvider", line: 232 },
+      { kind: "loading", condition: "loading", line: 140 },
+      { kind: "error", condition: "error && providers.length === 0", line: 146 },
+      { kind: "branch", condition: "!currentProvider", line: 158 },
+      { kind: "branch", condition: "currentProvider.provider_type === 'local'", line: 168 },
+      { kind: "branch", condition: "!windowMinSize.sm", line: 179 },
+      { kind: "branch", condition: "windowMinSize.sm", line: 197 },
+      { kind: "branch", condition: "item.key === 'add-provider'", line: 207 },
+      { kind: "branch", condition: "currentProvider", line: 231 },
     ],
   },
   "modules/llm-provider/components/LocalProviderSettings": {
@@ -3293,13 +3300,13 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/settings/SettingsPage",
     requiredStates: [],
     signals: [
-      { kind: "branch", condition: "adminSettingsItems.length > 0", line: 81 },
-      { kind: "branch", condition: "adminSettingsItems.length > 0", line: 114 },
-      { kind: "branch", condition: "useMobileLayout", line: 236 },
-      { kind: "branch", condition: "key === '__onboarding__'", line: 253 },
-      { kind: "branch", condition: "key === '__help__'", line: 257 },
-      { kind: "branch", condition: "!useMobileLayout", line: 289 },
-      { kind: "branch", condition: "forbiddenSection", line: 327 },
+      { kind: "branch", condition: "adminSettingsItems.length > 0", line: 86 },
+      { kind: "branch", condition: "adminSettingsItems.length > 0", line: 119 },
+      { kind: "branch", condition: "useMobileLayout", line: 241 },
+      { kind: "branch", condition: "key === '__onboarding__'", line: 258 },
+      { kind: "branch", condition: "key === '__help__'", line: 262 },
+      { kind: "branch", condition: "!useMobileLayout", line: 294 },
+      { kind: "branch", condition: "forbiddenSection", line: 332 },
     ],
   },
   "modules/settings/components/SettingsFormActions": {
@@ -3456,19 +3463,19 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/user-llm-providers/UserLlmProvidersPage",
     requiredStates: ["delayed","empty","error"],
     signals: [
-      { kind: "branch", condition: "!selectedId", line: 61 },
-      { kind: "branch", condition: "!key || key === KEY_DISPLAY_PLACEHOLDER", line: 63 },
-      { kind: "branch", condition: "!selectedId", line: 77 },
-      { kind: "loading", condition: "loading", line: 113 },
-      { kind: "error", condition: "error", line: 121 },
-      { kind: "empty", condition: "providers.length === 0", line: 135 },
-      { kind: "branch", condition: "!currentProvider", line: 151 },
-      { kind: "branch", condition: "hasUserKey", line: 170 },
-      { kind: "branch", condition: "currentProvider.api_key_configured", line: 172 },
-      { kind: "branch", condition: "hasUserKey", line: 202 },
-      { kind: "branch", condition: "!windowMinSize.sm", line: 221 },
-      { kind: "branch", condition: "windowMinSize.sm && providers.length > 0", line: 239 },
-      { kind: "branch", condition: "currentProvider", line: 248 },
+      { kind: "branch", condition: "!selectedId", line: 60 },
+      { kind: "branch", condition: "!key || key === KEY_DISPLAY_PLACEHOLDER", line: 62 },
+      { kind: "branch", condition: "!selectedId", line: 76 },
+      { kind: "loading", condition: "loading", line: 112 },
+      { kind: "error", condition: "error", line: 120 },
+      { kind: "empty", condition: "providers.length === 0", line: 134 },
+      { kind: "branch", condition: "!currentProvider", line: 150 },
+      { kind: "branch", condition: "hasUserKey", line: 169 },
+      { kind: "branch", condition: "currentProvider.api_key_configured", line: 171 },
+      { kind: "branch", condition: "hasUserKey", line: 201 },
+      { kind: "branch", condition: "!windowMinSize.sm", line: 220 },
+      { kind: "branch", condition: "windowMinSize.sm && providers.length > 0", line: 238 },
+      { kind: "branch", condition: "currentProvider", line: 247 },
     ],
   },
   "modules/user-llm-providers/chat-extension/components/ModelSelector": {

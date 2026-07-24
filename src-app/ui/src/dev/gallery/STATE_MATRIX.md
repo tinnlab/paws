@@ -7,8 +7,8 @@
 
 ## Summary
 
-- **335** surfaces carry at least one renderable-state signal.
-- **2053** signals total: 1607 branch, 136 empty, 117 error, 94 loading, 96 overlay, 3 panel.
+- **336** surfaces carry at least one renderable-state signal.
+- **2054** signals total: 1608 branch, 136 empty, 117 error, 94 loading, 96 overlay, 3 panel.
 - **3** right-panel renderers registered (each a right-panel-open state).
 - **35** slot registrations (sidebar / settings / chat mount points).
 
@@ -393,11 +393,11 @@ Required states: `empty`
 |---|---|---|
 | branch | `isStreaming \|\| wasStreamingRef.current \|\| isActiveMatch` | 60 |
 | empty | `contents.length === 0 && !showEmptyCompletionNotice` | 88 |
-| branch | `attachmentBlocks.length > 0` | 178 |
-| branch | `bubbleBlocks.length > 0` | 207 |
-| branch | `offerCollapse` | 233 |
-| branch | `showEmptyCompletionNotice` | 253 |
-| branch | `isUser` | 272 |
+| branch | `attachmentBlocks.length > 0` | 189 |
+| branch | `bubbleBlocks.length > 0` | 218 |
+| branch | `offerCollapse` | 244 |
+| branch | `showEmptyCompletionNotice` | 264 |
+| branch | `renderAsUser` | 283 |
 
 ### `modules/chat/components/CollapsibleBlock`
 
@@ -496,10 +496,10 @@ Required states: _(branch-only — proven via dynamic coverage)_
 | kind | condition | line |
 |---|---|---|
 | branch | `!msg` | 26 |
-| branch | `!text` | 46 |
-| branch | `isRegenerating \|\| isBusy` | 73 |
-| branch | `isUser` | 102 |
-| branch | `isAssistant` | 115 |
+| branch | `!text` | 55 |
+| branch | `isRegenerating \|\| isBusy` | 82 |
+| branch | `isUser && !isObservation` | 111 |
+| branch | `isAssistant` | 124 |
 
 ### `modules/chat/components/MessageList`
 
@@ -594,8 +594,8 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `isEditing` | 93 |
-| branch | `showBackButton` | 139 |
+| branch | `isEditing` | 92 |
+| branch | `showBackButton` | 138 |
 
 ### `modules/chat/components/VirtualizedConversationList`
 
@@ -741,9 +741,9 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!conversation` | 36 |
-| branch | `!conversation` | 78 |
-| empty | `messages.length === 0` | 165 |
+| branch | `!conversation` | 42 |
+| branch | `!conversation` | 84 |
+| empty | `messages.length === 0` | 171 |
 
 ### `modules/chat/extensions/keyboard/extension`
 
@@ -817,6 +817,14 @@ Required states: _(branch-only — proven via dynamic coverage)_
 | kind | condition | line |
 |---|---|---|
 | branch | `!messageId` | 46 |
+
+### `modules/chat/extensions/text/components/ObservationContent`
+
+Required states: _(branch-only — proven via dynamic coverage)_
+
+| kind | condition | line |
+|---|---|---|
+| branch | `!text` | 25 |
 
 ### `modules/chat/extensions/text/components/TextContent`
 
@@ -1757,14 +1765,14 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `currentTabSlot` | 192 |
-| branch | `hubVersion` | 200 |
-| branch | `useMobileLayout` | 245 |
-| branch | `canRefresh` | 247 |
-| branch | `!useMobileLayout` | 284 |
-| branch | `canRefresh` | 293 |
-| branch | `urlSegmentIsForbidden` | 313 |
-| branch | `currentTabSlot` | 340 |
+| branch | `currentTabSlot` | 191 |
+| branch | `hubVersion` | 199 |
+| branch | `useMobileLayout` | 244 |
+| branch | `canRefresh` | 246 |
+| branch | `!useMobileLayout` | 283 |
+| branch | `canRefresh` | 292 |
+| branch | `urlSegmentIsForbidden` | 312 |
+| branch | `currentTabSlot` | 339 |
 
 ### `modules/hub/modules/assistants/components/AssistantDetailsDrawer`
 
@@ -2476,14 +2484,14 @@ Required states: `delayed`, `error`
 
 | kind | condition | line |
 |---|---|---|
-| loading | `loading` | 141 |
-| error | `error && providers.length === 0` | 147 |
-| branch | `!currentProvider` | 159 |
-| branch | `currentProvider.provider_type === 'local'` | 169 |
-| branch | `!windowMinSize.sm` | 180 |
-| branch | `windowMinSize.sm` | 198 |
-| branch | `item.key === 'add-provider'` | 208 |
-| branch | `currentProvider` | 232 |
+| loading | `loading` | 140 |
+| error | `error && providers.length === 0` | 146 |
+| branch | `!currentProvider` | 158 |
+| branch | `currentProvider.provider_type === 'local'` | 168 |
+| branch | `!windowMinSize.sm` | 179 |
+| branch | `windowMinSize.sm` | 197 |
+| branch | `item.key === 'add-provider'` | 207 |
+| branch | `currentProvider` | 231 |
 
 ### `modules/llm-provider/components/LocalProviderSettings`
 
@@ -3602,13 +3610,13 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `adminSettingsItems.length > 0` | 81 |
-| branch | `adminSettingsItems.length > 0` | 114 |
-| branch | `useMobileLayout` | 236 |
-| branch | `key === '__onboarding__'` | 253 |
-| branch | `key === '__help__'` | 257 |
-| branch | `!useMobileLayout` | 289 |
-| branch | `forbiddenSection` | 327 |
+| branch | `adminSettingsItems.length > 0` | 86 |
+| branch | `adminSettingsItems.length > 0` | 119 |
+| branch | `useMobileLayout` | 241 |
+| branch | `key === '__onboarding__'` | 258 |
+| branch | `key === '__help__'` | 262 |
+| branch | `!useMobileLayout` | 294 |
+| branch | `forbiddenSection` | 332 |
 
 ### `modules/settings/components/SettingsFormActions`
 
@@ -3780,19 +3788,19 @@ Required states: `delayed`, `empty`, `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!selectedId` | 61 |
-| branch | `!key \|\| key === KEY_DISPLAY_PLACEHOLDER` | 63 |
-| branch | `!selectedId` | 77 |
-| loading | `loading` | 113 |
-| error | `error` | 121 |
-| empty | `providers.length === 0` | 135 |
-| branch | `!currentProvider` | 151 |
-| branch | `hasUserKey` | 170 |
-| branch | `currentProvider.api_key_configured` | 172 |
-| branch | `hasUserKey` | 202 |
-| branch | `!windowMinSize.sm` | 221 |
-| branch | `windowMinSize.sm && providers.length > 0` | 239 |
-| branch | `currentProvider` | 248 |
+| branch | `!selectedId` | 60 |
+| branch | `!key \|\| key === KEY_DISPLAY_PLACEHOLDER` | 62 |
+| branch | `!selectedId` | 76 |
+| loading | `loading` | 112 |
+| error | `error` | 120 |
+| empty | `providers.length === 0` | 134 |
+| branch | `!currentProvider` | 150 |
+| branch | `hasUserKey` | 169 |
+| branch | `currentProvider.api_key_configured` | 171 |
+| branch | `hasUserKey` | 201 |
+| branch | `!windowMinSize.sm` | 220 |
+| branch | `windowMinSize.sm && providers.length > 0` | 238 |
+| branch | `currentProvider` | 247 |
 
 ### `modules/user-llm-providers/chat-extension/components/ModelSelector`
 
