@@ -18,6 +18,7 @@
 //! the SAME shared `AgentCore` loop drives a workflow `kind: agent` step). Both
 //! hosts now build their core through `agent_dispatch::build_detached_agent_core`.
 
+mod resume;
 mod run_notes;
 mod runs;
 // Group C — background sandbox code execution (ITEM-11/12/13). Rootfs-gated

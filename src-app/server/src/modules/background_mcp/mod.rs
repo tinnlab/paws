@@ -28,18 +28,32 @@ use std::sync::Arc;
 
 use aide::axum::ApiRouter;
 use linkme::distributed_slice;
+use once_cell::sync::OnceCell;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::core::config::Config;
 use crate::module_api::{AppModule, MODULE_ENTRIES, ModuleContext, ModuleEntry};
 
 pub mod handlers;
 pub mod permissions;
 pub mod repository;
+pub mod resume;
 pub mod routes;
 pub mod run_notes;
 pub mod runs;
 pub mod tools;
+
+/// The deployment `Config`, stashed at init so the push-to-resume path
+/// (`resume::resume_conversation_with_result`, invoked from the detached run
+/// driver where no `Config` is in scope) can build the chat extension registry
+/// for the resumed turn. Set once in `init`. Mirrors `scheduler::SCHEDULER_CONFIG`.
+static BACKGROUND_MCP_CONFIG: OnceCell<Arc<Config>> = OnceCell::new();
+
+/// The stashed config, if the module has initialized.
+pub fn background_mcp_config() -> Option<Arc<Config>> {
+    BACKGROUND_MCP_CONFIG.get().cloned()
+}
 
 // ── ITEM-26 (inbox): declare the background-run completion notification kind ──
 //
@@ -105,6 +119,10 @@ impl AppModule for BackgroundMcpModule {
 
     fn init(&mut self, ctx: &ModuleContext) -> Result<(), Box<dyn Error>> {
         self.pool = Some(ctx.db_pool.clone());
+
+        // Stash the deployment config so the detached run driver's push-to-resume
+        // path can build the chat extension registry (it has no Config in scope).
+        let _ = BACKGROUND_MCP_CONFIG.set(crate::module_api::app_config(ctx));
 
         // Pin loopback (defense in depth — the JWTs the MCP client signs for
         // built-in servers MUST NOT leave the host).

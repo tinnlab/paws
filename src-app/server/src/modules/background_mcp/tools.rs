@@ -45,7 +45,7 @@ pub fn tool_list() -> Value {
         "tools": [
             {
                 "name": "spawn_background",
-                "description": "Launch background work DETACHED from this conversation — you keep chatting while it runs, then collect its result later with `collect_result`. Two kinds: 'subagent' runs a detached agent turn on a self-contained task (research a question, draft a section, analyze data); 'sandbox_exec' runs a shell command in this conversation's isolated code sandbox as a background job (a long build, a data crunch, a test suite) so it doesn't block the chat. Use for a bounded unit of work whose answer you don't need inline right now. Returns an opaque `run_id`. Do NOT use for trivial things you can answer directly. This LAUNCHES work, so it requires approval before it starts.",
+                "description": "Launch background work DETACHED from this conversation. After you spawn, END YOUR TURN — do NOT poll or loop on check_status. When a 'subagent' run finishes you are AUTOMATICALLY re-engaged in this conversation with its result (a new turn arrives carrying the sub-agent's answer), so just stop and wait. Two kinds: 'subagent' runs a detached agent turn on a self-contained task (research a question, draft a section, analyze data) and auto-resumes this conversation with its result when done; 'sandbox_exec' runs a shell command in this conversation's isolated code sandbox as a background job (a long build, a data crunch, a test suite) — its completion drops a notification in the user's inbox (collect_result reads its output on demand). Use for a bounded unit of work whose answer you don't need inline right now. Returns an opaque `run_id`. Do NOT use for trivial things you can answer directly. This LAUNCHES work, so it requires approval before it starts.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -85,7 +85,7 @@ pub fn tool_list() -> Value {
             },
             {
                 "name": "check_status",
-                "description": "Check the state and progress of a background run you spawned, by its `run_id`. Cheap and non-blocking: use it to see whether a background task is still running, has completed, failed, or is waiting for input — WITHOUT fetching the full result (use `collect_result` for that). Only your own runs are visible; an unknown or foreign id returns not found.",
+                "description": "OPTIONAL one-off peek at the state of a background run you spawned, by its `run_id`. You do NOT need this to receive a sub-agent's result — a completed 'subagent' run re-engages this conversation automatically. Use it only if you want to check on a run out-of-band (e.g. a long 'sandbox_exec' job): it reports whether the run is still running, completed, failed, or waiting, WITHOUT fetching the full result (use `collect_result` for that). Do NOT call it in a loop. Only your own runs are visible; an unknown or foreign id returns not found.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -96,7 +96,7 @@ pub fn tool_list() -> Value {
             },
             {
                 "name": "collect_result",
-                "description": "Read the final result of a background run by its `run_id`. Idempotent — safe to call repeatedly — and paged for large outputs via `offset`/`max_chars`. If the run has not finished yet, this returns its current status instead of a result, so poll `check_status` (or retry) until it is complete. Only your own runs are visible; an unknown or foreign id returns not found.",
+                "description": "Read the final result of a background run by its `run_id`, on demand. Idempotent — safe to call repeatedly — and paged for large outputs via `offset`/`max_chars`. You do NOT need to call this to receive a 'subagent' result: a completed sub-agent re-engages this conversation automatically with its answer. Use collect_result to fetch a 'sandbox_exec' run's output, to re-read a large result page-by-page, or to look up a result you were notified about. If the run has not finished yet it returns its current status instead of a result. Only your own runs are visible; an unknown or foreign id returns not found.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -250,7 +250,7 @@ async fn spawn_subagent(
         "run_id": run_id,
         "kind": job_kind.as_str(),
         "status": "pending",
-        "note": "Background run started. Poll check_status, then collect_result when it is complete."
+        "note": "Background sub-agent started. END your turn now — do NOT poll. When it finishes, this conversation is automatically re-engaged with its result."
     }))
 }
 
@@ -330,15 +330,50 @@ async fn execute_subagent_run(
     //    failed/cancelled run.) A notify failure must NOT fail the run — log and
     //    continue, exactly like the scheduler's first-producer path. ──
     if let BackgroundOutcome::Completed { final_output } = &outcome {
-        let summary = final_output
+        let final_text = final_output
             .as_ref()
             .and_then(|v| v.get("final_text"))
             .and_then(|v| v.as_str())
             .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(|s| s.chars().take(500).collect::<String>())
-            .unwrap_or_else(|| "Background task finished.".to_string());
+            .unwrap_or("")
+            .to_string();
+
+        let summary = if final_text.is_empty() {
+            "Background task finished.".to_string()
+        } else {
+            final_text.chars().take(500).collect::<String>()
+        };
         post_completion_notification(pool, user_id, run_id, conversation_id, summary).await;
+
+        // ── Push-to-resume (kill the poll loop): a conversation-bound sub-agent
+        //    that produced a result re-engages the chat agent loop with that
+        //    result. Detached (`tokio::spawn`) so it does NOT block the runner's
+        //    terminal transition; owns every capture (DEC-6). Gated to
+        //    conversation-bound + non-empty result (the subagent-only gate is
+        //    structural — this driver is never the sandbox path). A resume failure
+        //    must NEVER fail the already-completed run — log + continue (DEC-7). ──
+        if super::resume::should_resume(conversation_id, &final_text) {
+            let cid = conversation_id.expect("should_resume guarantees Some");
+            let resume_pool = pool.clone();
+            let resume_task = task.to_string();
+            tokio::spawn(async move {
+                if let Err(e) = super::resume::resume_conversation_with_result(
+                    resume_pool,
+                    user_id,
+                    cid,
+                    model_id,
+                    resume_task,
+                    final_text,
+                )
+                .await
+                {
+                    tracing::warn!(
+                        "background_mcp: push-to-resume failed for run {run_id} \
+                         (conversation {cid}); result remains in the run row + inbox: {e:?}"
+                    );
+                }
+            });
+        }
     }
 
     outcome
@@ -447,7 +482,7 @@ async fn spawn_sandbox_exec(
         "run_id": run_id,
         "kind": JobKind::SandboxExec.as_str(),
         "status": "pending",
-        "note": "Background sandbox command started. Poll check_status, then collect_result when it is complete."
+        "note": "Background sandbox command started. END your turn — its completion drops a notification in the inbox; read its output with collect_result on demand."
     }))
 }
 
@@ -872,6 +907,49 @@ mod tests {
             let t = tools.iter().find(|t| t["name"] == read).unwrap();
             assert_eq!(t["inputSchema"]["required"][0], "run_id");
         }
+    }
+
+    // TEST-1 (push-to-resume): the tool descriptions must NOT re-grow the polling
+    // anti-pattern. `collect_result` must not instruct the model to poll
+    // `check_status` until complete, and `spawn_background` must tell the model to
+    // END its turn + that a subagent auto-re-engages the conversation. A regression
+    // that reintroduces the poll loop silently defeats the whole feature.
+    #[test]
+    fn descriptions_drop_polling_and_teach_push_resume() {
+        let list = tool_list();
+        let tools = list["tools"].as_array().unwrap();
+        let desc = |name: &str| -> String {
+            tools
+                .iter()
+                .find(|t| t["name"] == name)
+                .and_then(|t| t["description"].as_str())
+                .unwrap_or("")
+                .to_string()
+        };
+
+        let collect = desc("collect_result").to_lowercase();
+        assert!(
+            !collect.contains("poll `check_status`") && !collect.contains("poll check_status"),
+            "collect_result must not instruct polling check_status: {collect}"
+        );
+        assert!(
+            !collect.contains("until it is complete"),
+            "collect_result must drop the 'poll until complete' loop: {collect}"
+        );
+
+        let spawn = desc("spawn_background").to_lowercase();
+        assert!(
+            spawn.contains("end your turn"),
+            "spawn_background must tell the model to end its turn: {spawn}"
+        );
+        assert!(
+            spawn.contains("re-engaged") || spawn.contains("auto-resume") || spawn.contains("automatically"),
+            "spawn_background must describe automatic re-engagement on completion: {spawn}"
+        );
+        assert!(
+            spawn.contains("do not poll") || spawn.contains("do not") && spawn.contains("poll"),
+            "spawn_background must warn against polling: {spawn}"
+        );
     }
 
     // TEST (Group C): the `kind` enum now advertises BOTH background kinds so the
