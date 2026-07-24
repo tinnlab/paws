@@ -59,18 +59,24 @@ pub fn should_resume(conversation_id: Option<Uuid>, final_text: &str) -> bool {
     conversation_id.is_some() && !final_text.trim().is_empty()
 }
 
-/// The inputs for a single push-to-resume (grouped into a struct so the three
+/// The inputs for a single push-to-resume (grouped into a struct so the four
 /// same-typed `Uuid`s can't be transposed at the call site — api-friendliness).
 pub struct ResumeRequest {
+    /// Cheap Arc-backed clone of the server pool (the resume runs detached).
     pub pool: PgPool,
+    /// The run's owner — the resumed turn runs as this user (owner-scoped).
     pub user_id: Uuid,
+    /// The conversation to re-engage (the sub-agent's originating conversation).
     pub conversation_id: Uuid,
     /// The completed background run — surfaced in the injected message so the
     /// model can `collect_result` a truncated / large result by its real id.
     pub run_id: Uuid,
     /// The conversation's model, re-checked for access before the resumed turn.
     pub model_id: Uuid,
+    /// The sub-agent's task, echoed into the injected `[Background task complete]`
+    /// message so the model knows which work finished.
     pub task: String,
+    /// The sub-agent's final assistant answer — the result carried into the turn.
     pub final_text: String,
 }
 

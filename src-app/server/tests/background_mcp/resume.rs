@@ -155,7 +155,10 @@ async fn resume_injects_new_turn_without_polling() {
 
     // And the loop actually RAN on it → a fresh assistant reply with REAL content
     // exists (not just a started-but-empty row): the stub answers "Hello from
-    // stub" again on the resumed turn.
+    // stub" again on the resumed turn. NOTE this assertion is load-bearing BECAUSE
+    // the detached sub-agent persists its own transcript to `workflow_runs`, NOT
+    // to the conversation's chat messages — so an assistant "Hello from stub" in
+    // THIS conversation can only have come from the resumed turn.
     let assistant_answered = msgs
         .iter()
         .any(|m| role_of(m) == "assistant" && message_text(m).contains("Hello from stub"));
@@ -190,5 +193,88 @@ async fn resume_fires_exactly_once_per_completion() {
         injected_count, 1,
         "a single sub-agent completion must resume the conversation exactly once (no runaway); \
          found {injected_count} injected turns: {msgs:?}"
+    );
+}
+
+// TEST-7 (security branch): if the user LOSES access to the run's model between
+// spawn and completion, the resume re-check (mirroring the scheduler's fire-time
+// re-check) must SKIP the resume — no turn is injected — while the result still
+// lives in the run row. Deterministic: a DELAYED stub keeps the sub-agent turn
+// in flight long enough to revoke the provider→group access (DB delete) before
+// the resume's re-check runs.
+#[tokio::test]
+async fn resume_skipped_when_model_access_revoked() {
+    let server = TestServer::start().await;
+    let user = resume_user(&server, "bg_resume_revoked").await;
+
+    // A stub that paces its deltas so the sub-agent turn is slow enough to revoke
+    // access before it completes + resumes.
+    let (_stub, model) =
+        crate::chat::helpers::create_stub_model_with_delay(&server, &user.user_id, 200).await;
+    let model_id = Uuid::parse_str(model["id"].as_str().unwrap()).unwrap();
+    let provider_id = Uuid::parse_str(model["provider_id"].as_str().unwrap()).unwrap();
+    let conv = crate::chat::helpers::create_conversation(
+        &server,
+        &user.token,
+        Some(model_id),
+        Some("bg-resume revoked conv"),
+    )
+    .await;
+    let conv_id = Uuid::parse_str(conv["id"].as_str().unwrap()).unwrap();
+
+    let spawn = super::jsonrpc(
+        &server,
+        &user.token,
+        Some(conv_id),
+        "tools/call",
+        json!({
+            "name": "spawn_background",
+            "arguments": { "spec": { "task": "Say a one-line hello." } }
+        }),
+    )
+    .await;
+    let sc = super::structured(&spawn);
+    let run_id = sc["run_id"].as_str().expect("run_id").to_string();
+
+    // Revoke the user's access to the model's provider by removing it from every
+    // group (user_group_llm_providers). The sub-agent turn only requires
+    // provider.enabled (still true), so it still completes — but the resume's
+    // fire-time access re-check now returns false → skip.
+    let pool = sqlx::PgPool::connect(&server.database_url).await.unwrap();
+    sqlx::query("DELETE FROM user_group_llm_providers WHERE provider_id = $1")
+        .bind(provider_id)
+        .execute(&pool)
+        .await
+        .expect("revoke provider group access");
+
+    // Wait until the run is terminal (here we DO poll check_status — this test is
+    // about the revoke branch, not the no-poll contract), then grace-wait so any
+    // (erroneous) resume would have injected a turn by now.
+    let deadline = Instant::now() + Duration::from_secs(45);
+    loop {
+        let body = super::jsonrpc(
+            &server,
+            &user.token,
+            Some(conv_id),
+            "tools/call",
+            json!({ "name": "check_status", "arguments": { "run_id": run_id } }),
+        )
+        .await;
+        if super::structured(&body)["terminal"].as_bool().unwrap_or(false) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "run did not reach terminal in 45s");
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    let msgs = conversation_messages(&server, &user.token, conv_id).await;
+    let injected = msgs
+        .iter()
+        .filter(|m| role_of(m) == "user" && message_text(m).contains("[Background task complete]"))
+        .count();
+    assert_eq!(
+        injected, 0,
+        "with model access revoked, the resume must be SKIPPED (no injected turn); got {injected}: {msgs:?}"
     );
 }
