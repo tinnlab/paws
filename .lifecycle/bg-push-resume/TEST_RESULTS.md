@@ -8,7 +8,8 @@ e2e chain applies). Full logs:
 ## Commands + real results
 
 - Lib unit: `cargo test --lib -p ziee background_mcp::`
-  → `test result: ok. 13 passed; 0 failed; 0 ignored`.
+  → `test result: ok. 14 passed; 0 failed; 0 ignored` (13 + the iteration's TEST-8
+  kill-switch test). Config-parse tests: `3 passed; 0 failed`.
 - Integration: `source tests/.env.test && cargo test --test integration_tests -p ziee
   background_mcp:: -- --test-threads=1`
   → `test result: ok. 26 passed; 0 failed; 0 ignored` (the pre-existing 23 module
@@ -26,6 +27,7 @@ e2e chain applies). Full logs:
 - **TEST-5**: PASS  (integration `resume_injects_new_turn_without_polling`)
 - **TEST-6**: PASS  (integration `resume_fires_exactly_once_per_completion`)
 - **TEST-7**: PASS  (integration `resume_skipped_when_model_access_revoked`)
+- **TEST-8**: PASS  (unit `should_resume_kill_switch_disables_resume` — deploy kill switch)
 
 ## Deterministic phase-8 checks
 

@@ -1,4 +1,6 @@
 file	start	end	angles
+src-app/server/src/core/config.rs	58	62	config-parse,patterns-conformance,api-contract
+src-app/server/src/core/config.rs	234	264	config-parse,patterns-conformance,api-contract,maintainability
 src-app/server/src/modules/background_mcp/mod.rs	31	31	correctness,concurrency,error-handling,patterns-conformance
 src-app/server/src/modules/background_mcp/mod.rs	35	35	correctness,concurrency,error-handling,modularity
 src-app/server/src/modules/background_mcp/mod.rs	41	41	correctness,concurrency,error-handling
@@ -6,7 +8,7 @@ src-app/server/src/modules/background_mcp/mod.rs	47	57	correctness,concurrency,e
 src-app/server/src/modules/background_mcp/mod.rs	123	126	correctness,concurrency,error-handling,patterns-conformance,security,state-management
 src-app/server/src/modules/background_mcp/resume.rs	1	90	correctness,concurrency,error-handling,security,perms,api-contract,patterns-conformance,extensibility,maintainability
 src-app/server/src/modules/background_mcp/resume.rs	91	215	correctness,concurrency,error-handling,security,perms,patterns-conformance,modularity,state-management,api-friendliness,maintainability
-src-app/server/src/modules/background_mcp/resume.rs	216	282	correctness,concurrency,error-handling,tests-quality,maintainability,api-contract
+src-app/server/src/modules/background_mcp/resume.rs	216	315	correctness,concurrency,error-handling,tests-quality,maintainability,api-contract,config-parse
 src-app/server/src/modules/background_mcp/tools.rs	48	48	correctness,concurrency,error-handling,api-contract,patterns-conformance
 src-app/server/src/modules/background_mcp/tools.rs	88	88	correctness,concurrency,error-handling,api-contract,patterns-conformance
 src-app/server/src/modules/background_mcp/tools.rs	99	99	correctness,concurrency,error-handling,api-contract,patterns-conformance
@@ -14,8 +16,8 @@ src-app/server/src/modules/background_mcp/tools.rs	208	214	correctness,security,
 src-app/server/src/modules/background_mcp/tools.rs	255	255	correctness,api-contract,patterns-conformance
 src-app/server/src/modules/background_mcp/tools.rs	335	335	correctness,concurrency,error-handling,patterns-conformance
 src-app/server/src/modules/background_mcp/tools.rs	340	347	correctness,concurrency,error-handling,security,plan-coverage,test-gate-predicate
-src-app/server/src/modules/background_mcp/tools.rs	349	376	correctness,concurrency,error-handling,security,perms,modularity,extensibility,plan-coverage,state-management
-src-app/server/src/modules/background_mcp/tools.rs	485	485	correctness,concurrency,error-handling,api-contract,patterns-conformance
-src-app/server/src/modules/background_mcp/tools.rs	912	954	correctness,concurrency,error-handling,tests-quality,maintainability
+src-app/server/src/modules/background_mcp/tools.rs	349	380	correctness,concurrency,error-handling,security,perms,patterns-conformance,plan-coverage,state-management
+src-app/server/src/modules/background_mcp/tools.rs	489	489	correctness,concurrency,error-handling,api-contract,patterns-conformance
+src-app/server/src/modules/background_mcp/tools.rs	916	958	correctness,concurrency,error-handling,tests-quality,maintainability
 src-app/server/tests/background_mcp/mod.rs	21	21	correctness,concurrency,error-handling,plan-coverage
 src-app/server/tests/background_mcp/resume.rs	1	318	correctness,concurrency,error-handling,tests-quality,test-reality,security,perms,plan-coverage
