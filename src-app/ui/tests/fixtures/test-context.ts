@@ -10,6 +10,11 @@ import {
   releasePortLock,
   updatePortLockHeartbeat,
 } from './port-manager'
+import {
+  serverBinaryExists,
+  serverBinaryPath,
+  terminateChild,
+} from './harness-process'
 
 const { Pool } = pg
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -240,20 +245,24 @@ export const test = base.extend<TestFixtures & TestOptions>({
     try {
       if (templateName) {
         // Clone the fully-migrated template. Postgres locks the template during
-        // a copy, so a concurrent clone (raised PLAYWRIGHT_WORKERS) can transiently
-        // fail with 55006 "source database is being accessed by other users" —
-        // bounded-retry it. Per-test DB name stays unique → isolation preserved.
+        // a copy, so a concurrent clone (raised PLAYWRIGHT_WORKERS) can
+        // transiently fail with 55006 "source database is being accessed by
+        // other users" or a lock-timeout (55P03) — bounded-retry those with
+        // JITTERED backoff so lock-step workers don't re-collide on the same
+        // cadence. Per-test DB name stays unique → isolation preserved.
+        const TRANSIENT_CLONE_CODES = new Set(['55006', '55P03'])
         let created = false
         let lastErr: unknown
-        for (let attempt = 0; attempt < 5 && !created; attempt++) {
+        for (let attempt = 0; attempt < 8 && !created; attempt++) {
           try {
             await pool.query(`CREATE DATABASE ${databaseName} TEMPLATE ${templateName}`)
             created = true
           } catch (err) {
             lastErr = err
             const code = (err as { code?: string })?.code
-            if (code === '55006') {
-              await new Promise(r => setTimeout(r, 200))
+            if (code && TRANSIENT_CLONE_CODES.has(code)) {
+              // 150-450ms jittered backoff.
+              await new Promise(r => setTimeout(r, 150 + Math.floor(Math.random() * 300)))
               continue
             }
             throw err
@@ -403,20 +412,16 @@ ${
         ? `${process.env.USERPROFILE}\\.cargo\\bin\\cargo`
         : `${process.env.HOME}/.cargo/bin/cargo`
 
-    // Spawn the PREBUILT server binary (warmed once in global-setup) rather than
-    // `cargo run` per test. `cargo run` pays a per-test cargo graph-check and
-    // contends on the cross-worktree build lock; the binary boots in ~0.8s. The
-    // binary lives at src-app/target/debug/ziee (this file is at
-    // src-app/ui/tests/fixtures/ → ../../../target). Mirrors the Rust harness
-    // (ziee-test-harness/src/lib.rs:471-503). Fall back to `cargo run` if the
-    // binary is absent (warmup skipped/failed) — same server code either way, so
-    // per-test isolation is identical.
-    const serverBinary = resolve(
-      __dirname,
-      '../../../target/debug',
-      process.platform === 'win32' ? 'ziee.exe' : 'ziee',
-    )
-    const usePrebuilt = existsSync(serverBinary)
+    // Spawn the PREBUILT server binary rather than `cargo run` per test. The
+    // binary is rebuilt ONCE per run by the global-setup warmup (block 8b), so
+    // it is fresh at run start; `cargo run` per test would instead pay a cargo
+    // graph-check + contend on the cross-worktree build lock, and boot in ~0.8s
+    // is far cheaper. Fall back to `cargo run` when the binary is absent (warmup
+    // skipped/failed) — same server code either way, so per-test isolation is
+    // identical. (Binary path + existence resolved via the shared helper so
+    // global-setup and this fixture never drift.)
+    const serverBinary = serverBinaryPath()
+    const usePrebuilt = serverBinaryExists()
     const spawnCmd = usePrebuilt ? serverBinary : cargoPath
     const spawnArgs = usePrebuilt
       ? ['--config-file', configPath]
@@ -757,57 +762,6 @@ export default defineConfig({
 })
 
 export { expect } from '@playwright/test'
-
-/**
- * Terminate a child process, driven by its `exit` event instead of a fixed
- * sleep. Sends SIGTERM and waits up to `graceMs` for the process to exit; if it
- * is still alive, escalates to SIGKILL and waits up to `killMs`. Resolves as
- * soon as the process has exited (or the bounded waits elapse) — a clean
- * shutdown returns almost immediately rather than always waiting the full grace.
- *
- * Note: this bounds the WAIT only. The caller still force-kills anything left on
- * the ports afterwards (killProcessOnPort), which is the real port-release
- * guarantee; this helper never weakens it.
- */
-async function terminateChild(
-  child: ChildProcess,
-  graceMs = 4000,
-  killMs = 2000,
-): Promise<void> {
-  // Already exited (exitCode/signalCode set) — nothing to wait for.
-  if (child.exitCode !== null || child.signalCode !== null) return
-
-  const waitForExit = (timeoutMs: number): Promise<boolean> =>
-    new Promise<boolean>(resolveExit => {
-      if (child.exitCode !== null || child.signalCode !== null) {
-        resolveExit(true)
-        return
-      }
-      let done = false
-      const finish = (exited: boolean) => {
-        if (done) return
-        done = true
-        clearTimeout(timer)
-        child.removeListener('exit', onExit)
-        resolveExit(exited)
-      }
-      const onExit = () => finish(true)
-      const timer = setTimeout(() => finish(false), timeoutMs)
-      child.once('exit', onExit)
-    })
-
-  try {
-    child.kill('SIGTERM')
-  } catch {}
-  const exited = await waitForExit(graceMs)
-  if (exited) return
-
-  // Still running after the grace window — force kill and confirm exit.
-  try {
-    child.kill('SIGKILL')
-  } catch {}
-  await waitForExit(killMs)
-}
 
 async function waitForServer(
   url: string,

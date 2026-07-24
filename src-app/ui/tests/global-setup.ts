@@ -1,6 +1,5 @@
 import { FullConfig } from '@playwright/test'
 import { execSync, spawn } from 'child_process'
-import net from 'net'
 import { resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, rmSync } from 'fs'
@@ -9,6 +8,12 @@ import crypto from 'crypto'
 import pg from 'pg'
 import dotenv from 'dotenv'
 import { cleanupStaleLocks, cleanupStaleConfigFiles, allocatePostgresPort } from './fixtures/port-manager'
+import {
+  findFreePort,
+  serverBinaryPath,
+  terminateChild,
+  waitForHttpReady,
+} from './fixtures/harness-process'
 
 const { Pool } = pg
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -333,15 +338,21 @@ export default defineConfig({
   //     Best-effort (DEC-9): on any failure we publish no template name and
   //     test-context falls back to the raw CREATE DATABASE (migrate-on-boot)
   //     path. Opt out with E2E_SKIP_DB_TEMPLATE=1.
+  // NOTE (seed semantics): the template is produced by BOOTING the server, which
+  // also runs the declarative seed (seed-if-empty; default.yaml seeds default
+  // groups/settings but NO admin user, so the /setup first-run flow is preserved).
+  // Each per-test server then boots against the clone and re-runs seed, which is a
+  // no-op on the already-seeded rows. The one behavioral consequence: config-
+  // derived "seed-once" values (e.g. session_settings from jwt.*) are latched from
+  // the TEMPLATE's config, so a per-test config that sets a NON-default seed-once
+  // value would not take effect. The template + per-test configs use the same
+  // defaults today, so there is no divergence; a future spec needing a custom
+  // seed-once value should opt out with E2E_SKIP_DB_TEMPLATE=1.
   let templateName: string | undefined
-  const serverBinaryPath = resolve(
-    uiRoot,
-    '../target/debug',
-    process.platform === 'win32' ? 'ziee.exe' : 'ziee',
-  )
+  const serverBinary = serverBinaryPath()
   if (process.env.E2E_SKIP_DB_TEMPLATE === '1') {
     console.log('🗄️  E2E_SKIP_DB_TEMPLATE=1 — per-test backends will migrate on boot\n')
-  } else if (!existsSync(serverBinaryPath)) {
+  } else if (!existsSync(serverBinary)) {
     console.warn('⚠️  Prebuilt server binary absent — skipping DB template (per-test boots migrate)\n')
   } else {
     templateName = `ziee_test_template_${runId.replace(/[^a-zA-Z0-9_]/g, '_')}`
@@ -397,7 +408,7 @@ bio_mcp:
         process.platform === 'win32'
           ? `${process.env.USERPROFILE}\\.cargo\\bin`
           : `${process.env.HOME}/.cargo/bin`
-      const tmplProc = spawn(serverBinaryPath, ['--config-file', tmplConfigPath], {
+      const tmplProc = spawn(serverBinary, ['--config-file', tmplConfigPath], {
         cwd: serverRoot2,
         stdio: ['ignore', 'pipe', 'pipe'],
         env: {
@@ -408,30 +419,27 @@ bio_mcp:
           PATH: `${cargoBinDir}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH}`,
         },
       })
+      // Keep a rolling stderr tail so a Rust panic (plain text, NOT the JSON
+      // "level":"error" lines) is visible if the boot fails.
       let tmplErr = ''
       tmplProc.stderr?.on('data', d => {
-        const m = d.toString()
-        if (m.includes('"level":"error"')) tmplErr += m
+        tmplErr = (tmplErr + d.toString()).slice(-2000)
       })
 
-      // Health answers only AFTER boot migrations complete, so it's the ready
-      // signal that the template is fully migrated.
-      const ready = await waitForHttp(`http://127.0.0.1:${tmplPort}/api/health`, 120)
+      // Migrations run synchronously during boot BEFORE the HTTP listener binds
+      // (server main: initialize_database → migrate, then TcpListener::bind), so
+      // a healthy /api/health means the template is fully migrated. Passing
+      // tmplProc makes the wait fail FAST if the server crashes instead of
+      // burning the whole 120s budget.
+      const ready = await waitForHttpReady(
+        `http://127.0.0.1:${tmplPort}/api/health`,
+        120,
+        tmplProc,
+      )
 
-      // Shut it down and CONFIRM exit so the template has no live connections
-      // when the per-test clones copy from it.
-      await new Promise<void>(res => {
-        let done = false
-        const fin = () => {
-          if (!done) { done = true; res() }
-        }
-        tmplProc.once('exit', fin)
-        try { tmplProc.kill('SIGTERM') } catch {}
-        setTimeout(() => {
-          try { tmplProc.kill('SIGKILL') } catch {}
-          fin()
-        }, 5000)
-      })
+      // Shut it down and CONFIRM exit (shared exit-driven helper) so the template
+      // has no live connections when the per-test clones copy from it.
+      await terminateChild(tmplProc)
 
       // Terminate any straggler backend so CREATE DATABASE … TEMPLATE can copy.
       const quiesce = new Pool({
@@ -468,41 +476,4 @@ bio_mcp:
   console.log('   - Each worker: 2 dynamic ports (vite preview + backend)')
   console.log('   - Each test: unique database + backend restart')
   console.log('   - Worker 0: 9000+9100, Worker 1: 9001+9101, etc.\n')
-}
-
-/**
- * Ask the OS for an ephemeral free TCP port (bind to :0, read the assigned
- * port, close). Used for the one-off template-build server boot in global-setup.
- * There is an inherent TOCTOU window between close and the server binding, but
- * it's a single serial boot here (not a worker pool), so it's safe in practice.
- */
-function findFreePort(): Promise<number> {
-  return new Promise((res, rej) => {
-    const srv = net.createServer()
-    srv.on('error', rej)
-    srv.listen(0, '127.0.0.1', () => {
-      const addr = srv.address()
-      const port = typeof addr === 'object' && addr ? addr.port : 0
-      srv.close(() => (port ? res(port) : rej(new Error('no free port'))))
-    })
-  })
-}
-
-/**
- * Poll an HTTP URL until it answers non-5xx (server ready) or the budget
- * elapses. Returns true on ready, false on timeout. Used to wait for the
- * template-build server's boot migrations to finish.
- */
-async function waitForHttp(url: string, maxSeconds: number): Promise<boolean> {
-  const deadline = Date.now() + maxSeconds * 1000
-  while (Date.now() < deadline) {
-    try {
-      const res = await fetch(url)
-      if (res.status < 500) return true
-    } catch {
-      // not up yet
-    }
-    await new Promise(r => setTimeout(r, 500))
-  }
-  return false
 }
