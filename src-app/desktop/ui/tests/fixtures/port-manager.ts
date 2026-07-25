@@ -36,11 +36,8 @@ import { execSync } from 'child_process'
 import { createServer } from 'net'
 // @ts-ignore — ESM run-key-derived isolation keys (byte-identical FNV, parity-tested).
 // Lock dir + port bases are per-worktree so N concurrent worktrees never collide.
-import {
-  desktopBackendBase,
-  desktopPgBase,
-  desktopLockDir,
-} from './isolation-keys.mjs'
+// @ts-ignore — plain-JS run-key twin has no .d.ts; runtime-verified by node --test
+import { desktopBackendBase, desktopPgBase, desktopLockDir } from './isolation-keys.mjs'
 // Re-export so global-setup imports the reaper helpers from ONE place.
 // @ts-ignore
 export { collectLiveRunIds, desktopContainerFilter, shouldKeepContainer } from './isolation-keys.mjs'
