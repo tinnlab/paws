@@ -35,8 +35,12 @@ type FormValues = z.infer<typeof schema>
  * chunks.
  */
 export function ChunkingSection() {
-  const canRead = usePermission(READ_PERM) || usePermission(MANAGE_PERM)
+  // Both permission hooks must be called UNCONDITIONALLY every render — a
+  // `usePermission(A) || usePermission(B)` short-circuits the second hook when
+  // the first is true, so the hook COUNT varies with permission state and React
+  // throws "Rendered more hooks than during the previous render" when it flips.
   const canManage = usePermission(MANAGE_PERM)
+  const canRead = usePermission(READ_PERM) || canManage
   const { settings, saving, error } = FileRagAdmin
   // Client-side cross-field validation (overlap < chunk) surfaced as a persistent
   // alert, alongside the toast + field errors.

@@ -68,8 +68,12 @@ interface PendingDictionarySwap {
  * this section only observes it via the store.
  */
 export function FullTextSearchSection() {
-  const canRead = usePermission(READ_PERM) || usePermission(MANAGE_PERM)
+  // Both permission hooks must be called UNCONDITIONALLY every render — a
+  // `usePermission(A) || usePermission(B)` short-circuits the second hook when
+  // the first is true, so the hook COUNT varies with permission state and React
+  // throws "Rendered more hooks than during the previous render" when it flips.
   const canManage = usePermission(MANAGE_PERM)
+  const canRead = usePermission(READ_PERM) || canManage
   const {
     settings,
     saving,

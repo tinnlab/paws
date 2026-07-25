@@ -40,8 +40,12 @@ const schema = z.object({
  * fused with Reciprocal Rank Fusion (`fts_rrf_k`, `fts_candidate_multiplier`).
  */
 export function FullTextSection() {
-  const canRead = usePermission(READ_PERM) || usePermission(MANAGE_PERM)
+  // Both permission hooks must be called UNCONDITIONALLY every render — a
+  // `usePermission(A) || usePermission(B)` short-circuits the second hook when
+  // the first is true, so the hook COUNT varies with permission state and React
+  // throws "Rendered more hooks than during the previous render" when it flips.
   const canManage = usePermission(MANAGE_PERM)
+  const canRead = usePermission(READ_PERM) || canManage
   const { settings, saving, error } = FileRagAdmin
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),

@@ -430,12 +430,12 @@ export const gallery: ModuleGallery = {
       slug: 'overlay-workflow-detail-drawer',
       surface: 'modules/workflow/components/WorkflowDetailDrawer',
       title: 'Workflow detail (drawer)',
-      // Wrapped in a MemoryRouter (dev-only) because the drawer's "Edit"
-      // affordance calls useNavigate, which throws in the router-less gallery
-      // overlay host. The real app always renders it inside the app Router.
+      // The gallery overlay host (`OverlayFrame`) now wraps every overlay in a
+      // MemoryRouter, so the drawer's `useNavigate` "Edit" affordance resolves
+      // without a per-component wrapper — render the real component directly.
       component: lazyNamed(
-        () => import('@/dev/gallery/fixtures/routedOverlays'),
-        'WorkflowDetailDrawerRouted',
+        () => import('@/modules/workflow/components/WorkflowDetailDrawer'),
+        'WorkflowDetailDrawer',
       ),
       open: () => WorkflowDrawer.open(workflowFixture as any),
     },
