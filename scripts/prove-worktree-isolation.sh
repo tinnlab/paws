@@ -70,7 +70,19 @@ log "base repo=$SRC_REPO ref=${SRC_REF:0:9} runid=$PROVE_RUNID"
 setup_wt() {
   local i="$1" wt="$WORK/wt-$i" lg="$LOGROOT/wt-$i-setup.log"
   git -C "$SRC_REPO" worktree add --detach "$wt" "$SRC_REF" >>"$lg" 2>&1 || { echo "SETUP-FAIL $i" >>"$lg"; return 1; }
-  git -C "$wt" submodule update --init --recursive >>"$lg" 2>&1
+  # The `sdk` submodule commit on this feature branch is LOCAL-ONLY (not pushed to
+  # the sdk remote), so `git submodule update` can't fetch it. Copy the base
+  # repo's already-checked-out submodule working trees instead (exclude heavy
+  # build/dep dirs). This makes the throwaway's npm workspaces find sdk/packages/*
+  # and link @ziee/* locally — no network, no remote-fetch failure.
+  rsync -a --delete \
+    --exclude 'target/' --exclude 'node_modules/' --exclude '.git' \
+    "$SRC_REPO/sdk/" "$wt/sdk/" >>"$lg" 2>&1
+  rsync -a --exclude 'agent-kit/.git' "$SRC_REPO/agent-kit/" "$wt/agent-kit/" >>"$lg" 2>&1 || true
+  # pgvector (server build) only needed for the FULL cargo/e2e legs.
+  if [ "$FULL" = "1" ] && [ -d "$SRC_REPO/src-app/server/vendor/pgvector" ]; then
+    rsync -a --exclude '.git' "$SRC_REPO/src-app/server/vendor/pgvector/" "$wt/src-app/server/vendor/pgvector/" >>"$lg" 2>&1 || true
+  fi
   # hub-seed copy (the known worktree gotcha) — from the base repo if present.
   if [ -d "$SRC_REPO/src-app/server/binaries/hub-seed" ]; then
     mkdir -p "$wt/src-app/server/binaries"
