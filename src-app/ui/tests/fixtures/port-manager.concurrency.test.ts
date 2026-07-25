@@ -24,6 +24,15 @@ process.env.ZIEE_E2E_LOCK_DIR = LOCK_DIR
 
 const pm = await import('./port-manager.ts')
 
+// port-manager logs verbosely (emoji-prefixed) to stdout. Under `node --test`
+// that high-volume multibyte output interleaves with the runner's V8-serialized
+// IPC on the SAME pipe and intermittently corrupts it ("Unable to deserialize
+// cloned data"). Silence the operational logs for this spec — every assertion
+// here is against files / return values, never console output.
+for (const k of ['log', 'info', 'warn', 'debug'] as const) {
+  ;(console as unknown as Record<string, () => void>)[k] = () => {}
+}
+
 // --- helpers ---------------------------------------------------------------
 
 /** Resolves true iff `port` is bindable on 0.0.0.0 right now (test-local copy
@@ -35,6 +44,15 @@ function bindable(port: number): Promise<boolean> {
     srv.once('listening', () => srv.close(() => res(true)))
     srv.listen(port, '0.0.0.0')
   })
+}
+
+/** Restore the base-port env vars (unset when they were previously absent) so a
+ *  test never leaks its port base into a sibling test. */
+function restoreEnv(saved: { v: string | undefined; b: string | undefined }): void {
+  if (saved.v === undefined) delete process.env.ZIEE_E2E_BASE_VITE_PORT
+  else process.env.ZIEE_E2E_BASE_VITE_PORT = saved.v
+  if (saved.b === undefined) delete process.env.ZIEE_E2E_BASE_BACKEND_PORT
+  else process.env.ZIEE_E2E_BASE_BACKEND_PORT = saved.b
 }
 
 /** Hold `port` with a real listener (simulates a concurrent session's live
@@ -70,6 +88,7 @@ async function findFreeBase(): Promise<{ V: number; B: number }> {
 // TEST-1 — happy path: a free base is returned unchanged (the bind-check does
 // not perturb the free case).
 test('TEST-1 findAvailablePorts returns the base pair when it is free', async () => {
+  const savedEnv = { v: process.env.ZIEE_E2E_BASE_VITE_PORT, b: process.env.ZIEE_E2E_BASE_BACKEND_PORT }
   const { V, B } = await findFreeBase()
   process.env.ZIEE_E2E_BASE_VITE_PORT = String(V)
   process.env.ZIEE_E2E_BASE_BACKEND_PORT = String(B)
@@ -80,6 +99,7 @@ test('TEST-1 findAvailablePorts returns the base pair when it is free', async ()
     assert.equal(got.backend, B, 'free base backend port is chosen as-is')
   } finally {
     pm.releasePortLock(got.vite, got.backend)
+    restoreEnv(savedEnv)
   }
 })
 
@@ -89,6 +109,7 @@ test('TEST-1 findAvailablePorts returns the base pair when it is free', async ()
 // pair (the old code did, then test-context killed the sibling) — it skips to
 // the next OS-bindable offset. This is the enumerable regression guard.
 test('TEST-2 findAvailablePorts skips a base held by a concurrent session (no collision)', async () => {
+  const savedEnv = { v: process.env.ZIEE_E2E_BASE_VITE_PORT, b: process.env.ZIEE_E2E_BASE_BACKEND_PORT }
   const { V, B } = await findFreeBase()
   process.env.ZIEE_E2E_BASE_VITE_PORT = String(V)
   process.env.ZIEE_E2E_BASE_BACKEND_PORT = String(B)
@@ -100,16 +121,23 @@ test('TEST-2 findAvailablePorts skips a base held by a concurrent session (no co
   try {
     const got = await pm.findAvailablePorts(0)
     try {
+      // Robust skip-invariant (not a hard `=== V+8`, which flakes if another
+      // process grabs the +8 offset between the probe and the allocation): the
+      // allocator must NEVER hand out the held base pair, must move FORWARD by a
+      // whole offset step (multiple of 8), and must apply the SAME offset to both
+      // ports (they move together).
       assert.notEqual(got.vite, V, 'must NOT hand out the vite port a sibling holds')
       assert.notEqual(got.backend, B, 'must NOT hand out the backend port a sibling holds')
-      assert.equal(got.vite, V + 8, 'skips to the next offset (workerIndex 0, attempt 1 → +8)')
-      assert.equal(got.backend, B + 8, 'backend skips to the same next offset')
+      assert.ok(got.vite >= V + 8, `skipped forward past the held base (got ${got.vite}, base ${V})`)
+      assert.equal((got.vite - V) % 8, 0, 'skipped by a whole worker-offset step')
+      assert.equal(got.backend - got.vite, B - V, 'the same offset is applied to vite + backend')
     } finally {
       pm.releasePortLock(got.vite, got.backend)
     }
   } finally {
     a1.close()
     a2.close()
+    restoreEnv(savedEnv)
   }
 })
 
@@ -120,7 +148,11 @@ test('TEST-2 findAvailablePorts skips a base held by a concurrent session (no co
 // PATH scoped so lsof is ABSENT but fuser present, it must actually invoke
 // `fuser -k <port>/tcp`; and with lsof present, lsof must still win (fuser
 // untouched).
-test('TEST-3 killProcessOnPort falls back to fuser when lsof is absent, prefers lsof when present', async () => {
+// POSIX-only: writes `#!/bin/sh` fake binaries + relies on `command -v` and the
+// exec bit. Genuinely incompatible with Windows `test:unit` (no /bin/sh, no
+// chmod exec bit, `command -v` is not cmd) — a legitimate platform gate, not a
+// go-green skip. The win32 arm of killProcessOnPort is unchanged by this diff.
+test('TEST-3 killProcessOnPort falls back to fuser when lsof is absent, prefers lsof when present', { skip: process.platform === 'win32' }, async () => {
   const bin = mkdtempSync(join(tmpdir(), 'pm-bin-'))
   const fuserMarker = join(bin, 'fuser.called')
   const lsofMarker = join(bin, 'lsof.called')

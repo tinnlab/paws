@@ -879,6 +879,10 @@ async function killProcessOnPort(port: number): Promise<void> {
     }
   }
 
+  // Defense-in-depth: `port` is typed number but reaches here from callers that
+  // read lock files; refuse a non-numeric value before it hits a shell string.
+  if (!Number.isInteger(port) || port <= 0) return
+
   try {
     if (process.platform === 'win32') {
       const output = execSync(`netstat -ano | findstr :${port}`, { encoding: 'utf8', stdio: 'pipe' }).trim()
@@ -919,6 +923,10 @@ async function killProcessOnPort(port: number): Promise<void> {
           execSync(`kill -9 ${pid}`, { stdio: 'ignore' })
         } catch {}
       }
+    } else {
+      // No lsof/fuser/ss available — cannot reap; warn instead of silently
+      // no-opping (mirrors the port-manager.ts copy).
+      console.warn(`⚠️  no lsof/fuser/ss available to free port ${port}; leaving it`)
     }
 
     // Wait for port to be released

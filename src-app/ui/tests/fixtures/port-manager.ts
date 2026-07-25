@@ -113,6 +113,11 @@ function hasCmd(cmd: string): boolean {
  * present. Windows (`netstat`/`taskkill`) is unchanged.
  */
 export function killProcessOnPort(port: number): void {
+  // Defense-in-depth: `port` is typed number but callers pass values read from
+  // lock files (lock.vitePort/backendPort); refuse a non-numeric value before
+  // it is interpolated into a shell string.
+  if (!Number.isInteger(port) || port <= 0) return
+
   if (process.platform === 'win32') {
     try {
       const output = execSync(`netstat -ano | findstr :${port}`, { encoding: 'utf8', stdio: 'pipe' }).trim()
@@ -379,7 +384,10 @@ export async function findAvailablePorts(
       // allocator (allocatePostgresPort → isPortBindable): a lock-free port is not
       // necessarily bind-free, so verify BOTH ports are actually bindable at the
       // OS level before handing them out. If a sibling holds either, release our
-      // just-taken lock and try the next offset.
+      // just-taken lock and try the next offset. NOTE this bind probe is TOCTOU
+      // (same accepted caveat as allocatePostgresPort): two sessions on different
+      // lock dirs could both pass the probe and race for the same port — it
+      // strongly REDUCES, but cannot fully eliminate, cross-session collisions.
       const bindable =
         (await isPortBindable(vitePort)) && (await isPortBindable(backendPort))
       if (bindable) {
