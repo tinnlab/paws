@@ -50,6 +50,21 @@ caused by this feature** and cannot be fixed within its scope:
   CLAUDE.md's "known test-environment floor" warns to classify, not treat as a
   regression. The DESKTOP gallery (fewer surfaces) passed clean under the same
   mechanism.
+- **The only non-test web files the diff changes are `vite.config.ts` +
+  `gallery.config.json`, and NEITHER can affect React rendering:** the added
+  `gallerySentinelPlugin()` has ONLY `configureServer`/`configResolved` hooks (a
+  `/__worktree` middleware) — **no `transform`/`load` hook** — so it cannot alter
+  module bundling; the `pickBindablePort`/port change affects only the dev-server
+  PORT.
+- **DECISIVE REGRESSION TEST:** reverting `vite.config.ts` + `gallery.config.json`
+  to their BASE (`origin/feat/agent-core`) versions and re-running gate:ui yields
+  the **IDENTICAL failure — 27 surfaces with HIGH findings** (same as my config's
+  27). Base config → same failure ⇒ the web-gallery runtime-health condition is
+  **pre-existing and empirically feature-independent** (my config restored after;
+  tree clean).
+- Consistency across runs (cold 45 / warm 54 / fresh 54 gating) shows a
+  reproducible pre-existing web-gallery condition, not a flaky one my change
+  introduced.
 - Per B3, the shared `runtime-baseline.js` / `isHarnessNoise()` are NOT edited to
   force this gate green — that would be routing a pre-existing harness gap around
   this feature.
