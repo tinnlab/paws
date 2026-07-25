@@ -27,6 +27,7 @@ import { chromium } from '@playwright/test'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { resolveGalleryPort } from '@ziee/gallery/scripts/lib/run-key.mjs'
 import { fileURLToPath } from 'node:url'
 import { enumerateSurfaces } from './lib/gallery-surfaces.mjs'
 
@@ -39,7 +40,7 @@ const TAXONOMY = path.resolve(UI_DIR, 'docs/DEFECT_TAXONOMY.md')
 const arg = (n, d) =>
   (process.argv.find(a => a.startsWith(`--${n}=`)) || `--${n}=${d}`).split('=').slice(1).join('=')
 const flag = n => process.argv.includes(`--${n}`)
-const PORT = process.env.GALLERY_PORT || '1420'
+const PORT = process.env.GALLERY_PORT || String(resolveGalleryPort({ env: undefined, cfgPort: null, which: 'desktopGallery' }))
 const BASE = arg('url', `http://localhost:${PORT}/dev-gallery.html`)
 const NO_SHOTS = flag('no-shots')
 

@@ -1,5 +1,15 @@
 import { defineConfig, devices } from '@playwright/test'
 import crypto from 'crypto'
+// @ts-ignore — key-derived desktop dev port (audit §7; no fixed 1420)
+import { resolveGalleryPort, pickBindablePort } from '@ziee/gallery/scripts/lib/run-key.mjs'
+
+// Per-worktree, bind-checked desktop dev-server port. The vite CLI `--port`
+// override makes vite honor exactly this port, so playwright's baseURL/webServer
+// url match. Two desktop-e2e worktrees derive DIFFERENT ports (distinct keys).
+const DEV_PORT: number = await pickBindablePort(
+  resolveGalleryPort({ env: process.env.VITE_DEV_PORT, cfgPort: null, which: 'desktopGallery' }),
+)
+const DEV_URL = `http://localhost:${DEV_PORT}`
 
 // Organize test results by test run ID to avoid conflicts between parallel test runs
 const testRunId = process.env.TEST_RUN_ID || crypto.randomBytes(4).toString('hex')
@@ -42,7 +52,7 @@ export default defineConfig({
   // Shared settings for all projects
   use: {
     // Base URL for desktop app's Vite dev server
-    baseURL: 'http://localhost:1420',
+    baseURL: DEV_URL,
 
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
@@ -81,8 +91,8 @@ export default defineConfig({
 
   // Dev server configuration - start Tauri dev server for tests
   webServer: {
-    command: 'npm run dev',
-    url: 'http://localhost:1420',
+    command: `npm run dev -- --port ${DEV_PORT} --strictPort`,
+    url: DEV_URL,
     reuseExistingServer: !process.env.CI,
     timeout: 120000, // 2 minutes for server to start
   },

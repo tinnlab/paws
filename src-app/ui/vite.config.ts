@@ -13,6 +13,10 @@ import { preloadGraphPlugin } from './plugins/vite-plugin-preload-graph.js'
 import { galleryCoveragePlugin } from '@ziee/gallery/vite/vite-plugin-gallery-coverage.js'
 // @ts-ignore
 import { galleryAliasPlugin } from '@ziee/gallery/vite/vite-plugin-gallery-alias.js'
+// @ts-ignore — worktree-sentinel middleware (no-foreign-reuse, audit §7)
+import { gallerySentinelPlugin } from '@ziee/gallery/vite/vite-plugin-gallery-sentinel.js'
+// @ts-ignore — unified run-key: key-derived, bind-checked dev port (no fixed 1420)
+import { resolveGalleryPort, pickBindablePort } from '@ziee/gallery/scripts/lib/run-key.mjs'
 
 const host = process.env.TAURI_DEV_HOST
 
@@ -26,6 +30,19 @@ export default defineConfig(async () => {
   // `window.__coverage__` (per-branch hit counts). Off by every other build —
   // normal dev/build/test never pays the instrumentation cost.
   const coverage = process.env.GALLERY_COVERAGE === '1'
+
+  // Key-derived, bind-checked dev port (audit §7: no fixed 1420). Precedence:
+  // explicit VITE_DEV_PORT > per-worktree key-derived base, then forward
+  // bind-search so strictPort is safe on an already-verified port. gate:ui /
+  // playwright pass `--port X` on the CLI which overrides this; a bare
+  // `npm run dev` gets a per-worktree port so two worktrees never collide.
+  const devPortBase = resolveGalleryPort({
+    env: process.env.VITE_DEV_PORT,
+    cfgPort: null,
+    which: 'webGallery',
+  })
+  const devPort = await pickBindablePort(devPortBase)
+  const hmrPort = devPort + 1
 
   return {
     plugins: [
@@ -55,6 +72,9 @@ export default defineConfig(async () => {
       // Serve the gallery at the pretty `/gallery` URL + keep `/dev-gallery.html`
       // working post-rename (dev/preview only).
       galleryAliasPlugin(),
+      // Serve the worktree sentinel at /__worktree so gate:ui/visual/proof can
+      // prove a running server belongs to THIS worktree (no-foreign-reuse).
+      gallerySentinelPlugin(),
       // Detect duplicate form names
       formNamesPlugin({
         srcDir: 'src',
@@ -78,14 +98,14 @@ export default defineConfig(async () => {
   },
 
   server: {
-    port: Number(process.env.VITE_DEV_PORT) || 1420,
+    port: devPort,
     strictPort: true,
     host: host || false,
     hmr: host
       ? {
           protocol: 'ws',
           host,
-          port: 1421,
+          port: hmrPort,
         }
       : undefined,
     watch: {

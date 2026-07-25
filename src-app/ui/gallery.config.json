@@ -2,7 +2,6 @@
   "galleryDir": "src/dev/gallery",
   "surfaceRoots": ["src/modules", "src/components/ui"],
   "kitImport": "@ziee/kit",
-  "port": 1420,
   "galleryUrl": "/gallery.html",
   "prodMarker": "ZIEE_GALLERY_SEED_MARKER",
   "distDir": "../../dist/ui",

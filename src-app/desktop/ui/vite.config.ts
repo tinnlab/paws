@@ -7,6 +7,10 @@ import { removeDataTestPlugin } from './plugins/vite-plugin-remove-data-test.js'
 import { localOverridePlugin } from './plugins/vite-plugin-local-override.js'
 import { testidUniquePlugin } from './plugins/vite-plugin-testid-unique.js'
 import { galleryAliasPlugin } from './plugins/vite-plugin-gallery-alias.js'
+// @ts-ignore — worktree-sentinel + unified run-key (audit §7; no fixed 1420/1455)
+import { gallerySentinelPlugin } from '@ziee/gallery/vite/vite-plugin-gallery-sentinel.js'
+// @ts-ignore
+import { resolveGalleryPort, pickBindablePort } from '@ziee/gallery/scripts/lib/run-key.mjs'
 
 const host = process.env.TAURI_DEV_HOST
 
@@ -14,6 +18,16 @@ const host = process.env.TAURI_DEV_HOST
 export default defineConfig(async () => {
   const isDev = process.env.NODE_ENV !== 'production'
   const isTest = process.env.NODE_ENV === 'test'
+
+  // Key-derived, bind-checked desktop dev port (disjoint from the web workspace's
+  // range so a web + desktop dev/gate run in the same worktree never collide).
+  const devPortBase = resolveGalleryPort({
+    env: process.env.VITE_DEV_PORT,
+    cfgPort: null,
+    which: 'desktopGallery',
+  })
+  const devPort = await pickBindablePort(devPortBase)
+  const hmrPort = devPort + 1
 
   return {
     plugins: [
@@ -28,6 +42,8 @@ export default defineConfig(async () => {
       // Serve the gallery at the pretty `/gallery` URL + keep `/dev-gallery.html`
       // working post-rename (dev/preview only).
       galleryAliasPlugin(),
+      // Worktree sentinel at /__worktree (no-foreign-reuse, audit §7).
+      gallerySentinelPlugin(),
       // Detect duplicate form names
       formNamesPlugin({
         srcDir: 'src',
@@ -82,16 +98,17 @@ export default defineConfig(async () => {
       ],
     },
 
-    // Tauri expects a fixed port
+    // Per-worktree key-derived port (bind-verified above) instead of a fixed
+    // 1420; gate:ui / playwright pass `--port` on the CLI to override.
     server: {
-      port: 1420,
+      port: devPort,
       strictPort: true,
       host: host || false,
       hmr: host
         ? {
             protocol: 'ws',
             host,
-            port: 1421,
+            port: hmrPort,
           }
         : undefined,
       watch: {

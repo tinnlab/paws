@@ -8,8 +8,13 @@
  * workspace's separate `playwright.visual.config.ts`.
  */
 import { defineConfig, devices } from '@playwright/test'
+// @ts-ignore — key-derived desktop gallery port (audit §7; no fixed 1455)
+import { resolveGalleryPort } from '@ziee/gallery/scripts/lib/run-key.mjs'
 
-const PORT = Number(process.env.GALLERY_PORT || 1455)
+const PORT = Number(
+  process.env.GALLERY_PORT ||
+    resolveGalleryPort({ env: undefined, cfgPort: null, which: 'desktopGallery' }),
+)
 
 export default defineConfig({
   testDir: './tests/e2e',

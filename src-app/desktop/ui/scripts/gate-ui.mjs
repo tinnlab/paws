@@ -29,10 +29,27 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import {
+  resolveGalleryPort,
+  pickBindablePort,
+  resolveWorktreeRoot,
+  fetchSentinelRoot,
+  serverIsThisWorktree,
+} from '@ziee/gallery/scripts/lib/run-key.mjs'
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const UI_DIR = path.resolve(__dirname, '..')
 const GALLERY_DIR = path.resolve(UI_DIR, 'src/dev/gallery')
-const PORT = Number(process.env.GALLERY_PORT || 1420)
+// Key-derived, bind-checked desktop gallery port (audit §7; no fixed 1420). The
+// final PORT is decided in main() — reuse only THIS worktree's server.
+const OWN_ROOT = resolveWorktreeRoot(UI_DIR)
+const PORT_BASE = resolveGalleryPort({
+  env: process.env.GALLERY_PORT,
+  cfgPort: null,
+  which: 'desktopGallery',
+  cwd: UI_DIR,
+})
+let PORT = PORT_BASE
 const SKIP_COVERAGE = process.argv.includes('--skip-coverage')
 
 const results = [] // { name, ok, detail }
@@ -100,10 +117,23 @@ async function main() {
   if (guard.code !== 0) console.log(guard.out.slice(-1500))
   if (colors.code !== 0) console.log(colors.out.slice(-1500))
 
-  // 3. runtime needs the gallery Vite server. Boot it (or reuse). ------------
+  // 3. runtime needs the gallery Vite server. Boot it (or reuse ONLY our own —
+  // NO-FOREIGN-REUSE, audit §2/§7: reuse a server on the base port only if its
+  // /__worktree sentinel proves it is THIS worktree; else boot our own on a fresh
+  // bindable port so we never test a sibling worktree's tree).
   let vite = null
-  const alreadyUp = await galleryUp(PORT)
-  if (!alreadyUp) {
+  const sentinelRoot = await fetchSentinelRoot(PORT_BASE)
+  const isOurs = serverIsThisWorktree(sentinelRoot, OWN_ROOT) && (await galleryUp(PORT_BASE))
+  if (isOurs) {
+    PORT = PORT_BASE
+    console.log(`• reusing THIS worktree's gallery dev server already on :${PORT}`)
+  } else {
+    if (sentinelRoot && sentinelRoot !== OWN_ROOT) {
+      console.log(
+        `• port :${PORT_BASE} holds a FOREIGN worktree's server (${sentinelRoot}); NOT reusing — booting our own`,
+      )
+    }
+    PORT = await pickBindablePort(PORT_BASE)
     console.log(`• booting gallery dev server on :${PORT} …`)
     vite = spawn(
       'npm',
@@ -116,8 +146,6 @@ async function main() {
       finish()
       return
     }
-  } else {
-    console.log(`• reusing gallery dev server already on :${PORT}`)
   }
 
   try {
