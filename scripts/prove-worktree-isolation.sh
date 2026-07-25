@@ -75,13 +75,21 @@ setup_wt() {
   # repo's already-checked-out submodule working trees instead (exclude heavy
   # build/dep dirs). This makes the throwaway's npm workspaces find sdk/packages/*
   # and link @ziee/* locally — no network, no remote-fetch failure.
-  rsync -a --delete \
-    --exclude 'target/' --exclude 'node_modules/' --exclude '.git' \
-    "$SRC_REPO/sdk/" "$wt/sdk/" >>"$lg" 2>&1
-  rsync -a --exclude 'agent-kit/.git' "$SRC_REPO/agent-kit/" "$wt/agent-kit/" >>"$lg" 2>&1 || true
-  # pgvector (server build) only needed for the FULL cargo/e2e legs.
+  # tar-pipe copy (rsync isn't installed on every box) excluding heavy build/dep
+  # dirs. MUST land before `npm install` so the workspace links @ziee/* locally.
+  copy_tree() { # $1=submodule dir name (relative to repo root), lands at $wt/$1
+    local name="$1"
+    [ -d "$SRC_REPO/$name" ] || return 0
+    ( cd "$SRC_REPO" && tar -cf - \
+        --exclude="$name/target" --exclude="$name/node_modules" \
+        --exclude="$name/.git" "$name" ) | ( cd "$wt" && tar -xf - ) 2>>"$lg"
+  }
+  copy_tree "sdk"
+  copy_tree "agent-kit" || true
   if [ "$FULL" = "1" ] && [ -d "$SRC_REPO/src-app/server/vendor/pgvector" ]; then
-    rsync -a --exclude '.git' "$SRC_REPO/src-app/server/vendor/pgvector/" "$wt/src-app/server/vendor/pgvector/" >>"$lg" 2>&1 || true
+    mkdir -p "$wt/src-app/server/vendor"
+    ( cd "$SRC_REPO/src-app/server/vendor" && tar -cf - --exclude='pgvector/.git' pgvector ) \
+      | ( cd "$wt/src-app/server/vendor" && tar -xf - ) 2>>"$lg" || true
   fi
   # hub-seed copy (the known worktree gotcha) — from the base repo if present.
   if [ -d "$SRC_REPO/src-app/server/binaries/hub-seed" ]; then
@@ -148,11 +156,25 @@ declare -A DEV_PORT=()
 if [ "$DEV" = "1" ]; then
   log "waiting for dev servers + probing /__worktree sentinels…"
   for i in $(seq 1 "$K"); do
-    port=""
+    wt="$WORK/wt-$i"; port=""
     for _ in $(seq 1 60); do
       port="$(grep -oaE 'localhost:[0-9]+' "$LOGROOT/wt-$i-dev.log" 2>/dev/null | head -1 | cut -d: -f2)"
       [ -n "$port" ] && break; sleep 2
     done
+    # Robustness fallback (LEDGER finding, FIX_ROUND-1): if the vite log format
+    # didn't surface a port, scan THIS worktree's key-derived port range for a
+    # /__worktree sentinel that reports this worktree's own root — independent of
+    # any log string.
+    if [ -z "$port" ]; then
+      base="$(cd "$wt/src-app/ui" 2>/dev/null && node -e "import('@ziee/gallery/scripts/lib/run-key.mjs').then(m=>console.log(m.portBase(m.worktreeKey(),m.PORT_FLOORS.webGallery.floor,m.PORT_FLOORS.webGallery.span)))" 2>/dev/null)"
+      if [ -n "$base" ]; then
+        for off in $(seq 0 200); do
+          p=$((base+off))
+          r="$(curl -fsS --max-time 1 "http://localhost:$p/__worktree" 2>/dev/null | sed -n 's/.*"worktreeRoot":"\([^"]*\)".*/\1/p')"
+          if [ "$r" = "$wt" ]; then port="$p"; break; fi
+        done
+      fi
+    fi
     DEV_PORT[$i]="$port"
     [ -n "$port" ] && BOUND_PORTS+=("$port")
   done
