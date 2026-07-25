@@ -30,6 +30,10 @@ PROVE_RUNID="prove-$(date +%s)-$$"
 WORK="/data/pbya/ziee/tmp/prove-iso/$PROVE_RUNID"
 LOGROOT="$WORK/_logs"
 mkdir -p "$LOGROOT"
+# "<wt-index> <port>" pairs — disjointness is checked ACROSS worktrees (a
+# worktree that reuses its OWN dev server for its gate leg repeats its port; only
+# a port bound by two DIFFERENT worktrees is a real collision).
+PORT_PAIRS="$LOGROOT/port-pairs.txt"; : > "$PORT_PAIRS"
 
 log()  { printf '%s %s\n' "[$(date +%H:%M:%S)]" "$*"; }
 fail_markers=0
@@ -176,7 +180,7 @@ if [ "$DEV" = "1" ]; then
       fi
     fi
     DEV_PORT[$i]="$port"
-    [ -n "$port" ] && BOUND_PORTS+=("$port")
+    [ -n "$port" ] && { BOUND_PORTS+=("$port"); echo "$i $port" >> "$PORT_PAIRS"; }
   done
   # provenance assertion
   for i in $(seq 1 "$K"); do
@@ -199,7 +203,7 @@ if [ "$GATE" = "1" ]; then
   for f in "$LOGROOT"/wt-*-gate.pid; do [ -f "$f" ] && wait "$(cat "$f")" 2>/dev/null; done
   for i in $(seq 1 "$K"); do
     gp="$(grep -oaE 'gallery dev server (already )?on :[0-9]+|on :[0-9]+' "$LOGROOT/wt-$i-gate.log" 2>/dev/null | grep -oE '[0-9]+' | head -1)"
-    [ -n "$gp" ] && BOUND_PORTS+=("$gp")
+    [ -n "$gp" ] && { BOUND_PORTS+=("$gp"); echo "$i $gp" >> "$PORT_PAIRS"; }
   done
 fi
 
@@ -221,12 +225,14 @@ if [ "$GATE" = "1" ]; then
   fi
 fi
 
-# (b) ports pairwise-disjoint.
-dupes="$(printf '%s\n' "${BOUND_PORTS[@]:-}" | sort | uniq -d)"
-if [ -n "$dupes" ]; then
-  log "❌ bound ports NOT disjoint — collisions: $dupes"; fail_markers=$((fail_markers+1))
+# (b) ports disjoint ACROSS worktrees. `sort -u` collapses a worktree's repeated
+#     (wt,port) rows (dev + its own gate reuse), so a port left owned by >1
+#     DISTINCT worktree is the only real collision.
+cross="$(sort -u "$PORT_PAIRS" 2>/dev/null | awk '{c[$2]++} END{for(p in c) if(c[p]>1) print p}')"
+if [ -n "$cross" ]; then
+  log "❌ ports NOT disjoint across worktrees — port(s) bound by >1 worktree: $cross"; fail_markers=$((fail_markers+1))
 else
-  log "  ✅ bound ports pairwise-disjoint ($(printf '%s ' "${BOUND_PORTS[@]:-}"))"
+  log "  ✅ ports pairwise-disjoint across worktrees ($(sort -u "$PORT_PAIRS" 2>/dev/null | awk '{printf "%s ",$2}'))"
 fi
 
 # (c) forbidden cross-run error markers in ANY log.
