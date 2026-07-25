@@ -26,7 +26,12 @@ import {
   allocatePostgresPort,
   cleanupStaleConfigFiles,
   cleanupStaleLocks,
+  collectLiveRunIds,
+  desktopContainerFilter,
+  shouldKeepContainer,
 } from './fixtures/port-manager'
+// @ts-ignore — pure ns helper (ESM); the runId must carry the session namespace.
+import { desktopSessionNs } from './fixtures/isolation-keys.mjs'
 
 const { Pool } = pg
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -44,9 +49,13 @@ export default async function globalSetup(_config: FullConfig) {
     console.warn('⚠️  playwright install chromium failed (continuing):', e)
   }
 
-  // Allocate a test run ID (used to namespace the Docker container +
-  // config files) and stash it in env for teardown / test-context.
-  const runId = process.env.TEST_RUN_ID || crypto.randomBytes(4).toString('hex')
+  // Allocate a test run ID (used to namespace the Docker container + config
+  // files). NAMESPACE it with the per-worktree session ns (`pg<pgBase>`) so a
+  // sibling worktree's containers live in a disjoint name-space and can never be
+  // reaped here (the tailtest twin) — mirrors the core/SDK sessionNs runId shape.
+  const sessionNs = desktopSessionNs()
+  const runId =
+    process.env.TEST_RUN_ID || `${sessionNs}-${crypto.randomBytes(4).toString('hex')}`
   console.log(`🆔 Test run ID: ${runId}`)
   process.env.TEST_RUN_ID = runId
 

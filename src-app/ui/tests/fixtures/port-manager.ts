@@ -3,6 +3,14 @@ import { resolve } from 'path'
 import { tmpdir } from 'os'
 import { execSync } from 'child_process'
 import { createServer } from 'net'
+// @ts-ignore — key-derived e2e defaults (ITEM-12): when ZIEE_E2E_* is unset the
+// default is per-worktree (audit §7), so isolation isn't a manual opt-in.
+import { resolveE2eDefaults } from './e2e-data-dir.mjs'
+
+// Resolved ONCE per process from the run key. An explicit ZIEE_E2E_* env still
+// wins inside resolveE2eDefaults; lock dir + port bases are per-worktree by
+// default so a partial env-set can never reintroduce a shared base.
+const E2E_DEFAULTS = resolveE2eDefaults()
 
 /**
  * True when `port` can actually be bound on 0.0.0.0 right now.
@@ -30,7 +38,10 @@ function isPortBindable(port: number): Promise<boolean> {
 // stale-lock cleanup kills a sibling worktree's just-starting backend
 // (observed as a graceful "Shutdown signal received" ~20s into startup).
 // Pair with ZIEE_E2E_BASE_VITE_PORT / ZIEE_E2E_BASE_BACKEND_PORT.
-const LOCK_DIR = process.env.ZIEE_E2E_LOCK_DIR || resolve(tmpdir(), 'ziee-test-locks')
+// Default is per-worktree (`/tmp/ziee-test-locks-<key>`); ZIEE_E2E_LOCK_DIR wins
+// (handled inside resolveE2eDefaults). `tmpdir()` retained via the key-path only
+// when the derived default is used. Pairs with the key-derived port bases below.
+const LOCK_DIR = E2E_DEFAULTS.lockDir || resolve(tmpdir(), 'ziee-test-locks')
 const LOCK_TIMEOUT_MS = 1800000 // 30 minutes - covers a full dir run; postgres locks are not heartbeat-refreshed
 // @ts-ignore - Reserved for future use
 const _HEARTBEAT_INTERVAL_MS = 5000 // 5 seconds - heartbeat update frequency (reserved for future use)
@@ -361,9 +372,11 @@ export async function findAvailablePorts(
 ): Promise<{ vite: number; backend: number }> {
   // Try up to 100 port pairs
   const MAX_ATTEMPTS = 100
-  // Env-overridable port base for cross-worktree isolation (see LOCK_DIR).
-  const BASE_VITE_PORT = parseInt(process.env.ZIEE_E2E_BASE_VITE_PORT || '9000', 10)
-  const BASE_BACKEND_PORT = parseInt(process.env.ZIEE_E2E_BASE_BACKEND_PORT || '9100', 10)
+  // Per-worktree KEY-DERIVED base (ITEM-12): default is `portBase(key, floor)` so
+  // two worktrees never share a base; ZIEE_E2E_BASE_* still overrides (resolved
+  // in E2E_DEFAULTS, which moves the lock dir with these bases — audit §7).
+  const BASE_VITE_PORT = E2E_DEFAULTS.baseVitePort
+  const BASE_BACKEND_PORT = E2E_DEFAULTS.baseBackendPort
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     // Spread workers across port range to reduce collisions
@@ -534,7 +547,7 @@ export async function allocatePostgresPort(runId: string): Promise<number> {
   // one run's postgres dies with "port already allocated" → ECONNREFUSED. Give a
   // concurrent session its OWN base (e.g. ZIEE_E2E_BASE_PG_PORT=54600) so it can
   // never collide with the default-54331 sessions.
-  const BASE_PORT = parseInt(process.env.ZIEE_E2E_BASE_PG_PORT || '54331', 10)
+  const BASE_PORT = E2E_DEFAULTS.basePgPort
   const MAX_ATTEMPTS = 100
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {

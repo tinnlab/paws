@@ -69,37 +69,13 @@ struct ExtractedPaths {
     typst: PathBuf,
 }
 
-/// Write embedded bytes to `target` if not already on disk and set
-/// executable bit on Unix. Centralizes the per-binary
-/// write-then-chmod-then-log dance so adding a new embedded binary
-/// is a one-call addition.
-fn extract_one(
-    label: &str,
-    bytes: &[u8],
-    target: &PathBuf,
-) -> Result<(), AppError> {
-    if target.exists() {
-        tracing::debug!("{} already extracted at {:?}", label, target);
-        return Ok(());
-    }
-
-    tracing::info!("Extracting embedded {} to {:?}", label, target);
-    std::fs::write(target, bytes)
-        .map_err(|e| AppError::internal_error(format!("Failed to extract {}: {}", label, e)))?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(target)
-            .map_err(|e| AppError::internal_error(format!("Failed to get {} permissions: {}", label, e)))?
-            .permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(target, perms)
-            .map_err(|e| AppError::internal_error(format!("Failed to set {} permissions: {}", label, e)))?;
-    }
-
-    tracing::info!("Successfully extracted {} ({} bytes)", label, bytes.len());
-    Ok(())
+/// Write embedded bytes to `target` if not already on disk (intact) and set the
+/// executable bit on Unix. Delegates to the shared cross-process-atomic extractor
+/// (`common::embedded::extract_atomic`: temp-write + `fs::rename` + advisory
+/// flock) so two concurrent server processes sharing `~/.ziee/bin` never produce
+/// a torn binary.
+fn extract_one(label: &str, bytes: &[u8], target: &PathBuf) -> Result<(), AppError> {
+    crate::common::embedded::extract_atomic(label, bytes, target)
 }
 
 /// Extract embedded binaries on first call only

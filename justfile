@@ -190,6 +190,20 @@ server:
 # occasional real-LLM agentic hang; 6-8 is the sweet spot (raise if the host is
 # idle, drop to 1 to debug a suspected race). Override: `just test THREADS=8`.
 THREADS := "6"
+
+# Prove concurrent-worktree resource isolation (the acceptance gate for the
+# isolation layer). Launches K throwaway worktrees running the matrix
+# simultaneously and asserts ZERO cross-run interference (disjoint ports, no
+# foreign gallery-server reuse, own-sentinel provenance, no ERR_ABORTED/
+# ECONNREFUSED/EADDRINUSE/port-alloc/ENOENT-config/55006/3D000/42P04, intact
+# extracted binaries, no ~/.ziee writes). Green at K=8 COLD=1 = exit condition.
+#   just prove-isolation                 # K=8 default (gate:ui + dev-pair)
+#   just prove-isolation K=8 COLD=1      # cold: wipe .ziee-cache + vite cache
+#   just prove-isolation K=4 FULL=1      # also run `just test` + web e2e legs
+# Runs ONLY its own runId-scoped resources — never a broad docker/pkill/rm.
+prove-isolation *ARGS:
+    bash scripts/prove-worktree-isolation.sh {{ARGS}}
+
 test:
     cd src-app/server && \
         bash -c 'source tests/.env.test && cargo test --test integration_tests -- --test-threads={{THREADS}}'

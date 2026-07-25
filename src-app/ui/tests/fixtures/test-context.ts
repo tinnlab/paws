@@ -15,6 +15,8 @@ import {
   serverBinaryPath,
   terminateChild,
 } from './harness-process'
+// @ts-ignore — per-run app.data_dir isolation off shared ~/.ziee (ITEM-8)
+import { prepareE2eDataDir, e2eDataDirFor } from './e2e-data-dir.mjs'
 
 const { Pool } = pg
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -295,7 +297,16 @@ export const test = base.extend<TestFixtures & TestOptions>({
     }
 
     const configPath = resolve(configDir, `test-${testId}.yaml`)
-    const configContent = `postgresql:
+    // ITEM-8: isolate app.data_dir off the shared ~/.ziee. Each test writes
+    // files/workflows/skills/temp/models/sandboxes/bin under a per-worktree,
+    // per-test dir; the expensive read-only bin/lib caches are symlinked from
+    // the per-worktree shared cache (mirrors the Rust harness). NEVER ~/.ziee.
+    const worktreeRoot = resolve(__dirname, '../../../..')
+    const appDataDir = prepareE2eDataDir(worktreeRoot, testId)
+    const configContent = `app:
+  data_dir: "${appDataDir}"
+
+postgresql:
   use_embedded: false
 
   external:
@@ -749,6 +760,13 @@ export default defineConfig({
       })
       // Per-test isolated hub catalog dir.
       rmSync(resolve(configDir, `hub-${testId}`), {
+        recursive: true,
+        force: true,
+      })
+      // Per-test isolated app.data_dir (ITEM-8). testId-scoped — the bin/lib
+      // subdirs are SYMLINKS into the shared cache, so removing this dir removes
+      // only the links + this test's writable state, never the shared cache.
+      rmSync(e2eDataDirFor(worktreeRoot, testId), {
         recursive: true,
         force: true,
       })

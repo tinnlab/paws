@@ -32,10 +32,36 @@ import {
   writeFileSync,
 } from 'fs'
 import { resolve } from 'path'
-import { tmpdir } from 'os'
 import { execSync } from 'child_process'
+import { createServer } from 'net'
+// @ts-ignore — ESM run-key-derived isolation keys (byte-identical FNV, parity-tested).
+// Lock dir + port bases are per-worktree so N concurrent worktrees never collide.
+import {
+  desktopBackendBase,
+  desktopPgBase,
+  desktopLockDir,
+} from './isolation-keys.mjs'
+// Re-export so global-setup imports the reaper helpers from ONE place.
+// @ts-ignore
+export { collectLiveRunIds, desktopContainerFilter, shouldKeepContainer } from './isolation-keys.mjs'
 
-const LOCK_DIR = resolve(tmpdir(), 'ziee-desktop-test-locks')
+const LOCK_DIR: string = desktopLockDir()
+
+/**
+ * True when `port` can be bound on 0.0.0.0 right now (mirrors the web
+ * port-manager). A lock-free port is NOT necessarily bind-free — a sibling
+ * worktree's leftover docker container can still hold it — so every allocator
+ * bind-verifies before handing a port out (else `docker compose up` dies with
+ * "port is already allocated").
+ */
+function isPortBindable(port: number): Promise<boolean> {
+  return new Promise((res) => {
+    const srv = createServer()
+    srv.once('error', () => res(false))
+    srv.once('listening', () => srv.close(() => res(true)))
+    srv.listen(port, '0.0.0.0')
+  })
+}
 const LOCK_TIMEOUT_MS = 180_000 // 3 min max test duration
 const HEARTBEAT_STALE_MS = 10_000 // 10s without heartbeat = orphaned
 const CONFIG_STALE_MS = 300_000 // 5 min — wipe leftover config files this old
@@ -186,15 +212,23 @@ export async function findAvailableBackendPort(
   workerIndex: number,
 ): Promise<number> {
   const MAX_ATTEMPTS = 100
-  const BASE_PORT = 9100
+  // Per-worktree key-derived base, OFF the web-e2e 9100 overlap (desktopE2eBackend
+  // floor 9600) so a desktop + web e2e run in the same box never share a base.
+  const BASE_PORT = desktopBackendBase()
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const port = BASE_PORT + workerIndex + attempt * 8
     if (acquireBackendPortLock(port)) {
+      // Lock-free is not bind-free — a sibling's leftover holder can still own
+      // the port. Bind-verify before handing it out; else release + try next.
+      if (await isPortBindable(port)) {
+        console.log(`🔒 Locked backend port for worker ${workerIndex}: ${port}`)
+        return port
+      }
       console.log(
-        `🔒 Locked backend port for worker ${workerIndex}: ${port}`,
+        `⚠️  backend port ${port} is lock-free but already bound at the OS level; skipping`,
       )
-      return port
+      releaseBackendPortLock(port)
     }
   }
   throw new Error(
@@ -284,18 +318,24 @@ function acquirePostgresPortLock(port: number, runId: string): boolean {
 }
 
 export async function allocatePostgresPort(runId: string): Promise<number> {
-  // Base port 54431: above core's 54331 so two test runs (web + desktop)
-  // can coexist without colliding.
-  const BASE_PORT = 54431
+  // Per-worktree key-derived base (desktopE2ePg floor 54600), disjoint from the
+  // web-e2e 54331 range so a web + desktop e2e run never race the same pg port.
+  const BASE_PORT = desktopPgBase()
   const MAX_ATTEMPTS = 100
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const port = BASE_PORT + attempt
     if (acquirePostgresPortLock(port, runId)) {
+      // Verify the port is actually bind-free (a sibling's orphaned container can
+      // still hold a lock-free port → `docker compose up` "port already allocated").
+      if (await isPortBindable(port)) {
+        console.log(`🔒 Locked PostgreSQL port ${port} for test run ${runId}`)
+        return port
+      }
       console.log(
-        `🔒 Locked PostgreSQL port ${port} for test run ${runId}`,
+        `⚠️  PostgreSQL port ${port} is lock-free but already bound at the OS level; skipping`,
       )
-      return port
+      releasePostgresPortLock(port)
     }
   }
   throw new Error(

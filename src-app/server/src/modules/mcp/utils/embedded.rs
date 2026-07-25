@@ -119,37 +119,14 @@ pub fn ensure_binaries_extracted() -> Result<(), AppError> {
                 AppError::internal_error(format!("Failed to create bin directory: {}", e))
             })?;
 
-            // Extract UV
+            // Extract UV + Bun via the shared cross-process-atomic extractor
+            // (temp-write + rename + advisory flock) so concurrent server
+            // processes sharing ~/.ziee/bin never exec a torn binary.
             let uv_path = bin_dir.join(binaries::UV_NAME);
-            if !uv_path.exists() {
-                tracing::info!("Extracting embedded UV binary to {:?}", uv_path);
-                fs::write(&uv_path, binaries::UV).map_err(|e| {
-                    AppError::internal_error(format!("Failed to write UV binary: {}", e))
-                })?;
+            crate::common::embedded::extract_atomic("UV", binaries::UV, &uv_path)?;
 
-                #[cfg(unix)]
-                set_executable(&uv_path)?;
-
-                tracing::info!("UV binary extracted successfully");
-            } else {
-                tracing::debug!("UV binary already exists at {:?}", uv_path);
-            }
-
-            // Extract Bun
             let bun_path = bin_dir.join(binaries::BUN_NAME);
-            if !bun_path.exists() {
-                tracing::info!("Extracting embedded Bun binary to {:?}", bun_path);
-                fs::write(&bun_path, binaries::BUN).map_err(|e| {
-                    AppError::internal_error(format!("Failed to write Bun binary: {}", e))
-                })?;
-
-                #[cfg(unix)]
-                set_executable(&bun_path)?;
-
-                tracing::info!("Bun binary extracted successfully");
-            } else {
-                tracing::debug!("Bun binary already exists at {:?}", bun_path);
-            }
+            crate::common::embedded::extract_atomic("Bun", binaries::BUN, &bun_path)?;
 
             Ok(ExtractedPaths { uv: uv_path, bun: bun_path })
         })
@@ -178,7 +155,10 @@ pub fn get_bun_path() -> Result<&'static PathBuf, AppError> {
         })
 }
 
+// The extract path now sets the executable bit via `common::embedded`; kept for
+// any direct caller / future use.
 #[cfg(unix)]
+#[allow(dead_code)]
 fn set_executable(path: &PathBuf) -> Result<(), AppError> {
     use std::os::unix::fs::PermissionsExt;
 
