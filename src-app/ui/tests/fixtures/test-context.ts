@@ -866,34 +866,54 @@ async function waitForServerStable(
 }
 
 async function killProcessOnPort(port: number): Promise<void> {
+  const { execSync } = await import('child_process')
+
+  // True when `cmd` resolves on PATH — used to pick an AVAILABLE Unix
+  // port-killer so cleanup still works on a box WITHOUT `lsof`.
+  const hasCmd = (cmd: string): boolean => {
+    try {
+      execSync(`command -v ${cmd}`, { stdio: 'ignore' })
+      return true
+    } catch {
+      return false
+    }
+  }
+
   try {
-    const { execSync } = await import('child_process')
-    // Find process using the port
-    const cmd =
-      process.platform === 'win32'
-        ? `netstat -ano | findstr :${port}`
-        : `lsof -ti :${port}`
-
-    const output = execSync(cmd, { encoding: 'utf8', stdio: 'pipe' }).trim()
-
-    if (!output) return
-
     if (process.platform === 'win32') {
-      // Windows: extract PID from netstat output
-      const lines = output.split('\n')
-      const pids = new Set<string>()
-      for (const line of lines) {
-        const match = line.trim().match(/\s+(\d+)$/)
-        if (match) pids.add(match[1])
+      const output = execSync(`netstat -ano | findstr :${port}`, { encoding: 'utf8', stdio: 'pipe' }).trim()
+      if (output) {
+        // Windows: extract PID from netstat output
+        const pids = new Set<string>()
+        for (const line of output.split('\n')) {
+          const match = line.trim().match(/\s+(\d+)$/)
+          if (match) pids.add(match[1])
+        }
+        for (const pid of pids) {
+          try {
+            execSync(`taskkill /F /PID ${pid}`, { stdio: 'ignore' })
+          } catch {}
+        }
       }
-      for (const pid of pids) {
+    } else if (hasCmd('lsof')) {
+      // Unix, preferred: lsof returns PIDs directly.
+      const output = execSync(`lsof -ti :${port}`, { encoding: 'utf8', stdio: 'pipe' }).trim()
+      for (const pid of output.split('\n').filter(Boolean)) {
         try {
-          execSync(`taskkill /F /PID ${pid}`, { stdio: 'ignore' })
+          execSync(`kill -9 ${pid}`, { stdio: 'ignore' })
         } catch {}
       }
-    } else {
-      // Unix: lsof returns PIDs directly
-      const pids = output.split('\n').filter(Boolean)
+    } else if (hasCmd('fuser')) {
+      // Fallback: `fuser -k` SIGKILLs every holder of the TCP port directly.
+      // (The old lsof-only path silently no-op'd on a box without lsof.)
+      try {
+        execSync(`fuser -k ${port}/tcp`, { stdio: 'ignore' })
+      } catch {}
+    } else if (hasCmd('ss')) {
+      // Fallback: parse `ss` output for pid= and kill -9.
+      const output = execSync(`ss -H -ltnp 'sport = :${port}'`, { encoding: 'utf8', stdio: 'pipe' }).trim()
+      const pids = new Set<string>()
+      for (const m of output.matchAll(/pid=(\d+)/g)) pids.add(m[1])
       for (const pid of pids) {
         try {
           execSync(`kill -9 ${pid}`, { stdio: 'ignore' })
