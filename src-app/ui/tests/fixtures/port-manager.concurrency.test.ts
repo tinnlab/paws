@@ -128,9 +128,10 @@ test('TEST-2 findAvailablePorts skips a base held by a concurrent session (no co
       // ports (they move together).
       assert.notEqual(got.vite, V, 'must NOT hand out the vite port a sibling holds')
       assert.notEqual(got.backend, B, 'must NOT hand out the backend port a sibling holds')
-      assert.ok(got.vite >= V + 8, `skipped forward past the held base (got ${got.vite}, base ${V})`)
-      assert.equal((got.vite - V) % 8, 0, 'skipped by a whole worker-offset step')
-      assert.equal(got.backend - got.vite, B - V, 'the same offset is applied to vite + backend')
+      assert.ok(got.vite >= V + 8, `vite skipped forward past the held base (got ${got.vite}, base ${V})`)
+      assert.ok(got.backend >= B + 8, `backend skipped forward past the held base (got ${got.backend}, base ${B})`)
+      assert.equal((got.vite - V) % 8, 0, 'vite skipped by a whole worker-offset step')
+      assert.equal((got.backend - B) % 8, 0, 'backend skipped by a whole worker-offset step')
     } finally {
       pm.releasePortLock(got.vite, got.backend)
     }

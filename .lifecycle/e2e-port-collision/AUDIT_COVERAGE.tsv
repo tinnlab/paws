@@ -3,9 +3,9 @@ src-app/ui/tests/fixtures/port-manager.ts	92	700	correctness,concurrency,error-h
 src-app/ui/tests/fixtures/port-manager.ts	92	700	security,cross-platform,resource-lifecycle
 src-app/ui/tests/fixtures/port-manager.ts	92	700	maintainability,tests-quality,patterns-conformance
 src-app/ui/tests/fixtures/port-manager.ts	92	700	api-friendliness,extensibility,modularity
-src-app/ui/tests/fixtures/test-context.ts	860	920	correctness,error-handling,security
-src-app/ui/tests/fixtures/test-context.ts	860	920	cross-platform,concurrency,maintainability
-src-app/ui/tests/fixtures/test-context.ts	860	920	patterns-conformance,api-friendliness,resource-lifecycle
-src-app/ui/tests/fixtures/port-manager.concurrency.test.ts	1	183	correctness,tests-quality,concurrency
-src-app/ui/tests/fixtures/port-manager.concurrency.test.ts	1	183	resource-lifecycle,error-handling,maintainability
-src-app/ui/tests/fixtures/port-manager.concurrency.test.ts	1	183	security,patterns-conformance,api-friendliness
+src-app/ui/tests/fixtures/test-context.ts	860	945	correctness,error-handling,security
+src-app/ui/tests/fixtures/test-context.ts	860	945	cross-platform,concurrency,maintainability
+src-app/ui/tests/fixtures/test-context.ts	860	945	patterns-conformance,api-friendliness,resource-lifecycle
+src-app/ui/tests/fixtures/port-manager.concurrency.test.ts	1	230	correctness,tests-quality,concurrency
+src-app/ui/tests/fixtures/port-manager.concurrency.test.ts	1	230	resource-lifecycle,error-handling,maintainability
+src-app/ui/tests/fixtures/port-manager.concurrency.test.ts	1	230	security,patterns-conformance,api-friendliness
