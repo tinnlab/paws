@@ -17,7 +17,6 @@
 import { FullConfig } from '@playwright/test'
 import { execSync } from 'child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
-import { tmpdir } from 'os'
 import { resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import crypto from 'crypto'
@@ -64,52 +63,33 @@ export default async function globalSetup(_config: FullConfig) {
   const configDir = resolve(__dirname, '.test-configs')
   cleanupStaleConfigFiles(configDir)
 
-  // Cleanup stale Docker test containers (containers whose lock files
-  // are missing or whose owning PID is dead).
+  // Cleanup stale Docker test containers.
+  //
+  // CROSS-SESSION SAFETY (ITEM-10, the tailtest twin): concurrent desktop-e2e
+  // sessions (separate git worktrees) share ONE docker daemon, so the filter is
+  // NAMESPACED to THIS session (`ziee-desktop-test-postgres-pg<pgBase>-`) — a
+  // session can only ever list (and thus reap) its OWN containers. Liveness is
+  // judged from the SHARED lock dir via collectLiveRunIds() (NOT the per-worktree
+  // .test-configs, which is invisible to siblings and wrongly marks a sibling's
+  // LIVE container as stale → `docker rm -f` mid-run). Never a broad rm/prune.
   console.log('🧹 Cleaning up stale PostgreSQL containers...')
   try {
+    const filter = desktopContainerFilter()
     const containers = execSync(
-      'docker ps -a --filter "name=ziee-desktop-test-postgres-" --format "{{.Names}}"',
+      `docker ps -a --filter "name=${filter}" --format "{{.Names}}"`,
       { encoding: 'utf-8' },
     ).trim()
 
     if (containers) {
+      const liveRunIds = collectLiveRunIds()
       let removed = 0
       let kept = 0
       for (const container of containers.split('\n')) {
-        const runIdFromName = container.replace(
-          'ziee-desktop-test-postgres-',
-          '',
-        )
-        const configPath = resolve(
-          configDir,
-          `postgres-${runIdFromName}.json`,
-        )
-
-        if (existsSync(configPath)) {
-          try {
-            const cfg = JSON.parse(readFileSync(configPath, 'utf-8'))
-            const lockFile = resolve(
-              tmpdir(),
-              'ziee-desktop-test-locks',
-              `postgres-${cfg.port}.lock`,
-            )
-            if (existsSync(lockFile)) {
-              const lock = JSON.parse(readFileSync(lockFile, 'utf-8'))
-              try {
-                process.kill(lock.pid, 0)
-                console.log(`   ✅ Kept active container: ${container}`)
-                kept++
-                continue
-              } catch {
-                // Owner PID gone — fall through to remove.
-              }
-            }
-          } catch {
-            // Corrupted config — fall through to remove.
-          }
+        if (shouldKeepContainer(container, liveRunIds)) {
+          console.log(`   ✅ Kept active container: ${container} (live lock)`)
+          kept++
+          continue
         }
-
         console.log(`   🗑️  Removing stale container: ${container}`)
         execSync(`docker rm -f ${container}`, { stdio: 'ignore' })
         removed++

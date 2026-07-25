@@ -47,23 +47,30 @@ export function desktopSessionNs(env = process.env) {
   return `pg${desktopPgBase(env)}`
 }
 
+/** Fixed container-name prefix (before the runId, which itself starts with the
+ *  session ns). */
+export const CONTAINER_PREFIX = 'ziee-desktop-test-postgres-'
+
 /** The scoped `docker ps --filter name=` prefix (NEVER the bare, un-namespaced
- *  `ziee-desktop-test-postgres-`). */
+ *  `ziee-desktop-test-postgres-`): fixed prefix + session ns → lists only THIS
+ *  session's containers. */
 export function desktopContainerFilter(env = process.env) {
-  return `ziee-desktop-test-postgres-${desktopSessionNs(env)}-`
+  return `${CONTAINER_PREFIX}${desktopSessionNs(env)}-`
 }
 
-/** runId embedded in a scoped container name (the part after the filter). */
-export function runIdFromContainer(name, env = process.env) {
-  return name.replace(desktopContainerFilter(env), '')
+/** runId embedded in a container name. The runId is `<sessionNs>-<rand>`, so we
+ *  strip only the FIXED prefix (leaving the full runId incl. its session ns —
+ *  the value the shared lock records). */
+export function runIdFromContainer(name) {
+  return name.replace(CONTAINER_PREFIX, '')
 }
 
 /**
  * KEEP a container iff a STILL-LIVE session owns its runId (judged from the
  * SHARED lock dir, never the local .test-configs — that's the tailtest twin).
  */
-export function shouldKeepContainer(name, liveRunIds, env = process.env) {
-  return liveRunIds.has(runIdFromContainer(name, env))
+export function shouldKeepContainer(name, liveRunIds) {
+  return liveRunIds.has(runIdFromContainer(name))
 }
 
 /** Set of runIds whose owning PID is still alive, from the shared postgres locks. */
