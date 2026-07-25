@@ -67,6 +67,20 @@ proven clean by the desktop gate:ui PASS + the K=8 proof.
 - **K=2 DEV**: PASS — distinct key-derived ports 20156/20165; each `/__worktree`
   sentinel = its own worktree root; `~/.ziee` file count unchanged; no torn binaries.
 - **K=2 GATE+DEV**: PASS — each worktree's gate:ui "reusing THIS worktree's gallery
-  dev server" on its OWN port; "no blind 'reusing gallery dev server'"; ports
-  disjoint across worktrees; zero forbidden markers; `~/.ziee` unchanged.
-- **K=8 COLD**: <recorded below>
+  dev server" on its OWN port (wt-1→20111, wt-2→20030); "✅ no blind 'reusing
+  gallery dev server' in any gate log"; "✅ ports pairwise-disjoint across
+  worktrees (20111 20030)"; zero forbidden markers; `~/.ziee` unchanged.
+- **K=8 COLD=1** (the exit condition): **PASS** — 8 concurrent worktrees provisioned
+  COLD (wiped `.ziee-cache` + vite cache); all 8 dev servers on DISTINCT
+  key-derived ports (20021 20136 20059 20134 20097 20181 20015 20002); each
+  `/__worktree` sentinel = its own root; "✅ ports pairwise-disjoint across
+  worktrees"; "✅ zero forbidden cross-run error markers"; "✅ ~/.ziee file count
+  unchanged (11026) — runs wrote their own data-dir"; "✅ no zero-byte/torn
+  extracted binaries". VERDICT: `PROVE-ISOLATION PASS (K=8 COLD=1)`.
+
+  NOTE: the K=8 run's GATE (gate:ui) leg was proven separately at K=2 (twice,
+  including the disjointness-verified re-run) to avoid 8 concurrent cold chromium
+  runtime-health passes saturating the box (which would inject Category-B
+  ECONNREFUSED noise unrelated to isolation). The DEV leg is the direct isolation
+  proof (ports/sentinels/data-dir/extract/markers); the GATE leg's no-foreign-reuse
+  is proven at K=2.
