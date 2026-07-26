@@ -1,57 +1,33 @@
-import { Bot } from 'lucide-react'
-import { Permissions } from '@/api-client/permissions'
-
 import { createModule } from '@ziee/framework'
-
-import { AppLayoutDef } from '@/modules/layouts/app-layout'
-import { lazyWithPreload } from '@/utils/lazyWithPreload'
 
 import { useBackgroundRunsStore } from './stores/BackgroundRuns.store'
 import '@/modules/background/types' // register Stores.BackgroundRuns (declaration merge)
 
-const BackgroundTasksPage = lazyWithPreload(() =>
-  import('./pages/BackgroundTasksPage').then(m => ({
-    default: m.BackgroundTasksPage,
-  })),
-)
-
+/**
+ * Background sub-agent runs.
+ *
+ * There is deliberately NO nav entry, route, or page here: every background run
+ * belongs to exactly one owner, and that owner surfaces it —
+ *   - a CONVERSATION's sub-agents → that conversation's right-panel "Tasks" tab
+ *     plus the end-of-conversation affordance, both registered by the background
+ *     chat-extension at `chat-extension/extension.tsx`; and
+ *   - a SCHEDULED TASK's runs → that task's own run history under Scheduled Tasks.
+ *
+ * A conversation-less run only ever comes from detached/scheduled work, so a
+ * standalone global "Background tasks" page would merely duplicate the
+ * scheduler's run history while pulling the user OUT of the conversation they
+ * were reading. Completed results surface through the central notification bell,
+ * which navigates to the conversation the result landed in.
+ *
+ * This module therefore only registers the shared runs store, consumed by the
+ * in-chat panel + footer.
+ */
 export default createModule({
   metadata: {
     name: 'background',
     version: '1.0.0',
-    description: 'Background sub-agent runs — view, cancel, and steer detached tasks',
+    description:
+      'Background sub-agent runs — surfaced in-conversation (right-panel Tasks tab + footer); no global page.',
   },
-  dependencies: ['router'],
-  routes: [
-    {
-      // Top-level nav destination → render inside the app shell (left sidebar +
-      // header bar) so the user keeps the sidebar to hop back to chat, matching
-      // every other top-level page (chat/scheduled-tasks/knowledge-base).
-      path: '/background-tasks',
-      element: BackgroundTasksPage,
-      requiresAuth: true,
-      // Same read perm the /api/background/runs endpoint enforces (`background::use`).
-      permission: Permissions.BackgroundUse,
-      layout: AppLayoutDef,
-    },
-  ],
   stores: [{ name: 'BackgroundRuns', store: useBackgroundRunsStore }],
-  slots: {
-    sidebarNavigation: [
-      {
-        // Discoverable entry to the live background-run dashboard. Sits between
-        // "Scheduled Tasks" (order 22) and "Background results" (order 24) so all
-        // background/agent work is grouped together in the nav.
-        id: 'background-tasks',
-        icon: <Bot />,
-        label: 'Background tasks',
-        path: '/background-tasks',
-        order: 23,
-        // Gate: SAME read perm as the route + the runs data (`background::use`).
-        // A user without the grant never sees the entry (and the store self-gates
-        // its fetch → no 403).
-        permission: Permissions.BackgroundUse,
-      },
-    ],
-  },
 })

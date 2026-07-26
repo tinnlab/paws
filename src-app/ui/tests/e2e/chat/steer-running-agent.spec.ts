@@ -1,14 +1,20 @@
 import { test, expect } from '../../fixtures/test-context'
-import { loginAsAdmin } from '../../common/auth-helpers'
+import { loginAsAdmin, getAdminToken } from '../../common/auth-helpers'
 import { byTestId } from '../testid'
+import {
+  openTasksPanel,
+  seedConversationRun,
+  seedConversationWithMessage,
+} from '../15-background/helpers/background-helpers'
 
 /**
  * TEST-126 / ITEM-25 — steer a RUNNING background agent: a right-panel nudge is
  * accepted and the run CONTINUES (it is not restarted / killed), and the steering
  * panel rehydrates the queued note when reopened.
  *
- * The steer surface is the inline composer on each running `BackgroundRunCard`
- * (`/background-tasks`). Posting a note drives the REAL
+ * The steer surface is the inline composer on each running `BackgroundRunCard`,
+ * now rendered inside the conversation's right-panel "Tasks" tab (RETARGETED from
+ * the deleted global `/background-tasks` page). Posting a note drives the REAL
  * `POST /api/background/runs/{id}/notes` endpoint, which enqueues a durable
  * steering note into the `background_run_notes` queue (the detached sub-agent
  * consumes it at its next iteration boundary) WITHOUT touching the run's lifecycle
@@ -27,23 +33,29 @@ test.describe('steer a running background agent (ITEM-25)', () => {
     page,
     testInfra,
   }) => {
-    const { baseURL, sql } = testInfra
+    const { baseURL, apiURL, sql } = testInfra
     await loginAsAdmin(page, baseURL)
+    const token = await getAdminToken(apiURL)
 
-    // Seed a RUNNING background sub-agent run owned by the admin.
+    // Seed a RUNNING background sub-agent run owned by the admin, BOUND to a
+    // conversation — that conversation's Tasks tab is now the steer surface.
     const adminId = (await sql(`SELECT id FROM users WHERE username = 'admin' LIMIT 1`))
       .rows[0].id as string
-    const label = 'Long-running research sub-agent'
-    const inserted = await sql(
-      `INSERT INTO workflow_runs (user_id, job_kind, status, inputs_json)
-       VALUES ($1, 'subagent', 'running', $2::jsonb)
-       RETURNING id`,
-      [adminId, JSON.stringify({ task: label })],
+    const conversationId = await seedConversationWithMessage(
+      page,
+      apiURL,
+      token,
+      sql,
+      'Steering conversation',
     )
-    const runId = inserted.rows[0].id as string
+    const label = 'Long-running research sub-agent'
+    const runId = await seedConversationRun(sql, adminId, conversationId, {
+      kind: 'subagent',
+      status: 'running',
+      task: label,
+    })
 
-    await page.goto(`${baseURL}/background-tasks`)
-    await expect(byTestId(page, 'background-tasks-page')).toBeVisible({ timeout: 30_000 })
+    await openTasksPanel(page, baseURL, conversationId)
     const card = byTestId(page, `background-run-card-${runId}`)
     await expect(card).toBeVisible({ timeout: 30_000 })
     // The run is running before we steer it.

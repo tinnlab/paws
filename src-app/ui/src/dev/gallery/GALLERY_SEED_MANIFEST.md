@@ -17,7 +17,7 @@ listed in `GALLERY_SEED_EXCEPTIONS.md` with a structural reason + sign-off.
 | `assistant` | yes | ✓ gallery.tsx |
 | `auth` | yes | ✓ gallery.tsx |
 | `auth-providers` | yes | ✓ gallery.tsx |
-| `background` | yes | ✓ gallery.tsx |
+| `background` | no | ✓ gallery.tsx |
 | `chat` | yes | ✓ gallery.tsx |
 | `citations` | yes | ✓ gallery.tsx |
 | `code-sandbox` | yes | ✓ gallery.tsx |

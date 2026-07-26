@@ -1641,11 +1641,22 @@ pub async fn list_runs_for_user(
 /// `final_output_json` exists, read fully via `collect_result`). Owner-scoped
 /// (`user_id = $1`; a foreign run is simply absent — never leaked).
 ///
+/// `conversation_id` is a **DISJOINT** scope, not an ordinary residual filter:
+/// `None` returns ONLY conversation-LESS runs (the detached work a scheduled task
+/// spawns), and `Some(id)` returns ONLY that conversation's runs. A background run
+/// therefore surfaces in exactly one place — its conversation's in-chat "Tasks"
+/// panel, or the scheduler's run history — and never in both. Note this is
+/// deliberately NOT the `($n IS NULL OR col = $n)` shape used by `status`/`kind`
+/// just below: that shape would make an unfiltered call return every run,
+/// re-introducing the global listing this scoping exists to remove.
+///
 /// Index-friendly: the existing `(user_id, created_at DESC)` index
-/// (`idx_workflow_runs_user_created`) serves the scan + ordering; `job_kind` and
-/// `status` (both separately indexed) are residual filters. Returns
-/// `(rows, total)` for the paginated response. Pushes every filter to SQL (§4 —
-/// no in-memory filtering / N+1).
+/// (`idx_workflow_runs_user_created`) serves the scan + ordering; `job_kind`,
+/// `status` (both separately indexed) and `conversation_id` are residual filters
+/// over that bounded, `LIMIT`-ed scan. Returns `(rows, total)` for the paginated
+/// response — the same predicate is applied to the COUNT so `total` can never
+/// disagree with the page. Pushes every filter to SQL (§4 — no in-memory
+/// filtering / N+1).
 pub async fn list_background_runs_for_user(
     pool: &PgPool,
     user_id: Uuid,
@@ -1653,6 +1664,7 @@ pub async fn list_background_runs_for_user(
     per_page: i64,
     status: Option<&str>,
     kind: Option<&str>,
+    conversation_id: Option<Uuid>,
 ) -> Result<(Vec<BackgroundRunSummary>, i64), AppError> {
     let per_page = per_page.clamp(1, 500);
     let offset = (page - 1).max(0) * per_page;
@@ -1677,6 +1689,10 @@ pub async fn list_background_runs_for_user(
           AND job_kind <> 'workflow'
           AND ($2::text IS NULL OR status = $2)
           AND ($3::text IS NULL OR job_kind = $3)
+          -- DISJOINT conversation scope (see the doc comment): no param → the
+          -- conversation-LESS runs only; a param → that conversation's runs only.
+          AND (($6::uuid IS NULL AND conversation_id IS NULL)
+               OR conversation_id = $6)
         ORDER BY created_at DESC
         LIMIT $4 OFFSET $5
         "#,
@@ -1685,6 +1701,7 @@ pub async fn list_background_runs_for_user(
         kind,
         per_page,
         offset,
+        conversation_id,
     )
     .fetch_all(pool)
     .await
@@ -1698,10 +1715,16 @@ pub async fn list_background_runs_for_user(
           AND job_kind <> 'workflow'
           AND ($2::text IS NULL OR status = $2)
           AND ($3::text IS NULL OR job_kind = $3)
+          -- Same disjoint scope as the list query above — applied here too so
+          -- `total` (and therefore the page count) can never disagree with the
+          -- rows actually returned.
+          AND (($4::uuid IS NULL AND conversation_id IS NULL)
+               OR conversation_id = $4)
         "#,
         user_id,
         status,
         kind,
+        conversation_id,
     )
     .fetch_one(pool)
     .await

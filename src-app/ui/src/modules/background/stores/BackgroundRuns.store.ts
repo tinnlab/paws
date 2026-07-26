@@ -19,22 +19,41 @@ export const isTerminalRunStatus = (status: string): boolean =>
   TERMINAL_STATUSES.has(status)
 
 /**
- * The user's background sub-agent / sandbox-exec runs (ITEM-8). Server-paginated
- * over `GET /api/background/runs`; refetches live on `sync:workflow_run` (the
- * backbone emits it — `Audience::owner` — on every background-run state change)
- * so statuses move to their terminal badge without a manual reload.
+ * How many runs the in-conversation Tasks panel pulls per request (DEC-5/DEC-7).
+ * A named constant, not an inline literal, so it can be promoted to a setting
+ * later without a rewrite. The server independently clamps `per_page` to `1..=500`.
+ */
+export const PANEL_PAGE_SIZE = 20
+
+/**
+ * The user's background sub-agent / sandbox-exec runs (ITEM-8), keyed BY
+ * CONVERSATION. Server-paginated over `GET /api/background/runs`; refetches live
+ * on `sync:workflow_run` (the backbone emits it — `Audience::owner` — on every
+ * background-run state change) so statuses move to their terminal badge without a
+ * manual reload.
+ *
+ * **Why keyed and not one shared list.** `GET /api/background/runs` scopes
+ * DISJOINTLY: no `conversation_id` returns only the conversation-LESS runs, one
+ * returns only that conversation's. A single shared `runs` array therefore cannot
+ * serve two surfaces at once — and the `sync:workflow_run` handler, which must
+ * refetch on every run state change, would have to pick ONE scope and blank the
+ * other. Keying by conversation lets the handler refetch each open scope with its
+ * own id, and lets two split panes on two conversations coexist. (Keying by id
+ * mirrors this store's own `detailsByRun` / `notesByRun`.)
  *
  * Mirrors `McpToolCalls.store` (paginated + sync-subscribed + self-gated).
  */
 const BackgroundRunsDef = defineStore('BackgroundRuns', {
   immer: true,
   state: {
-    runs: [] as BackgroundRunSummary[],
-    total: 0,
-    currentPage: 1,
-    pageSize: 10,
-    loading: false,
-    error: null as string | null,
+    /** Accumulated runs per conversation id (page 1..N appended, newest-first). */
+    runsByConversation: {} as Record<string, BackgroundRunSummary[]>,
+    /** Server-reported total for that conversation's scope (drives "N of M"). */
+    totalByConversation: {} as Record<string, number>,
+    /** Highest page fetched per conversation (so Load-more asks for the next). */
+    pageByConversation: {} as Record<string, number>,
+    loadingByConversation: {} as Record<string, boolean>,
+    errorByConversation: {} as Record<string, string | null>,
     /**
      * Pending steering notes keyed by run id, loaded on demand when a row's
      * steer composer is opened (avoids an N-fetch fan-out across the page).
@@ -52,36 +71,58 @@ const BackgroundRunsDef = defineStore('BackgroundRuns', {
     detailErrorByRun: {} as Record<string, string>,
   },
   actions: (set, get) => {
-    const loadRuns = async (page?: number, pageSize?: number): Promise<void> => {
+    /**
+     * Load ONE conversation's background runs (the in-chat Tasks panel + the
+     * end-of-conversation footer both read this slice).
+     *
+     * `page` 1 REPLACES the slice (a fresh read of the newest page — this is what
+     * the sync handler re-issues); `page > 1` APPENDS (Load-more). Sending
+     * `conversation_id` is what makes the read disjoint: without it the endpoint
+     * returns the conversation-LESS runs, which are a different surface entirely.
+     */
+    const loadConversationRuns = async (
+      conversationId: string,
+      page = 1,
+    ): Promise<void> => {
       // no-403 invariant: gate on the SAME permission the endpoint enforces.
       if (!hasPermissionNow(Permissions.BackgroundUse)) return
-      const state = get()
-      const nextPage = page ?? state.currentPage
-      const nextPageSize = pageSize ?? state.pageSize
       try {
         set(draft => {
-          draft.loading = true
-          draft.error = null
+          draft.loadingByConversation[conversationId] = true
+          draft.errorByConversation[conversationId] = null
         })
         const response = await ApiClient.Background.listRuns({
-          page: nextPage,
-          per_page: nextPageSize,
+          page,
+          per_page: PANEL_PAGE_SIZE,
+          // The disjoint scope. Never omit it here.
+          conversation_id: conversationId,
         })
         set(draft => {
-          draft.runs = response.runs
-          draft.total = response.total
-          draft.currentPage = response.page
-          draft.pageSize = response.per_page
-          draft.loading = false
+          const previous = draft.runsByConversation[conversationId] ?? []
+          draft.runsByConversation[conversationId] =
+            page <= 1 ? response.runs : [...previous, ...response.runs]
+          draft.totalByConversation[conversationId] = response.total
+          draft.pageByConversation[conversationId] = response.page
+          draft.loadingByConversation[conversationId] = false
         })
       } catch (error) {
-        console.error('Background runs load failed:', error)
+        console.error('Background runs load failed:', conversationId, error)
         set(draft => {
-          draft.loading = false
-          draft.error =
-            error instanceof Error ? error.message : 'Failed to load background tasks'
+          draft.loadingByConversation[conversationId] = false
+          // Never clear an already-loaded slice on a refetch failure — the user
+          // keeps seeing the last good list with the error surfaced beside it.
+          draft.errorByConversation[conversationId] =
+            error instanceof Error
+              ? error.message
+              : 'Failed to load this conversation’s tasks'
         })
       }
+    }
+
+    /** Load-more: fetch the page after the highest one already held. */
+    const loadMoreConversationRuns = async (conversationId: string): Promise<void> => {
+      const next = (get().pageByConversation[conversationId] ?? 1) + 1
+      await loadConversationRuns(conversationId, next)
     }
 
     const loadNotes = async (runId: string): Promise<void> => {
@@ -136,22 +177,38 @@ const BackgroundRunsDef = defineStore('BackgroundRuns', {
       }
     }
 
+    /**
+     * Refetch page 1 of EVERY conversation scope currently held, each with its
+     * own `conversation_id`. Bounded by the conversations whose panel/footer this
+     * session actually opened (one per pane), so it can never fan out unbounded.
+     *
+     * An unscoped refetch is deliberately NOT issued here: under the endpoint's
+     * disjoint semantics that would return the conversation-LESS runs and blank
+     * every open panel on the first run state change — i.e. exactly when the user
+     * is watching. See TEST-7.
+     */
+    const refreshTrackedConversations = (): void => {
+      for (const conversationId of Object.keys(get().runsByConversation)) {
+        void loadConversationRuns(conversationId, 1)
+      }
+    }
+
     return {
-      loadRuns,
+      loadConversationRuns,
+      loadMoreConversationRuns,
+      refreshTrackedConversations,
       loadNotes,
       loadRunDetail,
-      setPage: (page: number, pageSize?: number): void => {
-        void loadRuns(page, pageSize)
-      },
       /**
        * Cancel a non-terminal run. The server flips the row + emits
        * `sync:workflow_run` (→ the row refreshes to `cancelled`); we also refetch
-       * the current page immediately as a backstop. Throws on failure so the UI
-       * layer toasts it (the store carries no per-mutation error state).
+       * that run's own conversation scope immediately as a backstop. Throws on
+       * failure so the UI layer toasts it (the store carries no per-mutation
+       * error state).
        */
       cancelRun: async (runId: string): Promise<BackgroundRunCancelAck> => {
         const ack = await ApiClient.Background.cancelRun({ run_id: runId })
-        await loadRuns()
+        refreshTrackedConversations()
         return ack
       },
       /**
@@ -167,18 +224,19 @@ const BackgroundRunsDef = defineStore('BackgroundRuns', {
         await loadNotes(runId)
         return created
       },
-      clearError: (): void =>
+      clearConversationError: (conversationId: string): void =>
         set(draft => {
-          draft.error = null
+          draft.errorByConversation[conversationId] = null
         }),
     }
   },
-  init: ({ on, get, actions }) => {
-    // Live refresh: refetch the current page on any owner-scoped background-run
-    // state change and on SSE reconnect. Self-gated inside `loadRuns`
+  init: ({ on, actions }) => {
+    // Live refresh: on any owner-scoped background-run state change and on SSE
+    // reconnect, refetch EVERY conversation scope currently held — each with its
+    // own conversation_id. Self-gated inside `loadConversationRuns`
     // (no-403-on-reconnect for a role without `background::use`).
     const reload = (): void => {
-      void actions.loadRuns(get().currentPage)
+      actions.refreshTrackedConversations()
     }
     on('sync:workflow_run', reload)
     on('sync:reconnect', reload)

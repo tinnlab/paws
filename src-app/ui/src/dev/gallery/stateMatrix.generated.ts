@@ -4,7 +4,7 @@
 // renders + overlay triggers + panel/slot registrations) that the reconciliation
 // gate (scripts/reconcile-state-matrix.mjs) checks the gallery entries against.
 //
-// 336 surfaces carry renderable-state signals; 2055 signals total.
+// 338 surfaces carry renderable-state signals; 2061 signals total.
 
 /** A signal is one mechanically-detected render fork (a state the surface can be in). */
 export interface StateSignal {
@@ -249,23 +249,30 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
       { kind: "branch", condition: "!canManage", line: 113 },
     ],
   },
+  "modules/background/chat-extension/extension": {
+    surface: "modules/background/chat-extension/extension",
+    requiredStates: ["panel-open"],
+    signals: [
+      { kind: "panel", condition: "registerPanelRenderer('background')", line: 31 },
+    ],
+  },
   "modules/background/components/BackgroundRunCard": {
     surface: "modules/background/components/BackgroundRunCard",
     requiredStates: ["error","open"],
     signals: [
-      { kind: "branch", condition: "!text", line: 109 },
-      { kind: "branch", condition: "run.has_result", line: 147 },
-      { kind: "error", condition: "run.status === 'failed' && run.error_message", line: 159 },
-      { kind: "branch", condition: "run.conversation_id", line: 171 },
-      { kind: "branch", condition: "terminal", line: 181 },
-      { kind: "branch", condition: "!terminal", line: 194 },
-      { kind: "branch", condition: "!terminal", line: 205 },
-      { kind: "overlay", condition: "<Confirm open>", line: 216 },
-      { kind: "branch", condition: "!terminal && steerOpen", line: 242 },
-      { kind: "branch", condition: "pendingNotes.length > 0", line: 247 },
-      { kind: "branch", condition: "terminal && resultOpen", line: 287 },
-      { kind: "branch", condition: "detailError", line: 293 },
-      { kind: "branch", condition: "detail", line: 300 },
+      { kind: "branch", condition: "!text", line: 121 },
+      { kind: "branch", condition: "run.has_result", line: 159 },
+      { kind: "error", condition: "run.status === 'failed' && run.error_message", line: 171 },
+      { kind: "branch", condition: "shouldShowOpenConversation(run, contextConversationId)", line: 183 },
+      { kind: "branch", condition: "terminal", line: 193 },
+      { kind: "branch", condition: "!terminal", line: 206 },
+      { kind: "branch", condition: "!terminal", line: 217 },
+      { kind: "overlay", condition: "<Confirm open>", line: 228 },
+      { kind: "branch", condition: "!terminal && steerOpen", line: 254 },
+      { kind: "branch", condition: "pendingNotes.length > 0", line: 259 },
+      { kind: "branch", condition: "terminal && resultOpen", line: 299 },
+      { kind: "branch", condition: "detailError", line: 305 },
+      { kind: "branch", condition: "detail", line: 312 },
     ],
   },
   "modules/background/components/BackgroundRunResult": {
@@ -283,13 +290,23 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
       { kind: "branch", condition: "text", line: 178 },
     ],
   },
-  "modules/background/pages/BackgroundTasksPage": {
-    surface: "modules/background/pages/BackgroundTasksPage",
+  "modules/background/components/BackgroundRunsFooter": {
+    surface: "modules/background/components/BackgroundRunsFooter",
+    requiredStates: ["empty"],
+    signals: [
+      { kind: "empty", condition: "!convId || !runs || runs.length === 0", line: 42 },
+      { kind: "branch", condition: "running > 0", line: 69 },
+    ],
+  },
+  "modules/background/components/BackgroundRunsPanel": {
+    surface: "modules/background/components/BackgroundRunsPanel",
     requiredStates: ["delayed","empty","error"],
     signals: [
-      { kind: "loading", condition: "loading && runs.length === 0", line: 87 },
-      { kind: "error", condition: "error && runs.length === 0", line: 91 },
-      { kind: "empty", condition: "runs.length === 0", line: 99 },
+      { kind: "loading", condition: "loading && runs === undefined", line: 37 },
+      { kind: "error", condition: "error && loaded.length === 0", line: 45 },
+      { kind: "empty", condition: "loaded.length === 0", line: 59 },
+      { kind: "error", condition: "error", line: 75 },
+      { kind: "branch", condition: "hasMore", line: 97 },
     ],
   },
   "modules/chat/components/BranchNavigator": {
@@ -4112,6 +4129,7 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
 
 /** Right-panel renderers — each is a distinct right-panel-open state to render. */
 export const PANEL_RENDERERS: PanelRegistration[] = [
+  { type: "background", surface: "modules/background/chat-extension/extension", line: 31 },
   { type: "file", surface: "modules/file/chat-extension/extension", line: 156 },
   { type: "kb_source", surface: "modules/knowledge-base/chat-extension/extension", line: 52 },
   { type: "literature", surface: "modules/literature/chat-extension/extension", line: 27 },
@@ -4164,7 +4182,7 @@ export type StateMatrixSurface = keyof typeof STATE_MATRIX
  * `STATE_COVERAGE satisfies Record<RequiredState, StateCoverageEntry>`, so a
  * newly-extracted state with no entry is a compile error (mirrors how
  * galleryCoverage.generated.ts's `GallerySurface` gates coverage.ts).
- * 373 keys.
+ * 375 keys.
  */
 export type RequiredState =
   | "modules/agent/components/AgentSettingsSection:delayed"
@@ -4194,11 +4212,13 @@ export type RequiredState =
   | "modules/auth/RegisterForm:error"
   | "modules/auth/SessionSettingsPage:delayed"
   | "modules/auth/SessionSettingsPage:error"
+  | "modules/background/chat-extension/extension:panel-open"
   | "modules/background/components/BackgroundRunCard:error"
   | "modules/background/components/BackgroundRunCard:open"
-  | "modules/background/pages/BackgroundTasksPage:delayed"
-  | "modules/background/pages/BackgroundTasksPage:empty"
-  | "modules/background/pages/BackgroundTasksPage:error"
+  | "modules/background/components/BackgroundRunsFooter:empty"
+  | "modules/background/components/BackgroundRunsPanel:delayed"
+  | "modules/background/components/BackgroundRunsPanel:empty"
+  | "modules/background/components/BackgroundRunsPanel:error"
   | "modules/chat/components/ChatInput:open"
   | "modules/chat/components/ChatMessage:empty"
   | "modules/chat/components/ConversationCard:open"
@@ -4570,11 +4590,13 @@ export const REQUIRED_STATE_KEYS = [
   "modules/auth/RegisterForm:error",
   "modules/auth/SessionSettingsPage:delayed",
   "modules/auth/SessionSettingsPage:error",
+  "modules/background/chat-extension/extension:panel-open",
   "modules/background/components/BackgroundRunCard:error",
   "modules/background/components/BackgroundRunCard:open",
-  "modules/background/pages/BackgroundTasksPage:delayed",
-  "modules/background/pages/BackgroundTasksPage:empty",
-  "modules/background/pages/BackgroundTasksPage:error",
+  "modules/background/components/BackgroundRunsFooter:empty",
+  "modules/background/components/BackgroundRunsPanel:delayed",
+  "modules/background/components/BackgroundRunsPanel:empty",
+  "modules/background/components/BackgroundRunsPanel:error",
   "modules/chat/components/ChatInput:open",
   "modules/chat/components/ChatMessage:empty",
   "modules/chat/components/ConversationCard:open",

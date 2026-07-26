@@ -104,6 +104,28 @@ export const STATE_COVERAGE = {
   'modules/literature/chat-extension/extension:panel-open': {
     via: 'deep:deep-chat-right-panel-literature',
   },
+  // The in-conversation background surfaces (there is no global page).
+  'modules/background/chat-extension/extension:panel-open': {
+    via: 'deep:deep-chat-right-panel-background',
+  },
+  'modules/background/components/BackgroundRunsPanel:empty': {
+    via: 'deep:deep-chat-background-empty',
+  },
+  'modules/background/components/BackgroundRunsPanel:delayed': {
+    skip: true,
+    reason:
+      "first-paint spinner for one conversation's runs — a transient in-flight fetch the seeded cassette resolves immediately, so it is not deterministically snapshottable; the branch is reached on every panel open and its populated outcome is covered by 'deep-chat-right-panel-background' + the 15-background/background-in-conversation e2e",
+  },
+  'modules/background/components/BackgroundRunsPanel:error': {
+    skip: true,
+    reason:
+      "fetch-failure panel with Retry, shown when GET /api/background/runs fails for this conversation; a transient transport-failure state the seeded cassette (which always 200s) cannot drive, and the mock's global error mode is a page-level switch. The store-side half — the error is recorded WITHOUT clearing an already-loaded list — is pinned by TEST-8 in BackgroundRuns.store.test.ts",
+  },
+  'modules/background/components/BackgroundRunsFooter:empty': {
+    skip: true,
+    reason:
+      "the footer renders NULL for a conversation with no background runs — its 'empty' state is the deliberate absence of any chrome, so there is nothing to snapshot; the absence is asserted by the 15-background/background-in-conversation e2e (TEST-15)",
+  },
   "modules/assistant/chat-extension/components/AssistantMenuItem:empty": { skip: true, reason: "via surface — rendered within its page; 'empty' branch proven by Part 2 runtime coverage" },
   "modules/assistant/chat-extension/components/AssistantSelector:empty": { skip: true, reason: "via surface — rendered within its page; 'empty' branch proven by Part 2 runtime coverage" },
   "modules/assistant/components/AssistantFormDrawer:open": { via: 'overlay' },
@@ -442,9 +464,6 @@ export const STATE_COVERAGE = {
   "modules/workflow/components/builder/builderFields:error": { skip: true, reason: "via surface — rendered within its page; 'error' branch proven by Part 2 runtime coverage" },
   'modules/background/components/BackgroundRunCard:error': { skip: true, reason: 'agent-core surface merged from feat/agent-core; state-matrix state-coverage annotation deferred to a follow-up gallery pass' },
   'modules/background/components/BackgroundRunCard:open': { skip: true, reason: 'agent-core surface merged from feat/agent-core; state-matrix state-coverage annotation deferred to a follow-up gallery pass' },
-  'modules/background/pages/BackgroundTasksPage:delayed': { skip: true, reason: 'agent-core surface merged from feat/agent-core; state-matrix state-coverage annotation deferred to a follow-up gallery pass' },
-  'modules/background/pages/BackgroundTasksPage:empty': { skip: true, reason: 'agent-core surface merged from feat/agent-core; state-matrix state-coverage annotation deferred to a follow-up gallery pass' },
-  'modules/background/pages/BackgroundTasksPage:error': { skip: true, reason: 'agent-core surface merged from feat/agent-core; state-matrix state-coverage annotation deferred to a follow-up gallery pass' },
   'modules/chat/components/agent-activity/SubAgentActivityCard:empty': { skip: true, reason: 'agent-core surface merged from feat/agent-core; state-matrix state-coverage annotation deferred to a follow-up gallery pass' },
   'modules/chat/components/agent-activity/TaskListChecklist:empty': { skip: true, reason: 'agent-core surface merged from feat/agent-core; state-matrix state-coverage annotation deferred to a follow-up gallery pass' },
   'modules/chat/extensions/schedule/components/ScheduleLoopButton:open': { skip: true, reason: 'agent-core surface merged from feat/agent-core; state-matrix state-coverage annotation deferred to a follow-up gallery pass' },

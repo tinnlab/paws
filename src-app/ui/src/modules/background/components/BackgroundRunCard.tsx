@@ -18,6 +18,7 @@ import {
 } from '@ziee/kit'
 
 import { isTerminalRunStatus } from '../stores/BackgroundRuns.store'
+import { shouldShowOpenConversation } from './runCardAffordances'
 import { BackgroundRunResult } from './BackgroundRunResult'
 import { BackgroundRuns } from '@/modules/background/stores/BackgroundRuns.store'
 
@@ -64,8 +65,19 @@ const notifyError = (e: unknown, fallback: string): void => {
  *
  * Cancel + steer are gated on `!isTerminalRunStatus(run.status)` — the exact
  * boundary the backend enforces (both endpoints 409 on a terminal run).
+ *
+ * `contextConversationId` names the conversation the card is rendered INSIDE (the
+ * in-chat Tasks panel passes its own). When it matches the run's conversation the
+ * "Open conversation" affordance is suppressed — see `shouldShowOpenConversation`.
+ * Omitted ⇒ no context ⇒ unchanged behaviour for every other call site.
  */
-export function BackgroundRunCard({ run }: { run: BackgroundRunSummary }) {
+export function BackgroundRunCard({
+  run,
+  contextConversationId,
+}: {
+  run: BackgroundRunSummary
+  contextConversationId?: string
+}) {
   const navigate = useNavigate()
   const [cancelOpen, setCancelOpen] = useState(false)
   const [cancelling, setCancelling] = useState(false)
@@ -168,7 +180,7 @@ export function BackgroundRunCard({ run }: { run: BackgroundRunSummary }) {
 
         {/* Actions */}
         <Flex className="flex-wrap items-center gap-2">
-          {run.conversation_id && (
+          {shouldShowOpenConversation(run, contextConversationId) && (
             <Button
               variant="link"
               icon={<ExternalLink />}

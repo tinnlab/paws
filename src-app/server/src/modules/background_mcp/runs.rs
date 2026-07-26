@@ -66,6 +66,14 @@ pub struct ListBackgroundRunsQuery {
     /// Filter to a single background job kind (`subagent` / `sandbox_exec`).
     #[serde(default)]
     pub kind: Option<String>,
+    /// Scope to ONE conversation's background runs — used by the in-chat "Tasks"
+    /// panel + the end-of-conversation affordance.
+    ///
+    /// **Disjoint**, not additive: omitting it returns ONLY the conversation-LESS
+    /// runs (detached work, e.g. a scheduled task's), never every run. A run
+    /// therefore appears in exactly one surface.
+    #[serde(default)]
+    pub conversation_id: Option<Uuid>,
 }
 
 #[debug_handler]
@@ -82,6 +90,7 @@ pub async fn list_background_runs(
         per_page,
         params.status.as_deref(),
         params.kind.as_deref(),
+        params.conversation_id,
     )
     .await?;
     let total_pages = if per_page > 0 {
@@ -111,7 +120,12 @@ pub fn list_background_runs_docs(op: TransformOperation) -> TransformOperation {
              (detached sub-agent / sandbox-exec runs — never classic workflow runs). \
              Optional `status` / `kind` filters; `page`/`per_page` clamped (default 50, \
              cap 500). Compact summaries only — the full result is fetched separately \
-             via `collect_result`.",
+             via `collect_result`.\n\n\
+             `conversation_id` is a DISJOINT scope: omit it and you get ONLY the \
+             conversation-less runs (detached work such as a scheduled task's); pass one \
+             and you get ONLY that conversation's runs. A background run is therefore \
+             surfaced in exactly one place — its conversation's in-chat Tasks panel, or \
+             the scheduler's run history — never both.",
         )
         .response::<200, Json<BackgroundRunListResponse>>()
         .response_with::<401, (), _>(|r| r.description("Unauthorized"))
@@ -233,4 +247,66 @@ pub fn cancel_background_run_docs(op: TransformOperation) -> TransformOperation 
         .response_with::<401, (), _>(|r| r.description("Unauthorized"))
         .response_with::<404, (), _>(|r| r.description("Run not found / not owned"))
         .response_with::<409, (), _>(|r| r.description("Run already finished"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::extract::Query;
+    use axum::http::Uri;
+
+    fn parse(qs: &str) -> Result<ListBackgroundRunsQuery, String> {
+        let uri: Uri = format!("/background/runs?{qs}").parse().unwrap();
+        Query::<ListBackgroundRunsQuery>::try_from_uri(&uri)
+            .map(|Query(q)| q)
+            .map_err(|e| e.to_string())
+    }
+
+    /// TEST-1 — the disjoint `conversation_id` scope must survive deserialization
+    /// exactly as sent. A filter that silently vanishes here would WIDEN the
+    /// scope (the panel would fall back to the conversation-less listing), which
+    /// is precisely the failure this param exists to prevent.
+    #[test]
+    fn conversation_id_is_parsed_when_present() {
+        let id = Uuid::new_v4();
+        let q = parse(&format!("conversation_id={id}")).expect("valid query");
+        assert_eq!(q.conversation_id, Some(id));
+        // The other filters keep their documented defaults.
+        assert_eq!(q.page, 1);
+        assert_eq!(q.per_page, 50);
+        assert!(q.status.is_none());
+        assert!(q.kind.is_none());
+    }
+
+    #[test]
+    fn conversation_id_is_none_when_absent() {
+        let q = parse("page=2&per_page=20").expect("valid query");
+        assert!(
+            q.conversation_id.is_none(),
+            "absent conversation_id must stay None — the repository reads None as \
+             'conversation-less runs only', so any other value silently rescopes"
+        );
+        assert_eq!(q.page, 2);
+        assert_eq!(q.per_page, 20);
+    }
+
+    #[test]
+    fn conversation_id_composes_with_the_other_filters() {
+        let id = Uuid::new_v4();
+        let q = parse(&format!("status=running&kind=subagent&conversation_id={id}"))
+            .expect("valid query");
+        assert_eq!(q.conversation_id, Some(id));
+        assert_eq!(q.status.as_deref(), Some("running"));
+        assert_eq!(q.kind.as_deref(), Some("subagent"));
+    }
+
+    #[test]
+    fn malformed_conversation_id_is_rejected_not_dropped() {
+        let err = parse("conversation_id=not-a-uuid")
+            .expect_err("a malformed uuid must be a 4xx, never a silently-dropped filter");
+        assert!(
+            err.to_lowercase().contains("conversation_id") || !err.is_empty(),
+            "unexpected error text: {err}"
+        );
+    }
 }
