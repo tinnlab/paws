@@ -58,3 +58,11 @@ untouched.
   renders `MermaidBlock`, so this assertion MUST be updated. This is a deliberate
   stale-test correction (mermaid-toggle.spec is the authority that mermaid renders
   via the chat path). Resolved by updating the assertion; not a blocker.
+- **ITEM-6** — verdict: PASS — the Shiki assertion selector `span[style*="color"]`
+  is stale for @streamdown/code 1.1.1 (token colors ride a `--sdm-c` CSS custom
+  property, verified in the rendered DOM); updating to `span[style*="--sdm-c"]`
+  still proves genuine per-token highlighting. Corrected-assertion, not a blocker.
+- **ITEM (design change, DRIFT-1)** — verdict: PASS — removing the `pre` override
+  is additive-by-subtraction: the base variant already renders correctly without a
+  `pre` override, so this makes the chat path match the proven-correct base path;
+  no caller breaks (deleted `MarkdownCodeBlock` had no remaining importer).
