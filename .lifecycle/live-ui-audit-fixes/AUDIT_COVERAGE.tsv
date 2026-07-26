@@ -87,3 +87,5 @@ src-app/ui/src/modules/summarization/stores/summarizationAdmin/actions/_doLoadMo
 src-app/ui/src/modules/summarization/stores/summarizationAdmin/actions/_doLoadModels.ts	28	31	correctness,patterns-conformance,design-conformance
 src-app/ui/tests/e2e/perf/live-audit-network-hygiene.spec.ts	1	153	tests-quality,design-conformance,perf
 src-app/ui/tests/e2e/perf/live-audit-ui-conformance.spec.ts	1	261	tests-quality,design-conformance,a11y,correctness
+src-app/desktop/ui/src/api-client/apiEndpoints.ts	324	324	generated,api-contract,patterns-conformance
+src-app/ui/src/api-client/apiEndpoints.ts	309	309	generated,api-contract,patterns-conformance

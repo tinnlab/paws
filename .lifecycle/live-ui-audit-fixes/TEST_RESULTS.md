@@ -4,7 +4,12 @@
 
 - `npm run check (ui): PASS` — exit 0 (`/data/pbya/ziee/tmp/luif/npm-check-ui5.log`)
 - `npm run check (desktop/ui): PASS` — exit 0 (`/data/pbya/ziee/tmp/luif/npm-check-desktop2.log`)
-- `gate:ui (ui): PENDING` — see "Known gaps" below.
+- `gate:ui (ui): PASS` — exit 0; `197/197 surfaces PASS`, 0 gating-HIGH runtime
+  findings across 636 gallery cells (`/data/pbya/ziee/tmp/luif/gate-ui.log`).
+- `gate:ui (desktop/ui): PASS` — exit 0; `52/52 surfaces PASS`
+  (`/data/pbya/ziee/tmp/luif/gate-ui-desktop.log`).
+  (Both run `--skip-visual`: the diff changes no layout, and the Layer-B pixel
+  baselines are not maintained on this worktree.)
 
 ## Per-test results
 
@@ -183,11 +188,11 @@ than in the next manual audit.
 
 ## Known gaps
 
-- **`gate:ui`** was not run: the gallery runtime-health gate is a separate
-  long-running harness and the diff adds no new gallery surface (the two changed
-  components are existing surfaces; `check:state-matrix` and
-  `check:gallery-coverage` — both inside the PASSING `npm run check` — are the
-  parts of that gate this diff can move). Recorded honestly rather than claimed.
+- **Layer-B visual regression** (`VISUAL_SNAPSHOTS=1 npm run gate:ui`) was NOT
+  run — the pixel baselines are not maintained on this worktree, and the diff
+  changes no layout (the only pixel-visible change is the accent swatch colour in
+  dark mode, which is the intended change and would need a re-blessed baseline
+  anyway). Criteria 2 (runtime-health) and 4 (tsc+lint) of the UI DONE gate pass.
 - **Phase-0 `A1`** fails: the branch's base (`feat/agent-core`) already carries 7
   other features' `.lifecycle/` dirs that were never stripped at their merges.
   Deleting them here would add a large unrelated diff and conflict with the FF
