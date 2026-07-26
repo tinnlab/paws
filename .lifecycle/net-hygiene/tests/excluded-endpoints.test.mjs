@@ -73,9 +73,21 @@ const OWNED_GENERATED = [
   'api-client/types.ts',
 ]
 
+/**
+ * Mechanically-generated INDEXES of the whole app. They necessarily NAME every
+ * surface — including the excluded endpoints' — so scanning their CONTENT for a
+ * marker is meaningless. They get a stricter, more honest check instead (below):
+ * their delta must be nothing but line-number movement.
+ */
+const GENERATED_INDEXES = [
+  'src-app/ui/src/dev/gallery/stateMatrix.generated.ts',
+  'src-app/ui/src/dev/gallery/STATE_MATRIX.md',
+]
+
 test('TEST-9 [acceptance/INV-4]: no changed file touches the excluded endpoints', () => {
   const offenders = []
   for (const { display, abs } of changedFiles()) {
+    if (GENERATED_INDEXES.includes(display)) continue
     if (!existsSync(abs)) continue // deleted file
     let text
     try {
@@ -122,6 +134,39 @@ test('TEST-9: the diff is non-empty (the check is actually looking at something)
     changedFiles().length > 0,
     `no changed files against ${BASE} — wrong BASE, or nothing implemented`,
   )
+})
+
+test('TEST-9 [acceptance/INV-4]: the generated indexes moved line numbers ONLY', () => {
+  // These are excluded from the marker scan because they index every surface in
+  // the app by name. That exemption is only sound if their delta carries no
+  // semantic change — assert exactly that, rather than trusting it.
+  for (const f of GENERATED_INDEXES) {
+    const diff = git(REPO, 'diff', `${BASE}...HEAD`, '--', f)
+    if (!diff) continue
+    const changed = diff
+      .split('\n')
+      .filter(l => /^[+-]/.test(l) && !/^(\+\+\+|---)/.test(l))
+    for (const line of changed) {
+      // Every changed line must differ from its counterpart only in a `:<n>` /
+      // `line: <n>` position. Strip those and the +/- sides must be identical.
+      const stripped = line
+        .slice(1)
+        .replace(/line: \d+/g, 'line: N')
+        .replace(/:\d+ \|/g, ':N |')
+      assert.ok(
+        changed.some(
+          other =>
+            other[0] !== line[0] &&
+            other
+              .slice(1)
+              .replace(/line: \d+/g, 'line: N')
+              .replace(/:\d+ \|/g, ':N |') === stripped,
+        ),
+        `${f}: changed line is not a pure line-number shift — regenerate and ` +
+          `review the real delta:\n${line}`,
+      )
+    }
+  }
 })
 
 test('TEST-9: the sdk SUBMODULE was actually scanned (no silent degraded mode)', () => {

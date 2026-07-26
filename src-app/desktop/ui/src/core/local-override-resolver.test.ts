@@ -83,9 +83,11 @@ describe('resolveOverridePath', () => {
     expect(resolveOverridePath('@/modules/auth/bootSessionVerify', realOpts)).toBe(
       path.join(realOpts.fallbackSrc, 'modules/auth/bootSessionVerify.desktop.ts'),
     )
-    // Control: a file with no `.desktop` twin still binds core.
-    expect(resolveOverridePath('@/modules/liveSession', realOpts)).toBe(
-      path.join(realOpts.fallbackSrc, 'modules/liveSession.ts'),
+    // Control: a sibling in the same module with no `.desktop` twin still binds
+    // core — so the assertion above is about THIS file's twin, not about the
+    // resolver preferring the core tree in general.
+    expect(resolveOverridePath('@/modules/auth/meFreshness', realOpts)).toBe(
+      path.join(realOpts.fallbackSrc, 'modules/auth/meFreshness.ts'),
     )
   })
 })

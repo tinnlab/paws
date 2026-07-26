@@ -1,6 +1,11 @@
 # BASE — conflict-surface scoping for `feat/net-hygiene`
 
-Branch base: `origin/feat/agent-core` @ `60b0db310` (as directed). Worktree
+Branch base: `origin/feat/agent-core`. Cut at `60b0db310`; **merged onto the new
+tip `a72553e6e` mid-lifecycle** (DRIFT-2.10) once the concurrent
+`feat/live-ui-audit-fixes` landed there, so the before→after numbers are measured
+against the CURRENT baseline and this branch is credited with none of that work.
+The merge was clean — no conflict, and no `openapi.json` / `api-client` regen on
+this side. Every gate's diff base is `a72553e6e`. Worktree
 `/data/pbya/ziee/tmp/net-hygiene-wt`.
 
 ## Migrations
@@ -24,7 +29,7 @@ Three worktrees are live off the same `60b0db310` tip:
 
 | Worktree / branch | Its surface | Overlap with this branch |
 |---|---|---|
-| `/data/pbya/ziee/tmp/live-ui-fixes-wt` (`feat/live-ui-audit-fixes`) | **Owns the two excluded fixes**: a batch `/api/projects/by-conversation` endpoint (`server/src/modules/project/{chat_extension,repository,types}.rs` + BOTH `openapi.json`/`apiEndpoints.ts`/`types.ts`) and the `/api/llm-models` ×3 de-dup | **None by construction (INV-4).** This branch edits no `project/` code, no generated api-client file, and no `llm-models` call site. Verified mechanically by `TEST-9`. |
+| `feat/live-ui-audit-fixes` — **LANDED** at `a72553e6e` | **Owned the two excluded fixes**: `POST /api/projects/by-conversations` (batch) + `src-app/ui/src/core/llmModelCatalog.ts` (a coalescing model catalog) + an OpenAPI regen for both workspaces | **None, and now verified by the merge itself.** This branch edits no `project/` code, no `llm-models` call site, and no generated api-client file; the merge onto their tip was conflict-free. Enforced mechanically by `TEST-9`. |
 | `/data/pbya/ziee/tmp/sse-slot-leak-wt` (`feat/sse-slot-leak`) | The SERVER-side `/api/sync/subscribe` 429 (per-user connection-slot reclamation, `server/src/modules/sync/registry.rs`) | **Adjacent, not overlapping.** ITEM-9 changes only the CLIENT reconnect backoff (`sdk/packages/framework/src/sync/SyncClient.ts`). Different file, different tree, and correct regardless of whether the server leak is fixed. |
 | `/data/pbya/ziee/tmp/chat-ui-robustness-wt`, `/data/pbya/ziee/tmp/streamdown-wt` | Chat render surfaces | None — no overlap with the transport/loader/sync files here. |
 
