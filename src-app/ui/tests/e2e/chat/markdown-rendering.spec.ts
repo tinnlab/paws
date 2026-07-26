@@ -33,9 +33,9 @@ import {
  * `text_delta` events into the existing text content block, which
  * TextContent.tsx renders via Streamdown — same code path as production.
  *
- * Per project directive ([[no-katex-remark-rehype]]) math is NOT
- * supported; one negative test pins that decision so a stray katex
- * import doesn't slip in.
+ * The chat markdown path wires the @streamdown/code (Shiki), @streamdown/math
+ * (KaTeX) plugins + the html/mermaid `plugins.renderers`, so this spec asserts
+ * they actually render (mermaid → MermaidBlock, ```rust → Shiki, $$…$$ → KaTeX).
  */
 
 const assistantTextMessage = (id: string, text: string): MockMessageWithContent => ({
@@ -137,33 +137,33 @@ test.describe('Tier 1 — streamdown lock-in (chat assistant markdown rendering)
   })
 
   test(
-    'mermaid block renders as a styled code-block (no SVG: plugin not installed)',
+    'mermaid fence renders MermaidBlock (diagram) via plugins.renderers',
     async ({ page, testInfra }) => {
-    // Streamdown 2 unbundled mermaid into the `@streamdown/mermaid`
-    // plugin package, which this project intentionally does NOT install
-    // (per [[no-katex-remark-rehype]] — keep dep surface small, no
-    // markdown plugin packages). The mermaid fence therefore renders as
-    // a normal code block (`data-language="mermaid"`) with an EMPTY
-    // body — no SVG. Pin this behavior so a future "let's add mermaid
-    // back" PR has to update this test (and the plan) deliberately.
+    // A ` ```mermaid ` fence is a registered custom renderer
+    // (`plugins.renderers` → MermaidBlock) — the SAME chat render path
+    // exercised by `visual/mermaid-toggle.spec.ts`. It renders the
+    // MermaidBlock card (`data-streamdown="mermaid-block"`) with the
+    // diagram SVG by default, NOT a bare code-block. (This assertion used
+    // to pin a bare code-block; that only "passed" while the `pre`
+    // override silently bypassed plugins.renderers.)
     await seedAssistantWithText(
       page,
       testInfra.baseURL,
       '```mermaid\ngraph LR\n  A-->B\n```',
     )
     const bubble = assistantBubble(page)
-    const codeBlock = bubble.locator(
-      '[data-streamdown="code-block"][data-language="mermaid"]',
-    )
-    await expect(codeBlock).toBeVisible({ timeout: 10000 })
-    // The mermaid plugin would inject an <svg> into code-block-body.
-    // Without the plugin, the body is empty. Scope strictly to the
-    // body — the surrounding code-block wrapper has header chrome
-    // icons (copy, expand, etc.) that ARE svgs.
-    const body = codeBlock.locator(
-      '[data-streamdown="code-block-body"]',
-    )
-    expect(await body.locator('svg').count()).toBe(0)
+    const block = bubble.locator('[data-streamdown="mermaid-block"]')
+    await expect(block).toBeVisible({ timeout: 15000 })
+    // The diagram renders by default (mode="render") → an <svg> is present.
+    await expect(
+      block.locator('[data-testid="mermaid-diagram"] svg'),
+    ).toBeVisible({ timeout: 15000 })
+    // It is NOT rendered as the default streamdown code-block.
+    expect(
+      await bubble
+        .locator('[data-streamdown="code-block"][data-language="mermaid"]')
+        .count(),
+    ).toBe(0)
   },
   )
 
@@ -202,30 +202,37 @@ test.describe('Tier 1 — streamdown lock-in (chat assistant markdown rendering)
     const body = codeBlock.locator('[data-streamdown="code-block-body"]')
     // The code text survived into the rendered block.
     await expect(body).toContainText('fn foo')
-    // Shiki applies per-token colors via inline `style="color:..."` on
-    // <span>s inside the <pre>. At least one such colored token must
-    // exist — its absence means highlighting silently regressed to
-    // plain text.
-    const coloredTokens = body.locator('pre span[style*="color"]')
-    await expect(coloredTokens.first()).toBeVisible({ timeout: 10000 })
-    expect(await coloredTokens.count()).toBeGreaterThan(0)
+    // Shiki applies per-token colors. @streamdown/code themes tokens via a
+    // `--sdm-c` CSS custom property (`style="--sdm-c: #A0111F; --shiki-dark: …"`
+    // + a `text-[var(--sdm-c)]` class) so light/dark can swap without re-render —
+    // NOT a literal inline `color:`. At least one such per-token color must
+    // exist; its absence means highlighting silently regressed to plain text.
+    const coloredTokens = body.locator('pre span[style*="--sdm-c"]')
+    await expect
+      .poll(async () => coloredTokens.count(), { timeout: 10000 })
+      .toBeGreaterThan(0)
   },
   )
 
-  test('does NOT render math with KaTeX styling', async ({ page, testInfra }) => {
-    // Per [[no-katex-remark-rehype]] — math is intentionally not
-    // wired. This test pins that decision so a future stray katex
-    // import doesn't slip in unnoticed.
+  test('renders math with KaTeX styling', async ({ page, testInfra }) => {
+    // The chat markdown path wires `@streamdown/math` (createMathPlugin,
+    // singleDollarTextMath) via `variant="chat"`, so `$$…$$` renders with
+    // KaTeX. (This assertion used to pin the ABSENCE of KaTeX — a stale
+    // decision; the math plugin is wired and KaTeX renders today.)
     await seedAssistantWithText(
       page,
       testInfra.baseURL,
       'Math here: $$x^2 + y^2 = z^2$$',
     )
     const bubble = assistantBubble(page)
-    // Wait for the message text to render before asserting the absence.
+    // Wait for the message text to render before asserting KaTeX applied.
     await expect(bubble).toContainText('Math here')
-    // No .katex class anywhere — would be present if rehype-katex were active.
-    expect(await bubble.evaluate(el => el.querySelectorAll('.katex').length)).toBe(0)
+    // KaTeX applied → at least one `.katex` node (rehype-katex/@streamdown/math).
+    await expect
+      .poll(async () => bubble.evaluate(el => el.querySelectorAll('.katex').length), {
+        timeout: 10000,
+      })
+      .toBeGreaterThan(0)
   })
 
   test('renders footnotes with collapsed References section', async ({
