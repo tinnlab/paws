@@ -48,11 +48,23 @@
  * Store-proxy identification (two factors, BOTH required — load-bearing, not
  * defensive: `EditLlmModelDrawer` is both a store-proxy export AND a component
  * name, so a name-only registry would false-flag component imports):
- *   1. the binding is imported from a store-module specifier
- *      (`…/stores/…`, `…/store`, `*.store`, `@ziee/framework/stores`), AND
+ *   1. the import specifier RESOLVES to a file that DEFINES the proxy (the `@/`
+ *      alias and relative specifiers are resolved against every scanned root).
+ *      Only when a specifier cannot be resolved at all does it fall back to the
+ *      legacy path-shape heuristic (`…/stores/…`, `…/store`, `*.store`) — that
+ *      heuristic alone silently excluded ~44 real proxies (`AppLayout`,
+ *      `Hardware`, most drawer stores), which is exactly BUG-B's own class, AND
  *   2. its ORIGINAL exported name is in the proxy registry — every
  *      `export const X = registerLazyStore|defineStore|defineLocalStore|
- *      createStoreProxy|…(…)` or `= <Ident>.store` found across the roots.
+ *      createStoreProxy|lazyStoreProxy|…(…)` or `= <Ident>.store` found across the
+ *      roots, seen through `as`/`satisfies` wrappers and aliased factory imports
+ *      (`export const Chat = _createStoreProxy(bridge) as StoreProxy<…>` — the
+ *      most-imported proxy in the app takes exactly that shape).
+ *
+ * A per-instance store reached through a hook handle is covered too:
+ * `const pane = useChatPane(); … pane.store.<field>`. Requiring a HOOK-call
+ * initializer is what keeps it precise — `extension.store.name`, a store
+ * DEFINITION reached from a registry loop, is not a handle and is ignored.
  *
  * NOT a hook, never flagged: the path-1 specials `$` / `__setState` /
  * `__refCount` / `__refTracker` / `__destroyed`; and path-2 ACTIONS, whether
