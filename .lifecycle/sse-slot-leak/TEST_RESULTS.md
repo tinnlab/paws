@@ -28,7 +28,7 @@ cd sdk && cargo test -p ziee-framework --test permission_extractors --test sync_
 
 # server unit (chat-token stream registry + handler)
 cd src-app && cargo test -p ziee --lib chat::stream::
-  → test result: ok. 16 passed; 0 failed; 1324 filtered out (14 registry + 2 handler slot-lifecycle tests)
+  → test result: ok. 17 passed; 0 failed; 1324 filtered out (15 registry + 2 handler slot-lifecycle tests)
 
 # server integration, real TestServer subprocess (sync + chat stream)
 source src-app/server/tests/.env.test
@@ -76,6 +76,9 @@ cd src-app/ui && npm run lint:hooks
 - **TEST-19**: PASS — `sync::subscribe_test::head_requests_do_not_leak_connection_slots` **[acceptance INV-1]** — the red-before-fix proof THROUGH THE REAL ENDPOINT (unfixed: `HEAD #13` → `left: 429, right: 200`)
 - **TEST-20**: PASS — `chat::stream_slot_reclaim_test::head_requests_do_not_leak_chat_stream_slots`
 - **TEST-21**: PASS — `sync::registry::tests::prune_closed_for_user_repairs_an_orphaned_index_entry`
+- **TEST-21b**: PASS — `chat::stream::registry::tests::prune_closed_for_user_repairs_an_orphaned_index_entry`
+- **TEST-19a**: PASS — the non-vacuity anchor inside `sync::subscribe_test::head_requests_do_not_leak_connection_slots` (a HEAD is refused 429 while the allowance is held by live streams, proving it reached `register()`)
+- **TEST-20a**: PASS — the same anchor inside `chat::stream_slot_reclaim_test::head_requests_do_not_leak_chat_stream_slots`
 
 ## Acceptance tests (design-invariant proofs) — all PASS
 
