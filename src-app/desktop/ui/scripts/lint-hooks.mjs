@@ -112,10 +112,16 @@ function findFiles(dir, { includeFixtures }, acc = []) {
     const full = path.join(dir, entry)
     let st
     try {
-      st = fs.statSync(full)
+      // lstat, NOT stat: a symlink inside src/ would otherwise let the scan
+      // escape the tree (a `vendor -> ../node_modules` link defeats SKIP_DIRS,
+      // which matches by directory NAME, and makes the gate parse and report on
+      // out-of-tree files). Symlinks are skipped outright — no source file in
+      // either workspace is reached through one.
+      st = fs.lstatSync(full)
     } catch {
       continue
     }
+    if (st.isSymbolicLink()) continue
     if (st.isDirectory()) {
       if (SKIP_DIRS.has(entry)) continue
       if (entry === FIXTURE_DIR_NAME && !includeFixtures) continue
@@ -295,25 +301,47 @@ function conditionalContext(node, { allowEarlyReturn }) {
  *   targets — what is REPORTED on (default: the registry roots, fixtures excluded).
  * @returns {{findings: Array, proxyCount: number, actionCount: number, fileCount: number}}
  */
+/**
+ * Parsing the ~2.2k-file registry dominates the runtime (~0.8s of a ~1.3s run),
+ * and a single process may call `analyze()` many times (the test suite does).
+ * Cache the ROOT parse per root-set for the life of the process. Targets are
+ * always re-read, so a caller linting a file it just wrote still sees it; the
+ * cache only ever holds the immutable-for-this-run source roots.
+ */
+const rootAstCache = new Map()
+function rootAsts(roots, read) {
+  const key = roots.join(' ')
+  let cached = rootAstCache.get(key)
+  if (!cached) {
+    cached = new Map(
+      uniq(roots.flatMap((r) => findFiles(r, { includeFixtures: true }))).map((f) => [f, parse(f, read(f))]),
+    )
+    rootAstCache.set(key, cached)
+  }
+  return cached
+}
+
 export function analyze(opts = {}) {
   const roots = opts.registryRoots?.length ? opts.registryRoots : defaultRoots()
   const explicitTargets = opts.targets?.length ? opts.targets.map((t) => path.resolve(t)) : null
   const includeFixtures = !!explicitTargets
-
-  const registryFiles = uniq([
-    ...roots.flatMap((r) => findFiles(r, { includeFixtures: true })),
-    ...(explicitTargets ?? []).flatMap((t) => findFiles(t, { includeFixtures: true })),
-  ])
-  const targetFiles = explicitTargets
-    ? uniq(explicitTargets.flatMap((t) => findFiles(t, { includeFixtures: true })))
-    : uniq(roots.flatMap((r) => findFiles(r, { includeFixtures })))
 
   const texts = new Map()
   const read = (f) => {
     if (!texts.has(f)) texts.set(f, fs.readFileSync(f, 'utf8'))
     return texts.get(f)
   }
-  const asts = new Map(registryFiles.map((f) => [f, parse(f, read(f))]))
+
+  const asts = new Map(rootAsts(roots, read))
+  // Targets outside the roots (a fixture dir, a temp file) join the registry so
+  // a self-describing fixture store is recognised — and are always re-parsed.
+  for (const f of uniq((explicitTargets ?? []).flatMap((t) => findFiles(t, { includeFixtures: true }))))
+    asts.set(f, parse(f, read(f)))
+
+  const targetFiles = explicitTargets
+    ? uniq(explicitTargets.flatMap((t) => findFiles(t, { includeFixtures: true })))
+    : uniq(roots.flatMap((r) => findFiles(r, { includeFixtures })))
+
   const { proxies, actions } = buildRegistries(asts)
 
   const findings = []

@@ -236,6 +236,28 @@ describe('TEST-5: the conditional-evaluation core', () => {
     assert.deepEqual(above, [])
   })
 
+  test('the walk does NOT follow symlinks out of the tree', () => {
+    // `statSync` would follow a `vendor -> …/node_modules` link and defeat
+    // SKIP_DIRS (which matches by directory NAME), making a gate that runs in
+    // `check` read + report on arbitrary out-of-tree files.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lint-hooks-link-'))
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'lint-hooks-out-'))
+    try {
+      fs.writeFileSync(
+        path.join(outside, 'Escaped.tsx'),
+        `import { useFlag } from '@/core/flags'\n` +
+          `export function C({ a }: { a: boolean }) {\n  const v = a || useFlag('x')\n  return <div>{String(v)}</div>\n}\n`,
+      )
+      fs.writeFileSync(path.join(dir, 'Ok.tsx'), `export function Ok() {\n  return <div />\n}\n`)
+      fs.symlinkSync(outside, path.join(dir, 'vendor'), 'dir')
+      const { findings } = analyze({ registryRoots: [UI_SRC, DESKTOP_SRC], targets: [dir] })
+      assert.deepEqual(findings, [], 'the symlinked dir must not be scanned')
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+      fs.rmSync(outside, { recursive: true, force: true })
+    }
+  })
+
   test('--root scopes REPORTING to that dir while the registries still come from the full roots', () => {
     const { findings } = analyze({ targets: [FIXTURES] })
     assert.ok(findings.length >= 4, `expected the fixture defects, got ${JSON.stringify(findings)}`)
