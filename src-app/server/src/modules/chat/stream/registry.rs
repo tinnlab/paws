@@ -95,10 +95,14 @@ impl ChatStreamRegistry {
     /// A cap is only ever charged for connections that are still ALIVE: before
     /// each cap check the corresponding set is swept of connections whose
     /// stream is gone (`prune_closed_locked`). Without that sweep a user whose
-    /// slots leaked would be refused forever — the registry's other reapers
-    /// (`publish_frame` / `publish_raw_event` / `set_subscription`) only run
-    /// when there is something to deliver, so a quiescent deployment never
-    /// reclaims anything. Mirrors `SyncRegistry::register`, including its
+    /// slots leaked would be refused forever. The primary release path is the
+    /// subscribe handler's `ConnGuard` (`unregister` on drop), which since the
+    /// guard was hoisted out of the stream generator covers EVERY termination
+    /// including a never-polled stream; this sweep is the backstop for any
+    /// future path that loses it. The remaining reapers (`publish_frame` /
+    /// `publish_raw_event` / `set_subscription`) only run when there is
+    /// something to deliver, so they reclaim nothing on a quiescent deployment.
+    /// Mirrors `SyncRegistry::register`, including its
     /// cap-check ORDER: global first, then per-user, so a saturated deployment
     /// reports `CHAT_STREAM_GLOBAL_LIMIT` (a capacity incident) instead of
     /// masking it as `CHAT_STREAM_USER_LIMIT` for a user who is also at their
@@ -108,6 +112,9 @@ impl ChatStreamRegistry {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
 
         if inner.clients.len() >= inner.limits.global_max_connections {
+            prune_closed_locked(&mut inner);
+        }
+        if inner.clients.len() >= inner.limits.global_max_connections {
             return Err(AppError::new(
                 StatusCode::TOO_MANY_REQUESTS,
                 "CHAT_STREAM_GLOBAL_LIMIT",
@@ -115,7 +122,11 @@ impl ChatStreamRegistry {
             ));
         }
 
-        let user_count = inner.by_user.get(&conn.user_id).map_or(0, |s| s.len());
+        let mut user_count = inner.by_user.get(&conn.user_id).map_or(0, |s| s.len());
+        if user_count >= inner.limits.per_user_max_connections {
+            prune_closed_for_user_locked(&mut inner, conn.user_id);
+            user_count = inner.by_user.get(&conn.user_id).map_or(0, |s| s.len());
+        }
         if user_count >= inner.limits.per_user_max_connections {
             return Err(AppError::new(
                 StatusCode::TOO_MANY_REQUESTS,
@@ -127,6 +138,16 @@ impl ChatStreamRegistry {
         inner.by_user.entry(conn.user_id).or_default().insert(conn_id);
         inner.clients.insert(conn_id, conn);
         Ok(())
+    }
+
+    /// How many connections this user currently holds — the number the per-user
+    /// cap is charged against. Used by the handler's slot-lifecycle tests, which
+    /// must observe ONE user's slots in a process-wide singleton registry that
+    /// sibling tests share.
+    #[cfg(test)]
+    pub fn connection_count_for_user(&self, user_id: Uuid) -> usize {
+        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        inner.by_user.get(&user_id).map_or(0, |s| s.len())
     }
 
     /// Remove a connection (called on stream termination).
@@ -142,17 +163,6 @@ impl ChatStreamRegistry {
     /// touched, and the per-conversation `generations` replay buffers (keyed by
     /// conversation, not connection) are deliberately untouched by a sweep.
     ///
-    /// **Deliberately NOT reclaimed: a connection that is merely OLD** — see
-    /// the long rationale on `SyncRegistry::prune_closed`. Reaping a
-    /// past-deadline connection whose stream is still alive would free the
-    /// accounting slot while the stream, its channel, its task and its socket
-    /// survive, so the cap would bound bookkeeping instead of real resources.
-    ///
-    /// **Load-bearing invariant**: the registry holds the SOLE surviving
-    /// `Sender` clone, which is what makes `remove_conn` terminate the stream
-    /// (closing the channel breaks its `rx.recv()` loop) rather than orphan it.
-    /// Do not introduce a second long-lived `Sender` clone.
-    ///
     /// This is the BACKSTOP; the primary, deterministic release is the
     /// subscribe handler's `ConnGuard`, constructed at registration and moved
     /// into the stream so it drops even if the stream is never polled.
@@ -161,8 +171,8 @@ impl ChatStreamRegistry {
     /// which already holds the lock and therefore calls `prune_closed_locked`
     /// directly. This lock-taking wrapper exists only so the unit tests can
     /// drive a sweep in isolation — shipping it as unused public API would be
-    /// dead code. (The framework twin IS `pub`: its crate-level integration
-    /// test lives in a separate crate and genuinely needs the public entry.)
+    /// dead code. (The framework twin is gated the same way; its crate-level
+    /// integration test asserts through `connection_count()` instead.)
     #[cfg(test)]
     pub fn prune_closed(&self) -> usize {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
@@ -376,9 +386,36 @@ pub fn apply_config_limits(chat: &crate::core::config::ChatConfig) {
 }
 
 /// Sweep every connection whose stream is gone. Caller holds the lock.
-/// Collect-then-remove (mirroring `publish_frame`'s dead-connection handling)
-/// so the two-index invariant is maintained by the single `remove_conn` helper.
-#[allow(dead_code)]
+///
+/// **Liveness signal — `sender.is_closed()`, and deliberately only that.** Each
+/// connection's `Receiver` is owned solely by its own SSE stream, so a closed
+/// sender means exactly "that stream no longer exists": there is nothing left to
+/// bound. An idle-but-live stream (the normal state of a connection on a quiet
+/// deployment) is never touched.
+///
+/// **Deliberately NOT reclaimed: a connection that is merely OLD.** An earlier
+/// revision also reaped connections past their token's `exp`, to cover a peer
+/// that vanished without the socket ever erroring. That is wrong: in exactly
+/// that case the stream future is not being polled (which is *why* it outlived
+/// its own deadline), so dropping the registry entry frees the accounting slot
+/// while the stream future, its channel, its tokio task and its socket all
+/// survive. The cap would then bound bookkeeping rather than real resources,
+/// letting a client accumulate server-side connections *past* the cap — trading
+/// a fail-closed bound for unbounded growth. A backpressured-but-healthy stream
+/// (suspended at `yield`, or inside the periodic re-check's DB await) is also
+/// past its deadline and would be reaped. That case stays bounded the honest
+/// way: axum's keep-alive writes eventually fail on a dead peer, hyper drops the
+/// body, and the connection guard fires.
+///
+/// **Load-bearing invariant**: the registry holds the SOLE surviving `Sender`
+/// clone (the handler's own `tx` drops when the handler returns, and `rx` lives
+/// inside the stream). That is what makes `remove_conn` TERMINATE the stream
+/// rather than orphan it — dropping the sender closes the channel, `rx.recv()`
+/// yields `None`, and the loop breaks. Do not introduce a second long-lived
+/// `Sender` clone.
+///
+/// Collect-then-remove so the two-index invariant is maintained by the single
+/// `remove_conn` helper.
 fn prune_closed_locked(inner: &mut RegistryInner) -> usize {
     let dead: Vec<ConnId> = inner
         .clients
@@ -397,14 +434,25 @@ fn prune_closed_locked(inner: &mut RegistryInner) -> usize {
 }
 
 /// Sweep only `user_id`'s dead connections. Caller holds the lock.
-#[allow(dead_code)]
+///
+/// An id present in `by_user` but MISSING from `clients` is treated as dead too.
+/// `register` and `remove_conn` keep the two indexes in lockstep under one lock,
+/// so that desync should be unreachable — but `user_count` is derived from
+/// `by_user`, so an orphan would count against the per-user cap forever and
+/// NEITHER sweep could clear it (this one would filter it out, the global one
+/// iterates `clients`). That is the permanently-429'd account this module exists
+/// to prevent, so the sweep repairs it rather than skipping it.
 fn prune_closed_for_user_locked(inner: &mut RegistryInner, user_id: Uuid) -> usize {
     let Some(set) = inner.by_user.get(&user_id) else {
         return 0;
     };
     let dead: Vec<ConnId> = set
         .iter()
-        .filter(|cid| inner.clients.get(*cid).is_some_and(|c| c.sender.is_closed()))
+        .filter(|cid| {
+            // Missing from `clients` => an orphaned index entry; see the doc
+            // comment. `is_none_or` makes the sweep repair it.
+            inner.clients.get(*cid).is_none_or(|c| c.sender.is_closed())
+        })
         .copied()
         .collect();
     let n = dead.len();
@@ -647,6 +695,11 @@ mod tests {
     }
 
     // ---- slot reclamation (sse-slot-leak) --------------------------------
+    //
+    // COVERAGE NOTE: the `prune_*` tests below drive the sweep helpers in
+    // isolation — they do NOT prove the sweep is wired into production. What
+    // proves the wiring is the cap tests (`*_cap_counts_live_connections_only`),
+    // which go through `register` and fail if its sweep calls are removed.
     //
     // The chat-token registry's only pre-existing reapers (`publish_frame` /
     // `publish_raw_event` / `set_subscription`) require something to deliver, so

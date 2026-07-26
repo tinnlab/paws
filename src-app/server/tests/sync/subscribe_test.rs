@@ -587,7 +587,7 @@ async fn count_available_slots(
 ) -> usize {
     let client = reqwest::Client::new();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-    let mut best = 0usize;
+    let mut prev: Option<usize> = None;
     loop {
         let mut held = Vec::new();
         for _ in 0..ceiling {
@@ -598,16 +598,27 @@ async fn count_available_slots(
                 .await
                 .expect("subscribe request completes");
             if res.status() != 200 {
-                assert_eq!(res.status(), 429, "the only expected refusal is the cap 429");
+                assert_eq!(res.status(), 429, "the only expected refusal is a cap 429");
+                // It must be the PER-USER cap, not the global one: a global
+                // refusal would silently understate this user's allowance and
+                // make every downstream assertion pass vacuously.
+                let body = res.text().await.unwrap_or_default();
+                assert!(
+                    body.contains("USER_LIMIT") || body.contains("Too many open"),
+                    "expected the PER-USER cap refusal, got: {body}"
+                );
                 break;
             }
             held.push(res);
         }
-        best = best.max(held.len());
+        let n = held.len();
         drop(held);
-        if best + 1 >= ceiling || std::time::Instant::now() >= deadline {
-            return best;
+        // Settled once two consecutive passes agree (normally 2 iterations), or
+        // once the ceiling is reached, or at the deadline.
+        if prev == Some(n) || n + 1 >= ceiling || std::time::Instant::now() >= deadline {
+            return n;
         }
+        prev = Some(n);
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     }
 }
@@ -645,8 +656,15 @@ async fn discover_per_user_cap(server: &crate::common::TestServer) -> usize {
 /// afterwards the user must still be able to open a FULL set of 12 concurrent
 /// streams — i.e. every abandoned slot was reclaimed, not just one.
 ///
-/// Before the fix the 13th subscribe in the storm returns 429 and the user is
-/// permanently locked out.
+/// SCOPE — be precise about what this does and does not prove. It passes both
+/// BEFORE and AFTER the guard fix: over real HTTP hyper always polls the
+/// response body while writing it, so the never-polled leak is unreachable here
+/// (measured on the unfixed server: 20 sequential, then 100 sequential, then 400
+/// concurrent abandoned raw sockets all leaked 0 slots). It is an end-to-end
+/// guarantee that the reported symptom cannot occur through the real endpoint —
+/// a genuine regression net — NOT the proof of the fix. The red-before-fix
+/// proofs are the unpolled-drop tests in `ziee-framework`'s `tests/sync_routes.rs`
+/// and in `chat/stream/handler.rs`'s own `#[cfg(test)]` module.
 #[tokio::test]
 async fn abandoned_reconnects_release_their_slots_and_never_lock_the_user_out() {
     let server = crate::common::TestServer::start().await;
@@ -762,8 +780,9 @@ async fn the_per_user_cap_is_still_enforced_for_live_streams() {
         );
         let body = over.text().await.unwrap_or_default();
         assert!(
-            body.contains("SYNC_USER_LIMIT") || body.contains("Too many open sync connections"),
-            "the 429 must still carry SYNC_USER_LIMIT, got: {body}"
+            body.contains("SYNC_USER_LIMIT"),
+            "the 429 must carry the machine-readable SYNC_USER_LIMIT error code \
+             (not merely a human message), got: {body}"
         );
     }
 
@@ -836,8 +855,13 @@ async fn owner_scoping_and_notify_only_wire_format_survive_slot_reclamation() {
         .await;
     assert_eq!(
         frame.id, file_id,
-        "the frame must carry the file id (notify-and-refetch), and nothing more"
+        "the frame must carry the file id (notify-and-refetch)"
     );
+    // NOTE: this asserts the {entity, action, id} triple is intact and correctly
+    // routed. It does NOT prove the absence of extra payload fields — SyncProbe
+    // parses out exactly those three and discards the rest, so a row-data
+    // regression would be invisible here. The wire format's shape is pinned by
+    // the sync module's own in-source serialization tests.
 
     // … and the OTHER user's stream receives NOTHING at all (owner-scoping is
     // untouched by the registry change).

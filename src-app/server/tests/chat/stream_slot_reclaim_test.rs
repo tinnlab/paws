@@ -10,8 +10,16 @@
 //! quiescent deployment never reclaimed anything: every reconnect burned a slot
 //! until the account was permanently 429'd and chat stopped working for it.
 //!
-//! These drive the REAL endpoint (a live `TestServer`), not the registry in
-//! isolation — the unit tests in `modules/chat/stream/registry.rs` cover that.
+//! These drive the REAL endpoint (a live `TestServer`) as an END-TO-END
+//! regression net: they prove the reported symptom cannot occur through
+//! `GET /api/chat/stream`. They are NOT the proof of the guard fix and pass both
+//! before and after it — over real HTTP hyper always polls the response body
+//! while writing it, so the never-polled path is unreachable here (measured: 400
+//! concurrent abandoned raw sockets leak 0 slots). That path is proven
+//! behaviourally by `modules::chat::stream::handler::tests::
+//! an_unpolled_stream_still_releases_its_slot`, which drives `open_chat_stream`
+//! directly and IS red before the fix. The registry's own logic is covered by
+//! the unit tests in `modules/chat/stream/registry.rs`.
 
 use std::time::Duration;
 
@@ -60,7 +68,7 @@ async fn count_available_slots(
 ) -> usize {
     let client = reqwest::Client::new();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-    let mut best = 0usize;
+    let mut prev: Option<usize> = None;
     loop {
         let mut held = Vec::new();
         for _ in 0..ceiling {
@@ -71,16 +79,27 @@ async fn count_available_slots(
                 .await
                 .expect("subscribe request completes");
             if res.status() != 200 {
-                assert_eq!(res.status(), 429, "the only expected refusal is the cap 429");
+                assert_eq!(res.status(), 429, "the only expected refusal is a cap 429");
+                // It must be the PER-USER cap, not the global one: a global
+                // refusal would silently understate this user's allowance and
+                // make every downstream assertion pass vacuously.
+                let body = res.text().await.unwrap_or_default();
+                assert!(
+                    body.contains("USER_LIMIT") || body.contains("Too many open"),
+                    "expected the PER-USER cap refusal, got: {body}"
+                );
                 break;
             }
             held.push(res);
         }
-        best = best.max(held.len());
+        let n = held.len();
         drop(held);
-        if best + 1 >= ceiling || std::time::Instant::now() >= deadline {
-            return best;
+        // Settled once two consecutive passes agree (normally 2 iterations), or
+        // once the ceiling is reached, or at the deadline.
+        if prev == Some(n) || n + 1 >= ceiling || std::time::Instant::now() >= deadline {
+            return n;
         }
+        prev = Some(n);
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     }
 }
@@ -189,9 +208,9 @@ async fn the_chat_stream_per_user_cap_is_still_enforced_for_live_streams() {
         );
         let body = over.text().await.unwrap_or_default();
         assert!(
-            body.contains("CHAT_STREAM_USER_LIMIT")
-                || body.contains("Too many open chat-stream connections"),
-            "the 429 must still carry CHAT_STREAM_USER_LIMIT, got: {body}"
+            body.contains("CHAT_STREAM_USER_LIMIT"),
+            "the 429 must carry the machine-readable CHAT_STREAM_USER_LIMIT error \
+             code (not merely a human message), got: {body}"
         );
     }
 

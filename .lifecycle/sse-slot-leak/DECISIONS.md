@@ -51,9 +51,12 @@ snapshot, and it is reclaimed on the next registration by anyone.)
 
 ### DEC-5: Sweep scope per `register()` call — global, per-user, or both?
 
-**Resolution:** Both, ordered and conditional: sweep the acting user's set
-first (bounded by the per-user cap, ≤ 12 / ≤ 24 entries) and re-evaluate the
-per-user cap; sweep globally ONLY when the global cap would otherwise trip.
+**Resolution:** Both, each conditional on its own cap being about to trip — and
+in the ORDER the pre-existing code used: **global first, then per-user**.
+(Amended in FIX_ROUND-1: the first implementation put per-user first for cost
+reasons, which silently changed which 429 error code a saturated deployment
+returns. See DEC-15.) The common path still does no extra work at all, since
+each sweep runs only when its cap would otherwise refuse.
 **Basis:** convention — keeps the common path O(per-user cap) under a lock that
 `register()` already holds, while still guaranteeing the global cap can never
 be pinned by dead connections. Mirrors `deliver()`'s existing "collect dead,
@@ -188,3 +191,30 @@ alone left the entire chat suite green) or to ship a behavioural test that
 passes either way, which is worse than none because it looks like proof. A
 source-shape assertion is honest about being one and genuinely fails if someone
 moves the guard back.
+
+### DEC-15: Which cap is checked first, and does it matter?
+
+**Resolution:** Global first, then per-user — preserving the pre-existing order.
+**Basis:** convention + a blind-audit finding. Both caps surface 429, but with
+DIFFERENT machine-readable error codes (`*_GLOBAL_LIMIT` vs `*_USER_LIMIT`), and
+both are documented OpenAPI responses. Checking per-user first means a user who
+is at their own cap on a globally-saturated deployment is told "too many
+connections for this account" when the truth is "the deployment is out of
+capacity" — masking a capacity incident as a per-account problem in logs and in
+client error branching. The cost argument for per-user-first is moot because
+each sweep is already gated on its own cap being about to trip.
+
+### DEC-16: The chat handler's guard fix had no behavioural test. Ship a source-shape assertion, or refactor for testability?
+
+**Resolution:** Refactor. `open_chat_stream(user_id, exp, token_ver)` is extracted
+from `subscribe_chat_stream`, so the register → guard → stream construction can
+be driven with no extractor, no HTTP and no database; the test calls it, drops
+the returned `Sse` WITHOUT polling it, and asserts the slot was released.
+**Basis:** B7 ("verification means RUNNING it") + a blind-audit finding. The
+first attempt was a `include_str!` source-shape assertion, shipped because the
+never-polled path is unreachable over real HTTP (measured). An auditor correctly
+pushed back that the blocker was only the inlined construction, not anything
+fundamental — and separately proved one of that test's two assertions was VACUOUS
+(it matched its own error-message string literal). The extraction is a smaller,
+stronger change than a string lint plus its apologia, and the resulting test is
+verified red before the fix (`left: 1, right: 0`).

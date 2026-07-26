@@ -90,9 +90,20 @@ identical bug:
 - `sdk/crates/ziee-framework/src/sync/routes.rs` (`/api/sync/subscribe`, cap 12)
 - `src-app/server/src/modules/chat/stream/handler.rs` (`/api/chat/stream`, cap 24)
 
-The other `async_stream::stream!` SSE handlers (hardware, downloads, voice,
-llm_local_runtime, code_sandbox) use unkeyed `tokio::broadcast` with no slot
-accounting and no cap, so they are NOT affected.
+**Correction (FIX_ROUND-2, from a blind auditor).** The original survey claimed
+the other `async_stream::stream!` SSE handlers "use unkeyed `tokio::broadcast`
+with no slot accounting and no cap". That is FALSE for `hardware`, which uses a
+KEYED pool with a hard cap (`ziee-hardware/src/monitoring.rs`,
+`MAX_SSE_CLIENTS = 256`, `add_client` → 503 at capacity) and releases its slot
+with `remove_client(...)` as the LAST STATEMENT INSIDE its generator body — the
+exact anti-pattern this feature removes, unreachable on the disconnect path.
+It is masked (not fixed) by `broadcast_usage_update` pruning failed senders every
+monitoring tick, so it self-heals within seconds and is not the reported bug.
+**Left untouched deliberately** — it is a different module with its own owner and
+no reported symptom, and widening this fix into it would balloon the diff. It is
+called out in the hand-off so it is not lost. `voice`, `llm_local_runtime`,
+`llm_model` downloads and `code_sandbox` were re-checked and are genuinely
+broadcast-based without a per-user slot cap.
 
 ## Items
 
