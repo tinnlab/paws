@@ -37,8 +37,10 @@ of the fix untested) to `medium`/`low` (claim accuracy, test isolation, defensiv
 coverage). Round 4 returned **nothing high** and nothing that changed the shipped
 behaviour except one strictly-safer index removal.
 
-A fifth round was run on the post-round-4 diff as the final pre-merge check; its
-verdict is recorded in `FIX_ROUND-5.md`. This file's count refers to round 4's
-own findings, all resolved above.
+A fifth blind round was commissioned on the post-round-4 diff as a final
+pre-merge go/no-go. If `FIX_ROUND-5.md` is absent, that round had not returned at
+hand-off time and the merge decision rests on rounds 1-4 — which is stated
+plainly in the hand-off rather than implied to be a clean fifth round. This
+file's count refers to round 4's own findings, all resolved above.
 
 **New confirmed findings:** 0
