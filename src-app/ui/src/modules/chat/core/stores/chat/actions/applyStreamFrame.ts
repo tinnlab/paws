@@ -143,112 +143,133 @@ export default (set: ChatSet, getRaw: () => ChatInitialState) => {
           }
 
           for (const block of data.content) {
-            if (block.type === 'text_delta') {
-              const currentState = get()
-              const hasTextContent =
-                currentState.streamingMessage?.contents.some(
-                  c =>
-                    c.content_type === 'text' ||
-                    (c.content as any)?.type === 'text',
-                ) ?? false
+            // Map the streaming delta type → a registered content type. Both
+            // deltas carry their increment in `block.delta`; the text extension
+            // registers providers/renderers for BOTH 'text' and 'thinking', so a
+            // reasoning model's thoughts stream LIVE instead of only appearing
+            // after `complete` refetches history (the "thinking not streaming"
+            // bug). Non-text/thinking blocks (tool_use, …) are routed through an
+            // extension SSE handler above, not here.
+            const contentType =
+              block.type === 'text_delta'
+                ? 'text'
+                : block.type === 'thinking_delta'
+                  ? 'thinking'
+                  : null
+            if (!contentType) continue
+            const grownField = contentType === 'thinking' ? 'thinking' : 'text'
 
-              if (!currentState.streamingMessage || !hasTextContent) {
-                const messageId =
-                  currentState.streamingMessage?.id ||
-                  data.message_id ||
-                  `streaming-${Date.now()}`
-                const initialContent =
-                  await chatExtensionRegistry.provideStreamingContent(
-                    'text',
-                    block.delta,
-                  )
-                if (initialContent) {
-                  const baseMessage = currentState.streamingMessage ?? {
-                    id: messageId,
-                    role: 'assistant' as const,
-                    contents: [],
-                    originated_from_id: '',
-                    edit_count: 0,
-                    created_at: new Date().toISOString(),
-                  }
-                  const newContent = {
-                    ...initialContent,
-                    id: `${messageId}-content-${baseMessage.contents.length}`,
-                    message_id: messageId,
-                    sequence_order: baseMessage.contents.length,
-                  }
-                  const newMessage: MessageWithContent = {
-                    ...baseMessage,
-                    id: messageId,
-                    contents: [...baseMessage.contents, newContent],
-                  }
-                  set(state => {
-                    const newMessages = new Map(state.messages)
-                    newMessages.set(newMessage.id, newMessage)
-                    return {
-                      streamingMessage: newMessage,
-                      messages: newMessages,
-                    }
-                  })
+            const currentState = get()
+            const hasTypeContent =
+              currentState.streamingMessage?.contents.some(
+                c =>
+                  c.content_type === contentType ||
+                  (c.content as any)?.type === contentType,
+              ) ?? false
+
+            if (!currentState.streamingMessage || !hasTypeContent) {
+              const messageId =
+                currentState.streamingMessage?.id ||
+                data.message_id ||
+                `streaming-${Date.now()}`
+              const initialContent =
+                await chatExtensionRegistry.provideStreamingContent(
+                  contentType,
+                  block.delta,
+                )
+              if (initialContent) {
+                const baseMessage = currentState.streamingMessage ?? {
+                  id: messageId,
+                  role: 'assistant' as const,
+                  contents: [],
+                  originated_from_id: '',
+                  edit_count: 0,
+                  created_at: new Date().toISOString(),
                 }
-              } else {
-                const delta = block.delta || ''
-                const incomingMessageId = data.message_id
-                set(currentState => {
-                  if (!currentState.streamingMessage) return {}
-                  const stableId = currentState.streamingMessage.id
-                  const dbId = incomingMessageId || stableId
-                  const existingContents =
-                    currentState.streamingMessage.contents
-                  const lastBlock =
-                    existingContents[existingContents.length - 1]
-                  const lastIsText =
-                    !!lastBlock &&
-                    (lastBlock.content_type === 'text' ||
-                      (lastBlock.content as any)?.type === 'text')
-
-                  let updatedContents: MessageContent[]
-                  if (lastIsText) {
-                    const currentText = (lastBlock.content as any)?.text || ''
-                    updatedContents = [...existingContents]
-                    updatedContents[existingContents.length - 1] = {
-                      ...lastBlock,
-                      content: {
-                        ...lastBlock.content,
-                        text: currentText + delta,
-                      } as any,
-                    }
-                  } else {
-                    const now = new Date().toISOString()
-                    updatedContents = [
-                      ...existingContents,
-                      {
-                        id: `${stableId}-content-${existingContents.length}`,
-                        message_id: dbId,
-                        content_type: 'text',
-                        content: { type: 'text', text: delta } as any,
-                        sequence_order: existingContents.length,
-                        created_at: now,
-                        updated_at: now,
-                      },
-                    ]
-                  }
-
-                  const updatedMessage: MessageWithContent = {
-                    ...currentState.streamingMessage,
-                    contents: updatedContents.map(c => ({
-                      ...c,
-                      message_id: dbId,
-                    })),
-                  }
-                  const newMessages = new Map(currentState.messages)
-                  newMessages.set(stableId, updatedMessage)
+                const newContent = {
+                  ...initialContent,
+                  id: `${messageId}-content-${baseMessage.contents.length}`,
+                  message_id: messageId,
+                  sequence_order: baseMessage.contents.length,
+                }
+                const newMessage: MessageWithContent = {
+                  ...baseMessage,
+                  id: messageId,
+                  contents: [...baseMessage.contents, newContent],
+                }
+                set(state => {
+                  const newMessages = new Map(state.messages)
+                  newMessages.set(newMessage.id, newMessage)
                   return {
-                    streamingMessage: updatedMessage,
+                    streamingMessage: newMessage,
                     messages: newMessages,
                   }
                 })
               }
+            } else {
+              const delta = block.delta || ''
+              set(currentState => {
+                if (!currentState.streamingMessage) return {}
+                const stableId = currentState.streamingMessage.id
+                const existingContents =
+                  currentState.streamingMessage.contents
+                const lastBlock =
+                  existingContents[existingContents.length - 1]
+                const lastMatches =
+                  !!lastBlock &&
+                  (lastBlock.content_type === contentType ||
+                    (lastBlock.content as any)?.type === contentType)
+
+                let updatedContents: MessageContent[]
+                if (lastMatches) {
+                  // Grow ONLY the last block; keep every earlier block by
+                  // REFERENCE (slice, not map+spread) so React re-renders just
+                  // the streaming block. The former per-token full re-clone
+                  // (`contents.map(c => ({ ...c }))`) was O(n) per token →
+                  // O(n²) over a long stream — the real cause of the render lag
+                  // on a fast (local) token stream.
+                  const prev = (lastBlock.content as any)?.[grownField] || ''
+                  updatedContents = existingContents.slice()
+                  updatedContents[updatedContents.length - 1] = {
+                    ...lastBlock,
+                    content: {
+                      ...lastBlock.content,
+                      [grownField]: prev + delta,
+                    } as any,
+                    updated_at: new Date().toISOString(),
+                  }
+                } else {
+                  // A different-typed block was last (e.g. the first answer
+                  // token after a thinking block) → open a new block of this
+                  // type after it.
+                  const now = new Date().toISOString()
+                  updatedContents = [
+                    ...existingContents,
+                    {
+                      id: `${stableId}-content-${existingContents.length}`,
+                      message_id: stableId,
+                      content_type: contentType,
+                      content: (contentType === 'thinking'
+                        ? { type: 'thinking', thinking: delta, metadata: null }
+                        : { type: 'text', text: delta }) as any,
+                      sequence_order: existingContents.length,
+                      created_at: now,
+                      updated_at: now,
+                    },
+                  ]
+                }
+
+                const updatedMessage: MessageWithContent = {
+                  ...currentState.streamingMessage,
+                  contents: updatedContents,
+                }
+                const newMessages = new Map(currentState.messages)
+                newMessages.set(stableId, updatedMessage)
+                return {
+                  streamingMessage: updatedMessage,
+                  messages: newMessages,
+                }
+              })
             }
           }
         }

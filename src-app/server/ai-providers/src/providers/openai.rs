@@ -627,7 +627,52 @@ impl OpenAIProvider {
             }
         }
 
-        out
+        // Strict OpenAI-compatible backends (vLLM/Qwen chat templates) reject a
+        // `system` message that isn't at position 0 ("System message must be at
+        // the beginning", 400). ziee's chat extensions can inject a system
+        // message after earlier turns (e.g. a per-turn untrusted-content guard),
+        // so consolidate EVERY system message into ONE at the front — text joined
+        // with blank lines, order of the rest preserved. Real OpenAI / Groq /
+        // DeepSeek accept a single leading system message identically, so this is
+        // a safe normalization for every openai-compatible provider.
+        let mut system_text = String::new();
+        let mut rest: Vec<OpenAIMessage> = Vec::with_capacity(out.len());
+        for m in out {
+            if m.role == "system" {
+                let t = match &m.content {
+                    Some(OpenAIContent::Text(s)) => s.clone(),
+                    Some(OpenAIContent::Multimodal(parts)) => parts
+                        .iter()
+                        .filter_map(|p| match p {
+                            OpenAIContentPart::Text { text } => Some(text.clone()),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n\n"),
+                    None => String::new(),
+                };
+                if !t.is_empty() {
+                    if !system_text.is_empty() {
+                        system_text.push_str("\n\n");
+                    }
+                    system_text.push_str(&t);
+                }
+            } else {
+                rest.push(m);
+            }
+        }
+        let mut merged: Vec<OpenAIMessage> = Vec::with_capacity(rest.len() + 1);
+        if !system_text.is_empty() {
+            merged.push(OpenAIMessage {
+                role: "system".to_string(),
+                content: Some(OpenAIContent::Text(system_text)),
+                name: None,
+                tool_call_id: None,
+                tool_calls: None,
+            });
+        }
+        merged.extend(rest);
+        merged
     }
 
     /// Converts our tools to OpenAI format
