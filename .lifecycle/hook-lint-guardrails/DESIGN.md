@@ -64,8 +64,8 @@ In this codebase a reactive store-proxy field read **IS a hook**: path 4 of
    beyond `usePermission` to ANY `use*()` call.
 2. **BUG-B's exact shape must be mechanically impossible to reintroduce** — a
    store-proxy field read that is only conditionally evaluated (ternary branch,
-   `&&`/`||`/`??` right-hand side, `if`/`else` body, loop body, `switch` case, or
-   after an early return) is an error.
+   `&&`/`||`/`??` right-hand side, `if`/`else` body, loop body, `switch` case,
+   `catch` body, or after an early return) is an error.
 3. **The gate must be free of false positives on the current tree** — the lint
    reports ZERO on `src-app/ui/src` + `src-app/desktop/ui/src` as they stand
    (both bugs already fixed), so it can be wired into `npm run check` and stay
@@ -87,6 +87,7 @@ An expression is *conditionally evaluated* when, walking up its ancestors and
 | `if-body` | `if (c) { HERE }` / `else { HERE }` |
 | `loop-body` | `for/while (…) { HERE }` |
 | `switch-case` | `case 'a': HERE` |
+| `catch-clause` | `try { … } catch { HERE }` |
 | `after-early-return` | a statement that follows an `if (…) return/throw` guard in the same function body |
 
 The walk never crosses OUT of a function, so a callback does not inherit the
@@ -109,7 +110,7 @@ Both the bare `useX()` and the namespaced `React.useX()` call forms are matched.
 
 ### Rule H2 — conditionally-evaluated store-proxy read
 
-A read of `Proxy.field` (or a destructure `const { … } = Proxy`) in ANY of the six
+A read of `Proxy.field` (or a destructure `const { … } = Proxy`) in ANY of the seven
 contexts, where `Proxy` is a **store proxy** and `field` is **not** an action and
 not a hook-free special.
 

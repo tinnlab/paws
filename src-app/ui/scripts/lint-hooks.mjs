@@ -29,7 +29,7 @@
  * An expression is CONDITIONALLY EVALUATED when, walking up its ancestors and
  * stopping at the nearest enclosing function boundary, it sits in one of:
  *   ternary-branch · logical-rhs (&&, ||, ??) · if-body · loop-body ·
- *   switch-case · after-early-return
+ *   switch-case · catch-clause · after-early-return
  * The walk never crosses OUT of a function, so a callback does not inherit the
  * conditions of the component around it (a read that is UNCONDITIONAL inside an
  * `onClick={() => …}` is not reported just because the component has an early
@@ -41,7 +41,7 @@
  *       `after-early-return` (that is the classic type-guard idiom — 5 such hook
  *       calls across 3 pre-existing components — and is the standard
  *       rules-of-hooks rule's territory; see DEC-6).
- *   H2  a read of `Proxy.field` (or `const { … } = Proxy`) in ANY of the six
+ *   H2  a read of `Proxy.field` (or `const { … } = Proxy`) in ANY of the seven
  *       contexts, where `Proxy` passes a two-factor store-proxy test and `field`
  *       is neither a hook-free special, nor an action, nor a call callee.
  *
@@ -403,6 +403,8 @@ function conditionalContext(node, { allowEarlyReturn }) {
     )
       return 'loop-body'
     if (ts.isCaseClause(parent) || ts.isDefaultClause(parent)) return 'switch-case'
+    // A `catch` body runs only when the `try` threw — the same hazard.
+    if (ts.isCatchClause(parent) && parent.block === cur) return 'catch-clause'
     cur = parent
     parent = parent.parent
   }
@@ -420,6 +422,12 @@ function conditionalContext(node, { allowEarlyReturn }) {
     // (A bare top-level `return`/`throw` would make everything after it dead
     // code, so restricting to `if` was both narrower and arbitrary.)
     const stmt = body.statements[i]
+    // A preceding nested FUNCTION DECLARATION is its own scope — its `return`
+    // exits the helper, not this function. `forEachChild(stmt, …)` would descend
+    // straight into its body (the guard inside `walk` only stops the walk one
+    // level lower), so skip it here or every read below an inner `function`
+    // helper is falsely reported.
+    if (isFunctionBoundary(stmt)) continue
     if (ts.isReturnStatement(stmt) || ts.isThrowStatement(stmt)) return 'after-early-return'
     let exits = false
     const walk = (n) => {
@@ -457,14 +465,31 @@ const rootAstCache = new Map()
 function registryAsts(roots, targetSet, read) {
   const key = roots.join('\u0000')
   let cached = rootAstCache.get(key)
-  if (!cached) {
-    cached = new Map(
-      uniq(roots.flatMap((r) => findFiles(r, { includeFixtures: true }))).map((f) => [f, parse(f, read(f))]),
-    )
-    rootAstCache.set(key, cached)
-  }
+  if (!cached) rootAstCache.set(key, (cached = new Map()))
+  const files = uniq(roots.flatMap((r) => findFiles(r, { includeFixtures: true })))
   const out = new Map()
-  for (const [f, ast] of cached) out.set(f, targetSet.has(f) ? parse(f, read(f)) : ast)
+  for (const f of files) {
+    // Validate every cache hit against disk. A stat is ~free next to a parse,
+    // and without it a second `analyze()` in one process can answer from an AST
+    // that no longer matches the file — reporting a fixed violation, or (worse)
+    // missing a new one. Targets are never served from the cache at all.
+    let stamp
+    try {
+      const st = fs.statSync(f)
+      stamp = `${st.mtimeMs}:${st.size}`
+    } catch {
+      cached.delete(f)
+      continue
+    }
+    const hit = cached.get(f)
+    if (targetSet.has(f) || !hit || hit.stamp !== stamp) {
+      const ast = parse(f, read(f))
+      if (!targetSet.has(f)) cached.set(f, { stamp, ast })
+      out.set(f, ast)
+    } else {
+      out.set(f, hit.ast)
+    }
+  }
   return out
 }
 
@@ -592,7 +617,7 @@ export function analyze(opts) {
 
   findings.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line)
   const actionCount = [...actions.values()].reduce((n, s) => n + s.size, 0)
-  return { findings, proxyCount: proxies.size, actionCount, fileCount: targetFiles.length }
+  return { findings, proxyCount: proxies.size, actionCount, fileCount: targetFiles.length, roots }
 }
 
 /**
@@ -675,7 +700,11 @@ export function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--json') json = true
-    else if (a.startsWith('--root=')) roots.push(a.slice('--root='.length))
+    else if (a.startsWith('--root=')) {
+      const v = a.slice('--root='.length)
+      if (v === '') bad.push('--root= needs a directory')
+      else roots.push(v)
+    }
     else if (a === '--root') {
       const next = argv[++i]
       if (next === undefined || next.startsWith('--')) bad.push('--root needs a directory')

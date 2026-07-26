@@ -65,12 +65,12 @@ guardrail vitest cases are red on an untouched `origin/feat/agent-core` worktree
 
 **New confirmed findings:** 0
 
-## Honest limit of this round
+## Coverage note (superseded by FIX_ROUND-3)
 
 Two blind agents were dispatched for round 2. The **conformance** agent returned
 the four findings above (all fixed). The second agent — assigned correctness /
 error-handling / tests-quality / state-management / security on the lint core —
-did not return within the session window, so its lens is covered here by
+had not returned when this file was written, so its lens was covered here by
 *my own* targeted mutation matrix rather than by an independent reviewer:
 
 * the stale-cache class it was specifically asked to attack is proven closed by a
@@ -80,6 +80,9 @@ did not return within the session window, so its lens is covered here by
   in `TEST_RESULTS.md`), which is the property that agent was asked to falsify;
 * exit-code behaviour (0 / 1 / 2) is asserted end-to-end in TEST-15.
 
-That substitution is recorded rather than papered over: it is a self-review of the
-one lens that lacked a second pair of eyes this round, and it is the first thing a
-follow-up review should re-run independently.
+That substitution is recorded rather than papered over. **It was not sufficient:**
+the agent subsequently returned with 9 findings that still reproduced — including a
+real FALSE POSITIVE in the gate and five tests that could not fail — none of which
+my self-review had caught. They are fixed in `FIX_ROUND-3.md`. The lesson is the
+rule, not the exception: a self-substituted lens is a gap, and this one is the
+reason the feature is not 3-rounds-clean but 4.

@@ -18,7 +18,7 @@ or narrowed to go green.
 - **TEST-10**: PASS — `tests/e2e/hub/hub-mcp.spec.ts`, same run as TEST-9.
 - **TEST-11**: PASS — `tests/e2e/llm/model-edit-delete.spec.ts`, same run as TEST-8.
 - **TEST-12**: PASS — `desktop/ui/tests/e2e/host-mount.spec.ts`: **2 passed (20.5s)**.
-- **TEST-13**: PASS — `npm run test:lint-hooks` is wired and green: **56 tests, 56 pass, 0 fail**.
+- **TEST-13**: PASS — `npm run test:lint-hooks` is wired and green: **61 tests, 61 pass, 0 fail**.
 - **TEST-14**: PASS — `tests/e2e/visual/pdf-viewer.spec.ts` (the REAL `PdfJsBody` through the gallery): **5 passed (19.5s)**, including "renders PDF offline with no console errors".
 - **TEST-15**: PASS — SDK packages in scope (>100 files, 0 findings) and both copies resolve an identical root set; `registryHealthError()` trips on a zero-file scan and below the proxy floor, null when healthy, live registry >2× the floor; every unusable `--root`/unknown flag exits **2** (distinct from 0 and 1); `parseArgs` handles repeatable and space forms; `siblingDriftError()` is null and `main()` consults it.
 
@@ -29,6 +29,8 @@ or narrowed to go green.
 - `gate:ui (ui): PASS` — **197/197 surfaces runtime-clean**, 0 gating HIGH findings; tsc + lint + runtime-health + visual all PASS.
 - `gate:ui (desktop/ui): PASS` — **52/52 surfaces runtime-clean**; tsc + lint + runtime-health + coverage all PASS.
 - `tsc --noEmit`: clean in BOTH workspaces.
+
+- **TEST-16**: PASS — repeated `analyze()` calls in one process never answer from a stale AST: a TARGET edited between calls is re-read (0 → 1 → 0), and a NON-target REGISTRY file edited between calls is re-read (1 → 0 → 1).
 
 ## Mutation evidence (the tests are not tautological)
 
@@ -46,6 +48,15 @@ Each mutation was applied to a copy of the lint and the suite re-run; all went R
 | neuter the element-access rule | RED (3 failures) |
 | drop aliased-factory resolution | RED (1 failure) |
 | replace the comment scanner with an empty set | RED (2 failures) |
+| drift guard never consulted (`null && siblingDriftError()`) | RED |
+| `PROXY_REGISTRY_FLOOR = 0` (guard disabled) | RED |
+| `isTypeOnly` dropped (element, and import clause) | RED (each) |
+| `resolveSpecifier` → `[]` (factor 1 back to path-shape) | RED |
+| SDK roots removed from `ROOT_CANDIDATES` | RED |
+| inner-function boundary skip undone (the FP) | RED |
+| `catch-clause` context removed | RED |
+| cache disk-stamp ignored | RED |
+| empty `--root=` accepted | RED |
 
 ## Known-red, PRE-EXISTING on the base (not caused by this branch, B3: not worked around here)
 

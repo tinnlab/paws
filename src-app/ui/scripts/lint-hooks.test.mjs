@@ -165,11 +165,18 @@ describe('TEST-3 [acceptance][INV-3]: zero findings across the live tree', () =>
     assert.equal(counts[0], counts[1], 'the two copies must resolve an identical root set')
   })
 
-  test('the shared SDK React packages are in scope (they render inside BOTH apps)', () => {
+  test('the shared SDK React packages are in the DEFAULT scan (they render inside BOTH apps)', () => {
     const sdk = path.resolve(REPO, 'sdk/packages')
-    const { findings, fileCount } = analyze({ targets: [sdk] })
-    assert.ok(fileCount > 100, `expected the SDK packages to be scanned, got ${fileCount}`)
+    // The DEFAULT roots must include the SDK — an explicit `targets` call would
+    // bypass ROOT_CANDIDATES entirely and prove only that the dir is parseable.
+    const { roots, findings } = analyze()
+    assert.ok(
+      roots.some((r) => path.resolve(r) === sdk),
+      `sdk/packages must be a default root; got ${JSON.stringify(roots)}`,
+    )
     assert.deepEqual(findings, [])
+    const explicit = analyze({ targets: [sdk] })
+    assert.ok(explicit.fileCount > 100, `expected the SDK packages to be scanned, got ${explicit.fileCount}`)
   })
 })
 
@@ -259,6 +266,27 @@ describe('TEST-5: the conditional-evaluation core', () => {
     )
     assert.equal(findings.length, 1)
     assert.equal(findings[0].context, 'ternary-branch')
+  })
+
+  test('an inner `function` helper above a read is NOT an early return', () => {
+    // `forEachChild(stmt, walk)` descends straight into a preceding function
+    // DECLARATION, so its own `return` used to mark every later statement as
+    // after-early-return — a false positive in a blocking gate.
+    const findings = lintSnippet(
+      `${PROXY_IMPORT}export function C() {\n` +
+        `  function fmt(n: number) { return String(n) }\n` +
+        `  const v = FixtureStore.items\n  return <div>{fmt(v.length)}</div>\n}\n`,
+    )
+    assert.deepEqual(findings, [])
+  })
+
+  test('a `catch` body is conditionally evaluated', () => {
+    const findings = lintSnippet(
+      `${PROXY_IMPORT}export function C() {\n  let v: unknown = null\n` +
+        `  try { v = 1 } catch { v = FixtureStore.items }\n  return <div>{String(v)}</div>\n}\n`,
+    )
+    assert.equal(findings.length, 1, JSON.stringify(findings))
+    assert.equal(findings[0].context, 'catch-clause')
   })
 
   test('a do-while body is NOT conditional (it always runs at least once)', () => {
@@ -430,6 +458,55 @@ describe('TEST-5: the conditional-evaluation core', () => {
   })
 })
 
+describe('TEST-16: repeated analyze() calls never answer from a stale AST', () => {
+  test('a TARGET edited between calls is re-read', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lint-hooks-stale-'))
+    const f = path.join(dir, 'S.tsx')
+    const clean = `${PROXY_IMPORT}export function C() {\n  const v = FixtureStore.items\n  return <div>{String(v)}</div>\n}\n`
+    const bad = `${PROXY_IMPORT}export function C({ a }: { a: boolean }) {\n  const v = a ? FixtureStore.items : null\n  return <div>{String(v)}</div>\n}\n`
+    try {
+      const call = () => analyze({ registryRoots: [UI_SRC, DESKTOP_SRC], targets: [dir] }).findings.length
+      fs.writeFileSync(f, clean)
+      assert.equal(call(), 0)
+      fs.writeFileSync(f, bad)
+      assert.equal(call(), 1, 'a violation added between calls must be seen')
+      fs.writeFileSync(f, clean)
+      assert.equal(call(), 0, 'a violation fixed between calls must stop being reported')
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('a NON-target REGISTRY file edited between calls is re-read', () => {
+    // The registry AST cache is the only thing served from memory; without a
+    // disk stamp it would keep answering from a store definition that changed.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lint-hooks-root-'))
+    const tgt = fs.mkdtempSync(path.join(os.tmpdir(), 'lint-hooks-tgt-'))
+    try {
+      fs.mkdirSync(path.join(root, 'stores'), { recursive: true })
+      const store = path.join(root, 'stores', 's.ts')
+      const asProxy =
+        'declare function registerLazyStore<T>(h: unknown): T\nexport const S = registerLazyStore<{ items: number[] }>({})\n'
+      const asPlain = 'export const S = { items: [] as number[] }\n'
+      fs.writeFileSync(store, asProxy)
+      fs.writeFileSync(
+        path.join(tgt, 'C.tsx'),
+        `import { S } from '../${path.basename(root)}/stores/s'\n` +
+          `export function C({ a }: { a: boolean }) {\n  const v = a ? S.items : null\n  return <div>{String(v)}</div>\n}\n`,
+      )
+      const call = () => analyze({ registryRoots: [root], targets: [tgt] }).findings.length
+      assert.equal(call(), 1)
+      fs.writeFileSync(store, asPlain)
+      assert.equal(call(), 0, 'the store stopped being a proxy — a stale registry would still report')
+      fs.writeFileSync(store, asProxy)
+      assert.equal(call(), 1, 'and back again')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+      fs.rmSync(tgt, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('TEST-6: the non-firing shapes stay silent (zero-false-positive budget)', () => {
   const SILENT = {
     'unconditional proxy read': `  const items = FixtureStore.items\n  const v = a ? items : null`,
@@ -447,6 +524,24 @@ describe('TEST-6: the non-firing shapes stay silent (zero-false-positive budget)
       assert.deepEqual(findings, [])
     })
   }
+
+  test('factor 1 is module RESOLUTION — a proxy outside a `stores/` path is still recognised', () => {
+    // `Hardware` is exported from `@/modules/hardware/hardware`, a specifier the
+    // legacy path-shape heuristic rejects. Making `resolveSpecifier` return []
+    // (falling back to path shape) turns this red — and silently drops ~95 proxy
+    // bindings tree-wide, incl. AppLayout and most drawer stores.
+    for (const [spec, name, field] of [
+      ['@/modules/hardware/hardware', 'Hardware', 'devices'],
+      ['@/modules/layouts/app-layout/appLayout', 'AppLayout', 'isSidebarCollapsed'],
+    ]) {
+      const findings = lintSnippet(
+        `import { ${name} } from '${spec}'\nexport function C({ a }: { a: boolean }) {\n` +
+          `  const v = a ? ${name}.${field} : null\n  return <div>{String(v)}</div>\n}\n`,
+      )
+      assert.equal(findings.length, 1, `${spec} should be recognised: ${JSON.stringify(findings)}`)
+      assert.equal(findings[0].code, `${name}.${field}`)
+    }
+  })
 
   test('two-factor: a same-named import from a NON-store specifier is not a proxy', () => {
     // `EditLlmModelDrawer` is BOTH a store-proxy export and a component name.
@@ -469,32 +564,45 @@ describe('TEST-6: the non-firing shapes stay silent (zero-false-positive budget)
   })
 
   test('a type-only import of a proxy name is not a value read', () => {
-    // A REAL conditional property access on the type-only binding: identical
-    // syntax to a firing case, silent only because the import is type-only.
-    // Dropping either `isTypeOnly` guard turns this red.
+    // The lint parses, it never type-checks, so a file CAN reach it with a
+    // type-only binding used in a value position. That is the only way to
+    // exercise the `isTypeOnly` guards: an identical conditional property access
+    // to a firing case, silent solely because the import is type-only. (This
+    // snippet is a string in the test, so `tsc` never sees it.) Dropping either
+    // guard turns this red.
     for (const imp of [
       `import type { FixtureStore } from '${FIXTURE_STORE_SPEC}'`,
       `import { type FixtureStore } from '${FIXTURE_STORE_SPEC}'`,
     ]) {
       const findings = lintSnippet(
         `${imp}\nexport function C({ a }: { a: boolean }) {\n` +
-          `  type T = typeof FixtureStore.items\n` +
-          `  const v: T | null = a ? ([] as T) : null\n` +
+          `  const v = a ? FixtureStore.items : null\n` +
           `  return <div>{String(v)}</div>\n}\n`,
       )
       assert.deepEqual(findings, [], imp)
     }
+    // Control: the SAME snippet with a value import DOES fire, so the silence
+    // above is attributable to `isTypeOnly` and nothing else.
+    assert.equal(
+      lintSnippet(
+        `${PROXY_IMPORT}export function C({ a }: { a: boolean }) {\n` +
+          `  const v = a ? FixtureStore.items : null\n  return <div>{String(v)}</div>\n}\n`,
+      ).length,
+      1,
+    )
   })
 })
 
 describe('TEST-15: the gate fails LOUDLY instead of silently passing', () => {
   test('registryHealthError trips on an empty scan and on a broken proxy registry', () => {
+    // Absolute values, NOT expressions in PROXY_REGISTRY_FLOOR: parameterizing on
+    // the constant makes the assertions hold even at a floor of 0, i.e. with the
+    // guard disabled.
+    assert.ok(PROXY_REGISTRY_FLOOR >= 50, 'a floor below 50 cannot detect a partial registry break')
     assert.match(registryHealthError({ fileCount: 0, proxyCount: 300 }), /scanned 0 files/)
-    assert.match(
-      registryHealthError({ fileCount: 2000, proxyCount: PROXY_REGISTRY_FLOOR - 1 }),
-      /store-proxy registry looks broken/,
-    )
-    assert.equal(registryHealthError({ fileCount: 2000, proxyCount: PROXY_REGISTRY_FLOOR }), null)
+    assert.match(registryHealthError({ fileCount: 2000, proxyCount: 49 }), /store-proxy registry looks broken/)
+    assert.match(registryHealthError({ fileCount: 2000, proxyCount: 0 }), /store-proxy registry looks broken/)
+    assert.equal(registryHealthError({ fileCount: 2000, proxyCount: 300 }), null)
   })
 
   test('the live registry sits comfortably above the floor', () => {
@@ -507,7 +615,13 @@ describe('TEST-15: the gate fails LOUDLY instead of silently passing', () => {
 
   test('an unusable --root exits 2 (an operator error is never a passing gate)', () => {
     const run = (...args) => spawnSync('node', ['scripts/lint-hooks.mjs', ...args], { cwd: UI, encoding: 'utf8' })
-    for (const args of [['--root=src/does/not/exist'], ['--root', 'package.json'], ['--root'], ['--roots=src']]) {
+    for (const args of [
+      ['--root=src/does/not/exist'],
+      ['--root', 'package.json'],
+      ['--root'],
+      ['--root='], // empty value used to resolve to cwd and report the fixtures
+      ['--roots=src'],
+    ]) {
       const res = run(...args)
       assert.equal(res.status, 2, `${args.join(' ')} should be an operator error, got ${res.status}: ${res.stdout}`)
     }
@@ -522,10 +636,23 @@ describe('TEST-15: the gate fails LOUDLY instead of silently passing', () => {
     assert.equal(parseArgs(['--root']).bad.length, 1)
   })
 
-  test('the byte-identity drift guard runs INSIDE the gate (not only in a test)', () => {
+  test('the byte-identity drift guard runs INSIDE the gate (behavioural)', () => {
     assert.equal(siblingDriftError(), null, 'the two workspace copies must be byte-identical')
-    const src = fs.readFileSync(path.join(UI, 'scripts/lint-hooks.mjs'), 'utf8')
-    assert.match(src, /siblingDriftError\(\)/, 'main() must consult the drift guard')
+    // Make the copies genuinely differ and assert the CLI REFUSES to run. A
+    // source regex would match the function's own declaration and pass even if
+    // main() never called it, so this drives the real binary instead.
+    const sibling = path.join(DESKTOP_UI, 'scripts/lint-hooks.mjs')
+    const original = fs.readFileSync(sibling)
+    try {
+      fs.writeFileSync(sibling, `${original.toString('utf8')}\n// drift\n`)
+      assert.notEqual(siblingDriftError(), null, 'the guard must see the divergence')
+      const res = spawnSync('node', ['scripts/lint-hooks.mjs'], { cwd: UI, encoding: 'utf8' })
+      assert.equal(res.status, 2, 'a diverged pair must be an operator error, not a pass')
+      assert.match(res.stderr, /DIVERGED/)
+    } finally {
+      fs.writeFileSync(sibling, original)
+    }
+    assert.equal(siblingDriftError(), null, 'the copies must be restored')
   })
 })
 
