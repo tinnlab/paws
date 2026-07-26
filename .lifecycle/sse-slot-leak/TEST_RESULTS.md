@@ -18,7 +18,7 @@ rebased on top, so the pointer never regresses. No other file overlapped.
 ```
 # SDK unit (framework registry + sync)
 cd sdk && cargo test -p ziee-framework --lib sync::
-  → test result: ok. 21 passed; 0 failed; 51 filtered out
+  → test result: ok. 22 passed; 0 failed; 51 filtered out
 
 # SDK crate-scoped integration (real mounted sync_routes via tower::oneshot)
 cd sdk && cargo test -p ziee-framework --test sync_routes
@@ -34,7 +34,7 @@ cd src-app && cargo test -p ziee --lib chat::stream::
 source src-app/server/tests/.env.test
 cd src-app && cargo test -p ziee --test integration_tests -- --test-threads=4 \
     sync:: chat::stream_slot_reclaim_test chat::chat_stream_test
-  → test result: ok. 30 passed; 0 failed; 2299 filtered out; finished in 24.26s
+  → test result: ok. 32 passed; 0 failed; 2299 filtered out; finished in 27.26s
 
 # build gates
 cd sdk     && cargo check -p ziee-framework --tests   → clean
@@ -73,12 +73,15 @@ cd src-app/ui && npm run lint:hooks
 - **TEST-16**: PASS — `chat::stream::handler::tests::an_unpolled_stream_still_releases_its_slot` **[acceptance INV-1]** (verified RED before the fix: `left: 1, right: 0`)
 - **TEST-18**: PASS — `chat::stream::handler::tests::a_live_stream_keeps_its_slot_until_dropped` (also red before the fix)
 - **TEST-17**: PASS — `chat::stream::registry::tests::global_cap_counts_live_connections_only`
+- **TEST-19**: PASS — `sync::subscribe_test::head_requests_do_not_leak_connection_slots` **[acceptance INV-1]** — the red-before-fix proof THROUGH THE REAL ENDPOINT (unfixed: `HEAD #13` → `left: 429, right: 200`)
+- **TEST-20**: PASS — `chat::stream_slot_reclaim_test::head_requests_do_not_leak_chat_stream_slots`
+- **TEST-21**: PASS — `sync::registry::tests::prune_closed_for_user_repairs_an_orphaned_index_entry`
 
 ## Acceptance tests (design-invariant proofs) — all PASS
 
 | INV | acceptance test | result |
 |---|---|---|
-| INV-1 | TEST-4 (`abandoned_unpolled_streams_release_their_slots`, sync handler), **TEST-16** (`an_unpolled_stream_still_releases_its_slot`, chat handler), TEST-6 | PASS |
+| INV-1 | **TEST-19** (`head_requests_do_not_leak_connection_slots` — the real-endpoint proof), TEST-4 (sync handler, unpolled drop), **TEST-16** (chat handler, unpolled drop), TEST-6 | PASS |
 | INV-2 | TEST-11 (`every_stream_exit_path_releases_its_slot`) | PASS |
 | INV-3 | TEST-2, TEST-2b, TEST-8, TEST-12 | PASS |
 | INV-4 | TEST-10 | PASS |
@@ -86,7 +89,8 @@ cd src-app/ui && npm run lint:hooks
 ## Red-before-fix evidence (D2 — the acceptance tests are not tautologies)
 
 The fix was reverted in place and the acceptance tests re-run against the
-UNFIXED handler:
+UNFIXED handler. The last row is the important one: it is the reported
+production symptom, reproduced end-to-end through the real HTTP endpoint.
 
 | test | unfixed | fixed |
 |---|---|---|
@@ -95,6 +99,7 @@ UNFIXED handler:
 | the 4 registry cap unit tests | **FAIL** — they registered already-dead connections (DRIFT-1.1) | PASS |
 | `an_unpolled_stream_still_releases_its_slot` (chat, added in FIX_ROUND-2) | **FAIL** — `left: 1, right: 0` on iteration 0 | PASS |
 | `a_live_stream_keeps_its_slot_until_dropped` (chat) | **FAIL** — `left: 1, right: 0` | PASS |
+| **`head_requests_do_not_leak_connection_slots`** (through the REAL `/api/sync/subscribe`) | **FAIL** — `HEAD #13 must be accepted … left: 429, right: 200` | PASS |
 
 ## Pre-existing failures (NOT regressions — classified, not hand-waved)
 
