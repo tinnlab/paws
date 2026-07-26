@@ -3343,31 +3343,31 @@ Required states: `delayed`, `open`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!conversation?.id` | 162 |
-| branch | `!conversation?.id` | 169 |
-| branch | `!conversation?.id` | 172 |
-| branch | `getCached(conversation.id) !== undefined` | 173 |
-| branch | `cancelled` | 175 |
-| branch | `!conversation?.id \|\| !project?.name` | 183 |
-| branch | `!projectId` | 224 |
-| overlay | `<Confirm open>` | 346 |
-| branch | `cached !== undefined && (cached === null \|\| cached.name)` | 402 |
-| branch | `cancelled` | 404 |
-| branch | `event.data.conversationId !== conversationId` | 422 |
-| branch | `event.data.conversationId !== conversationId` | 436 |
-| branch | `!canUseProjects` | 450 |
-| loading | `state.kind === 'loading'` | 452 |
-| branch | `state.kind === 'in_project'` | 456 |
-| overlay | `<AddToProjectModal open>` | 493 |
-| branch | `loaded` | 539 |
-| branch | `cancelled` | 541 |
-| branch | `event.data.conversationId !== conversation.id` | 558 |
-| branch | `event.data.conversationId !== conversation.id` | 568 |
-| branch | `!project` | 589 |
-| branch | `!ok` | 596 |
-| branch | `project` | 608 |
-| branch | `loaded` | 625 |
-| overlay | `<AddToProjectModal open>` | 638 |
+| branch | `!conversation?.id` | 195 |
+| branch | `!conversation?.id` | 202 |
+| branch | `!conversation?.id` | 205 |
+| branch | `getCached(conversation.id) !== undefined` | 206 |
+| branch | `cancelled` | 208 |
+| branch | `!conversation?.id \|\| !project?.name` | 216 |
+| branch | `!projectId` | 257 |
+| overlay | `<Confirm open>` | 379 |
+| branch | `cached !== undefined && (cached === null \|\| cached.name)` | 435 |
+| branch | `cancelled` | 437 |
+| branch | `event.data.conversationId !== conversationId` | 455 |
+| branch | `event.data.conversationId !== conversationId` | 469 |
+| branch | `!canUseProjects` | 483 |
+| loading | `state.kind === 'loading'` | 485 |
+| branch | `state.kind === 'in_project'` | 489 |
+| overlay | `<AddToProjectModal open>` | 526 |
+| branch | `loaded` | 572 |
+| branch | `cancelled` | 574 |
+| branch | `event.data.conversationId !== conversation.id` | 591 |
+| branch | `event.data.conversationId !== conversation.id` | 601 |
+| branch | `!project` | 622 |
+| branch | `!ok` | 629 |
+| branch | `project` | 641 |
+| branch | `loaded` | 658 |
+| overlay | `<AddToProjectModal open>` | 671 |
 
 ### `modules/projects/components/AddToProjectModal`
 
@@ -3396,9 +3396,9 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!mountedRef.current` | 65 |
-| branch | `!mountedRef.current` | 72 |
-| branch | `showInitialSkeleton` | 231 |
+| branch | `!mountedRef.current` | 66 |
+| branch | `!mountedRef.current` | 73 |
+| branch | `showInitialSkeleton` | 232 |
 
 ### `modules/projects/components/ProjectFormDrawer`
 
@@ -3602,7 +3602,7 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `selected` | 87 |
+| branch | `selected` | 98 |
 
 ### `modules/settings/SettingsPage`
 

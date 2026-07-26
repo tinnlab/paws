@@ -293,6 +293,70 @@ impl ProjectRepository {
         Ok(project)
     }
 
+    /// Batch form of [`Self::get_for_conversation`]: resolve MANY
+    /// conversations' projects in ONE query.
+    ///
+    /// Exists so a conversation list can render its membership badges without
+    /// issuing one request (and one query) per row — the `n+1` burst the
+    /// live-ui-audit measured on the sidebar. Ownership scoping is identical to
+    /// the singular form (`AND p.user_id = $2`), so a conversation belonging to
+    /// another user simply does not come back — it is never an error and never
+    /// leaks a foreign project.
+    ///
+    /// Returns `(conversation_id, project)` pairs for the ATTACHED subset only;
+    /// unfiled ids are absent. Duplicate input ids collapse (`= ANY` is a set
+    /// membership test), so the caller may pass an unsanitised list.
+    pub async fn get_for_conversations(
+        &self,
+        conversation_ids: &[Uuid],
+        user_id: Uuid,
+    ) -> Result<Vec<(Uuid, Project)>, AppError> {
+        if conversation_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let rows = sqlx::query!(
+            r#"
+            SELECT
+                pc.conversation_id as "conversation_id: Uuid",
+                p.id as "id: Uuid", p.user_id as "user_id: Uuid",
+                p.name, p.description, p.instructions,
+                p.default_assistant_id as "default_assistant_id: Uuid",
+                p.default_model_id as "default_model_id: Uuid",
+                p.created_at as "created_at: chrono::DateTime<chrono::Utc>",
+                p.updated_at as "updated_at: chrono::DateTime<chrono::Utc>"
+            FROM project_conversations pc
+            JOIN projects p ON p.id = pc.project_id
+            WHERE pc.conversation_id = ANY($1) AND p.user_id = $2
+            "#,
+            conversation_ids,
+            user_id
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(AppError::database_error)?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| {
+                (
+                    r.conversation_id,
+                    Project {
+                        id: r.id,
+                        user_id: r.user_id,
+                        name: r.name,
+                        description: r.description,
+                        instructions: r.instructions,
+                        default_assistant_id: r.default_assistant_id,
+                        default_model_id: r.default_model_id,
+                        created_at: r.created_at,
+                        updated_at: r.updated_at,
+                    },
+                )
+            })
+            .collect())
+    }
+
     /// Return the project ID that a conversation is currently attached
     /// to (None if unfiled). Lightweight query for handlers/extensions
     /// that only need the ID, not the full project row.

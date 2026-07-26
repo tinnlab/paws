@@ -1,4 +1,4 @@
-import { ApiClient } from '@/api-client'
+import { filterByCapability, loadLlmModelCatalog } from '@/core/llmModelCatalog'
 import type { EmbeddingCapableModel } from '../state'
 import type { MemorySetupStepGet, MemorySetupStepSet } from '../state'
 
@@ -9,13 +9,10 @@ export default (set: MemorySetupStepSet, _get: MemorySetupStepGet) =>
       draft.error = null
     })
     try {
-      // Server-side filter `?capability=text_embedding` on the typed endpoint.
-      const body = await ApiClient.LlmModel.list({
-        capability: 'text_embedding',
-        page: 1,
-        perPage: 200,
-      })
-      const models: EmbeddingCapableModel[] = body.models.map(m => ({
+      // Shared catalog + the same `capabilities.text_embedding === true` rule
+      // the server applies to `?capability=text_embedding`.
+      const embedders = filterByCapability(await loadLlmModelCatalog(), 'text_embedding')
+      const models: EmbeddingCapableModel[] = embedders.map(m => ({
         id: m.id,
         name: m.name,
         display_name: m.display_name,
