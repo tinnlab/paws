@@ -31,14 +31,18 @@ export function EditLlmModelDrawer() {
   })
 
   const { open, modelId } = EditLlmModelDrawerStore
+  // Read the reactive `providers` proxy field EXACTLY ONCE, unconditionally: a
+  // store-kit proxy field read is a hook (useEffect + useStore(useShallow) — see
+  // framework/src/stores.ts), so reading it inside the `modelId ? …` ternary made
+  // the hook count jump when `modelId` flipped null→set as the drawer opened,
+  // tripping "change in the order of Hooks" → "Rendered more hooks" → crash.
+  const providers = LlmProvider.providers
   const currentModel = modelId
-    ? LlmProvider.providers
-        .flatMap(p => p.llm_models || [])
-        .find(m => m.id === modelId)
+    ? providers.flatMap(p => p.llm_models || []).find(m => m.id === modelId)
     : null
 
   // Find provider that owns this model
-  const currentProvider = LlmProvider.providers.find(p =>
+  const currentProvider = providers.find(p =>
     p.llm_models?.some(m => m.id === modelId),
   )
 

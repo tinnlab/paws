@@ -585,6 +585,76 @@ async function main() {
   await Promise.all(
     Array.from({ length: Math.min(CONCURRENCY, jobs.length) }, worker),
   )
+
+  // ── Concurrency-race confirmation for React's internal static-flag invariant ──
+  // "Internal React error: Expected static flag was missing. Please notify the
+  // React team." is a React 19.2 DEV + StrictMode-ONLY internal false-positive
+  // (compiled out of production) that this feature's investigation proved is
+  // strictly CONCURRENCY-TIMED. It is emitted when a lazy Suspense REVEAL of a
+  // drawer's forwardRef crosses a StrictMode double-invoke under the PARALLEL
+  // pass; a serial (or CPU-throttled-single) page never produces it (verified:
+  // 0/6 at N=1 vs 100% at N≥4 before the preload graph-fix, ~few-% residual on
+  // vaul drawers after). Crucially — unlike a product error — there is NO product
+  // anti-pattern behind it: it is React's own "please notify the React team"
+  // internal invariant. So each cell whose findings include this invariant is
+  // RE-RENDERED ONCE IN ISOLATION (its own page, no concurrent siblings, i.e. the
+  // regime where the race provably cannot fire). If the invariant does NOT recur
+  // it is a CONFIRMED concurrency-race transient → its findings are reclassified
+  // `harness` (still EMITTED + shown in the harness ledger, subtracted from
+  // gating). If it DOES recur in isolation it is deterministic → left GATING (a
+  // real defect). The discriminator is deliberately scoped to THIS invariant
+  // ONLY: errors that can reflect a real render-phase bug (e.g. "Cannot update a
+  // component while rendering a different component") are NEVER auto-reclassified
+  // and always gate — even when they happen to manifest only under concurrency.
+  const STATIC_FLAG_RE = /Expected static flag was missing/
+  const isStaticFlag = f =>
+    f.severity === 'HIGH' &&
+    !f.baselined &&
+    !f.harness &&
+    (f.category === 'console-error' || f.category === 'page-error') &&
+    STATIC_FLAG_RE.test(f.detail || '')
+  const staticFlagCells = new Map() // key → sample finding
+  for (const f of findings)
+    if (isStaticFlag(f)) {
+      const key = `${f.surface}|${f.state}|${f.theme}`
+      if (!staticFlagCells.has(key)) staticFlagCells.set(key, f)
+    }
+  let retryConfirmed = 0
+  for (const [key, sample] of staticFlagCells) {
+    let recurred = false
+    const pg = await browser.newPage({ viewport: { width: 1280, height: 900 } })
+    pg.on('console', m => {
+      if (m.type() === 'error' && STATIC_FLAG_RE.test(m.text())) recurred = true
+    })
+    pg.on('pageerror', e => {
+      if (STATIC_FLAG_RE.test(e.message || String(e))) recurred = true
+    })
+    const url = `${BASE}?surface=${sample.surface}&state=${sample.state}&theme=${sample.theme}`
+    try {
+      await pg.goto(url, { waitUntil: 'domcontentloaded', timeout: 20_000 })
+      await pg.waitForTimeout(
+        sample.kind === 'deep' || sample.kind === 'seeded' ? 2600 : 900,
+      )
+    } catch {
+      // A nav failure is not a clean confirmation — keep the finding gating.
+      recurred = true
+    }
+    await pg.close()
+    if (!recurred) {
+      for (const f of findings)
+        if (isStaticFlag(f) && `${f.surface}|${f.state}|${f.theme}` === key) {
+          f.harness = true
+          f.retryConfirmed = true
+          retryConfirmed++
+        }
+    }
+  }
+  if (retryConfirmed)
+    console.log(
+      `runtime-health: reclassified ${retryConfirmed} static-flag finding(s) as ` +
+        `concurrency-race transients (absent on an isolated serial re-render).`,
+    )
+
   await browser.close()
 
   // 3. Write the outputs.

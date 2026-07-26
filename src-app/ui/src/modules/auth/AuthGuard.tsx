@@ -50,10 +50,14 @@ export const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
     return <Loading fullscreen />
   }
 
-  // Redirect to setup if needed
+  // Redirect to setup if needed. The navigate() lives in the effect above —
+  // calling it HERE (during render) enqueues a Router state update while
+  // AuthGuard is rendering, which React 19 flags as "Cannot update a component
+  // (`Router`) while rendering a different component (`AuthGuard`)". Render the
+  // pending spinner instead; the `needsSetup === true` effect performs the
+  // redirect right after commit.
   if (needsSetup) {
-    navigate('/setup', { replace: true })
-    return null
+    return <Loading fullscreen />
   }
 
   // Show authentication page if not authenticated
