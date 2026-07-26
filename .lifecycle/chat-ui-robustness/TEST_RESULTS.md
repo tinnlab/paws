@@ -110,3 +110,36 @@ existing conversation"` — is **Category A of the known test-environment floor*
    assistant reply, so it is not counter-evidence that the LLM works.
 
 No code change can make this pass here; it needs a real provider key.
+
+## Live-app re-verification (the `live-ui-audit` skill, against a build of THIS branch)
+
+The two findings this feature exists to fix were re-checked with the SAME tool
+that found them, driving a real running stack built from this branch (server
+`target/debug/ziee` on :15201 + Vite on :15200, fresh embedded PG, admin
+bootstrapped via `POST /api/app/setup/admin`):
+
+```
+node agent-kit/skills/live-ui-audit/live-ui-audit.mjs \
+  --url=http://localhost:15200 --user=admin --password=password123 \
+  --jtbd=adversarial-compose --viewports=1280 --themes=light --persona=adversarial
+→ 18 deduped findings (HIGH 3 / MEDIUM 14 / LOW 1)
+```
+
+| Original finding | Before (audit @ `fp-ac-merge` 51164e4cd) | Now |
+|---|---|---|
+| `🔴 HIGH page-error` — "Message cannot be empty" | 6/6 cells | **`page-error` count: 0** — and no finding anywhere contains the string "cannot be empty" |
+| `🟡 MEDIUM stuck-loading` — "3 loading indicator(s) still present after settle window" (`sent`, `rapid-double-submit`) | 6/6 cells each | **`stuck-loading` count: 0** |
+
+Screenshot evidence from the same run:
+- `adversarial-compose__empty-submit` — the composer sits clean after the empty
+  Enter: no toast, no alert, no crash, nothing sent.
+- `adversarial-compose__rapid-double-submit` and `compose-send__sent` — a FAILED
+  send now shows **zero spinners** plus a visible, dismissible error alert
+  ("HTTP error! status: 422 …") with the composer re-enabled. That is JTBD-B's
+  terminal state, on the surface that previously spun forever.
+
+The 3 remaining HIGH `console-error` findings are all one cause — this bare
+verification instance has NO LLM provider configured, so `model.composeRequestFields`
+reports "No model selected", the send POST omits `model_id`, and the backend
+answers 422. They are an artifact of the empty instance, not of this change, and
+they are precisely what produces the visible error state shown above.
