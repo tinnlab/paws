@@ -875,9 +875,6 @@ export class ChatExtensionRegistry {
       for (const { extension, handler } of enabledHandlers) {
         try {
           await handler(event.data, chatGet, chatSet)
-          console.log(
-            `[ChatExtensions] SSE event "${event.event_type}" handled by: ${extension.name}`,
-          )
         } catch (error) {
           console.error(
             `[ChatExtensions] Error in ${extension.name}.sseEventHandlers.${eventType}:`,
@@ -907,9 +904,6 @@ export class ChatExtensionRegistry {
 
           // Stop propagation if handled
           if (result.handled) {
-            console.log(
-              `[ChatExtensions] SSE event "${event.event_type}" handled by: ${extension.name} (legacy)`,
-            )
             return true
           }
         }
@@ -1188,9 +1182,6 @@ export class ChatExtensionRegistry {
         try {
           const content = await provider(delta)
           if (content) {
-            console.log(
-              `[ChatExtensions] Streaming content for "${contentType}" provided by: ${extension.name}`,
-            )
             return content
           }
         } catch (error) {
@@ -1212,9 +1203,6 @@ export class ChatExtensionRegistry {
         if (extension.provideStreamingContent) {
           const content = await extension.provideStreamingContent(contentType, delta)
           if (content) {
-            console.log(
-              `[ChatExtensions] ${extension.name} provided streaming content for type: ${contentType} (legacy)`,
-            )
             return content
           }
         }
@@ -1257,9 +1245,6 @@ export class ChatExtensionRegistry {
         try {
           const updatedContent = await processor(content, delta)
           if (updatedContent !== content) {
-            console.log(
-              `[ChatExtensions] Streaming delta for "${contentType}" processed by: ${extension.name}`,
-            )
             return updatedContent
           }
         } catch (error) {
@@ -1281,9 +1266,6 @@ export class ChatExtensionRegistry {
         if (extension.processStreamingDelta) {
           const updatedContent = await extension.processStreamingDelta(content, delta)
           if (updatedContent !== content) {
-            console.log(
-              `[ChatExtensions] Streaming delta processed by: ${extension.name} (legacy)`,
-            )
             return updatedContent
           }
         }

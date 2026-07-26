@@ -542,19 +542,102 @@ const chatStoreConfig = {
     // IIFE below); the client only fires it after a genuine (re)connect, long
     // after that assignment lands.
     let onStreamReconnect: () => void = () => {}
+
+    // ── rAF-coalesced streaming (render-storm fix) ──────────────────────────
+    // A fast (local) model streams tokens far quicker than the browser can
+    // paint. Applying every text/thinking delta on its own would re-render the
+    // growing message once PER TOKEN — a render storm. Instead we MERGE the
+    // deltas that arrive within one animation frame into a single
+    // `applyStreamFrame`, so the message repaints at most ~once per frame
+    // (~60fps) no matter how fast tokens arrive. Only pure text/thinking content
+    // frames are coalescable; every other frame (started / complete / error /
+    // tool_use / mcp* / title…) FLUSHES the buffer first, then applies in order,
+    // so ordering + finalize semantics are untouched.
+    const raf: (cb: (t: number) => void) => number =
+      typeof requestAnimationFrame === 'function'
+        ? requestAnimationFrame
+        : cb => setTimeout(() => cb(0), 16) as unknown as number
+    const caf: (h: number) => void =
+      typeof cancelAnimationFrame === 'function'
+        ? cancelAnimationFrame
+        : (h => clearTimeout(h as unknown as ReturnType<typeof setTimeout>))
+    let pendingFrame: { conversationId: string; event: any } | null = null
+    let rafHandle: number | null = null
+    const applyOnTail = (conversationId: string, event: any) => {
+      frameApplyTail = frameApplyTail
+        .then(() => get().applyStreamFrame(conversationId, event))
+        .catch(err => console.error('[chat:token] apply failed', err))
+    }
+    const takePending = () => {
+      if (rafHandle != null) {
+        caf(rafHandle)
+        rafHandle = null
+      }
+      const p = pendingFrame
+      pendingFrame = null
+      return p
+    }
+    const flushPending = () => {
+      rafHandle = null
+      const p = pendingFrame
+      pendingFrame = null
+      if (p) applyOnTail(p.conversationId, p.event)
+    }
+    const isCoalescable = (event: any) =>
+      event?.type === 'content' &&
+      Array.isArray(event.content) &&
+      event.content.length > 0 &&
+      event.content.every(
+        (b: any) => b?.type === 'text_delta' || b?.type === 'thinking_delta',
+      )
+    const enqueueFrame = (conversationId: string, event: any) => {
+      if (isCoalescable(event)) {
+        // Buffer belongs to a different conversation → flush it in order first.
+        if (pendingFrame && pendingFrame.conversationId !== conversationId) {
+          const p = takePending()
+          if (p) applyOnTail(p.conversationId, p.event)
+        }
+        if (!pendingFrame) {
+          pendingFrame = {
+            conversationId,
+            event: { ...event, content: event.content.map((b: any) => ({ ...b })) },
+          }
+        } else {
+          const buf = pendingFrame.event.content as any[]
+          for (const b of event.content) {
+            const last = buf[buf.length - 1]
+            // Same-type run → concatenate the delta so N tokens become ONE grown
+            // block; a type switch (thinking→text) opens a new block.
+            if (last && last.type === b.type) last.delta = (last.delta || '') + (b.delta || '')
+            else buf.push({ ...b })
+          }
+          if (event.message_id) pendingFrame.event.message_id = event.message_id
+          if (event.branch_id) pendingFrame.event.branch_id = event.branch_id
+        }
+        if (rafHandle == null) rafHandle = raf(flushPending)
+        return
+      }
+      // Non-coalescable frame: flush buffered content FIRST (preserve order),
+      // then apply this frame on the same serialized tail.
+      const p = takePending()
+      if (p) applyOnTail(p.conversationId, p.event)
+      applyOnTail(conversationId, event)
+    }
+
     // Deliver THIS client's frames DIRECTLY to THIS pane's store (ITEM-35) rather
     // than the global `chat:token` bus, so two panes on the same conversation
     // never double-process. SERIALIZED via the per-instance tail promise
     // (applyStreamFrame is async → concurrent calls would corrupt streamingMessage).
     const streamClient = createChatStreamClient({
-      onFrame: (conversationId, event) => {
-        frameApplyTail = frameApplyTail
-          .then(() => get().applyStreamFrame(conversationId, event))
-          .catch((err) => console.error('[chat:token] apply failed', err))
-      },
+      onFrame: (conversationId, event) => enqueueFrame(conversationId, event),
       onReconnect: () => onStreamReconnect(),
     })
     set({ chatStreamClient: streamClient })
+
+    // Warm the streaming frame-apply chunk NOW (not on idle) so the very first
+    // token of a reply isn't stalled behind a dynamic `import()` of this lazy
+    // action — the frame-apply is the hot path for every streamed reply.
+    void (get() as { applyStreamFrame?: { preload?: () => void } }).applyStreamFrame?.preload?.()
 
     // Give THIS instance its own extension-store instances (e.g. the composer
     // `TextStore`) so split panes don't share one. Idempotent — the primary's
@@ -677,6 +760,9 @@ const chatStoreConfig = {
       // tail (under a StrictMode init#1→destroy#1→init#2 remount) bails at its
       // `if (destroyed) return` instead of restarting this client (DRIFT-2.16).
       destroyed = true
+      // Drop any rAF-buffered streaming frame so the coalescing flush can't fire
+      // after this instance is torn down.
+      takePending()
       streamClient.stop()
 
       // Null the client so a destroy→re-init cycle passes the init guard
