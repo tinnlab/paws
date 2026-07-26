@@ -109,12 +109,11 @@ export const STATE_COVERAGE = {
     via: 'deep:deep-chat-right-panel-background',
   },
   'modules/background/components/BackgroundRunsPanel:empty': {
+    // Real delivery, not a claim: the background cassette resolves the designated
+    // GALLERY_EMPTY_TASKS_CONVERSATION_ID (read off `ctx.query`, where a query
+    // param actually lives) to a zero-run page, so this deep state renders the
+    // genuine empty branch.
     via: 'deep:deep-chat-background-empty',
-  },
-  'modules/background/components/BackgroundRunsPanel:delayed': {
-    skip: true,
-    reason:
-      "first-paint spinner for one conversation's runs — a transient in-flight fetch the seeded cassette resolves immediately, so it is not deterministically snapshottable; the branch is reached on every panel open and its populated outcome is covered by 'deep-chat-right-panel-background' + the 15-background/background-in-conversation e2e",
   },
   'modules/background/components/BackgroundRunsPanel:error': {
     skip: true,

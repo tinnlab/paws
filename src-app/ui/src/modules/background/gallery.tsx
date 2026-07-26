@@ -12,6 +12,7 @@
  */
 import type { BackgroundRunDetail, BackgroundRunSummary } from '@/api-client/types'
 import type { ModuleGallery } from '@/dev/gallery/support'
+import { PANEL_PAGE_SIZE } from './stores/BackgroundRuns.store'
 
 const RUNNING = 'b0000000-0000-0000-0000-000000000001'
 const SUBAGENT_DONE = 'b0000000-0000-0000-0000-000000000002'
@@ -172,11 +173,21 @@ export const gallery: ModuleGallery = {
     // empty branch is a real, browsable gallery state rather than an allow-listed
     // gap. Every other id gets the full five-run spread.
     'Background.listRuns': ctx => {
-      const empty = ctx.params.conversation_id === GALLERY_EMPTY_TASKS_CONVERSATION_ID
-      const runs = empty ? [] : ALL_RUNS
+      // `conversation_id` is a QUERY param, so it arrives on `ctx.query` — NOT
+      // `ctx.params`, which holds PATH captures only (that mistake made the
+      // empty-state delivery silently return the populated list).
+      const requested = ctx.query.conversation_id
+      const empty = requested === GALLERY_EMPTY_TASKS_CONVERSATION_ID
+      // Stamp the REQUESTED conversation onto every run, so the seeded panel is
+      // faithful to the endpoint it stands in for: the disjoint server scope can
+      // only ever return runs belonging to the conversation asked for. Leaving the
+      // fixtures' own ids in place produced a gallery state that cannot occur.
+      const runs = empty
+        ? []
+        : ALL_RUNS.map(r => ({ ...r, conversation_id: requested ?? r.conversation_id }))
       return {
         page: 1,
-        per_page: 20,
+        per_page: PANEL_PAGE_SIZE,
         total: runs.length,
         total_pages: empty ? 0 : 1,
         runs,

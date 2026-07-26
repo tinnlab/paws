@@ -8,7 +8,7 @@
 ## Summary
 
 - **338** surfaces carry at least one renderable-state signal.
-- **2061** signals total: 1612 branch, 137 empty, 118 error, 94 loading, 96 overlay, 4 panel.
+- **2063** signals total: 1614 branch, 137 empty, 119 error, 93 loading, 96 overlay, 4 panel.
 - **4** right-panel renderers registered (each a right-panel-open state).
 - **35** slot registrations (sidebar / settings / chat mount points).
 
@@ -16,7 +16,7 @@
 
 | state | surfaces |
 |---|---|
-| `delayed` | 84 |
+| `delayed` | 83 |
 | `empty` | 112 |
 | `error` | 93 |
 | `open` | 82 |
@@ -324,19 +324,18 @@ Required states: `error`, `open`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!text` | 121 |
-| branch | `run.has_result` | 159 |
-| error | `run.status === 'failed' && run.error_message` | 171 |
-| branch | `shouldShowOpenConversation(run, contextConversationId)` | 183 |
-| branch | `terminal` | 193 |
-| branch | `!terminal` | 206 |
-| branch | `!terminal` | 217 |
-| overlay | `<Confirm open>` | 228 |
-| branch | `!terminal && steerOpen` | 254 |
-| branch | `pendingNotes.length > 0` | 259 |
-| branch | `terminal && resultOpen` | 299 |
-| branch | `detailError` | 305 |
-| branch | `detail` | 312 |
+| branch | `!text` | 113 |
+| branch | `run.has_result` | 151 |
+| error | `run.status === 'failed' && run.error_message` | 163 |
+| branch | `terminal` | 175 |
+| branch | `!terminal` | 188 |
+| branch | `!terminal` | 199 |
+| overlay | `<Confirm open>` | 210 |
+| branch | `!terminal && steerOpen` | 236 |
+| branch | `pendingNotes.length > 0` | 241 |
+| branch | `terminal && resultOpen` | 281 |
+| branch | `detailError` | 287 |
+| branch | `detail` | 294 |
 
 ### `modules/background/components/BackgroundRunResult`
 
@@ -360,20 +359,23 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| empty | `!convId \|\| !runs \|\| runs.length === 0` | 42 |
-| branch | `running > 0` | 69 |
+| branch | `!convId` | 48 |
+| empty | `!convId \|\| !runs \|\| total === 0` | 60 |
+| branch | `runningLoaded > 0` | 94 |
 
 ### `modules/background/components/BackgroundRunsPanel`
 
-Required states: `delayed`, `empty`, `error`
+Required states: `empty`, `error`
 
 | kind | condition | line |
 |---|---|---|
-| loading | `loading && runs === undefined` | 37 |
-| error | `error && loaded.length === 0` | 45 |
-| empty | `loaded.length === 0` | 59 |
-| error | `error` | 75 |
-| branch | `hasMore` | 97 |
+| branch | `!conversationId` | 42 |
+| branch | `!conversationId` | 52 |
+| error | `runs === undefined && error === null` | 76 |
+| error | `error && loaded.length === 0` | 84 |
+| empty | `loaded.length === 0` | 98 |
+| error | `error` | 134 |
+| branch | `hasMore` | 148 |
 
 ### `modules/chat/components/BranchNavigator`
 

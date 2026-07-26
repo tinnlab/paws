@@ -1642,21 +1642,40 @@ pub async fn list_runs_for_user(
 /// (`user_id = $1`; a foreign run is simply absent — never leaked).
 ///
 /// `conversation_id` is a **DISJOINT** scope, not an ordinary residual filter:
-/// `None` returns ONLY conversation-LESS runs (the detached work a scheduled task
-/// spawns), and `Some(id)` returns ONLY that conversation's runs. A background run
-/// therefore surfaces in exactly one place — its conversation's in-chat "Tasks"
-/// panel, or the scheduler's run history — and never in both. Note this is
-/// deliberately NOT the `($n IS NULL OR col = $n)` shape used by `status`/`kind`
-/// just below: that shape would make an unfiltered call return every run,
-/// re-introducing the global listing this scoping exists to remove.
+/// `None` returns ONLY conversation-LESS runs, and `Some(id)` returns ONLY that
+/// conversation's runs, so a run is surfaced by exactly one UI surface rather than
+/// two. This is deliberately NOT the `($n IS NULL OR col = $n)` shape used by
+/// `status`/`kind` just below: that shape would make an unfiltered call return
+/// every run, re-introducing the global listing this scoping exists to remove.
 ///
-/// Index-friendly: the existing `(user_id, created_at DESC)` index
-/// (`idx_workflow_runs_user_created`) serves the scan + ordering; `job_kind`,
-/// `status` (both separately indexed) and `conversation_id` are residual filters
-/// over that bounded, `LIMIT`-ed scan. Returns `(rows, total)` for the paginated
-/// response — the same predicate is applied to the COUNT so `total` can never
-/// disagree with the page. Pushes every filter to SQL (§4 — no in-memory
-/// filtering / N+1).
+/// **Who produces a conversation-LESS background run.** Both spawners require a
+/// conversation (`background_mcp::tools` errors `BACKGROUND_NO_MODEL` /
+/// `BACKGROUND_NO_CONVERSATION` without one), and the scheduler's own run history
+/// is a DIFFERENT table (`scheduled_task_runs`) — it never appeared here. So in
+/// practice the `None` bucket is filled only when a conversation is DELETED:
+/// `workflow_runs_conversation_id_fkey` is `ON DELETE SET NULL`, which detaches
+/// that conversation's runs. Those runs currently have no UI surface (see the
+/// tracked follow-up in the feature's lifecycle notes); the `None` branch is the
+/// endpoint's honest default and the query a future detached-runs surface will use.
+///
+/// Ordering carries an `id DESC` tiebreaker: `created_at` is NOT unique (a fan-out
+/// of sub-agents is spawned in the same instant), and without a tiebreaker
+/// `LIMIT/OFFSET` paging can repeat or skip rows between two page queries — which
+/// the client's APPEND-based Load-more would turn into duplicate rows.
+///
+/// Indexes: `(user_id, created_at DESC)` (`idx_workflow_runs_user_created`) serves
+/// the scan + ordering. `conversation_id` is a residual predicate — note the
+/// partial `idx_workflow_runs_conv (conversation_id) WHERE conversation_id IS NOT
+/// NULL` cannot serve the `IS NULL` branch, and an OR-shaped parameterised
+/// predicate is generally not index-selectable, so the scoped read is an
+/// index-ordered scan filtered on the way out rather than an index seek. Acceptable
+/// at current cardinality (bounded by `user_id`); a composite
+/// `(user_id, conversation_id, created_at DESC)` is the escalation if it matters.
+///
+/// Returns `(rows, total)`. The same predicate is applied to the COUNT so `total`
+/// cannot disagree with the page's FILTER — though the two statements run outside a
+/// transaction, so a concurrent insert between them can still shift the count.
+/// Pushes every filter to SQL (§4 — no in-memory filtering / N+1).
 pub async fn list_background_runs_for_user(
     pool: &PgPool,
     user_id: Uuid,
@@ -1693,7 +1712,9 @@ pub async fn list_background_runs_for_user(
           -- conversation-LESS runs only; a param → that conversation's runs only.
           AND (($6::uuid IS NULL AND conversation_id IS NULL)
                OR conversation_id = $6)
-        ORDER BY created_at DESC
+        -- `id DESC` is a TIEBREAKER, not cosmetic: created_at is not unique, and
+        -- OFFSET paging over a non-deterministic order repeats/skips rows.
+        ORDER BY created_at DESC, id DESC
         LIMIT $4 OFFSET $5
         "#,
         user_id,

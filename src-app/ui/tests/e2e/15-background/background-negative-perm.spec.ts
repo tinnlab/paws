@@ -1,11 +1,12 @@
 import { test, expect } from '../../fixtures/test-context'
-import { loginAsAdmin, getAdminToken } from '../../common/auth-helpers'
+import { loginAsAdmin, getAdminToken, getCurrentUserToken } from '../../common/auth-helpers'
 import { loginWithPerms } from '../permissions/fixtures'
 import { byTestId } from '../testid'
 import {
   adminUserId,
   seedConversationRun,
   seedConversationWithMessage,
+  userIdForToken,
 } from './helpers/background-helpers'
 
 /**
@@ -14,19 +15,12 @@ import {
  * TEST-12 [acceptance / INV-2] — the design's "no global Background tasks page
  * and no Background results sidebar entry" promise, asserted against an ADMIN.
  * The admin holds the `*` wildcard, so NOTHING is permission-filtered for them:
- * if either nav entry were still registered, the admin would see it. That is what
- * makes this an invariant proof rather than a permission check — a
- * restricted-user assertion would pass even if both entries were merely gated.
- * It also asserts the design's stated REPLACEMENT still works (the bell + the
- * `/notifications/background` deep-link it targets), so "removed" can't be
- * satisfied by deleting the replacement too.
+ * if either nav entry were still registered, the admin would see it.
  *
- * TEST-13 [negative-perm] — the surfaces that DO remain (the in-conversation
- * footer + Tasks panel, the bell, and the inbox route) are still gated: a user
- * stripped of the default group sees none of them. `background::use` is granted
- * to the default `users` group, so the subject is created with
- * `loginWithPerms(..., [])`, which removes it from that group (see
- * `permissions/fixtures.ts`), leaving only profile perms.
+ * TEST-13 [negative-perm] — the surfaces that DO remain are still gated. The
+ * subject is created by `loginWithPerms(..., [])`, which strips the default
+ * `users` group (see `permissions/fixtures.ts`) so it lacks `background::use`
+ * AND `notifications::read`, leaving only profile perms.
  */
 test.describe('Background surfaces — design absence + permission gating', () => {
   // Left-sidebar nav items derive `<menu-testid>-item-<id>` from the kit Menu
@@ -40,11 +34,11 @@ test.describe('Background surfaces — design absence + permission gating', () =
       .or(byTestId(page, 'layout-sidebar-toggle-button'))
       .first()
 
-  test('TEST-12 — an admin sees NEITHER background nav entry, and /background-tasks is gone', async ({
+  test('TEST-12 — an admin sees NEITHER background nav entry, and no global page lists runs', async ({
     page,
     testInfra,
   }) => {
-    const { baseURL } = testInfra
+    const { baseURL, sql } = testInfra
 
     await loginAsAdmin(page, baseURL)
     await expect(appShell(page)).toBeVisible({ timeout: 45000 })
@@ -60,12 +54,24 @@ test.describe('Background surfaces — design absence + permission gating', () =
     await expect(byTestId(page, BACKGROUND_TASKS_NAV)).toHaveCount(0)
     await expect(byTestId(page, BACKGROUND_RESULTS_NAV)).toHaveCount(0)
 
-    // The route is gone too — /background-tasks no longer resolves to the page.
+    // INV-2, the page half — asserted WITHOUT naming the deleted page's testid
+    // (which no longer exists anywhere, so a `toHaveCount(0)` on it could never
+    // fail). Instead: seed a conversation-LESS run — precisely what a global page
+    // would list — then visit /background-tasks and assert its CARD does not
+    // render. The card testid is still live (the in-conversation panel uses it),
+    // so a reintroduced global page under ANY testid would fail this.
+    const adminId = await adminUserId(sql)
+    const detachedRun = await seedConversationRun(sql, adminId, null, {
+      task: 'Detached run a global page would list',
+    })
     await page.goto(`${baseURL}/background-tasks`)
-    await expect(byTestId(page, 'background-tasks-page')).toHaveCount(0)
+    await page.waitForLoadState('load')
+    await expect(byTestId(page, `background-run-card-${detachedRun}`)).toHaveCount(0)
+    await expect(page.locator('[data-testid^="background-run-card-"]')).toHaveCount(0)
+    await expect(byTestId(page, 'background-panel-list')).toHaveCount(0)
 
     // ...while the design's stated REPLACEMENT survives: the notification bell and
-    // the deep-link route it targets both still work for the admin.
+    // the inbox route both still work for the admin.
     await page.goto(`${baseURL}/chat`)
     await expect(appShell(page)).toBeVisible({ timeout: 45000 })
     await expect(byTestId(page, 'notification-bell-badge')).toBeVisible({ timeout: 30000 })
@@ -73,33 +79,29 @@ test.describe('Background surfaces — design absence + permission gating', () =
     await expect(byTestId(page, 'agent-inbox-page')).toBeVisible({ timeout: 30000 })
   })
 
-  test('TEST-13 — a user without the grants sees no background surface at all', async ({
+  test('TEST-13 — a user without background::use sees no in-conversation task surface', async ({
     page,
     testInfra,
   }) => {
     const { baseURL, apiURL, sql } = testInfra
 
-    // Seed, as the ADMIN, a conversation that HAS a background run — so the
-    // absence asserted below is a real gate and not "there was nothing to show".
+    // ── Positive control: an ADMIN with a run in their OWN conversation DOES see
+    // the footer, so the surface exists and is reachable before we strip perms.
     await loginAsAdmin(page, baseURL)
     const adminToken = await getAdminToken(apiURL)
     const adminId = await adminUserId(sql)
-    const seededConv = await seedConversationWithMessage(
+    const adminConv = await seedConversationWithMessage(
       page,
       apiURL,
       adminToken,
       sql,
-      'Admin conversation with a run',
+      'Admin conversation with a task',
     )
-    await seedConversationRun(sql, adminId, seededConv, { task: 'Admin background work' })
-
-    // Positive control: the admin DOES see the footer for that conversation, so
-    // the surface exists and is reachable before we strip the permission.
-    await page.goto(`${baseURL}/chat/${seededConv}`)
+    await seedConversationRun(sql, adminId, adminConv, { task: 'Admin background work' })
+    await page.goto(`${baseURL}/chat/${adminConv}`)
     await expect(byTestId(page, 'background-footer-open')).toBeVisible({ timeout: 30000 })
 
-    // Negative subject: no group perms, only profile::{read,edit}. Lacks
-    // background::use AND notifications::read.
+    // ── Negative subject: no group perms, only profile::{read,edit}.
     await loginWithPerms(page, baseURL, apiURL, [], 'bg-noperm')
     await expect(appShell(page)).toBeVisible({ timeout: 45000 })
 
@@ -116,14 +118,33 @@ test.describe('Background surfaces — design absence + permission gating', () =
     })
     await expect(byTestId(page, 'agent-inbox-page')).toHaveCount(0)
 
-    // Layers 3/4 (the in-conversation surfaces): opening the admin's conversation
-    // yields no background footer and no Tasks panel — the store self-gates its
-    // fetch on `background::use`, so there is no request, no 403, and no
-    // affordance. This is the leg the sidebar assertions cannot cover, since the
-    // footer + panel are rendered inside chat rather than in the nav.
-    await page.goto(`${baseURL}/chat/${seededConv}`)
-    await page.waitForLoadState('load')
+    // Layers 3/4 (the in-conversation surfaces) — the leg the nav assertions
+    // cannot cover, because the footer + panel are rendered inside chat.
+    //
+    // CRITICAL: the conversation must belong to THIS user and must HAVE a task.
+    // Pointing them at the admin's conversation would confound the test — that
+    // conversation is owner-scoped and would not load at all, so the absent
+    // footer would be explained by the inaccessible conversation and the
+    // assertion would still pass with the store's permission gate deleted.
+    const subjectToken = await getCurrentUserToken(page)
+    const subjectId = await userIdForToken(page, apiURL, subjectToken)
+    const ownConv = await seedConversationWithMessage(
+      page,
+      apiURL,
+      subjectToken,
+      sql,
+      'Restricted user’s own conversation',
+    )
+    await seedConversationRun(sql, subjectId, ownConv, { task: 'Their own background work' })
+
+    await page.goto(`${baseURL}/chat/${ownConv}`)
+    // The conversation itself DOES load (it is theirs) — that is the control that
+    // makes the absences below attributable to `background::use` alone.
+    await expect(byTestId(page, 'chat-messages')).toBeVisible({ timeout: 30000 })
+    // The store self-gates on `background::use`, so no request is made, no 403 is
+    // raised, and neither surface appears.
     await expect(byTestId(page, 'background-footer-open')).toHaveCount(0)
     await expect(byTestId(page, 'background-panel-list')).toHaveCount(0)
+    await expect(page.locator('[data-testid^="background-run-card-"]')).toHaveCount(0)
   })
 })

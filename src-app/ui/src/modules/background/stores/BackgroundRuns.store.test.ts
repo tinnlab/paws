@@ -101,6 +101,7 @@ beforeEach(() => {
   perm.allow = true
   bus.clear()
   useBackgroundRunsStore.setState({
+    activeScopes: {},
     runsByConversation: {},
     totalByConversation: {},
     pageByConversation: {},
@@ -140,6 +141,10 @@ describe('BackgroundRuns — conversation-keyed slice (TEST-6..9)', () => {
     // Run the store's init so the sync subscriptions are live.
     useBackgroundRunsStore.getState().__init__.__store__()
 
+    // Two mounted consumers (a footer/panel each) — the refresh set is the
+    // MOUNT refcount, not the data map.
+    store().retainConversationScope(CONV_A)
+    store().retainConversationScope(CONV_B)
     apiMock.Background.listRuns.mockResolvedValue(listResponse([run('a1', CONV_A)]))
     await store().loadConversationRuns(CONV_A)
     apiMock.Background.listRuns.mockResolvedValue(listResponse([run('b1', CONV_B)]))
@@ -147,6 +152,7 @@ describe('BackgroundRuns — conversation-keyed slice (TEST-6..9)', () => {
     apiMock.Background.listRuns.mockClear()
 
     bus.emit('sync:workflow_run', { data: { action: 'update', id: 'a1' } })
+    await Promise.resolve()
     await Promise.resolve()
     await Promise.resolve()
 
@@ -219,5 +225,93 @@ describe('BackgroundRuns — conversation-keyed slice (TEST-6..9)', () => {
     )
     await store().loadConversationRuns(CONV_A, 1)
     expect(store().runsByConversation[CONV_A].map(r => r.id)).toEqual(['a1'])
+  })
+})
+
+describe('BackgroundRuns — scope refcount + eviction (TEST-10)', () => {
+  it('refreshes ONLY scopes a live consumer is showing, and evicts on release', async () => {
+    useBackgroundRunsStore.getState().__init__.__store__()
+
+    // The footer mounts in EVERY conversation the user opens, so loading alone
+    // must not enlist a scope in the live refresh — otherwise a long session
+    // fires one request per conversation VISITED on every run state change.
+    apiMock.Background.listRuns.mockResolvedValue(listResponse([run('a1', CONV_A)]))
+    await store().loadConversationRuns(CONV_A)
+    apiMock.Background.listRuns.mockClear()
+
+    bus.emit('sync:workflow_run', { data: { action: 'update', id: 'a1' } })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(apiMock.Background.listRuns).not.toHaveBeenCalled()
+
+    // With a mounted consumer, the same event refreshes it.
+    store().retainConversationScope(CONV_A)
+    bus.emit('sync:workflow_run', { data: { action: 'update', id: 'a1' } })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(scopesRequested()).toEqual([CONV_A])
+
+    // Refcounted: two consumers (footer + panel) then one unmount keeps it live.
+    store().retainConversationScope(CONV_A)
+    store().releaseConversationScope(CONV_A)
+    expect(store().activeScopes[CONV_A]).toBe(1)
+    expect(store().runsByConversation[CONV_A]).toHaveLength(1)
+
+    // The last release evicts the cached slice, so the maps cannot grow with
+    // every conversation the session visited.
+    store().releaseConversationScope(CONV_A)
+    expect(store().activeScopes[CONV_A]).toBeUndefined()
+    expect(store().runsByConversation[CONV_A]).toBeUndefined()
+    expect(store().totalByConversation[CONV_A]).toBeUndefined()
+
+    apiMock.Background.listRuns.mockClear()
+    bus.emit('sync:workflow_run', { data: { action: 'update', id: 'a1' } })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(apiMock.Background.listRuns).not.toHaveBeenCalled()
+  })
+
+  it('retries a scope whose FIRST load failed on sync:reconnect', async () => {
+    useBackgroundRunsStore.getState().__init__.__store__()
+
+    // A first-load failure writes an error but NO data key. Keying the refresh off
+    // the data map would therefore never retry it — defeating `sync:reconnect`,
+    // the mechanism that exists precisely to recover a dropped stream.
+    store().retainConversationScope(CONV_A)
+    apiMock.Background.listRuns.mockRejectedValueOnce(new Error('stream dropped'))
+    await store().loadConversationRuns(CONV_A)
+    expect(store().errorByConversation[CONV_A]).toBe('stream dropped')
+    expect(store().runsByConversation[CONV_A]).toBeUndefined()
+
+    apiMock.Background.listRuns.mockClear()
+    apiMock.Background.listRuns.mockResolvedValue(listResponse([run('a1', CONV_A)]))
+    bus.emit('sync:reconnect')
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(scopesRequested()).toEqual([CONV_A])
+    expect(store().runsByConversation[CONV_A]?.map(r => r.id)).toEqual(['a1'])
+    expect(store().errorByConversation[CONV_A]).toBeNull()
+  })
+
+  it('dedupes concurrent identical loads and de-duplicates appended rows', async () => {
+    // The footer and the panel both load page 1 on mount for the same
+    // conversation; only one request should go out.
+    apiMock.Background.listRuns.mockResolvedValue(listResponse([run('a1', CONV_A)], 3, 1))
+    await Promise.all([
+      store().loadConversationRuns(CONV_A, 1),
+      store().loadConversationRuns(CONV_A, 1),
+    ])
+    expect(apiMock.Background.listRuns).toHaveBeenCalledTimes(1)
+
+    // OFFSET paging over a non-unique sort can repeat a row; the append must not
+    // duplicate it (duplicate React keys + a wrong "Showing N of M").
+    apiMock.Background.listRuns.mockClear()
+    apiMock.Background.listRuns.mockResolvedValue(
+      listResponse([run('a1', CONV_A), run('a2', CONV_A)], 3, 2),
+    )
+    await store().loadMoreConversationRuns(CONV_A)
+    expect(store().runsByConversation[CONV_A]?.map(r => r.id)).toEqual(['a1', 'a2'])
   })
 })

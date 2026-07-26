@@ -1,4 +1,3 @@
-
 import { Permissions } from '@/api-client/permissions'
 import { createModule } from '@ziee/framework'
 import { lazyWithPreload } from '@/utils/lazyWithPreload'
@@ -68,10 +67,15 @@ export default createModule({
     // There is deliberately NO "Background results" sidebarNavigation entry.
     // The BELL below (`sidebarBottom`) is the single central surface for
     // agent / background / scheduled results, and it already navigates each
-    // result to the conversation it landed in (`/chat/{conversationId}`). A
-    // second top-level nav destination for the same data was redundant chrome.
-    // The `/notifications/background` ROUTE is kept as the bell's deep-link
-    // target — only the nav entry is gone.
+    // result to the conversation it landed in (`/chat/{conversationId}`); its
+    // "View all" goes to `/notifications` (`Notifications.store.ts` `inboxPath`).
+    // A second top-level nav destination for the same data was redundant chrome.
+    //
+    // NOTE the `/notifications/background` route below (AgentInboxPage, a view
+    // over the same inbox filtered to agent kinds) therefore has NO in-app entry
+    // point any more — it is a URL/bookmark target only. It is kept rather than
+    // deleted because the brief scoped this change to the nav entry; whether to
+    // link it from the inbox or remove it is a tracked follow-up for the owner.
     sidebarBottom: [
       {
         id: 'notification-bell',

@@ -304,9 +304,12 @@ mod tests {
     fn malformed_conversation_id_is_rejected_not_dropped() {
         let err = parse("conversation_id=not-a-uuid")
             .expect_err("a malformed uuid must be a 4xx, never a silently-dropped filter");
+        // Name the FIELD. A bare `!err.is_empty()` fallback would make this
+        // assertion true for any rejection at all, so it could not distinguish
+        // "rejected because conversation_id is malformed" from any other 4xx.
         assert!(
-            err.to_lowercase().contains("conversation_id") || !err.is_empty(),
-            "unexpected error text: {err}"
+            err.to_lowercase().contains("conversation_id"),
+            "the rejection must name the offending field, got: {err}"
         );
     }
 }

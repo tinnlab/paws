@@ -524,9 +524,17 @@ export const gallery: ModuleGallery = {
       note: 'the message_list_footer row summarising this conversation’s running sub-agents; clicking it opens the Tasks tab',
       setup: async () => {
         await whenLoaded(SHOWCASE_CONVERSATION_ID)
-        // The footer mounts inside MessageList and fetches its own slice; give
-        // that one round-trip a tick so the row is present for the capture.
-        await tick(200)
+        // The footer mounts inside MessageList and fetches its own slice. Wait on
+        // the STORE reaching the loaded state rather than a fixed sleep — a slow
+        // run would otherwise capture the pre-fetch frame, where the footer
+        // renders null, and silently blank the screenshot.
+        const { BackgroundRuns } = await import(
+          '@/modules/background/stores/BackgroundRuns.store'
+        )
+        await whenTrue(
+          () =>
+            (BackgroundRuns.$.totalByConversation[SHOWCASE_CONVERSATION_ID] ?? 0) > 0,
+        )
       },
       interactions: [
         {

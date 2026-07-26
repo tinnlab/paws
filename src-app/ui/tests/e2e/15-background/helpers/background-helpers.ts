@@ -34,11 +34,22 @@ export async function seedConversationWithMessage(
   if (res.status() >= 300) {
     throw new Error(`seed conversation failed: ${res.status()} ${await res.text()}`)
   }
-  const conversationId = (await res.json()).id as string
+  const created = await res.json()
+  const conversationId = created?.id
+  if (typeof conversationId !== 'string') {
+    throw new Error(`seed conversation: no id in ${JSON.stringify(created)}`)
+  }
 
   const branchId = (
     await sql(`SELECT active_branch_id FROM conversations WHERE id = $1`, [conversationId])
-  ).rows[0].active_branch_id as string
+  ).rows[0]?.active_branch_id
+  if (typeof branchId !== 'string') {
+    // Fail HERE rather than letting a NULL FK blow up two statements later with a
+    // symptom (an `expect(...).toBeVisible()` timeout) far from the cause.
+    throw new Error(
+      `seed conversation ${conversationId}: no active_branch_id — the create path did not make a root branch`,
+    )
+  }
 
   const messageId = (
     await sql(
@@ -79,6 +90,26 @@ export async function seedConversationRun(
     [userId, kind, status, JSON.stringify({ task }), conversationId],
   )
   return inserted.rows[0].id as string
+}
+
+/** Resolve the user id for a bearer token via the real `/api/auth/me`. */
+export async function userIdForToken(
+  page: Page,
+  apiURL: string,
+  token: string,
+): Promise<string> {
+  const res = await page.request.get(`${apiURL}/api/auth/me`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (res.status() >= 300) {
+    throw new Error(`userIdForToken: /auth/me ${res.status()} ${await res.text()}`)
+  }
+  const body = await res.json()
+  const id = body?.user?.id
+  if (typeof id !== 'string') {
+    throw new Error(`userIdForToken: /auth/me returned no user.id (${JSON.stringify(body)})`)
+  }
+  return id
 }
 
 /** The admin user's id in the per-test database. */

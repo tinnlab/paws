@@ -55,6 +55,19 @@ const BackgroundRunsDef = defineStore('BackgroundRuns', {
     loadingByConversation: {} as Record<string, boolean>,
     errorByConversation: {} as Record<string, string | null>,
     /**
+     * MOUNT REFCOUNT per conversation — how many live footers/panels are showing
+     * that conversation right now. This, NOT the data map, is what the live
+     * refresh iterates: the data map accumulates a key for every conversation the
+     * session ever opened (the footer mounts in all of them), so refreshing over
+     * it would fire one request per visited conversation on EVERY run state
+     * change. Refcounting bounds the fan-out to what is actually on screen
+     * (1 footer + at most 1 panel per open pane) and, because it is written on
+     * MOUNT rather than on a successful load, it also covers a scope whose first
+     * load FAILED — which the data map cannot, since it only gains a key on
+     * success.
+     */
+    activeScopes: {} as Record<string, number>,
+    /**
      * Pending steering notes keyed by run id, loaded on demand when a row's
      * steer composer is opened (avoids an N-fetch fan-out across the page).
      */
@@ -72,6 +85,15 @@ const BackgroundRunsDef = defineStore('BackgroundRuns', {
   },
   actions: (set, get) => {
     /**
+     * In-flight `conversationId#page` keys. Module-local rather than store state:
+     * it is a request-dedup guard, not something any component renders, so keeping
+     * it out of the reactive state avoids re-rendering every subscriber twice per
+     * fetch. (`loadRunDetail`'s `runDetailLoading` IS state because the card
+     * renders a per-row spinner from it.)
+     */
+    const inFlight = new Set<string>()
+
+    /**
      * Load ONE conversation's background runs (the in-chat Tasks panel + the
      * end-of-conversation footer both read this slice).
      *
@@ -86,23 +108,49 @@ const BackgroundRunsDef = defineStore('BackgroundRuns', {
     ): Promise<void> => {
       // no-403 invariant: gate on the SAME permission the endpoint enforces.
       if (!hasPermissionNow(Permissions.BackgroundUse)) return
+      // In-flight dedup: the footer and the panel both load page 1 on mount for
+      // the same conversation, and the panel remounts on every right-panel tab
+      // switch — without this each of those is a duplicate round-trip.
+      // (Mirrors `loadRunDetail`'s `runDetailLoading` guard.)
+      const key = `${conversationId}#${page}`
+      if (inFlight.has(key)) return
+      inFlight.add(key)
       try {
         set(draft => {
           draft.loadingByConversation[conversationId] = true
           draft.errorByConversation[conversationId] = null
         })
+        // A page-1 REFRESH must re-read the whole window the user already has,
+        // otherwise a sync event mid-session collapses an expanded list back to
+        // the first page (and Load-more visibly reappears) while they watch.
+        const pagesHeld = page === 1 ? (get().pageByConversation[conversationId] ?? 1) : 1
+        const perPage = PANEL_PAGE_SIZE * Math.max(1, page === 1 ? pagesHeld : 1)
         const response = await ApiClient.Background.listRuns({
           page,
-          per_page: PANEL_PAGE_SIZE,
+          per_page: perPage,
           // The disjoint scope. Never omit it here.
           conversation_id: conversationId,
         })
         set(draft => {
-          const previous = draft.runsByConversation[conversationId] ?? []
-          draft.runsByConversation[conversationId] =
-            page <= 1 ? response.runs : [...previous, ...response.runs]
+          if (page <= 1) {
+            draft.runsByConversation[conversationId] = response.runs
+          } else {
+            // De-duplicate on append: the server pages with OFFSET over a
+            // `created_at DESC` order, so a run created between two page fetches
+            // shifts the window and can repeat a row — which would otherwise
+            // produce duplicate React keys and a wrong "Showing N of M".
+            const previous = draft.runsByConversation[conversationId] ?? []
+            const seen = new Set(previous.map(r => r.id))
+            draft.runsByConversation[conversationId] = [
+              ...previous,
+              ...response.runs.filter(r => !seen.has(r.id)),
+            ]
+          }
           draft.totalByConversation[conversationId] = response.total
-          draft.pageByConversation[conversationId] = response.page
+          // Track pages in PANEL_PAGE_SIZE units, so a widened refresh read
+          // (per_page = N × PANEL_PAGE_SIZE) still reports N pages held.
+          draft.pageByConversation[conversationId] =
+            page <= 1 ? Math.max(1, Math.ceil(response.runs.length / PANEL_PAGE_SIZE)) : page
           draft.loadingByConversation[conversationId] = false
         })
       } catch (error) {
@@ -116,6 +164,8 @@ const BackgroundRunsDef = defineStore('BackgroundRuns', {
               ? error.message
               : 'Failed to load this conversation’s tasks'
         })
+      } finally {
+        inFlight.delete(key)
       }
     }
 
@@ -124,6 +174,33 @@ const BackgroundRunsDef = defineStore('BackgroundRuns', {
       const next = (get().pageByConversation[conversationId] ?? 1) + 1
       await loadConversationRuns(conversationId, next)
     }
+
+    /**
+     * Register/unregister a live consumer (a mounted footer or panel) for one
+     * conversation. The live-refresh set is derived from THIS, not from the data
+     * map — see `activeScopes`. Returns nothing; callers pair them in an effect's
+     * setup/cleanup.
+     */
+    const retainConversationScope = (conversationId: string): void =>
+      set(draft => {
+        draft.activeScopes[conversationId] = (draft.activeScopes[conversationId] ?? 0) + 1
+      })
+
+    const releaseConversationScope = (conversationId: string): void =>
+      set(draft => {
+        const next = (draft.activeScopes[conversationId] ?? 0) - 1
+        if (next > 0) draft.activeScopes[conversationId] = next
+        else {
+          delete draft.activeScopes[conversationId]
+          // Drop the cached slice for a conversation nothing is showing any more,
+          // so a long session cannot accumulate one list per conversation visited.
+          delete draft.runsByConversation[conversationId]
+          delete draft.totalByConversation[conversationId]
+          delete draft.pageByConversation[conversationId]
+          delete draft.loadingByConversation[conversationId]
+          delete draft.errorByConversation[conversationId]
+        }
+      })
 
     const loadNotes = async (runId: string): Promise<void> => {
       if (!hasPermissionNow(Permissions.BackgroundUse)) return
@@ -178,37 +255,51 @@ const BackgroundRunsDef = defineStore('BackgroundRuns', {
     }
 
     /**
-     * Refetch page 1 of EVERY conversation scope currently held, each with its
-     * own `conversation_id`. Bounded by the conversations whose panel/footer this
-     * session actually opened (one per pane), so it can never fan out unbounded.
+     * Refetch EVERY conversation scope that a live footer/panel is showing, each
+     * with its own `conversation_id`.
      *
-     * An unscoped refetch is deliberately NOT issued here: under the endpoint's
-     * disjoint semantics that would return the conversation-LESS runs and blank
-     * every open panel on the first run state change — i.e. exactly when the user
-     * is watching. See TEST-7.
+     * The set is `activeScopes` (mount-refcounted), NOT the data map. The footer
+     * occupies `message_list_footer`, so it mounts in every conversation the user
+     * opens and the data map gains a key for each — refreshing over THAT would
+     * fire one request per conversation visited on every run state change, forever.
+     * Refcounting bounds it to what is on screen and also covers a scope whose
+     * first load failed (the data map only gains a key on success, so a failed
+     * scope would never be retried by `sync:reconnect` — the very mechanism that
+     * exists to recover it).
+     *
+     * The refresh reads page 1 with a WIDENED `per_page` covering the pages the
+     * user has already loaded (see `loadConversationRuns`), so a live event cannot
+     * silently collapse an expanded list back to its first page.
+     *
+     * An unscoped refetch is deliberately NOT issued: under the endpoint's disjoint
+     * semantics that would return the conversation-LESS runs and blank every open
+     * panel. See TEST-7.
      */
-    const refreshTrackedConversations = (): void => {
-      for (const conversationId of Object.keys(get().runsByConversation)) {
-        void loadConversationRuns(conversationId, 1)
-      }
+    const refreshTrackedConversations = async (): Promise<void> => {
+      await Promise.all(
+        Object.keys(get().activeScopes).map(id => loadConversationRuns(id, 1)),
+      )
     }
 
     return {
       loadConversationRuns,
       loadMoreConversationRuns,
       refreshTrackedConversations,
+      retainConversationScope,
+      releaseConversationScope,
       loadNotes,
       loadRunDetail,
       /**
        * Cancel a non-terminal run. The server flips the row + emits
-       * `sync:workflow_run` (→ the row refreshes to `cancelled`); we also refetch
-       * that run's own conversation scope immediately as a backstop. Throws on
-       * failure so the UI layer toasts it (the store carries no per-mutation
-       * error state).
+       * `sync:workflow_run` (→ the row refreshes to `cancelled`); we AWAIT a
+       * refresh of every on-screen scope as a backstop, so a caller that awaits
+       * `cancelRun` is guaranteed an up-to-date list on return (the card clears
+       * its `cancelling` spinner on that promise). Throws on failure so the UI
+       * layer toasts it (the store carries no per-mutation error state).
        */
       cancelRun: async (runId: string): Promise<BackgroundRunCancelAck> => {
         const ack = await ApiClient.Background.cancelRun({ run_id: runId })
-        refreshTrackedConversations()
+        await refreshTrackedConversations()
         return ack
       },
       /**
@@ -224,10 +315,6 @@ const BackgroundRunsDef = defineStore('BackgroundRuns', {
         await loadNotes(runId)
         return created
       },
-      clearConversationError: (conversationId: string): void =>
-        set(draft => {
-          draft.errorByConversation[conversationId] = null
-        }),
     }
   },
   init: ({ on, actions }) => {
@@ -236,7 +323,7 @@ const BackgroundRunsDef = defineStore('BackgroundRuns', {
     // own conversation_id. Self-gated inside `loadConversationRuns`
     // (no-403-on-reconnect for a role without `background::use`).
     const reload = (): void => {
-      actions.refreshTrackedConversations()
+      void actions.refreshTrackedConversations()
     }
     on('sync:workflow_run', reload)
     on('sync:reconnect', reload)
