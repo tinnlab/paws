@@ -60,11 +60,11 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/host-mount/conversation-extension/components/ConversationMountsControl",
     requiredStates: ["empty","open"],
     signals: [
-      { kind: "branch", condition: "!conversationId", line: 25 },
-      { kind: "branch", condition: "!picked || Array.isArray(picked)", line: 44 },
-      { kind: "branch", condition: "draft.some((m) => m.host_path === picked)", line: 45 },
-      { kind: "empty", condition: "draft.length === 0", line: 68 },
-      { kind: "overlay", condition: "<Popover open>", line: 119 },
+      { kind: "branch", condition: "!conversationId", line: 30 },
+      { kind: "branch", condition: "!picked || Array.isArray(picked)", line: 48 },
+      { kind: "branch", condition: "draft.some((m) => m.host_path === picked)", line: 49 },
+      { kind: "empty", condition: "draft.length === 0", line: 72 },
+      { kind: "overlay", condition: "<Popover open>", line: 123 },
     ],
   },
   "modules/host-mount/project-extension/components/ProjectMountsPanel": {

@@ -7,6 +7,7 @@
  * door and stays silent on these. Each case is a real pattern the app relies on
  * — see `sdk/packages/framework/src/stores.ts` for the four proxy access paths.
  */
+import { Button } from '@ziee/kit'
 import { usePermission } from '@/core/permissions'
 import { Permissions } from '@/api-client/permissions'
 import { FixtureStore } from './stores/fixtureStore'
@@ -46,14 +47,24 @@ export function ActionCallInCondition({ show }: { show: boolean }) {
  * source of false positives if the lint's action registry is dropped.
  */
 export function ActionByReferenceInCondition({ error }: { error: string | null }) {
-  return <div>{error && <button onClick={FixtureStore.reload}>{error}</button>}</div>
+  return (
+    <div>
+      {error && (
+        <Button data-testid="fixture-o2-retry" aria-label="retry" onClick={FixtureStore.reload}>
+          {error}
+        </Button>
+      )}
+    </div>
+  )
 }
 
 /** A hook inside a CALLBACK body is not on this component's render path. */
 export function HookInsideCallback() {
   const items = FixtureStore.items
   return (
-    <button
+    <Button
+      data-testid="fixture-o2-go"
+      aria-label="go"
       onClick={() => {
         if (items.length > 0) {
           // A snapshot read in a handler — legal, and the walk stops at the
@@ -63,6 +74,6 @@ export function HookInsideCallback() {
       }}
     >
       go
-    </button>
+    </Button>
   )
 }
