@@ -355,9 +355,74 @@ describe('TEST-5: the conditional-evaluation core', () => {
     }
   })
 
+  test('element access `Proxy[\'field\']` is the same read', () => {
+    const findings = lintSnippet(
+      `${PROXY_IMPORT}export function C({ a }: { a: boolean }) {\n` +
+        `  const v = a ? FixtureStore['items'] : null\n  return <div>{String(v)}</div>\n}\n`,
+    )
+    assert.equal(findings.length, 1, JSON.stringify(findings))
+    assert.equal(findings[0].code, "FixtureStore['items']")
+  })
+
+  test('a PER-INSTANCE store reached through a hook handle is covered (`handle.store.field`)', () => {
+    // The other half of the shipped OpenInNewWindowAction defect: its pre-image
+    // read `pane.store.conversation` in one ternary branch. An imported-proxy-only
+    // rule sees only the other branch, so re-introducing this one would pass.
+    const findings = lintSnippet(
+      `import { useFixtureHandle } from '${FIXTURE_STORE_SPEC}'\n` +
+        `export function C({ a }: { a: boolean }) {\n` +
+        `  const handle = useFixtureHandle()\n` +
+        `  const v = a ? handle.store.items : null\n  return <div>{String(v)}</div>\n}\n`,
+    )
+    assert.equal(findings.length, 1, JSON.stringify(findings))
+    assert.equal(findings[0].code, 'handle.store.items')
+
+    // …and NOT a `.store` on something that is merely iterated (a store
+    // DEFINITION from a registry loop), which is what keeps this precise.
+    const notAHandle = lintSnippet(
+      `export function C({ a, exts }: { a: boolean; exts: { store: { name: string } }[] }) {\n` +
+        `  const v = a ? exts[0].store.name : null\n  return <div>{String(v)}</div>\n}\n`,
+    )
+    assert.deepEqual(notAHandle, [])
+  })
+
+  test('an aliased / type-asserted proxy factory is still registered (the `Chat` bridge shape)', () => {
+    // `export const Chat = _createStoreProxy(bridge) as StoreProxy<…>` — an
+    // ALIASED factory import wrapped in an `as`. It is the most-imported proxy in
+    // the app and the one in the OpenInNewWindowAction pre-image, so a registry
+    // that misses this shape is blind on 50+ files.
+    const findings = lintSnippet(
+      `import { Chat } from '@/modules/chat/core/stores/chatBridge'\n` +
+        `export function C({ a }: { a: boolean }) {\n` +
+        `  const v = a ? Chat.conversation : null\n  return <div>{String(v)}</div>\n}\n`,
+    )
+    assert.equal(findings.length, 1, JSON.stringify(findings))
+    assert.equal(findings[0].code, 'Chat.conversation')
+  })
+
+  test('a `//` inside a STRING is not a comment — it cannot carry an opt-out', () => {
+    const findings = lintSnippet(
+      `${PROXY_IMPORT}export function C({ a }: { a: boolean }) {\n` +
+        `  const doc = 'https://docs.example.com/hook-order-ok: see this'\n` +
+        `  const v = a ? FixtureStore.items : null\n  return <div>{doc}{String(v)}</div>\n}\n`,
+    )
+    assert.equal(findings.length, 1, 'a URL must not silence a real violation')
+  })
+
+  test('a block comment carries the opt-out too', () => {
+    const findings = lintSnippet(
+      `${PROXY_IMPORT}export function C({ a }: { a: boolean }) {\n` +
+        `  /* hook-order-ok: \`a\` is a mount-stable context value */\n` +
+        `  const v = a ? FixtureStore.items : null\n  return <div>{String(v)}</div>\n}\n`,
+    )
+    assert.deepEqual(findings, [])
+  })
+
   test('--root scopes REPORTING to that dir while the registries still come from the full roots', () => {
     const { findings } = analyze({ targets: [FIXTURES] })
-    assert.ok(findings.length >= 4, `expected the fixture defects, got ${JSON.stringify(findings)}`)
+    // One per defect in ConditionalHooks.tsx — an exact count, so a rule that
+    // stops firing (or starts over-reporting) fails here.
+    assert.equal(findings.length, 6, `expected the 6 fixture defects, got ${JSON.stringify(findings)}`)
     for (const f of findings) assert.ok(f.file.startsWith(FIXTURES), `reported outside the target: ${f.file}`)
     // The real proxy registry is still available in fixture mode.
     const { proxyCount } = analyze({ targets: [FIXTURES] })
@@ -499,6 +564,9 @@ describe('TEST-7: fixtures + detector-acceptance wiring', () => {
       assert.match(res.stderr, /__detector_fixtures__/)
       assert.match(res.stderr, /H1 /)
       assert.match(res.stderr, /H2 /)
+      // Every H2 sub-rule has a fixture instance, so none can be deleted silently.
+      for (const shape of [/ternary-branch/, /after-early-return/, /if-body/, /\['items'\]/, /handle\.store\.items/])
+        assert.match(res.stderr, shape, `${ws}: fixture must cover ${shape}`)
     }
   })
 

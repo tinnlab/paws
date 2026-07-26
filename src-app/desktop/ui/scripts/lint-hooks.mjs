@@ -65,10 +65,16 @@
  * NOT statically distinguishable from a plain state object here, so a conditional
  * nested-proxy read would be reported; none exists in either tree today.
  *
- * Known gaps, all measured against the live tree (0 instances of each today):
- * a proxy reached through a namespace/default import; a `defineLocalStore(…).use()`
- * instance bound to a local (only a hook-returned `handle.store.<field>` is
- * covered); and a proxy imported through a barrel that re-exports it.
+ * Known gaps (each re-measured against the live tree: 0 conditional reads today):
+ *   - a proxy reached through a NAMESPACE or DEFAULT import (only named imports
+ *     are resolved);
+ *   - a proxy imported through a BARREL that re-exports it — factor 1 resolves the
+ *     specifier to the barrel, which is not the defining file, so the binding is
+ *     not recognised (~109 named imports tree-wide take this shape);
+ *   - a `defineLocalStore(…).use()` instance bound to a local (only a
+ *     hook-returned `handle.store.<field>` is covered);
+ *   - an unconditional read inside a `.map()` callback (the per-iteration hazard —
+ *     a separate, already-named "reactive-read-in-loop" review angle, DEC-7).
  *
  * Escape hatch: a genuinely-stable conditional (a value that cannot flip for the
  * lifetime of a mounted component) opts out with an inline `hook-order-ok` marker
@@ -190,6 +196,25 @@ const isFunctionValued = (n) =>
   !!n && (ts.isArrowFunction(n) || ts.isFunctionExpression(n) || ts.isFunctionTypeNode(n))
 
 /**
+ * Strip the wrappers that carry no runtime meaning — `!`, `(…)`, `x as T`,
+ * `x satisfies T` — so `pane!.store.x` and `createStoreProxy(b) as StoreProxy<T>`
+ * read the same as their bare forms.
+ */
+const unwrap = (n) => {
+  let cur = n
+  while (
+    cur &&
+    (ts.isNonNullExpression(cur) ||
+      ts.isParenthesizedExpression(cur) ||
+      ts.isAsExpression(cur) ||
+      (ts.isSatisfiesExpression?.(cur) ?? false) ||
+      ts.isTypeAssertionExpression?.(cur))
+  )
+    cur = cur.expression
+  return cur
+}
+
+/**
  * Registries built once over the roots:
  *   proxies — `name -> Set<defining file>`; the name is factor 2 of the proxy
  *             test and the defining files are what factor 1 resolves against.
@@ -221,16 +246,29 @@ function buildRegistries(asts) {
       addTo(dirActions, storeDirOf(file), actionFile[1])
     const storeFile = isStoreFile(file)
     const dir = path.dirname(file)
+    // A factory may be imported under an ALIAS (`import { createStoreProxy as
+    // _createStoreProxy }` — the shape the most-imported proxy in the app,
+    // `Chat`, uses), so resolve each local callee name back to what it IMPORTS.
+    const importedAs = new Map()
+    for (const st of src.statements) {
+      if (!ts.isImportDeclaration(st)) continue
+      const nb = st.importClause?.namedBindings
+      if (nb && ts.isNamedImports(nb))
+        for (const el of nb.elements) importedAs.set(el.name.text, (el.propertyName || el.name).text)
+    }
+    const factoryName = (nm) => importedAs.get(nm) ?? nm
 
     const visit = (n) => {
       if (ts.isVariableStatement(n) && n.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)) {
         for (const d of n.declarationList.declarations) {
           if (!ts.isIdentifier(d.name) || !d.initializer) continue
-          const init = d.initializer
+          // `as`/`satisfies`/parens around the factory call must not hide it —
+          // `export const Chat = _createStoreProxy(bridge) as StoreProxy<…>`.
+          const init = unwrap(d.initializer)
           if (ts.isCallExpression(init)) {
-            const callee = init.expression
+            const callee = unwrap(init.expression)
             const name = ts.isIdentifier(callee)
-              ? callee.text
+              ? factoryName(callee.text)
               : ts.isPropertyAccessExpression(callee)
                 ? callee.name.text
                 : null
@@ -449,16 +487,12 @@ export function analyze(opts) {
     const local = localProxyBindings(src, proxies, roots)
     const paneHandles = hookHandleBindings(src)
     const lineOf = (pos) => src.getLineAndCharacterOfPosition(pos).line + 1
-    // The marker must be a COMMENT and must carry a reason (`hook-order-ok: …`),
-    // so neither an incidental occurrence in a string nor a bare, unexplained
-    // marker can silence a real violation.
-    const hasMarker = (text) => {
-      const at = text.indexOf('//')
-      if (at < 0) return false
-      const m = text.slice(at).match(new RegExp(`${OPT_OUT}\\s*:\\s*\\S`))
-      return !!m
-    }
-    const optedOut = (line) => hasMarker(lines[line - 1] ?? '') || hasMarker(lines[line - 2] ?? '')
+    // The marker must live in a REAL comment (found via the TS scanner, so a
+    // `//` inside a string or a URL is not mistaken for one) and must carry a
+    // reason (`hook-order-ok: …`) — neither an incidental occurrence nor a bare,
+    // unexplained marker can silence a real violation.
+    const markerLines = optOutMarkerLines(src, read(file))
+    const optedOut = (line) => markerLines.has(line) || markerLines.has(line - 1)
 
     const report = (rule, node, context, code) => {
       const line = lineOf(node.getStart(src))
@@ -549,11 +583,25 @@ export function analyze(opts) {
   return { findings, proxyCount: proxies.size, actionCount, fileCount: targetFiles.length }
 }
 
-/** Strip `!` / `(…)` so `pane!.store.x` and `(pane).store.x` read the same. */
-const unwrap = (n) => {
-  let cur = n
-  while (cur && (ts.isNonNullExpression(cur) || ts.isParenthesizedExpression(cur))) cur = cur.expression
-  return cur
+/**
+ * Line numbers carrying a valid `hook-order-ok: <reason>` opt-out. Comments are
+ * located with the TS scanner rather than by searching for `//` in the raw line,
+ * so a `//` inside a string literal or a URL cannot be mistaken for a comment
+ * (`const doc = 'https://x/hook-order-ok: y'` must NOT suppress anything).
+ */
+const OPT_OUT_RE = new RegExp(`${OPT_OUT}\\s*:\\s*\\S`)
+function optOutMarkerLines(src, text) {
+  const lines = new Set()
+  const scanner = ts.createScanner(ts.ScriptTarget.Latest, /* skipTrivia */ false, ts.LanguageVariant.JSX, text)
+  let token = scanner.scan()
+  while (token !== ts.SyntaxKind.EndOfFileToken) {
+    if (token === ts.SyntaxKind.SingleLineCommentTrivia || token === ts.SyntaxKind.MultiLineCommentTrivia) {
+      if (OPT_OUT_RE.test(scanner.getTokenText()))
+        lines.add(src.getLineAndCharacterOfPosition(scanner.getTokenStart()).line + 1)
+    }
+    token = scanner.scan()
+  }
+  return lines
 }
 
 const anyAction = (actions, prop) => {

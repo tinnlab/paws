@@ -15,7 +15,7 @@
  */
 import { usePermission } from '@/core/permissions'
 import { Permissions } from '@/api-client/permissions'
-import { FixtureStore } from './stores/fixtureStore'
+import { FixtureStore, useFixtureHandle } from './stores/fixtureStore'
 
 const READ_PERM = Permissions.FileRagAdminRead
 const MANAGE_PERM = Permissions.FileRagAdminManage
@@ -49,4 +49,22 @@ export function ConditionalProxyDestructure({ show }: { show: boolean }) {
     return <div>{String(ready)}</div>
   }
   return null
+}
+
+/** O2: element access is the same read, written differently. */
+export function ConditionalProxyElementAccess({ show }: { show: boolean }) {
+  const v = show ? FixtureStore['items'] : null
+  return <div>{v?.length ?? 0}</div>
+}
+
+/**
+ * O2: a PER-INSTANCE store reached through a hook handle. This is the other half
+ * of the shipped `OpenInNewWindowAction` defect, whose pre-image read
+ * `pane.store.conversation` in one ternary branch and an imported proxy in the
+ * other — an imported-proxy-only rule sees just one of the two.
+ */
+export function ConditionalPaneStoreRead({ show }: { show: boolean }) {
+  const handle = useFixtureHandle()
+  const v = show ? handle.store.items : null
+  return <div>{v?.length ?? 0}</div>
 }

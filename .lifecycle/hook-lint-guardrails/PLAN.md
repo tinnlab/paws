@@ -34,6 +34,9 @@ Ground truth for the design is two real shipped crashes on `feat/agent-core`:
 - **ITEM-13**: Fix residual H2 violation — `src-app/desktop/ui/src/modules/host-mount/conversation-extension/components/ConversationMountsControl.tsx:28` (proxy read after an early return).
 - **ITEM-14**: Fix residual H2 violation — `src-app/ui/src/modules/file/viewers/pdf/pdfjs-body.tsx:46` (`PdfHighlight.targets` read after the `if (!('file' in props)) return null` type guard). Found by the real lint during phase 5; DESIGN §5's hand-tallied blast-radius table listed 5 of the 6 (DRIFT-1.1). Fixed by the repo's component-per-case idiom: the type guard moves into a thin `PdfJsBody` wrapper so `PdfJsBodyInner`'s ~12 hooks — the proxy read included — all run unconditionally.
 
+- **ITEM-15**: Widen the scanned roots to include the shared SDK React packages (`sdk/packages`, +251 files), so an O1/O2 defect in code that renders inside BOTH apps is gated too (DEC-14). Added during phase 7 after the blind audit showed 136 shared `.tsx` were outside the gate.
+- **ITEM-16**: Never-silently-pass hardening (added during phase 7; DEC-15/DEC-16): a distinct exit code **2** for every operator error (missing/unusable `--root`, unknown flag, zero-file scan, a proxy registry below its floor, a crash), a `registryHealthError()` floor so an upstream store-kit rename cannot turn H2 into a green no-op, a `siblingDriftError()` byte-identity guard that runs INSIDE the gate, repeatable `--root=`/`--root <dir>` parsing matching the sibling lints, and a `--json` output mode.
+
 ## Files to touch
 
 - `src-app/ui/scripts/lint-hooks.mjs` (new) + byte-identical `src-app/desktop/ui/scripts/lint-hooks.mjs` (new)
@@ -53,6 +56,7 @@ Ground truth for the design is two real shipped crashes on `feat/agent-core`:
 - `src-app/ui/src/modules/llm-provider/components/LlmModelsSection.tsx`
 - `src-app/desktop/ui/src/modules/host-mount/conversation-extension/components/ConversationMountsControl.tsx`
 - `src-app/ui/src/modules/file/viewers/pdf/pdfjs-body.tsx`
+- regenerated artifacts (mechanical, not hand-edited): `src-app/{ui,desktop/ui}/src/dev/gallery/stateMatrix.generated.ts` + `STATE_MATRIX.md` (the component splits add conditional-render signals) and `src-app/ui/src/dev/gallery/DETECTOR_ACCEPTANCE.md` (the two new detector rows)
 
 ## Patterns to follow
 

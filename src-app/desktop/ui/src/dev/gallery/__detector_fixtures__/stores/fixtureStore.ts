@@ -32,3 +32,10 @@ export const FixtureStore = registerLazyStore<FixtureProxy>({
   name: 'LintFixtureStore',
   state: { items: [], ready: false },
 })
+
+/**
+ * A per-instance store handle, mirroring `useChatPane()` — its `.store` is a
+ * proxy, so `handle.store.<field>` is a path-4 reactive read (a hook).
+ */
+declare function useFixtureHandle(): { store: FixtureProxy }
+export { useFixtureHandle }

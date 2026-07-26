@@ -1932,18 +1932,18 @@ Required states: `open`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!server` | 36 |
-| overlay | `<Drawer open>` | 57 |
-| branch | `server.description` | 68 |
-| branch | `firstRemote` | 77 |
-| branch | `firstPackage` | 96 |
-| branch | `firstPackage?.environmentVariables && firstPackage.environmentVariables.length > 0` | 131 |
-| branch | `ev.isSecret` | 143 |
-| branch | `firstRemote?.headers && firstRemote.headers.length > 0` | 156 |
-| branch | `h.isSecret` | 167 |
-| branch | `(server.repository?.url \|\| server.websiteUrl)` | 180 |
-| branch | `server.repository?.url` | 184 |
-| branch | `server.websiteUrl` | 194 |
+| branch | `!server` | 38 |
+| overlay | `<Drawer open>` | 69 |
+| branch | `server.description` | 80 |
+| branch | `firstRemote` | 89 |
+| branch | `firstPackage` | 108 |
+| branch | `firstPackage?.environmentVariables && firstPackage.environmentVariables.length > 0` | 143 |
+| branch | `ev.isSecret` | 155 |
+| branch | `firstRemote?.headers && firstRemote.headers.length > 0` | 168 |
+| branch | `h.isSecret` | 179 |
+| branch | `(server.repository?.url \|\| server.websiteUrl)` | 192 |
+| branch | `server.repository?.url` | 196 |
+| branch | `server.websiteUrl` | 206 |
 
 ### `modules/hub/modules/mcp/components/McpServerHubCard`
 
