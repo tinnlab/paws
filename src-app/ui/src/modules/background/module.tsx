@@ -17,15 +17,22 @@ import '@/modules/background/types' // register Stores.BackgroundRuns (declarati
  * navigates to the conversation the result landed in.
  *
  * Scheduled tasks are NOT served from here — their run history is the scheduler's
- * own `scheduled_task_runs`, a different table that `GET /api/background/runs`
- * never returned.
+ * own `scheduled_task_runs`, a DIFFERENT table that `GET /api/background/runs` has
+ * never returned. (An earlier version of this comment claimed the
+ * conversation-less bucket was scheduled-task work surfaced under Scheduled Tasks.
+ * That was factually wrong and is corrected here so the next reader is not misled.)
  *
- * KNOWN GAP (tracked for the owner, not introduced by the surfacing change):
- * `workflow_runs.conversation_id` is `ON DELETE SET NULL`, so DELETING a
- * conversation detaches its runs. A detached run — possibly still running — now
- * has no UI surface at all. The endpoint's unscoped (conversation-less) read is
- * exactly the query a future "detached tasks" surface needs; nothing consumes it
- * today.
+ * WHY NOTHING SURVIVES DETACHED. `workflow_runs.conversation_id` is
+ * `ON DELETE SET NULL`, so deleting a conversation would otherwise detach its runs
+ * — rows with a NULL conversation and, worse, tasks still executing with no
+ * surface able to reach them. That hole is closed AT THE SOURCE rather than by
+ * adding a global page: the conversation-delete handler calls
+ * `background_mcp::runs::cancel_conversation_background_runs` BEFORE the delete,
+ * which flips every non-terminal run to `cancelled` (the same `cancel_cas` the
+ * single-run cancel endpoint uses) AND fires `registry::cancel` so the detached
+ * task actually stops. The row is then allowed to go conversation-less: it is
+ * terminal, so there is nothing left to view, steer, or stop. An already-terminal
+ * run keeps its outcome untouched. See DEC-15.
  *
  * This module therefore only registers the shared runs store, consumed by the
  * in-chat panel + footer.

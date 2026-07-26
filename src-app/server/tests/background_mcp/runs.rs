@@ -799,3 +799,170 @@ async fn list_conversation_scope_composes_and_stays_owner_scoped() {
          intruder={intruder_ids:?})"
     );
 }
+
+// ── cancel-on-conversation-delete ──────────────────────────────────────────
+//
+// `workflow_runs_conversation_id_fkey` is ON DELETE SET NULL, so deleting a
+// conversation would DETACH its background runs — rows with a NULL conversation
+// and tasks still executing, with no surface left to reach them (there is no
+// global background page by design). The delete path therefore cancels them
+// first. These tests pin that nothing survives non-terminal.
+
+/// Delete a conversation through the REAL `DELETE /api/conversations/{id}`.
+async fn delete_conversation_http(
+    server: &TestServer,
+    token: &str,
+    conversation_id: Uuid,
+) -> reqwest::StatusCode {
+    reqwest::Client::new()
+        .delete(server.api_url(&format!("/conversations/{conversation_id}")))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .unwrap()
+        .status()
+}
+
+async fn statuses_for_conversation_runs(server: &TestServer, ids: &[Uuid]) -> Vec<String> {
+    let pool = sqlx::PgPool::connect(&server.database_url).await.unwrap();
+    let mut out = Vec::new();
+    for id in ids {
+        out.push(
+            sqlx::query_scalar::<_, String>("SELECT status FROM workflow_runs WHERE id = $1")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .expect("read run status"),
+        );
+    }
+    out
+}
+
+/// TEST-24 — deleting a conversation leaves NO non-terminal background run for it,
+/// and does not touch another conversation's runs.
+///
+/// The four non-terminal statuses the cancel CAS guards (`pending` / `running` /
+/// `waiting` / `resumable`) are all seeded, so a regression that only handled
+/// `running` fails here. An ALREADY-TERMINAL run is seeded too and must keep its
+/// own status — the teardown must not rewrite a completed run's outcome.
+#[tokio::test]
+async fn deleting_a_conversation_cancels_its_in_flight_background_runs() {
+    let server = TestServer::start().await;
+    let owner = bg_user(&server, "bg_conv_delete_cancel").await;
+
+    let doomed = insert_conversation(&server, &owner.user_id, "about to be deleted").await;
+    let survivor = insert_conversation(&server, &owner.user_id, "untouched").await;
+
+    // Every non-terminal status, so the teardown cannot pass by handling only one.
+    let mut doomed_runs = Vec::new();
+    for status in ["pending", "running", "waiting", "resumable"] {
+        doomed_runs.push(
+            insert_bg_run_in_conversation(
+                &server,
+                &owner.user_id,
+                doomed,
+                "subagent",
+                status,
+                &format!("doomed {status}"),
+            )
+            .await,
+        );
+    }
+    // A terminal run in the SAME conversation — must keep its outcome.
+    let doomed_completed = insert_bg_run_in_conversation(
+        &server,
+        &owner.user_id,
+        doomed,
+        "subagent",
+        "completed",
+        "already finished",
+    )
+    .await;
+
+    // A non-terminal run in ANOTHER conversation — must be left running.
+    let survivor_run = insert_bg_run_in_conversation(
+        &server,
+        &owner.user_id,
+        survivor,
+        "subagent",
+        "running",
+        "unrelated work",
+    )
+    .await;
+
+    let status = delete_conversation_http(&server, &owner.token, doomed).await;
+    assert_eq!(status, 204, "owner delete of their own conversation must be 204");
+
+    // ── the invariant: NOTHING non-terminal survives for the deleted conversation
+    let after = statuses_for_conversation_runs(&server, &doomed_runs).await;
+    for (run_id, st) in doomed_runs.iter().zip(after.iter()) {
+        assert_eq!(
+            st, "cancelled",
+            "run {run_id} was still non-terminal after its conversation was deleted — it \
+             would be detached (conversation_id NULL) with no surface able to stop it"
+        );
+    }
+
+    // The terminal run keeps its own outcome (the teardown must not rewrite it).
+    assert_eq!(
+        statuses_for_conversation_runs(&server, &[doomed_completed]).await,
+        vec!["completed".to_string()],
+        "an already-terminal run must be left exactly as it was"
+    );
+
+    // The other conversation is untouched.
+    assert_eq!(
+        statuses_for_conversation_runs(&server, &[survivor_run]).await,
+        vec!["running".to_string()],
+        "another conversation's in-flight run must NOT be cancelled by this delete"
+    );
+
+    // Belt-and-braces on the actual hole: after the FK nulled the link, there is no
+    // detached non-terminal background row left for this owner at all.
+    let pool = sqlx::PgPool::connect(&server.database_url).await.unwrap();
+    let detached_non_terminal: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM workflow_runs \
+         WHERE user_id = $1 AND conversation_id IS NULL AND job_kind <> 'workflow' \
+           AND status IN ('pending','running','waiting','resumable')",
+    )
+    .bind(Uuid::parse_str(&owner.user_id).unwrap())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        detached_non_terminal, 0,
+        "a conversation delete must not leave a DETACHED, still-running background run"
+    );
+}
+
+/// TEST-25 — the teardown is owner-scoped: a delete attempt by a NON-owner is a 404
+/// and must not cancel anything. (The cancel runs before the delete, so a missing
+/// owner check there would have cancelled another user's work on a bogus request.)
+#[tokio::test]
+async fn a_foreign_conversation_delete_cancels_nothing() {
+    let server = TestServer::start().await;
+    let owner = bg_user(&server, "bg_conv_delete_owner").await;
+    let intruder = bg_user(&server, "bg_conv_delete_intruder").await;
+
+    let conv = insert_conversation(&server, &owner.user_id, "owner's conversation").await;
+    let run = insert_bg_run_in_conversation(
+        &server,
+        &owner.user_id,
+        conv,
+        "subagent",
+        "running",
+        "owner's work",
+    )
+    .await;
+
+    // `conversations::delete_conversation` is scoped `id = $1 AND user_id = $2`, so
+    // the intruder's delete affects no row → the handler 404s.
+    let status = delete_conversation_http(&server, &intruder.token, conv).await;
+    assert_eq!(status, 404, "deleting someone else's conversation must 404");
+
+    assert_eq!(
+        statuses_for_conversation_runs(&server, &[run]).await,
+        vec!["running".to_string()],
+        "a foreign delete attempt must not cancel the owner's in-flight run"
+    );
+}

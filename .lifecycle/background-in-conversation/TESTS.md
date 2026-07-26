@@ -11,6 +11,9 @@ test that would FAIL if the invariant were violated.
 - **TEST-4** (tier: integration) [covers: ITEM-2] file: `src-app/server/tests/background_mcp/runs.rs` — asserts: `conversation_id` composes with the pre-existing `status` / `kind` filters and stays owner-scoped — another user's run in the SAME conversation id is never returned.
 - **TEST-5** (tier: unit) [covers: ITEM-3] file: `src-app/server/src/openapi/emit_ts.rs` — asserts: the `types_ts_parity` golden regenerates `types.ts` from the committed `openapi.json` and matches byte-for-byte, so the new `conversation_id` query param cannot be present in the spec but missing from the committed client.
 
+- **TEST-24** (tier: integration) [covers: ITEM-15] file: `src-app/server/tests/background_mcp/runs.rs` — asserts: deleting a conversation through the real `DELETE /api/conversations/{id}` leaves NO non-terminal background run for it — all four cancellable statuses (`pending`/`running`/`waiting`/`resumable`) are seeded and every one ends `cancelled`, an already-terminal run in the same conversation keeps its own outcome, another conversation's running run is untouched, and a direct count proves no DETACHED non-terminal row survives for that owner.
+- **TEST-25** (tier: integration) [covers: ITEM-15] file: `src-app/server/tests/background_mcp/runs.rs` — asserts: the teardown is owner-scoped — a NON-owner's delete attempt 404s and cancels nothing, so the pre-delete cancel cannot be used to stop another user's work.
+
 ## Frontend — unit
 
 - **TEST-6** (tier: unit) [covers: ITEM-4] file: `src-app/ui/src/modules/background/stores/BackgroundRuns.store.test.ts` — asserts: `loadConversationRuns(cid)` calls `ApiClient.Background.listRuns` WITH `conversation_id: cid` and writes the result into `runsByConversation[cid]`; loading a SECOND conversation leaves the first conversation's slice intact (the split-pane clobber guard).

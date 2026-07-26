@@ -149,4 +149,20 @@ generated pairs are excluded from the phase-6 audit-coverage law by the validato
   commit + pointer bump, and cannot be skipped (`check:testid-registry` is in
   `npm run check`).
 
+- **ITEM-15** — verdict: PASS — added after phase 6 per the owner's DEC-15. It
+  REUSES the single-run cancel path verbatim (`cancel_cas` for the status-guarded
+  terminal write + `registry::cancel` for the in-memory `RunHandle` teardown that
+  actually stops the detached task), so no cancel semantics are reinvented. The call
+  site mirrors the two cascade-cleanups the SAME delete handler already performs
+  (`lit_search::fulltext::cache::cleanup_conversation_view`,
+  `code_sandbox::cleanup_conversation_workspace`), so the chat→background module
+  reach is an established pattern rather than new coupling. Verified constraints:
+  the cancel must precede the `DELETE` (afterwards `conversation_id` is NULL and the
+  runs are unfindable); the query is owner-scoped AND `job_kind <> 'workflow'`, so a
+  foreign delete cancels nothing and a classic workflow run is never touched by a
+  chat delete; the non-terminal status list is copied from `cancel_cas`'s own CAS
+  guard so the two cannot drift; and it is best-effort (a DB error logs and the
+  delete proceeds, with the startup orphan sweep as the backstop). No migration —
+  the `ON DELETE SET NULL` FK is deliberately left alone (DEC-16).
+
 No `BLOCKED` verdicts.

@@ -90,6 +90,16 @@ global "Background tasks" page + both background sidebar-nav entries, and make
   onto the in-conversation surface, and update
   `15-background/background-negative-perm` + `15-notifications/background-inbox`
   for the removed nav entries.
+- **ITEM-15**: Cancel-on-conversation-delete (added after the phase-6 audit, per the
+  owner's DEC-15). `workflow_runs.conversation_id` is `ON DELETE SET NULL`, so
+  deleting a conversation would detach its background runs — rows with a NULL
+  conversation and tasks still executing, unreachable because (by design) there is
+  no global page. New `workflow::repository::list_cancellable_background_runs_for_conversation`
+  + `background_mcp::runs::cancel_conversation_background_runs`, called from the
+  conversation-delete handler BEFORE the delete; it reuses `cancel_cas` (terminal
+  write) + `registry::cancel` (stops the detached task) and emits
+  `sync:workflow_run` per cancelled run. Already-terminal runs untouched;
+  owner-scoped; best-effort.
 - **ITEM-14**: Regenerate the testid registry (`npm run gen:testid-registry`) —
   removes the `background-tasks-*` ids, adds the new panel/footer ids. Output lands
   in the **`sdk` submodule** (`sdk/packages/kit/src/testIds.generated.ts`), so this
@@ -99,8 +109,9 @@ global "Background tasks" page + both background sidebar-nav entries, and make
 ## Files to touch
 
 Backend
-- `src-app/server/src/modules/background_mcp/runs.rs` (ITEM-1)
-- `src-app/server/src/modules/workflow/repository.rs` (ITEM-2)
+- `src-app/server/src/modules/background_mcp/runs.rs` (ITEM-1, ITEM-15)
+- `src-app/server/src/modules/workflow/repository.rs` (ITEM-2, ITEM-15)
+- `src-app/server/src/modules/chat/core/handlers/conversations.rs` (ITEM-15)
 - `src-app/server/tests/background_mcp/runs.rs` (tests)
 
 Generated (excluded from the audit-coverage law)

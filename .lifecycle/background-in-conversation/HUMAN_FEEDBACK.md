@@ -26,19 +26,31 @@ Not defects — decisions the owner may want to overrule when they see it runnin
 
 ## Added after the phase-6 blind audit
 
-The audit surfaced two things that are genuine PRODUCT decisions, not defects, and
-are therefore recorded here rather than silently taken:
+The audit surfaced three things that are genuine PRODUCT decisions, not defects.
+The first the owner decided and it is now IMPLEMENTED; the other two the owner
+explicitly deferred as out of scope:
 
-- **Detached tasks have no surface.** `workflow_runs.conversation_id` is
-  `ON DELETE SET NULL`, so deleting a conversation detaches its background tasks —
-  possibly while still running. With the global page gone they can no longer be
-  viewed, steered, or cancelled from any UI. The design's premise (that the
-  conversation-less bucket is scheduled-task work surfaced under Scheduled Tasks)
-  turned out to be false: the scheduler's history is a different table
-  (`scheduled_task_runs`) that this endpoint never returned. The endpoint's
-  unscoped read is exactly the query a "detached tasks" surface would use; nothing
-  consumes it today. **Owner decision:** add such a surface, cascade-delete the
-  tasks with the conversation, or accept the gap.
+- **FB-5** [status: resolved] — "close the detached-runs hole AT THE SOURCE … when a
+  conversation is deleted, cancel/tear down its in-flight background runs rather
+  than orphaning them via `ON DELETE SET NULL`. Kill the in-flight work too, not
+  just the row … If a run is already terminal, leave it." → implemented as ITEM-15:
+  the conversation-delete handler calls
+  `background_mcp::runs::cancel_conversation_background_runs` BEFORE the delete,
+  which per run does `cancel_cas` (the same status-guarded terminal write the
+  single-run cancel endpoint uses) **and** `registry::cancel` (wakes the `RunHandle`
+  → the sub-agent driver's `CancelToken` → the detached task stops instead of
+  running on headlessly). Already-terminal runs are excluded by the query and left
+  untouched. The row is then allowed to go conversation-less, which is now safe
+  BECAUSE it is terminal — recorded explicitly as DEC-16. The approved design is
+  unchanged: no global page, no new surface. Proven by TEST-24 (all four cancellable
+  statuses end `cancelled`; a terminal run keeps its outcome; another conversation's
+  run is untouched; zero detached non-terminal rows survive) and TEST-25
+  (owner-scoped — a foreign delete cancels nothing), both PASS. The factually wrong
+  "conversation-less runs come from scheduled tasks" claim in
+  `background/module.tsx` is corrected in the same change.
+  [generalizable: yes — when a delete relies on `ON DELETE SET NULL`, ask what
+  happens to the DETACHED row's live work, not just the row; a nulled FK that
+  strands a running task is a resource-lifecycle bug (§5), not a schema detail]
 - **`/notifications/background` is orphaned.** Removing its nav entry left it with
   no in-app entry point — the bell's "View all" goes to `/notifications`. It is
   kept (the brief scoped the change to the nav entry) but is now URL-only.

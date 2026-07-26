@@ -313,3 +313,90 @@ mod tests {
         );
     }
 }
+
+/// Cancel every still-in-flight background run bound to `conversation_id` before
+/// that conversation is DELETED.
+///
+/// **Why this exists.** `workflow_runs_conversation_id_fkey` is
+/// `ON DELETE SET NULL`, so deleting a conversation would otherwise DETACH its
+/// background runs: the rows survive with `conversation_id = NULL` and — worse —
+/// the spawned tasks keep executing headlessly, while the only surface that could
+/// view, steer, or cancel them (that conversation's in-chat "Tasks" panel) is gone.
+/// There is deliberately no global background page, so a detached run would be
+/// unreachable forever. Closing the hole AT THE SOURCE keeps the design intact:
+/// nothing survives detached because nothing survives non-terminal.
+///
+/// **What it does per run**, reusing the single-run cancel path verbatim (see
+/// `cancel_background_run`) rather than reinventing it:
+///   1. `cancel_cas` — the status-guarded terminal write (`pending`/`running`/
+///      `waiting`/`resumable` → `cancelled`). First terminal writer wins, so this
+///      is idempotent against a run finishing concurrently.
+///   2. `registry::cancel` — wakes the run's in-memory `RunHandle`, which the
+///      sub-agent driver bridges into the agent-core `CancelToken`, so the DETACHED
+///      TASK actually stops at its next await point instead of running on
+///      headlessly. This is the half that matters most here: cancelling only the
+///      row would leave the work executing.
+///
+/// An ALREADY-TERMINAL run is left completely alone — the query excludes it and the
+/// CAS would refuse it anyway. Its row keeps its result and simply becomes
+/// conversation-less, which is fine: a terminal run has nothing to steer or stop.
+///
+/// Owner-scoped: `user_id` is threaded into the query, so a caller who does not own
+/// the conversation cancels nothing.
+///
+/// Best-effort by design — a DB error here is logged and the delete proceeds. The
+/// alternative (aborting the user's delete because a cancel failed) is worse: the
+/// startup orphan sweep already reconciles rows left non-terminal by a crash.
+/// Returns the ids it cancelled, for the caller's sync fan-out + tests.
+pub async fn cancel_conversation_background_runs(
+    conversation_id: Uuid,
+    user_id: Uuid,
+) -> Vec<Uuid> {
+    let ids = match wf_repo::list_cancellable_background_runs_for_conversation(
+        Repos.pool(),
+        conversation_id,
+        user_id,
+    )
+    .await
+    {
+        Ok(ids) => ids,
+        Err(e) => {
+            tracing::warn!(
+                %conversation_id,
+                error = %e,
+                "background: could not list in-flight runs for a conversation being deleted; \
+                 they may be left non-terminal for the startup orphan sweep"
+            );
+            return Vec::new();
+        }
+    };
+    if ids.is_empty() {
+        return ids;
+    }
+
+    let mut cancelled = Vec::with_capacity(ids.len());
+    for run_id in ids {
+        // DB authority first (survives a crashed/absent runner), then the
+        // in-memory signal so the detached task stops executing.
+        match wf_repo::cancel_cas(Repos.pool(), run_id).await {
+            Ok(Some(_)) => {
+                let _ = registry::cancel(run_id);
+                cancelled.push(run_id);
+            }
+            // Raced to terminal between the list and the CAS — nothing to do.
+            Ok(None) => {}
+            Err(e) => tracing::warn!(
+                %run_id, %conversation_id, error = %e,
+                "background: cancel-on-conversation-delete failed for this run"
+            ),
+        }
+    }
+    if !cancelled.is_empty() {
+        tracing::info!(
+            %conversation_id,
+            count = cancelled.len(),
+            "background: cancelled in-flight runs for a deleted conversation"
+        );
+    }
+    cancelled
+}

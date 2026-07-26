@@ -8,14 +8,18 @@ Full logs: `/data/pbya/ziee/tmp/lifecycle-logs/background-in-conversation-*.log`
 `cargo test -p ziee --lib background_mcp::runs::` → `ok. 4 passed; 0 failed`
 `cargo test -p ziee --lib types_ts_parity` → `ok. 2 passed; 0 failed`
 `cargo test -p ziee --test integration_tests background_mcp:: -- --test-threads=4`
-→ `test result: ok. 29 passed; 0 failed; 0 ignored; 2298 filtered out; finished in 23.35s`, `EXIT=0`
-(re-run AFTER the fix round's `ORDER BY … , id DESC` change; the 26 pre-existing
-`background_mcp` tests still pass, so the disjoint semantics regressed nothing.)
+→ `test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 2305 filtered out; finished in 22.50s`, `EXIT=0`
+(final run, AFTER both the fix round's `ORDER BY … , id DESC` change and ITEM-15's
+cancel-on-conversation-delete. The 26 pre-existing `background_mcp` tests still
+pass, so neither the disjoint semantics nor the delete teardown regressed anything.
+Log: `background-in-conversation-int3.log`.)
 
 - **TEST-1**: PASS — 4/4 (`conversation_id_is_parsed_when_present`, `…_is_none_when_absent`, `…_composes_with_the_other_filters`, `malformed_conversation_id_is_rejected_not_dropped`)
 - **TEST-2**: PASS — `list_conversation_scope_paginates_consistently`
 - **TEST-3**: PASS — `list_conversation_scope_is_disjoint` (the INV-3 `[acceptance]` proof)
 - **TEST-4**: PASS — `list_conversation_scope_composes_and_stays_owner_scoped`
+- **TEST-24**: PASS — `deleting_a_conversation_cancels_its_in_flight_background_runs` (all four cancellable statuses end `cancelled`; the already-terminal run keeps `completed`; another conversation's run stays `running`; a direct COUNT proves zero detached non-terminal rows survive)
+- **TEST-25**: PASS — `a_foreign_conversation_delete_cancels_nothing` (non-owner delete → 404, the owner's run stays `running`)
 - **TEST-5**: PASS — `openapi::tests::types_ts_parity` AND `types_ts_parity_desktop`, so the regen is committed for BOTH workspaces
 
 ## Frontend unit — RUN, GREEN

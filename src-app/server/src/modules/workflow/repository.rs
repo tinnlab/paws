@@ -1755,6 +1755,44 @@ pub async fn list_background_runs_for_user(
     Ok((rows, total))
 }
 
+/// Every NON-TERMINAL background run bound to `conversation_id` and owned by
+/// `user_id`, newest-first. Backs the conversation-delete teardown: a conversation
+/// is about to be deleted, and `workflow_runs_conversation_id_fkey` is
+/// `ON DELETE SET NULL`, so anything still in flight would otherwise be DETACHED —
+/// still executing, with no surface left to view, steer, or cancel it (there is no
+/// global background page by design). The caller cancels each id before the delete.
+///
+/// The non-terminal set is spelled out to match `cancel_cas`'s CAS guard exactly
+/// (`WorkflowRunStatus::is_terminal` is its Rust twin); a run that is already
+/// terminal is deliberately excluded — it has nothing left to stop.
+///
+/// Owner-scoped (`user_id = $2`) and background-only (`job_kind <> 'workflow'`), so
+/// a foreign conversation yields an empty list and a classic workflow run is never
+/// touched by a chat delete.
+pub async fn list_cancellable_background_runs_for_conversation(
+    pool: &PgPool,
+    conversation_id: Uuid,
+    user_id: Uuid,
+) -> Result<Vec<Uuid>, AppError> {
+    let ids = sqlx::query_scalar!(
+        r#"
+        SELECT id
+        FROM workflow_runs
+        WHERE conversation_id = $1
+          AND user_id = $2
+          AND job_kind <> 'workflow'
+          AND status IN ('pending', 'running', 'waiting', 'resumable')
+        ORDER BY created_at DESC
+        "#,
+        conversation_id,
+        user_id,
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(AppError::database_error)?;
+    Ok(ids)
+}
+
 /// Owner-scoped detail fetch for one BACKGROUND run (ITEM-8 follow-up) — the
 /// getter backing `GET /api/background/runs/{run_id}`. Unlike the compact list,
 /// this projects the `final_output_json` result body so the FE can render a

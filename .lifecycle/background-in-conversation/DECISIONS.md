@@ -58,6 +58,16 @@ Every human/product input the implementation needs, resolved up front.
 **Resolution:** NO. `background::use` and its Users-group grant already exist (`202607191000_background_grant_permissions.sql`); this feature only moves the surfaces it gates.
 **Basis:** codebase. The existing `[negative-perm]` spec is still updated and run (TEST-13) because its surfaces moved, but no new backend deny test is owed beyond the existing `list_and_cancel_require_background_use_permission`.
 
+### DEC-15: A conversation delete would DETACH its in-flight background runs. Add a global surface for them, or stop them at the source?
+**Resolution:** stop them at the SOURCE. The conversation-delete handler calls `background_mcp::runs::cancel_conversation_background_runs(id, user_id)` BEFORE the delete, which for every non-terminal background run of that conversation (a) flips the row to `cancelled` via the same `cancel_cas` the single-run cancel endpoint uses, and (b) fires `registry::cancel` so the DETACHED TASK actually stops executing rather than running on headlessly. The approved design is kept exactly: no global page, no new global surface.
+**Basis:** user — the owner chose "cancel runs on conversation delete" over adding a surface, after the phase-6 audit showed `ON DELETE SET NULL` was leaving possibly-running work unreachable. Implementation reuses the existing cancel path verbatim rather than reinventing it; the call site mirrors the two cascade-cleanups the same handler already performs (`lit_search::…::cleanup_conversation_view`, `code_sandbox::cleanup_conversation_workspace`).
+
+### DEC-16: What happens to the ROW itself — block the `ON DELETE SET NULL`, or let it go conversation-less?
+**Resolution:** let it go conversation-less. The FK behaviour is unchanged; the row keeps its result and its `conversation_id` becomes NULL after the delete. That is safe precisely BECAUSE DEC-15 guarantees it is terminal first — a terminal run has nothing to view, steer, or stop, so having no surface for it is not a hole. An **already-terminal** run is left completely untouched (the query excludes it and the CAS would refuse it), so a completed run never has its outcome rewritten by a delete.
+**Basis:** user — explicitly sanctioned ("cancelling and letting `conversation_id` go NULL is fine (it's terminal, nothing to steer), but say so explicitly"). Not changing the FK also avoids a migration and avoids destroying a finished run's recorded result, which the user may still see in the notification bell.
+
+Ordering note (load-bearing): the cancel must run BEFORE the `DELETE`, because once the row is gone `conversation_id` is NULL and the runs can no longer be found. The teardown is owner-scoped, so a non-owner's delete attempt cancels nothing and still 404s (TEST-25). It is also best-effort: a DB error is logged and the delete proceeds, because aborting a user's delete over a failed cancel is worse and the startup orphan sweep already reconciles rows left non-terminal by a crash.
+
 ## Descopes
 
 None. Every ITEM-1..ITEM-14 is implemented and covered by an enumerated TEST.
