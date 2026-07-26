@@ -85,7 +85,6 @@ pub async fn subscribe_chat_stream(
     // is permanently 429'd. Captured by the `async move` generator instead, the
     // guard lives in the future's state and is dropped when the future is
     // dropped, polled or not.
-    let guard = ConnGuard(conn_id);
 
     // Handshake: hand the client its connection id to echo on the subscription PUT.
     let _ = tx.try_send(Ok(connected_event(conn_id)));
@@ -99,7 +98,7 @@ pub async fn subscribe_chat_stream(
         // Unregister on ANY termination — disconnect, exp, or deactivation,
         // INCLUDING a stream dropped before it was ever polled (the guard was
         // constructed at registration and is merely MOVED in here).
-        let _guard = guard;
+        let _guard = ConnGuard(conn_id);
 
         let mut recheck = tokio::time::interval_at(
             tokio::time::Instant::now() + RECHECK_INTERVAL,

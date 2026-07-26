@@ -116,8 +116,19 @@ pins that they pass unmodified.
 
 ### DEC-11: The closed-channel sweep cannot see a connection whose stream is alive but whose peer is gone. Fixed TTL, background reaper, or the connection's own `exp` deadline?
 
-**Resolution:** The connection's own `exp` deadline (ITEM-7), swept at the cap
-boundary alongside the closed-channel signal, with a fixed 60s slack.
+**Resolution:** None of them — do not reclaim on age at all. (This REVERSES the
+original answer, which is preserved below for the audit trail; FIX_ROUND-1
+showed it was wrong.) Reaping a past-deadline connection
+whose stream is still alive frees the accounting slot while the stream future,
+channel, task and socket survive, so the per-user cap stops bounding real
+resources and a client can accumulate connections past it — strictly worse than
+the leak, which failed closed. The case is already bounded: axum's keep-alive
+writes eventually fail on a dead peer, hyper drops the body, and the guard
+fires. The rejection is documented in both `prune_closed` doc comments.
+
+*Superseded original resolution (kept for the audit trail):* the connection's
+own `exp` deadline, swept at the cap boundary alongside the closed-channel
+signal, with a fixed 60s slack.
 **Basis:** codebase — both subscribe handlers ALREADY compute
 `deadline = exp - now` and `select!` on it, so a connection still registered
 well past that instant is definitionally broken. That makes the signal exact
@@ -133,8 +144,13 @@ only in `register`.
 
 ### DEC-12: The `exp` deadline is stored on `ClientConn` — a public SDK struct. Field, or a separate side-table?
 
-**Resolution:** A public `expires_at: Option<std::time::Instant>` field on
-`ClientConn` (and `ChatConn`), not a parallel map.
+**Resolution:** Moot — after FIX_ROUND-1 reversed DEC-11, no field is added at
+all; `ClientConn` / `ChatConn` are unchanged, so the SDK's public struct keeps
+its existing shape and no consumer breaks. The reasoning below applied only to
+the reverted deadline backstop and is kept for the audit trail.
+
+*Superseded original resolution:* a public `expires_at: Option<std::time::Instant>`
+field on `ClientConn` (and `ChatConn`), not a parallel map.
 **Basis:** convention — the registry's whole design is one authoritative
 `HashMap<ConnId, Conn>` plus a `by_user` index, with `remove_conn` as the single
 helper maintaining both. A third structure keyed by `ConnId` would add a fourth
@@ -143,3 +159,32 @@ compile-time break at every construction site (exactly 2 handlers + the crates'
 own test helpers), which is the desired failure mode — a defaulted field could
 silently leave new call sites opted out of the backstop. `None` is the explicit
 opt-out for a token with no `exp`.
+
+### DEC-13: The two registries now carry near-identical sweep logic across a crate boundary. Extract a shared generic, or accept the duplication?
+
+**Resolution:** Accept it, deliberately. Do not extract.
+**Basis:** convention — after FIX_ROUND-1 removed the deadline machinery, what
+is duplicated is two ~12-line `is_closed()` sweeps over structurally different
+types (`ClientConn<P>` behind a `Principal` bound vs a concrete `ChatConn` that
+also owns per-conversation replay buffers) with different limit sources (private
+consts vs a config-driven `ChatStreamLimits`). A generic extraction would put an
+app-owned registry's internals behind an SDK trait to save ~24 lines, inverting
+the framework/app split the module docs establish. The two registries were
+already near-duplicates before this change for the same reason. Flagged `high`
+by a blind auditor and consciously overruled — recorded here so it reads as a
+decision, not an oversight.
+
+### DEC-14: The chat handler's guard hoist cannot be tested behaviourally. Ship it untested, or add a structural (source-shape) test?
+
+**Resolution:** A structural test, explicitly labelled as such, whose doc names
+the behavioural proof it stands in for and states why one is not available here.
+**Basis:** codebase + measurement — the never-polled path needs an unpolled
+response body. `tower::oneshot` gives that in the framework crate, but the chat
+handler needs a live DB-backed `TestServer` (so, real HTTP), and over real HTTP
+hyper always polls the body while writing it — measured, not assumed: 400
+concurrent abandoned raw sockets leak 0 slots. The alternatives were to ship the
+hoist with no test at all (a blind auditor confirmed reverting `handler.rs`
+alone left the entire chat suite green) or to ship a behavioural test that
+passes either way, which is worse than none because it looks like proof. A
+source-shape assertion is honest about being one and genuinely fails if someone
+moves the guard back.

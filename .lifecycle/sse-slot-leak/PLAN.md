@@ -79,7 +79,11 @@ The mechanism the bug report names —
 
 — is a connection whose server-side stream is STILL ALIVE (so
 `sender.is_closed()` is false and the guard has not fired) because hyper never
-discovered the peer was gone. That case needs its own signal, and is ITEM-7.
+discovered the peer was gone. ITEM-7 records the conclusion reached about that
+case: it must NOT be reclaimed by a deadline or TTL (doing so frees the
+accounting slot while the socket survives, so the cap stops bounding real
+resources), and it is already bounded by axum's keep-alive writes failing on a
+dead peer. See FIX_ROUND-1.
 
 Both per-user SSE registries have the identical shape and therefore the
 identical bug:
@@ -110,15 +114,23 @@ accounting and no cap, so they are NOT affected.
   sweeps dead connections BEFORE evaluating the global / per-user cap, so a cap
   is never enforced against dead connections and a user can never be
   permanently locked out. Cap VALUES are unchanged.
-- **ITEM-7**: Deadline staleness backstop (added in DRIFT-1) — the ONLY signal
-  that can reclaim a connection whose stream is still alive but whose peer is
-  gone without the socket erroring. Carry each connection's own `exp` deadline
-  (already computed by both handlers for the `select!` arm) onto the registered
-  connection as `expires_at`, and let the sweep reclaim any connection still
-  present more than a slack period past it. Zero false positives and no
-  arbitrary TTL: the stream `select!`s on that exact instant and breaks there,
-  so a survivor is definitionally broken. A connection with no known `exp` opts
-  out entirely.
+- **ITEM-7**: **Reject** deadline/TTL-based reclamation, and record why in the
+  code. (Added in DRIFT-1.3 as "add a deadline backstop"; REVERSED in
+  FIX_ROUND-1 after three independent blind auditors converged on it.) Reaping a
+  connection because it is merely OLD frees the accounting slot while the stream
+  future, channel, tokio task and socket all stay alive — in exactly the
+  black-holed-peer case it targets, the stream is not being polled, which is WHY
+  it outlived its deadline, so nothing tears it down. The cap would then bound
+  bookkeeping instead of real resources, letting a client accumulate connections
+  PAST the cap: strictly worse than the leak, which at least failed closed. A
+  backpressured-but-healthy stream (suspended at `yield`, or inside the periodic
+  re-check's DB `await`) is also past-deadline and would be reaped. The
+  deliverable is therefore the NEGATIVE: the sole sweep signal is
+  `sender.is_closed()`, and both `prune_closed` doc comments carry a
+  "Deliberately NOT reclaimed: a connection that is merely OLD" rationale so the
+  next author does not re-derive the same wrong idea. The peer-gone-stream-alive
+  case stays bounded the honest way — axum's keep-alive writes eventually fail
+  on a dead peer, hyper drops the body, and the guard fires.
 - **ITEM-6**: Preserve existing behavior verbatim — cap values (512/12/1024,
   chat 24/512/2048), owner-scoping, the `{entity, action, id}` notify-only wire
   format, self-echo suppression, the exp-deadline + re-check `select!` arms, and

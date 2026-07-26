@@ -108,9 +108,6 @@ impl ChatStreamRegistry {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
 
         if inner.clients.len() >= inner.limits.global_max_connections {
-            prune_closed_locked(&mut inner);
-        }
-        if inner.clients.len() >= inner.limits.global_max_connections {
             return Err(AppError::new(
                 StatusCode::TOO_MANY_REQUESTS,
                 "CHAT_STREAM_GLOBAL_LIMIT",
@@ -118,11 +115,7 @@ impl ChatStreamRegistry {
             ));
         }
 
-        let mut user_count = inner.by_user.get(&conn.user_id).map_or(0, |s| s.len());
-        if user_count >= inner.limits.per_user_max_connections {
-            prune_closed_for_user_locked(&mut inner, conn.user_id);
-            user_count = inner.by_user.get(&conn.user_id).map_or(0, |s| s.len());
-        }
+        let user_count = inner.by_user.get(&conn.user_id).map_or(0, |s| s.len());
         if user_count >= inner.limits.per_user_max_connections {
             return Err(AppError::new(
                 StatusCode::TOO_MANY_REQUESTS,
@@ -385,6 +378,7 @@ pub fn apply_config_limits(chat: &crate::core::config::ChatConfig) {
 /// Sweep every connection whose stream is gone. Caller holds the lock.
 /// Collect-then-remove (mirroring `publish_frame`'s dead-connection handling)
 /// so the two-index invariant is maintained by the single `remove_conn` helper.
+#[allow(dead_code)]
 fn prune_closed_locked(inner: &mut RegistryInner) -> usize {
     let dead: Vec<ConnId> = inner
         .clients
@@ -403,6 +397,7 @@ fn prune_closed_locked(inner: &mut RegistryInner) -> usize {
 }
 
 /// Sweep only `user_id`'s dead connections. Caller holds the lock.
+#[allow(dead_code)]
 fn prune_closed_for_user_locked(inner: &mut RegistryInner, user_id: Uuid) -> usize {
     let Some(set) = inner.by_user.get(&user_id) else {
         return 0;

@@ -14,9 +14,9 @@ apply. No permission is introduced, so no `[negative-perm]` spec applies.
 - **TEST-2** (tier: unit) [acceptance] [invariant: INV-3] [covers: ITEM-5, ITEM-6] file: `sdk/crates/ziee-framework/src/sync/registry.rs` — asserts: the cap is charged for LIVE connections only. With `PER_USER_MAX_CONNECTIONS` receivers ALIVE the (cap+1)th `register` is still refused with 429 (cap value unchanged, self-heal cannot become a cap raise); with the same number of receivers DROPPED the next `register` succeeds and `connection_count()` equals 1. Both halves in one test so a regression that raises the cap fails the first half and a regression that removes the sweep fails the second.
 - **TEST-2b** (tier: unit) [acceptance] [invariant: INV-3] [covers: ITEM-5, ITEM-6] file: `sdk/crates/ziee-framework/src/sync/registry.rs` — asserts: the GLOBAL cap likewise counts live connections only — a registry full of LIVE connections still refuses the next one with 429, while a registry full of DEAD ones does not lock the whole deployment out.
 - **TEST-3b** (tier: unit) [covers: ITEM-4, ITEM-3] file: `src-app/server/src/modules/chat/stream/registry.rs` — asserts: the chat twin of TEST-3 — a user-scoped sweep reclaims only that user's dead connection; another user's dead connection survives it and is reclaimed by a subsequent global sweep.
-- **TEST-3c** (tier: unit) [covers: ITEM-6] file: `src-app/server/src/modules/chat/stream/registry.rs` — asserts: the chat twin of TEST-9 — a sweep never reclaims a live connection, and the survivor still receives published frames (functional, not merely counted).
+- **TEST-3c** (tier: unit) [covers: ITEM-6, ITEM-7] file: `src-app/server/src/modules/chat/stream/registry.rs` — asserts: the chat twin of TEST-9 — a sweep never reclaims a live connection, and the survivor still receives published frames (functional, not merely counted).
 - **TEST-3** (tier: unit) [covers: ITEM-3, ITEM-5] file: `sdk/crates/ziee-framework/src/sync/registry.rs` — asserts: `prune_closed_for_user()` removes ONLY the target user's dead connections — user B's dead connection and user A's LIVE connection both survive a sweep scoped to user A.
-- **TEST-9** (tier: unit) [covers: ITEM-6] file: `sdk/crates/ziee-framework/src/sync/registry.rs` — asserts: a sweep NEVER removes a live connection — with all receivers held open, `prune_closed()` returns 0 and `connection_count()` is unchanged, and the connection still receives a subsequent delivery (proving it was left functional, not merely counted).
+- **TEST-9** (tier: unit) [covers: ITEM-6, ITEM-7] file: `sdk/crates/ziee-framework/src/sync/registry.rs` — asserts: a sweep NEVER removes a live connection — with all receivers held open, `prune_closed()` returns 0 and `connection_count()` is unchanged, and the connection still receives a subsequent delivery (proving it was left functional, not merely counted).
 - **TEST-5** (tier: unit) [covers: ITEM-4] file: `src-app/server/src/modules/chat/stream/registry.rs` — asserts: the chat-token registry twin — dropping a receiver then `prune_closed()` removes it from `clients` + `by_user`, while a live connection survives; and the per-conversation `generations` replay buffers are NOT disturbed by a sweep.
 - **TEST-12** (tier: unit) [acceptance] [invariant: INV-3] [covers: ITEM-4, ITEM-5, ITEM-6] file: `src-app/server/src/modules/chat/stream/registry.rs` — asserts: the chat twin of TEST-2 against the CONFIGURED `ChatStreamLimits` (not a hardcoded 24): at the configured per-user cap with live receivers the next `register` is refused 429; with those receivers dropped it succeeds.
 
@@ -36,14 +36,19 @@ apply. No permission is introduced, so no `[negative-perm]` spec applies.
 
 - **TEST-13** (tier: unit) [covers: ITEM-1, ITEM-2, ITEM-3, ITEM-4, ITEM-5, ITEM-6] file: `src-app/server/src/modules/chat/stream/handler.rs` — asserts: no existing behavior was edited to make the new tests green — `cargo check -p ziee --tests` and `cargo check -p ziee-framework --tests` are clean, and the pre-existing `modules::sync` + chat-stream registry unit suites plus the whole pre-existing `tests/sync/` integration suite still pass with their assertions unmodified.
 
-## Deadline staleness backstop (ITEM-7)
+## ITEM-7 — deadline/TTL reclamation is REJECTED (the negative deliverable)
 
-Covers the mechanism the bug report actually names — a peer that vanished
-WITHOUT the socket erroring, so the server-side stream is still alive, the
-guard has not fired, and `sender.is_closed()` is false. Only the connection's
-own `exp` deadline can distinguish it.
+ITEM-7 was reversed in FIX_ROUND-1: reclaiming a connection because it is merely
+OLD frees the accounting slot while the stream, socket and task survive, so the
+cap would stop bounding real resources. The deliverable is the absence of that
+mechanism plus a recorded rationale, so it is pinned by the tests that assert a
+live connection is NEVER reclaimed regardless of anything else — TEST-9 (sync)
+and TEST-3c (chat) — together with TEST-8 / TEST-12, which prove a cap still
+refuses LIVE connections. A regression that reintroduced age-based reaping would
+have to make one of those live connections disappear.
 
-- **TEST-14** (tier: unit) [acceptance] [invariant: INV-1] [covers: ITEM-7] file: `sdk/crates/ziee-framework/src/sync/registry.rs` — asserts: with EVERY receiver still held open (so the closed-channel signal is false for all of them), a sweep reclaims EXACTLY the connection that is past its own `exp` deadline, while a connection whose deadline is in the future and one with no deadline at all both survive. This is the leg that proves "unregister on ANY termination" extends to the termination the socket never reported.
-- **TEST-14b** (tier: unit) [covers: ITEM-7] file: `src-app/server/src/modules/chat/stream/registry.rs` — asserts: the chat-token twin of TEST-14 — past-deadline reclaimed, future-deadline and no-deadline survive, all with live receivers.
-- **TEST-15** (tier: unit) [covers: ITEM-7, ITEM-6] file: `sdk/crates/ziee-framework/src/sync/registry.rs` — asserts: the slack window is respected — a connection whose deadline lapsed only a second ago is NOT reclaimed, so a normally-terminating stream is never raced by the sweep.
-- **TEST-15b** (tier: unit) [covers: ITEM-7, ITEM-6] file: `src-app/server/src/modules/chat/stream/registry.rs` — asserts: the chat-token twin of TEST-15.
+- **TEST-17** (tier: unit) [covers: ITEM-5, ITEM-6] file: `src-app/server/src/modules/chat/stream/registry.rs` — asserts: the chat GLOBAL cap counts live connections only AND reports the right error code — a registry full of LIVE connections refuses the next one with 429 `CHAT_STREAM_GLOBAL_LIMIT` (not the per-user code, so a capacity incident is never masked as a per-account problem), while a registry full of DEAD connections does not lock the whole deployment out. Covers the `register` global-sweep branch, which had no chat-side test at all.
+
+## Chat-handler guard placement (ITEM-2)
+
+- **TEST-16** (tier: unit) [covers: ITEM-2] file: `src-app/server/src/modules/chat/stream/handler.rs` — asserts: `ConnGuard` is constructed BEFORE the `async_stream::stream!` block and only MOVED into it (`let _guard = guard;`). Explicitly a STRUCTURAL (source-shape) guard, not a behavioural one, and labelled as such in its doc: the never-polled path needs an unpolled response body, which `tower::oneshot` provides in the framework crate but which is unreachable for this handler (it needs a live DB-backed `TestServer`, and over real HTTP hyper always polls the body — measured: 400 concurrent abandoned raw sockets leak 0 slots). Without it the chat half of the fix had NO covering test at all: reverting `handler.rs` alone left the entire chat suite green. See DEC-14.

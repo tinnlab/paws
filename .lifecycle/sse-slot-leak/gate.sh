@@ -1,38 +1,47 @@
 #!/usr/bin/env bash
-# Run lifecycle-check against a faithful "only THIS feature's .lifecycle dir"
-# view of the worktree.
+# Run lifecycle-check against a faithful, CLEAN "only THIS feature's .lifecycle
+# dir" view of the branch — i.e. exactly the post-merge-strip state.
 #
 # WHY: A1 ("a branch may carry exactly ONE .lifecycle feature dir") assumes the
 # branch was cut from main, where .lifecycle is stripped at merge. This branch is
 # cut from `origin/feat/agent-core`, which has ACCUMULATED 7 prior features'
-# artifacts. Deleting them here would delete them from agent-core on a
-# fast-forward, so they stay. Instead we stash the INHERITED dirs into a
-# scratch dir for the duration of one gate run and restore them immediately
-# after (trap-guarded), so the gate sees exactly the post-merge-strip state.
+# artifacts; deleting them here would delete them from agent-core on a
+# fast-forward, so they stay.
 #
-# Usage: bash .lifecycle/sse-slot-leak/gate.sh --phase 3
+# Earlier this script parked the inherited dirs in a temp dir, but that makes the
+# working tree dirty and A2 (clean-tree at phase 8) rightly fails. Instead it now
+# builds a detached STAGING WORKTREE at HEAD, removes the inherited dirs there
+# and COMMITS the removal, so the gate sees a genuinely clean tree with exactly
+# one feature dir. The real worktree is never touched.
+#
+# Usage: bash .lifecycle/sse-slot-leak/gate.sh --phase 8
 #        bash .lifecycle/sse-slot-leak/gate.sh --all
-set -u
+set -eu
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 FEATURE="sse-slot-leak"
 BASE="${LIFECYCLE_BASE:-origin/feat/agent-core}"
-PARK="$(mktemp -d)"
+STAGE="${LIFECYCLE_STAGE:-/data/pbya/ziee/tmp/sse-slot-leak-gate-stage}"
 
-restore() {
-  for d in "$PARK"/*; do
-    [ -e "$d" ] || continue
-    mv "$d" "$REPO/.lifecycle/$(basename "$d")"
-  done
-  rmdir "$PARK" 2>/dev/null || true
-}
-trap restore EXIT INT TERM
+git -C "$REPO" worktree remove --force "$STAGE" >/dev/null 2>&1 || true
+rm -rf "$STAGE"
+git -C "$REPO" worktree add --detach --quiet "$STAGE" HEAD
 
-for d in "$REPO"/.lifecycle/*/; do
+for d in "$STAGE"/.lifecycle/*/; do
   name="$(basename "$d")"
   [ "$name" = "$FEATURE" ] && continue
-  mv "$d" "$PARK/$name"
+  git -C "$STAGE" rm -r --quiet -- ".lifecycle/$name"
 done
+if ! git -C "$STAGE" diff --cached --quiet; then
+  git -C "$STAGE" -c user.name=gate -c user.email=gate@local \
+      commit -q -m "gate: strip inherited .lifecycle dirs (staging only)"
+fi
 
+set +e
 node "$REPO/.claude/lifecycle/lifecycle-check.mjs" \
-  --repo "$REPO" --dir ".lifecycle/$FEATURE" --base "$BASE" "$@"
+  --repo "$STAGE" --dir ".lifecycle/$FEATURE" --base "$BASE" "$@"
+rc=$?
+set -e
+
+git -C "$REPO" worktree remove --force "$STAGE" >/dev/null 2>&1 || true
+exit $rc
