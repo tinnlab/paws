@@ -51,6 +51,8 @@ const FIXTURE_DIR = 'src/dev/gallery/__detector_fixtures__'
 const LINT_CASES = [
   { miss: '#10b', cls: 'C11', lint: 'lint-icon-action.mjs', extra: [], desc: 'open-in-new-tab renders the wrong glyph' },
   { miss: '#17', cls: 'J8', lint: 'lint-native-scroll.mjs', extra: ['--gate'], desc: 'raw native scroll instead of DivScrollY' },
+  { miss: 'crash-A', cls: 'O1', lint: 'lint-hooks.mjs', extra: [], desc: 'usePermission(A) || usePermission(B) — the 2nd hook is short-circuited away' },
+  { miss: 'crash-B', cls: 'O2', lint: 'lint-hooks.mjs', extra: [], desc: 'store-proxy field read inside a ternary / behind an early return' },
 ]
 
 function runLint(script, extra = []) {

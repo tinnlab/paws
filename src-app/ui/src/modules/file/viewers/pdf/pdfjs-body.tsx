@@ -32,8 +32,15 @@ import { PdfHighlight } from '@/modules/file/stores/pdfHighlight'
 // `application/pdf` entry; office docs keep the legacy image body.
 export function PdfJsBody(props: FileViewerSlotProps) {
   // The PDF entry declares no `inline:`, so only `{file}` ever reaches here.
+  // The type guard lives in this thin wrapper so that EVERY hook of the real
+  // body — including the reactive `PdfHighlight.targets` proxy read, which IS a
+  // hook (useEffect + useStore, see framework/src/stores.ts) — runs
+  // unconditionally rather than behind an early return (taxonomy O2).
   if (!('file' in props)) return null
-  const { file } = props
+  return <PdfJsBodyInner file={props.file} />
+}
+
+function PdfJsBodyInner({ file }: { file: Extract<FileViewerSlotProps, { file: unknown }>['file'] }) {
   const { status, doc, api, error } = usePdfDocument(file.id)
 
   // Citation-highlight target for THIS file (set by a caller that opens the doc

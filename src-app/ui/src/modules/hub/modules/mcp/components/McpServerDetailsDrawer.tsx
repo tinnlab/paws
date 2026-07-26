@@ -28,6 +28,11 @@ export function McpServerDetailsDrawer({
   onClose,
   footer,
 }: McpServerDetailsDrawerProps) {
+  // Read the reactive `catalog` proxy field BEFORE the `!server` guard: a
+  // store-proxy field read IS a hook (useEffect + useStore — see
+  // framework/src/stores.ts), so reading it after an early return made the hook
+  // count depend on whether a server was selected (taxonomy O2).
+  const catalog = HubCatalog.catalog
   if (!server) return null
 
   // Display title: prefer the curated `IndexItem.title` (publisher
@@ -38,7 +43,7 @@ export function McpServerDetailsDrawer({
     const slash = server.name.indexOf('/')
     return slash >= 0 ? server.name.slice(slash + 1) : server.name
   })()
-  const indexItem = HubCatalog.catalog?.items?.find(
+  const indexItem = catalog?.items?.find(
     it => it.category === 'mcp-server' && it.name === server.name,
   )
   const displayTitle = indexItem?.title ?? leaf

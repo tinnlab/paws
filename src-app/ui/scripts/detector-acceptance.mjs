@@ -88,6 +88,8 @@ const ACCEPTANCE = [
   { miss: '#20', cls: 'H7', kind: 'geometry', where: 'repro-h7', desc: 'empty model select renders nothing' },
   { miss: '#10b', cls: 'C11', kind: 'lint', lint: 'lint-icon-action.mjs', desc: 'open-in-new-tab renders the wrong glyph' },
   { miss: '#17', cls: 'J8', kind: 'lint', lint: 'lint-native-scroll.mjs', extra: ['--gate'], desc: 'raw native scroll instead of DivScrollY' },
+  { miss: 'crash-A', cls: 'O1', kind: 'lint', lint: 'lint-hooks.mjs', desc: 'usePermission(A) || usePermission(B) — the 2nd hook is short-circuited away' },
+  { miss: 'crash-B', cls: 'O2', kind: 'lint', lint: 'lint-hooks.mjs', desc: 'store-proxy field read inside a ternary / behind an early return' },
   { miss: '#9a', cls: 'J5', kind: 'vision', desc: 'button-look tabs in a dense side panel (density-variant)' },
   { miss: '#13b', cls: 'C13', kind: 'vision', desc: 'valueless decoration (avatar with no value)' },
   { miss: '#14', cls: 'M1', kind: 'vision', desc: 'affordance absent (mermaid/html need source/render toggle)' },

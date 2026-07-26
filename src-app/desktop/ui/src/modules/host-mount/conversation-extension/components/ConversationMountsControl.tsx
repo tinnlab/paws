@@ -17,15 +17,19 @@ import { ConversationHostMounts } from '@ziee/desktop/modules/host-mount/convers
 import { FileDialog } from '@ziee/desktop/modules/file-dialog/store'
 export function ConversationMountsControl() {
   const conversationId = Chat.conversation?.id
-  const { saving } = ConversationHostMounts
+  // Read every reactive proxy field BEFORE the `!conversationId` guard: a
+  // store-proxy field read IS a hook (useEffect + useStore — see
+  // framework/src/stores.ts), so reading `byConversation` after the early return
+  // made the hook count jump when the conversation flipped null→set
+  // (taxonomy O2; same shape as 57f9fdb5b).
+  const { saving, byConversation } = ConversationHostMounts
 
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState<MountEntry[]>([])
 
   if (!conversationId) return null
 
-  const savedCount =
-    ConversationHostMounts.byConversation[conversationId]?.length ?? 0
+  const savedCount = byConversation[conversationId]?.length ?? 0
 
   const onOpenChange = async (next: boolean) => {
     setOpen(next)

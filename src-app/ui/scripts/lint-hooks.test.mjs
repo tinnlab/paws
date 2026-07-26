@@ -1,0 +1,356 @@
+/**
+ * Tests for the Rules-of-Hooks lint (taxonomy O1 / O2).
+ *
+ *   node --test scripts/lint-hooks.test.mjs     (npm run test:lint-hooks)
+ *
+ * The four ACCEPTANCE cases (TEST-1..TEST-4) do not lint a snippet I wrote — a
+ * fixture I author can drift into "whatever my implementation happens to catch".
+ * They extract the VERBATIM pre-fix source of the two real crashes out of git
+ * (`649ae7180^` and `57f9fdb5b^`) and run the REAL lint over it, so they fail if
+ * the rule is ever narrowed back to a special case.
+ */
+import { test, describe } from 'node:test'
+import assert from 'node:assert/strict'
+import { execFileSync, spawnSync } from 'node:child_process'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+import { analyze } from './lint-hooks.mjs'
+
+const HERE = path.dirname(fileURLToPath(import.meta.url))
+const UI = path.resolve(HERE, '..') // src-app/ui
+const DESKTOP_UI = path.resolve(UI, '../desktop/ui')
+const REPO = path.resolve(UI, '../..')
+const UI_SRC = path.join(UI, 'src')
+const DESKTOP_SRC = path.join(DESKTOP_UI, 'src')
+const FIXTURES = path.join(UI_SRC, 'dev/gallery/__detector_fixtures__')
+
+// The two real bugs, by the commit that FIXED each. `<sha>^` is the shipped,
+// crashing version; `<sha>` is the accepted fix.
+const BUG_A = {
+  fix: '649ae7180',
+  file: 'src-app/ui/src/modules/file-rag/components/sections/EnableSection.tsx',
+}
+const BUG_B = {
+  fix: '57f9fdb5b',
+  file: 'src-app/ui/src/modules/llm-provider/components/llm-models/EditLlmModelDrawer.tsx',
+}
+
+const gitShow = (rev, file) =>
+  execFileSync('git', ['show', `${rev}:${file}`], { cwd: REPO, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 })
+
+/** Write `source` to a temp file whose NAME matches the original, then lint it
+ *  with the registries learned from the live roots (so `LlmProvider` is known to
+ *  be a proxy and `providers` is known not to be an action). */
+function lintSource(source, originalPath) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lint-hooks-'))
+  const file = path.join(dir, path.basename(originalPath))
+  fs.writeFileSync(file, source)
+  try {
+    return analyze({ registryRoots: [UI_SRC, DESKTOP_SRC], targets: [file] }).findings
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+/** Lint an inline snippet as a component file. */
+const lintSnippet = (source) => lintSource(source, 'Snippet.tsx')
+
+const PROXY_IMPORT = `import { FixtureStore } from '@/modules/x/stores/fixtureStore'\n`
+
+describe('TEST-1 [acceptance][INV-1]: catches the shipped `usePermission(A) || usePermission(B)` crash', () => {
+  test('FIRES on the verbatim pre-fix EnableSection.tsx', () => {
+    const before = gitShow(`${BUG_A.fix}^`, BUG_A.file)
+    assert.match(
+      before,
+      /usePermission\(READ_PERM\) \|\| usePermission\(MANAGE_PERM\)/,
+      'the extracted blob must actually contain the shipped bug',
+    )
+    const findings = lintSource(before, BUG_A.file)
+    const h1 = findings.filter((f) => f.rule === 'H1')
+    assert.equal(h1.length, 1, `expected exactly 1 H1 finding, got ${JSON.stringify(findings)}`)
+    assert.equal(h1[0].context, 'logical-rhs')
+    assert.match(h1[0].code, /^usePermission/)
+    const line = before.split('\n')[h1[0].line - 1]
+    assert.match(line, /usePermission\(READ_PERM\) \|\| usePermission\(MANAGE_PERM\)/)
+  })
+
+  test('SILENT on the accepted fix (both hooks unconditional, results OR-ed)', () => {
+    const after = gitShow(BUG_A.fix, BUG_A.file)
+    assert.deepEqual(lintSource(after, BUG_A.file), [])
+  })
+
+  test('the rule is general, not a usePermission special case', () => {
+    const findings = lintSnippet(
+      `import { useFlag } from '@/core/flags'\n` +
+        `export function C({ a }: { a: boolean }) {\n` +
+        `  const v = a || useFlag('x')\n` +
+        `  return <div>{String(v)}</div>\n` +
+        `}\n`,
+    )
+    assert.equal(findings.length, 1)
+    assert.equal(findings[0].rule, 'H1')
+    assert.match(findings[0].code, /^useFlag/)
+  })
+})
+
+describe('TEST-2 [acceptance][INV-2]: catches the shipped conditional store-proxy read', () => {
+  test('FIRES on the verbatim pre-fix EditLlmModelDrawer.tsx', () => {
+    const before = gitShow(`${BUG_B.fix}^`, BUG_B.file)
+    assert.match(before, /\? LlmProvider\.providers/s, 'the extracted blob must contain the shipped bug')
+    const findings = lintSource(before, BUG_B.file)
+    const h2 = findings.filter((f) => f.rule === 'H2')
+    assert.equal(h2.length, 1, `expected exactly 1 H2 finding, got ${JSON.stringify(findings)}`)
+    assert.equal(h2[0].context, 'ternary-branch')
+    assert.equal(h2[0].code, 'LlmProvider.providers')
+  })
+
+  test('SILENT on the accepted fix (read hoisted, unconditional)', () => {
+    const after = gitShow(BUG_B.fix, BUG_B.file)
+    assert.deepEqual(lintSource(after, BUG_B.file), [])
+  })
+})
+
+describe('TEST-3 [acceptance][INV-3]: zero findings across the live tree', () => {
+  test('the real lint reports 0 over ui/src + desktop/ui/src', () => {
+    const { findings, fileCount } = analyze()
+    assert.ok(fileCount > 1500, `expected the full tree to be scanned, got ${fileCount} files`)
+    assert.deepEqual(
+      findings.map((f) => `${f.rule} ${path.relative(REPO, f.file)}:${f.line}`),
+      [],
+    )
+  })
+
+  test('the CLI exits 0 on the clean tree', () => {
+    const res = spawnSync('node', ['scripts/lint-hooks.mjs'], { cwd: UI, encoding: 'utf8' })
+    assert.equal(res.status, 0, res.stdout + res.stderr)
+    assert.match(res.stdout, /0 violations/)
+  })
+
+  test('both workspace copies see BOTH roots (a desktop-only regression is caught from ui and vice versa)', () => {
+    for (const ws of [UI, DESKTOP_UI]) {
+      const res = spawnSync('node', ['scripts/lint-hooks.mjs'], { cwd: ws, encoding: 'utf8' })
+      assert.equal(res.status, 0, `${ws}: ${res.stdout}${res.stderr}`)
+      const scanned = Number(res.stdout.match(/across (\d+) file/)?.[1] ?? 0)
+      assert.ok(scanned > 1500, `${ws} scanned only ${scanned} files — a root was not resolved`)
+    }
+  })
+})
+
+describe('TEST-4 [acceptance][INV-4]: wired into `npm run check` in both workspaces', () => {
+  for (const [label, ws] of [
+    ['ui', UI],
+    ['desktop/ui', DESKTOP_UI],
+  ]) {
+    test(`${label}: defines lint:hooks and chains it in check`, () => {
+      const pkg = JSON.parse(fs.readFileSync(path.join(ws, 'package.json'), 'utf8'))
+      assert.equal(pkg.scripts['lint:hooks'], 'node scripts/lint-hooks.mjs')
+      assert.ok(pkg.scripts.check.includes('run lint:hooks'), 'check must chain lint:hooks')
+    })
+  }
+
+  test('a reintroduced bug makes the wired command exit NON-ZERO (not merely print)', () => {
+    const res = spawnSync('node', ['scripts/lint-hooks.mjs', `--root=${path.relative(UI, FIXTURES)}`], {
+      cwd: UI,
+      encoding: 'utf8',
+    })
+    assert.equal(res.status, 1, 'the gate must fail the build on a violation')
+    assert.match(res.stderr, /Rules-of-Hooks violation/)
+  })
+
+  test('B6: the gate reads nothing from .lifecycle/ (survives the merge strip)', () => {
+    for (const ws of [UI, DESKTOP_UI]) {
+      const src = fs.readFileSync(path.join(ws, 'scripts/lint-hooks.mjs'), 'utf8')
+      assert.ok(!src.includes('.lifecycle'), `${ws}/scripts/lint-hooks.mjs must not read .lifecycle/`)
+    }
+  })
+})
+
+describe('TEST-5: the conditional-evaluation core', () => {
+  const CASES = [
+    ['ternary-branch (whenTrue)', `  const v = a ? FixtureStore.items : null`, 'ternary-branch'],
+    ['ternary-branch (whenFalse)', `  const v = a ? null : FixtureStore.items`, 'ternary-branch'],
+    ['logical-rhs (&&)', `  const v = a && FixtureStore.items`, 'logical-rhs'],
+    ['logical-rhs (||)', `  const v = a || FixtureStore.items`, 'logical-rhs'],
+    ['logical-rhs (??)', `  const v = (a ? null : undefined) ?? FixtureStore.items`, 'logical-rhs'],
+    ['if-body', `  let v: unknown = null\n  if (a) { v = FixtureStore.items }`, 'if-body'],
+    ['else-body', `  let v: unknown = null\n  if (!a) { v = 1 } else { v = FixtureStore.items }`, 'if-body'],
+    ['loop-body', `  let v: unknown = null\n  for (let i = 0; i < 1; i++) { v = FixtureStore.items }`, 'loop-body'],
+    [
+      'switch-case',
+      `  let v: unknown = null\n  switch (String(a)) { case 'x': v = FixtureStore.items; break; default: break }`,
+      'switch-case',
+    ],
+    ['after-early-return', `  if (!a) return null\n  const v = FixtureStore.items`, 'after-early-return'],
+  ]
+
+  for (const [name, body, expected] of CASES) {
+    test(`detects ${name}`, () => {
+      const findings = lintSnippet(
+        `${PROXY_IMPORT}export function C({ a }: { a: boolean }) {\n${body}\n  return <div>{String(v)}</div>\n}\n`,
+      )
+      assert.equal(findings.length, 1, `expected 1 finding, got ${JSON.stringify(findings)}`)
+      assert.equal(findings[0].context, expected)
+    })
+  }
+
+  test('the walk STOPS at the nearest function boundary (a callback body is not the render path)', () => {
+    const findings = lintSnippet(
+      `import { useEffect } from 'react'\n${PROXY_IMPORT}` +
+        `export function C({ a }: { a: boolean }) {\n` +
+        `  useEffect(() => { if (a) { console.error(FixtureStore.$.ready) } }, [a])\n` +
+        `  return <button onClick={() => { if (a) console.error(1) }}>x</button>\n` +
+        `}\n`,
+    )
+    assert.deepEqual(findings, [])
+  })
+
+  test('after-early-return applies to H2 but NOT to H1 (DEC-6: the type-guard idiom)', () => {
+    const findings = lintSnippet(
+      `import { useState } from 'react'\n${PROXY_IMPORT}` +
+        `export function C({ a }: { a: boolean }) {\n` +
+        `  if (!a) return null\n` +
+        `  const [s] = useState(0)\n` +
+        `  return <div>{s}</div>\n` +
+        `}\n`,
+    )
+    assert.deepEqual(findings, [], 'a plain hook after an early return is out of scope for H1')
+  })
+
+  test('the `hook-order-ok` marker opts out — on the line, and on the line above', () => {
+    const onLine = lintSnippet(
+      `${PROXY_IMPORT}export function C({ a }: { a: boolean }) {\n` +
+        `  const v = a ? FixtureStore.items : null // hook-order-ok: \`a\` is a mount-stable context value\n` +
+        `  return <div>{String(v)}</div>\n}\n`,
+    )
+    assert.deepEqual(onLine, [])
+
+    const above = lintSnippet(
+      `${PROXY_IMPORT}export function C({ a }: { a: boolean }) {\n` +
+        `  // hook-order-ok: \`a\` is a mount-stable context value\n` +
+        `  const v = a ? FixtureStore.items : null\n` +
+        `  return <div>{String(v)}</div>\n}\n`,
+    )
+    assert.deepEqual(above, [])
+  })
+
+  test('--root scopes REPORTING to that dir while the registries still come from the full roots', () => {
+    const { findings } = analyze({ targets: [FIXTURES] })
+    assert.ok(findings.length >= 4, `expected the fixture defects, got ${JSON.stringify(findings)}`)
+    for (const f of findings) assert.ok(f.file.startsWith(FIXTURES), `reported outside the target: ${f.file}`)
+    // The real proxy registry is still available in fixture mode.
+    const { proxyCount } = analyze({ targets: [FIXTURES] })
+    assert.ok(proxyCount > 100, `registry was not learned from the roots (proxyCount=${proxyCount})`)
+  })
+})
+
+describe('TEST-6: the non-firing shapes stay silent (zero-false-positive budget)', () => {
+  const SILENT = {
+    'unconditional proxy read': `  const items = FixtureStore.items\n  const v = a ? items : null`,
+    'the `$` snapshot in a conditional': `  const v = a ? FixtureStore.$.items : null`,
+    'an action CALL in a conditional': `  if (a) FixtureStore.reload()\n  const v = null`,
+    'an action BY REFERENCE in a conditional': `  const v = a && <button onClick={FixtureStore.reload}>x</button>`,
+    'a special property in a conditional': `  const v = a ? FixtureStore.__destroyed : null`,
+  }
+  for (const [name, body] of Object.entries(SILENT)) {
+    test(`silent on ${name}`, () => {
+      const findings = lintSnippet(
+        `${PROXY_IMPORT}export function C({ a }: { a: boolean }) {\n${body}\n  return <div>{String(v)}</div>\n}\n`,
+      )
+      assert.deepEqual(findings, [])
+    })
+  }
+
+  test('two-factor: a same-named import from a NON-store specifier is not a proxy', () => {
+    // `EditLlmModelDrawer` is BOTH a store-proxy export and a component name.
+    const asComponent = lintSnippet(
+      `import { EditLlmModelDrawer } from '@/modules/llm-provider/components/llm-models/EditLlmModelDrawer'\n` +
+        `export function C({ a }: { a: boolean }) {\n` +
+        `  const v = a ? EditLlmModelDrawer.displayName : null\n` +
+        `  return <div>{String(v)}</div>\n}\n`,
+    )
+    assert.deepEqual(asComponent, [], 'a component import must not be treated as a store proxy')
+
+    const asStore = lintSnippet(
+      `import { EditLlmModelDrawer } from '@/modules/llm-provider/stores/llmModelDrawers/editLlmModelDrawer'\n` +
+        `export function C({ a }: { a: boolean }) {\n` +
+        `  const v = a ? EditLlmModelDrawer.modelId : null\n` +
+        `  return <div>{String(v)}</div>\n}\n`,
+    )
+    assert.equal(asStore.length, 1, 'the SAME name imported from the store module IS a proxy')
+    assert.equal(asStore[0].rule, 'H2')
+  })
+
+  test('a type-only import of a proxy name is not a value read', () => {
+    const findings = lintSnippet(
+      `import type { FixtureStore } from '@/modules/x/stores/fixtureStore'\n` +
+        `export function C({ a }: { a: boolean }) {\n` +
+        `  const v: typeof FixtureStore | null = null\n` +
+        `  return <div>{String(a)}{String(v)}</div>\n}\n`,
+    )
+    assert.deepEqual(findings, [])
+  })
+})
+
+describe('TEST-7: fixtures + detector-acceptance wiring', () => {
+  const FIXTURE_FILES = [
+    'ConditionalHooks.tsx',
+    'ConditionalHooksClean.tsx',
+    path.join('stores', 'fixtureStore.ts'),
+  ]
+
+  test('the known-bad fixture exists in BOTH workspaces and is identical', () => {
+    for (const rel of FIXTURE_FILES) {
+      const a = path.join(UI_SRC, 'dev/gallery/__detector_fixtures__', rel)
+      const b = path.join(DESKTOP_SRC, 'dev/gallery/__detector_fixtures__', rel)
+      assert.ok(fs.existsSync(a), `missing ${a}`)
+      assert.ok(fs.existsSync(b), `missing ${b}`)
+      assert.equal(fs.readFileSync(a, 'utf8'), fs.readFileSync(b, 'utf8'), `${rel} drifted between workspaces`)
+    }
+  })
+
+  test('drift guard: the lint script is byte-identical between the two workspaces', () => {
+    assert.equal(
+      fs.readFileSync(path.join(UI, 'scripts/lint-hooks.mjs'), 'utf8'),
+      fs.readFileSync(path.join(DESKTOP_UI, 'scripts/lint-hooks.mjs'), 'utf8'),
+    )
+  })
+
+  test('the lint FIRES via the exact --root invocation the acceptance harness uses, in both workspaces', () => {
+    for (const ws of [UI, DESKTOP_UI]) {
+      const res = spawnSync(
+        'node',
+        ['scripts/lint-hooks.mjs', '--root=src/dev/gallery/__detector_fixtures__'],
+        { cwd: ws, encoding: 'utf8' },
+      )
+      assert.equal(res.status, 1, `${ws}: expected the fixture to fire`)
+      assert.match(res.stderr, /__detector_fixtures__/)
+      assert.match(res.stderr, /H1 /)
+      assert.match(res.stderr, /H2 /)
+    }
+  })
+
+  test('the clean companion contributes ZERO findings (both directions proven at once)', () => {
+    const { findings } = analyze({ targets: [FIXTURES] })
+    assert.deepEqual(findings.filter((f) => f.file.endsWith('ConditionalHooksClean.tsx')), [])
+  })
+
+  test('both detector-acceptance tables carry the O1 + O2 lint rows', () => {
+    for (const ws of [UI, DESKTOP_UI]) {
+      const src = fs.readFileSync(path.join(ws, 'scripts/detector-acceptance.mjs'), 'utf8')
+      assert.match(src, /cls: 'O1'[\s\S]*?lint-hooks\.mjs/, `${ws}: missing the O1 row`)
+      assert.match(src, /cls: 'O2'[\s\S]*?lint-hooks\.mjs/, `${ws}: missing the O2 row`)
+    }
+  })
+
+  test('the taxonomy documents O1 + O2 in both workspaces', () => {
+    for (const ws of [UI, DESKTOP_UI]) {
+      const doc = fs.readFileSync(path.join(ws, 'docs/DEFECT_TAXONOMY.md'), 'utf8')
+      assert.match(doc, /^- O1 \[L\]/m, `${ws}: missing the O1 taxonomy row`)
+      assert.match(doc, /^- O2 \[L\]/m, `${ws}: missing the O2 taxonomy row`)
+      assert.match(doc, /lint-hooks\.mjs/, `${ws}: taxonomy must name the detector script`)
+    }
+  })
+})
