@@ -198,7 +198,12 @@ Only ONE surface changes visually (the approval card); the rest are behavioral.
   (NEW — ITEM-6 pure helper) + its `.test.ts`
 - `src-app/ui/src/modules/chat/core/extensions/beforeSendCancel.ts` (NEW —
   ITEM-1 pure merge/severity helper) + its `.test.ts`
-- `src-app/ui/src/dev/gallery/fixtures/chat-deep.ts` (ITEM-9)
+- `src-app/ui/src/modules/chat/gallery.tsx` (ITEM-9 — a sibling cell next to the
+  existing `deep-chat-tool-approval` cell at `gallery.tsx:253-278`; the seed is
+  declared there, NOT in `dev/gallery/fixtures/chat-deep.ts`) + the
+  mechanically-regenerated gallery registries the `npm run check` chain verifies
+  (`check:gallery-coverage`, `check:state-matrix`, `check:gallery-seed-registry`,
+  `check:testid-registry`)
 - `src-app/ui/tests/e2e/chat/empty-submit-no-throw.spec.ts` (NEW — ITEM-1/2)
 - `src-app/ui/tests/e2e/chat/failed-stream-error-state.spec.ts` (NEW — ITEM-3/4/5)
 - `src-app/ui/tests/e2e/07-mcp/approval-actions-reachable.spec.ts` (NEW —
