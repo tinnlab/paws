@@ -30,18 +30,33 @@ const src = readFileSync(
   'utf8',
 )
 
-test('TEST-14 [acceptance/INV-5]: isAuthenticated comes from the VERIFIED session, not a persisted token', () => {
-  assert.match(
-    src,
-    /isAuthenticated:\s*!!auth\.isAuthenticated\s*,/,
-    'buildLoadContext must derive isAuthenticated from the verified session flag alone',
+/** The `isAuthenticated:` value expression, whitespace-collapsed. */
+const isAuthExpr = (() => {
+  const m = /isAuthenticated:\s*([^,]+),/.exec(src)
+  return m ? m[1].replace(/\s+/g, ' ').trim() : null
+})()
+
+test('TEST-14 [acceptance/INV-5]: isAuthenticated derives ONLY from the verified session flag', () => {
+  // Assert the VALUE EXPRESSION, not the formatting: any reintroduction of the
+  // widening has to add a second term here, whatever it is named. A denylist of
+  // specific identifiers would miss a rename; this cannot.
+  assert.equal(
+    isAuthExpr,
+    '!!auth.isAuthenticated',
+    'buildLoadContext must derive isAuthenticated from the verified session flag ' +
+      'ALONE. Deriving it from a persisted token delivers auth-gated module code ' +
+      'to a holder of a revoked-but-unexpired token, and modules are never ' +
+      'unloaded, so the later failed verification cannot undo it (DEC-15).',
   )
-  for (const forbidden of ['hasLiveSession', 'expiresAt', 'liveSession']) {
+})
+
+test('TEST-14 [acceptance/INV-5]: buildLoadContext reads no persisted-token state at all', () => {
+  // `token` / `expiresAt` are the persisted fields (Auth's partialize keeps only
+  // those). Eligibility must not consult either, under any wrapper.
+  for (const field of ['token', 'expiresAt', 'expiresIn']) {
     assert.ok(
-      !src.includes(forbidden),
-      `buildLoadContext must not consult "${forbidden}" — deriving eligibility ` +
-        `from a persisted token delivers auth-gated module code to a holder of a ` +
-        `revoked-but-unexpired token, and modules are never unloaded (DEC-15)`,
+      !new RegExp(`\\b${field}\\b`).test(src),
+      `buildLoadContext must not read the persisted "${field}" (DEC-15)`,
     )
   }
 })
@@ -53,9 +68,13 @@ test('TEST-14: permissions are still read from the (non-persisted) auth snapshot
     'permissions must come from the live auth snapshot; persisting them would ' +
       'leak a gated module chunk for the whole session',
   )
-  assert.match(
-    src,
-    /can:\s*\(\.\.\.perms: string\[\]\) =>\s*\n?\s*perms\.every\(p => evaluatePermission\(user, permissions, p\)\)/,
+  // Structural, not formatting-coupled: `can` must route through
+  // `evaluatePermission` with that snapshot, however it is line-wrapped.
+  const collapsed = src.replace(/\s+/g, ' ')
+  assert.ok(
+    /can: \(\.\.\.perms: string\[\]\) => perms\.every\(p => evaluatePermission\(user, permissions, p\)\)/.test(
+      collapsed,
+    ),
     'can() must evaluate every perm through evaluatePermission against that snapshot',
   )
 })

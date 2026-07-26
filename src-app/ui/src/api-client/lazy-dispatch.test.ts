@@ -73,6 +73,12 @@ test('TEST-4: the CHUNK is fetched once no matter how many callers race it', asy
   // silently drop a duplicate create/delete). The duplicate NETWORK requests are
   // removed one layer down, by the transport's GET coalescer.
   assert.equal(action.bodyCalls, 3)
+  // …and the action's OWN guard then does its job: only the first got past it.
+  assert.equal(
+    action.pastGuard,
+    1,
+    "the action's in-flight guard is reachable once the body runs",
+  )
 })
 
 test('TEST-4: once the chunk has resolved, dispatch is unchanged (each call runs)', async () => {
@@ -134,7 +140,7 @@ test('TEST-4: two identical cold-window MUTATION dispatches both run', async () 
   assert.equal(creates, 2)
 })
 
-test('TEST-4: a FAILED chunk load is not memoized — the next call retries', async () => {
+test('TEST-4: a TRANSIENT chunk failure is retried — it does not brick the action', async () => {
   let attempts = 0
   const dispatch = createLazyDispatcher(async () => {
     attempts++
@@ -144,6 +150,19 @@ test('TEST-4: a FAILED chunk load is not memoized — the next call retries', as
   await assert.rejects(dispatch(), /chunk 404/)
   assert.equal(await dispatch(), 'ok', 'a transient chunk failure must not brick the action')
   assert.equal(attempts, 2)
+})
+
+test('TEST-4: a DETERMINISTIC resolve failure is memoized — no unbounded retry loop', async () => {
+  // A throw from the action FACTORY is an authoring bug, not a blip. Retrying it
+  // forever would turn one bug into an unbounded loop for a component that
+  // dispatches from a render/effect, so after the single retry it fails fast.
+  let attempts = 0
+  const dispatch = createLazyDispatcher(async () => {
+    attempts++
+    throw new Error('factory blew up')
+  })
+  for (let i = 0; i < 5; i++) await assert.rejects(dispatch(), /factory blew up/)
+  assert.equal(attempts, 2, 'one retry, then the rejection is memoized')
 })
 
 test('TEST-4: preload warms the chunk without invoking the body', async () => {

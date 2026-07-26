@@ -3,9 +3,12 @@ import assert from 'node:assert/strict'
 import {
   ME_BOOT_FRESH_MS,
   __resetMeFreshnessForTests,
+  canJoinMeRefresh,
+  invalidateMeFreshness,
   isMeFresh,
   meRequestEpoch,
   noteMeLoaded,
+  shouldSkipMeFetch,
 } from './meFreshness.ts'
 import {
   __resetInflightForTests,
@@ -96,4 +99,51 @@ test('TEST-7: re-noting after a bump re-arms the window', () => {
   assert.equal(isMeFresh(t0 + 10), false)
   noteMeLoaded(meRequestEpoch(), t0 + 10) // the un-suppressed refetch landed
   assert.equal(isMeFresh(t0 + 20), true)
+})
+
+// ── The two decisions the Auth store makes (extracted so they are testable) ──
+
+test('TEST-7 [acceptance/INV-1]: a caller may NOT join a /me issued in an older epoch', () => {
+  __resetInflightForTests()
+  __resetMeFreshnessForTests()
+  const issuedAt = meRequestEpoch()
+  assert.equal(canJoinMeRefresh(issuedAt), true, 'same epoch → joining is safe')
+
+  // A mutation completes while that /me is on the wire.
+  bumpFetchEpoch()
+  assert.equal(
+    canJoinMeRefresh(issuedAt),
+    false,
+    'a post-mutation caller must NOT join a pre-mutation /me — it would receive ' +
+      'pre-mutation data, which is exactly the defect INV-1 forbids',
+  )
+})
+
+test('TEST-7: `force` always wins over both the join and the skip', () => {
+  __resetInflightForTests()
+  __resetMeFreshnessForTests()
+  const issuedAt = meRequestEpoch()
+  assert.equal(canJoinMeRefresh(issuedAt, true), false, 'force never joins')
+
+  noteMeLoaded(meRequestEpoch(), t0)
+  assert.equal(shouldSkipMeFetch(false, t0 + 10), true, 'fresh → skip')
+  assert.equal(
+    shouldSkipMeFetch(true, t0 + 10),
+    false,
+    'force must always perform the round-trip — that is what it is for',
+  )
+})
+
+test('TEST-7 [acceptance/INV-1]: an out-of-band identity change disarms the window', () => {
+  __resetInflightForTests()
+  __resetMeFreshnessForTests()
+  noteMeLoaded(meRequestEpoch(), t0)
+  assert.equal(shouldSkipMeFetch(false, t0 + 10), true, 'precondition: armed')
+
+  // A local `endSession()` teardown, or a session seeded over Tauri IPC / the
+  // tunnel, changes WHO the session is with no http call at all — so neither the
+  // transport nor SyncClient bumps the epoch. Without an explicit disarm the
+  // window would stay armed over a cleared / re-pointed store.
+  invalidateMeFreshness()
+  assert.equal(shouldSkipMeFetch(false, t0 + 10), false)
 })

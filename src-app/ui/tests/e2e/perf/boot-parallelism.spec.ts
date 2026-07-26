@@ -103,12 +103,29 @@ test.describe('net-hygiene — boot parallelism + request de-duplication', () =>
       await page.waitForTimeout(4000)
     })
 
-    const meCalls = reqs.filter(r => r.url === '/api/auth/me')
+    const meCalls = reqs.filter(r => r.url === '/api/auth/me').sort((a, b) => a.start - b.start)
+    expect(meCalls.length, 'the boot must verify the session').toBeGreaterThan(0)
+
+    // The suppression window is `ME_BOOT_FRESH_MS` (3 s) wide, so this asserts
+    // ONE `/me` only when the page's mount refresh actually landed inside it.
+    // On a slow box the profile route chunk can commit later than that, in which
+    // case a second `/me` is CORRECT behaviour, not a regression — so the
+    // assertion is conditioned on the observed gap rather than on a wall-clock
+    // coincidence. (`ME_BOOT_FRESH_MS` is not imported: this spec runs in the
+    // Playwright process, not the app bundle.)
+    const ME_BOOT_FRESH_MS = 3000
+    const gap = meCalls.length > 1 ? meCalls[1].start - meCalls[0].end : 0
+    if (meCalls.length > 1 && gap < ME_BOOT_FRESH_MS) {
+      throw new Error(
+        `two /api/auth/me only ${gap}ms apart — inside the ${ME_BOOT_FRESH_MS}ms ` +
+          `freshness window, so the page's mount refresh should have collapsed ` +
+          `onto the boot verification and did not`,
+      )
+    }
     expect(
       meCalls.length,
-      `expected 1 /api/auth/me on a cold profile load, got ${meCalls.length} ` +
-        `(the page's mount refresh must collapse onto the boot verification)`,
-    ).toBe(1)
+      `expected 1 /api/auth/me on a cold profile load, got ${meCalls.length}`,
+    ).toBeLessThanOrEqual(gap >= ME_BOOT_FRESH_MS ? 2 : 1)
 
     // …and de-duplicating did NOT cost the page its data: the form is populated.
     const username = page.getByLabel(/username/i).first()
@@ -132,14 +149,25 @@ test.describe('net-hygiene — boot parallelism + request de-duplication', () =>
     const renamed = `NetHygiene ${Date.now()}`
 
     try {
+      // The save triggers `refreshCurrentUser()`. Neither the transport's
+      // in-flight coalescer nor the `/me` freshness window may serve that
+      // pre-mutation data — the freshness epoch is bumped when the PUT
+      // completes, which disqualifies both. If either leaked, the page's
+      // `user`-effect would reset the form back to the OLD name.
+      //
+      // Load-bearing: WAIT FOR THE POST-SAVE `/me` TO LAND before asserting.
+      // Asserting straight after `fill()` would pass on the value this test
+      // typed, before any refetch resolved — i.e. it would prove nothing.
+      const meAfterSave = page.waitForResponse(
+        r => r.url().includes('/api/auth/me') && r.request().method() === 'GET',
+        { timeout: 20000 },
+      )
       await displayName.fill(renamed)
       await page.getByRole('button', { name: /save|update/i }).first().click()
+      await meAfterSave
 
-      // The save triggers `refreshCurrentUser()`. Neither the transport's
-      // in-flight coalescer nor the `/me` freshness window may let that be
-      // served pre-mutation data — the freshness epoch is bumped when the
-      // mutation completes, which disqualifies both. If either leaked, the UI
-      // would settle back to the OLD name.
+      // Give the store's `user` update a commit, then assert the form still
+      // shows the NEW value — i.e. the refetch returned post-mutation data.
       await expect(displayName).toHaveValue(renamed, { timeout: 20000 })
       await page.reload({ waitUntil: 'domcontentloaded' })
       await expect(page.getByLabel(/display name/i).first()).toHaveValue(renamed, {
@@ -149,12 +177,24 @@ test.describe('net-hygiene — boot parallelism + request de-duplication', () =>
       // ALWAYS restore: this mutates the SHARED admin fixture user, so an
       // earlier assertion failure must not leave every later spec in the run
       // looking at a renamed admin.
-      await page.goto(`${baseURL}/settings/profile`, { waitUntil: 'domcontentloaded' })
-      const restore = page.getByLabel(/display name/i).first()
-      await restore.waitFor({ state: 'visible', timeout: 20000 })
-      await restore.fill(original)
-      await page.getByRole('button', { name: /save|update/i }).first().click()
-      await expect(restore).toHaveValue(original, { timeout: 20000 })
+      //
+      // Swallow failures HERE, deliberately: a throw from a `finally` REPLACES
+      // the original assertion error, so a restore timeout would mask the real
+      // reason the test went red. Best-effort cleanup + a diagnostic beats a
+      // hidden root cause.
+      try {
+        await page.goto(`${baseURL}/settings/profile`, { waitUntil: 'domcontentloaded' })
+        const restore = page.getByLabel(/display name/i).first()
+        await restore.waitFor({ state: 'visible', timeout: 20000 })
+        await restore.fill(original)
+        await page.getByRole('button', { name: /save|update/i }).first().click()
+        await expect(restore).toHaveValue(original, { timeout: 20000 })
+      } catch (e) {
+        console.error(
+          `[TEST-12] failed to restore the shared fixture user to "${original}" — ` +
+            `a later spec may see a renamed admin: ${e}`,
+        )
+      }
     }
   })
 })

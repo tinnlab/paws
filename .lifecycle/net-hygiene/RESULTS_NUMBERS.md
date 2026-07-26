@@ -33,11 +33,22 @@ deterministic boot-ordering metrics below are what actually answer INV-2.
 
 ## Deterministic boot ordering (median of 5 cold loads per route, per build)
 
-| route | `/auth/me` starts | overlap with `/api/app/setup/status` | first shell DATA request |
-|---|---|---|---|
-| `/` | 343 ms → **50 ms** | 623 → 374 ms | 987 ms → **438 ms** |
-| `/settings/general` | 367 ms → **53 ms** | 271 → 260 ms | 670 ms → **344 ms** |
-| `/settings/profile` | 367 ms → **52 ms** | **−136 → +78 ms** | 403 ms → **204 ms** |
+Final numbers, taken after the second fix round (which removed a redundant
+`await getBaseUrl()` from the coalescing key path — see DRIFT-3.4):
+
+| route | total `/api` reqs | `/auth/me` starts | overlaps `/api/app/setup/status`? | first shell DATA request |
+|---|---|---|---|---|
+| `/` | 25 → **24** | 343 ms → **50 ms** | yes → yes | 987 ms → **75 ms** |
+| `/settings/general` | 11 → **10** | 367 ms → **38 ms** | yes → yes | 670 ms → **158 ms** |
+| `/settings/profile` | 12 → **10** | 367 ms → **58 ms** | **NO (−136 ms) → yes** | 403 ms → **170 ms** |
+
+Duplicates per cold load, same runs:
+
+| route | before | after |
+|---|---|---|
+| `/` | `sync/subscribe ×2`, `chat/stream/subscription ×2` | `chat/stream/subscription ×2` (a PUT — non-GET, correctly never coalesced) |
+| `/settings/general` | `sync/subscribe ×2` | none |
+| `/settings/profile` | `sync/subscribe ×2`, **`auth/me ×2`** | none |
 
 - `/auth/me` is issued ~7× earlier on every route — it is no longer the head of a
   serial chain. Confirmed structurally in the audit output too: in the `before`
@@ -46,7 +57,19 @@ deterministic boot-ordering metrics below are what actually answer INV-2.
 - `/settings/profile`'s overlap goes **negative → positive**: before the fix
   `/auth/me` did not even overlap `setup/status` (it started after it finished);
   now they are genuinely concurrent.
-- The shell's first data request lands **2×+ earlier** on all three routes.
+- The shell's first data request lands **2.4×–13× earlier** on all three routes
+  (987→75 ms, 670→158 ms, 403→170 ms). This is the user-facing effect: before the
+  fix nothing in the app mounted — and therefore nothing fetched — until
+  `AuthGuard`'s spinner cleared, which required the router chunk AND `/auth/me`
+  in series.
+
+## Measurement note
+
+A third confirmation pass was attempted and DISCARDED: the shared backend on
+`127.0.0.1:29185` (owned by another session) went down partway through, so that
+run's numbers reflect a dead backend, not the diff. It is not included. The two
+complete paired runs above, and the boot-probe medians, were all taken while the
+backend was healthy.
 
 
 ## RAW TOOL OUTPUT

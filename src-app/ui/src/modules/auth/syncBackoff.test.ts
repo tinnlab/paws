@@ -28,8 +28,11 @@ test('TEST-8: a 429 RAISES the floor — it never shortens an escalated backoff'
   // FASTER against an endpoint that just said "no room").
   assert.equal(reconnectDelayMs(429, 30_000, () => 0), MAX_BACKOFF_MS)
   assert.equal(reconnectDelayMs(429, 20_000, () => 0), 20_000)
-  // …and repeated 429s still escalate, because the loop's own backoff keeps
-  // doubling underneath: 10s → 16s → 30s as `currentBackoffMs` grows.
+  // The escalation itself lives in `SyncClient.connectLoop`
+  // (`backoffMs = min(backoffMs*2, MAX)`), which needs the fetch/EventBus graph
+  // and is not reachable from a unit spec. What IS asserted here is the property
+  // that makes escalation WORK: the 429 path never lowers whatever the loop has
+  // reached, so a growing `currentBackoffMs` passes straight through.
   assert.ok(reconnectDelayMs(429, 16_000, () => 0) >= 16_000)
 })
 

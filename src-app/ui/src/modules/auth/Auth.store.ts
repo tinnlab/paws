@@ -1,7 +1,14 @@
 import { defineStore , registerLazyStore } from '@ziee/framework/store-kit'
 import { ApiClient } from '@/api-client'
 import { setUnauthorizedHandler } from '@ziee/framework/api-client/core'
-import { isMeFresh, meRequestEpoch, noteMeLoaded } from '@/modules/auth/meFreshness'
+import {
+  canJoinMeRefresh,
+  invalidateMeFreshness,
+  isMeFresh,
+  meRequestEpoch,
+  noteMeLoaded,
+  shouldSkipMeFetch,
+} from '@/modules/auth/meFreshness'
 import type {
   CreateUserRequest,
   LinkAccountRequest,
@@ -99,7 +106,10 @@ interface AuthState {
   // Re-fetch /me and refresh the cached user/permissions/hasPassword.
   // Called after a self-service profile edit so the sidebar widget and
   // password-section visibility stay in sync without a page reload.
-  refreshCurrentUser: () => Promise<void>
+  // `force: true` bypasses the boot-freshness window and always performs the
+  // round-trip — for a caller that needs SERVER truth rather than consistency
+  // with a /me that already landed.
+  refreshCurrentUser: (opts?: { force?: boolean }) => Promise<void>
   // Silently rotate the access token via POST /api/auth/refresh (web:
   // httpOnly cookie; desktop/tunnel: in-memory body token). Returns
   // true when a fresh token landed. Registered as the api-client's
@@ -173,6 +183,10 @@ let sessionEpoch = 0
 function endSession(): void {
   sessionEpoch += 1
   stopRefreshMachinery()
+  // A local teardown wipes user/permissions with NO http call, so neither the
+  // transport nor SyncClient bumps the freshness epoch — disarm the /me window
+  // explicitly or it would stay armed over a cleared store.
+  invalidateMeFreshness()
 }
 
 // The cleared-session slice. Derived from `defaultState` so a field added
@@ -591,6 +605,9 @@ const AuthDef = defineStore('Auth', {
         },
 
         setAuthFromAutoLogin: (response: AutoLoginResponse) => {
+          // A whole session seeded over Tauri IPC / the tunnel path: no http call
+          // the transport could see, so disarm the /me window explicitly.
+          invalidateMeFreshness()
           // The OAuth callback flow passes a null user (the server is
           // the source of truth; initAuth() re-fetches /me right
           // after). During the gap between this set() and the
@@ -765,14 +782,14 @@ const AuthDef = defineStore('Auth', {
           }
         },
 
-        refreshCurrentUser: async () => {
+        refreshCurrentUser: async (opts?: { force?: boolean }) => {
           // Collapse concurrent callers onto one in-flight /me request — but
           // ONLY if that request was issued in the CURRENT freshness epoch. A
           // caller arriving after a mutation must not join a /me that started
           // before it and receive pre-mutation data (the same guard `coalesce`
           // applies at the transport; without it INV-1 would be half-enforced
           // in exactly the store that reads permissions).
-          if (refreshInFlight && refreshInFlightEpoch === meRequestEpoch()) {
+          if (refreshInFlight && canJoinMeRefresh(refreshInFlightEpoch, opts?.force)) {
             return refreshInFlight
           }
           // Near-miss collapse: a `/me` that landed moments ago (the boot
@@ -786,7 +803,7 @@ const AuthDef = defineStore('Auth', {
           // conditions together mean the store already holds what the fetch
           // would return, so an `await`ing caller reading `Auth.$.user` /
           // `hasPassword` right after sees current data either way.
-          if (isMeFresh()) return
+          if (shouldSkipMeFetch(opts?.force)) return
           const at = meRequestEpoch()
           refreshInFlightEpoch = at
           refreshInFlight = (async () => {
