@@ -8,7 +8,7 @@
 ## Summary
 
 - **336** surfaces carry at least one renderable-state signal.
-- **2054** signals total: 1608 branch, 136 empty, 117 error, 94 loading, 96 overlay, 3 panel.
+- **2055** signals total: 1609 branch, 136 empty, 117 error, 94 loading, 96 overlay, 3 panel.
 - **3** right-panel renderers registered (each a right-panel-open state).
 - **35** slot registrations (sidebar / settings / chat mount points).
 
@@ -238,8 +238,8 @@ Required states: `delayed`
 | branch | `!multiUserMode` | 41 |
 | branch | `!isAuthenticated` | 42 |
 | loading | `isInitializing \|\| needsSetup === null` | 49 |
-| branch | `needsSetup` | 54 |
-| branch | `!isAuthenticated` | 60 |
+| branch | `needsSetup` | 59 |
+| branch | `!isAuthenticated` | 64 |
 
 ### `modules/auth/AuthPage`
 
@@ -528,7 +528,7 @@ Required states: `delayed`, `empty`
 | branch | `loadingOlder` | 507 |
 | branch | `virtualize` | 517 |
 | branch | `!msg` | 532 |
-| loading | `(loading \|\| isStreaming)` | 596 |
+| loading | `(loading \|\| isStreaming)` | 623 |
 
 ### `modules/chat/components/ModelSelector`
 
@@ -545,8 +545,9 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!conversation` | 36 |
-| branch | `!popoutActionVisible(pane != null, isDesktop, isPopoutWindow)` | 41 |
+| branch | `pane` | 39 |
+| branch | `!conversation` | 65 |
+| branch | `!popoutActionVisible(pane != null, isDesktop, isPopoutWindow)` | 70 |
 
 ### `modules/chat/components/PaneManagerDrawer`
 
@@ -648,11 +649,11 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!state` | 140 |
-| branch | `this.initialized` | 431 |
-| empty | `extensions.length === 0` | 609 |
-| empty | `extensions.length === 0` | 642 |
-| empty | `!registered \|\| registered.length === 0` | 932 |
+| branch | `!state` | 141 |
+| branch | `this.initialized` | 432 |
+| empty | `extensions.length === 0` | 610 |
+| empty | `extensions.length === 0` | 643 |
+| empty | `!registered \|\| registered.length === 0` | 938 |
 
 ### `modules/chat/core/extensions/utils`
 
@@ -702,13 +703,13 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `isFootnoteLabel(props.id)` | 62 |
-| branch | `(rest as Record<string, unknown>)['data-footnotes'] === undefined` | 78 |
-| branch | `citeN !== null` | 94 |
-| branch | `className?.includes('data-footnote-backref') \|\| (rest as Record<string, unknown>)['data-footnote-backref'] !== undefined` | 98 |
-| branch | `scopedHref?.startsWith('#')` | 115 |
-| empty | `verdict === 'empty'` | 181 |
-| branch | `verdict === 'allowed'` | 182 |
+| branch | `isFootnoteLabel(props.id)` | 69 |
+| branch | `(rest as Record<string, unknown>)['data-footnotes'] === undefined` | 85 |
+| branch | `citeN !== null` | 101 |
+| branch | `className?.includes('data-footnote-backref') \|\| (rest as Record<string, unknown>)['data-footnote-backref'] !== undefined` | 105 |
+| branch | `scopedHref?.startsWith('#')` | 122 |
+| empty | `verdict === 'empty'` | 188 |
+| branch | `verdict === 'allowed'` | 189 |
 
 ### `modules/chat/extensions/compaction/components/CompactButton`
 
@@ -840,10 +841,11 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!el` | 78 |
-| branch | `isEditing` | 79 |
-| branch | `restoredKeyRef.current === draftKey` | 87 |
-| branch | `isEditingRef.current` | 95 |
+| branch | `!el` | 83 |
+| branch | `isEditing` | 84 |
+| branch | `restoredKeyRef.current === draftKey` | 92 |
+| branch | `isEditingRef.current` | 100 |
+| branch | `sending \|\| isStreaming \|\| inFlightRef.current` | 129 |
 
 ### `modules/chat/extensions/text/components/ThinkingContent`
 
@@ -1099,11 +1101,11 @@ Required states: `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!canRead` | 64 |
-| branch | `!settings` | 75 |
-| branch | `values.chunk_overlap_chars >= values.chunk_chars` | 85 |
-| branch | `canManage` | 117 |
-| error | `(error \|\| validationError)` | 127 |
+| branch | `!canRead` | 68 |
+| branch | `!settings` | 79 |
+| branch | `values.chunk_overlap_chars >= values.chunk_chars` | 89 |
+| branch | `canManage` | 121 |
+| error | `(error \|\| validationError)` | 131 |
 
 ### `modules/file-rag/components/sections/EmbeddingSection`
 
@@ -1111,16 +1113,16 @@ Required states: `empty`, `error`, `open`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!canRead` | 81 |
-| branch | `!settings` | 92 |
-| branch | `modelChanged && newId !== null && priorId !== null` | 127 |
-| branch | `!settings.embedding_model_id` | 135 |
-| branch | `canManage` | 159 |
-| error | `error` | 169 |
-| empty | `noModelsAvailable` | 170 |
-| overlay | `<Dialog open>` | 259 |
-| overlay | `<Dialog open>` | 282 |
-| branch | `!pendingSwap` | 297 |
+| branch | `!canRead` | 85 |
+| branch | `!settings` | 96 |
+| branch | `modelChanged && newId !== null && priorId !== null` | 131 |
+| branch | `!settings.embedding_model_id` | 139 |
+| branch | `canManage` | 163 |
+| error | `error` | 173 |
+| empty | `noModelsAvailable` | 174 |
+| overlay | `<Dialog open>` | 263 |
+| overlay | `<Dialog open>` | 286 |
+| branch | `!pendingSwap` | 301 |
 
 ### `modules/file-rag/components/sections/EnableSection`
 
@@ -1128,10 +1130,10 @@ Required states: `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!canRead` | 42 |
-| branch | `!settings` | 53 |
-| branch | `canManage` | 80 |
-| error | `error` | 90 |
+| branch | `!canRead` | 46 |
+| branch | `!settings` | 57 |
+| branch | `canManage` | 84 |
+| error | `error` | 94 |
 
 ### `modules/file-rag/components/sections/FullTextSection`
 
@@ -1139,10 +1141,10 @@ Required states: `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!canRead` | 68 |
-| branch | `!settings` | 79 |
-| branch | `canManage` | 108 |
-| error | `error` | 118 |
+| branch | `!canRead` | 72 |
+| branch | `!settings` | 83 |
+| branch | `canManage` | 112 |
+| error | `error` | 122 |
 
 ### `modules/file-rag/components/sections/MaintenanceSection`
 
@@ -1150,9 +1152,9 @@ Required states: `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!canRead` | 22 |
-| branch | `!settings` | 33 |
-| error | `error` | 55 |
+| branch | `!canRead` | 26 |
+| branch | `!settings` | 37 |
+| error | `error` | 59 |
 
 ### `modules/file-rag/components/sections/RerankSection`
 
@@ -1160,10 +1162,10 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!canRead` | 66 |
-| branch | `!settings` | 77 |
-| empty | `noModels` | 116 |
-| branch | `canManage` | 170 |
+| branch | `!canRead` | 70 |
+| branch | `!settings` | 81 |
+| empty | `noModels` | 120 |
+| branch | `canManage` | 174 |
 
 ### `modules/file-rag/components/sections/RetrievalLimitsSection`
 
@@ -1171,10 +1173,10 @@ Required states: `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!canRead` | 62 |
-| branch | `!settings` | 73 |
-| branch | `canManage` | 100 |
-| error | `error` | 110 |
+| branch | `!canRead` | 66 |
+| branch | `!settings` | 77 |
+| branch | `canManage` | 104 |
+| error | `error` | 114 |
 
 ### `modules/file-rag/pages/FileRagAdminPage`
 
@@ -1438,26 +1440,26 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!projectId` | 67 |
-| empty | `!projectId \|\| selectedFileIds.size === 0` | 79 |
-| empty | `!projectId \|\| incoming.length === 0` | 103 |
-| branch | `atCap` | 104 |
-| empty | `accepted.length === 0` | 120 |
-| branch | `!canUpload` | 129 |
-| branch | `!body` | 133 |
-| branch | `!Array.from(e.dataTransfer?.types ?? []).includes('Files')` | 144 |
+| branch | `!projectId` | 73 |
+| empty | `!projectId \|\| selectedFileIds.size === 0` | 85 |
+| empty | `!projectId \|\| incoming.length === 0` | 109 |
+| branch | `atCap` | 110 |
+| empty | `accepted.length === 0` | 126 |
+| branch | `!canUpload` | 135 |
+| branch | `!body` | 139 |
 | branch | `!Array.from(e.dataTransfer?.types ?? []).includes('Files')` | 150 |
 | branch | `!Array.from(e.dataTransfer?.types ?? []).includes('Files')` | 156 |
-| branch | `!Array.from(e.dataTransfer?.types ?? []).includes('Files')` | 160 |
-| branch | `!project` | 182 |
-| branch | `canUpload` | 194 |
-| branch | `selectedFileIds.size > 0` | 229 |
-| empty | `!(uploadingRows.length === 0)` | 255 |
-| branch | `initialLoading` | 277 |
-| empty | `files.length === 0` | 281 |
-| branch | `canEdit` | 311 |
-| branch | `atCap` | 357 |
-| branch | `isDragging && drawerBody` | 370 |
+| branch | `!Array.from(e.dataTransfer?.types ?? []).includes('Files')` | 162 |
+| branch | `!Array.from(e.dataTransfer?.types ?? []).includes('Files')` | 166 |
+| branch | `!project` | 188 |
+| branch | `canUpload` | 200 |
+| branch | `selectedFileIds.size > 0` | 235 |
+| empty | `!(uploadingRows.length === 0)` | 261 |
+| branch | `initialLoading` | 283 |
+| empty | `files.length === 0` | 287 |
+| branch | `canEdit` | 317 |
+| branch | `atCap` | 363 |
+| branch | `isDragging && drawerBody` | 376 |
 
 ### `modules/file/viewers/image/body`
 
@@ -1534,17 +1536,17 @@ Required states: `delayed`, `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!('file' in props)` | 35 |
-| branch | `status !== 'ready' \|\| !doc \|\| !api` | 63 |
-| branch | `!container \|\| !viewer` | 66 |
-| branch | `status !== 'ready'` | 101 |
-| branch | `!c` | 103 |
-| branch | `!c` | 118 |
-| branch | `!c` | 126 |
-| branch | `findOpen` | 252 |
-| loading | `status === 'loading'` | 301 |
-| error | `status === 'error'` | 306 |
-| error | `error` | 315 |
+| branch | `!('file' in props)` | 39 |
+| branch | `status !== 'ready' \|\| !doc \|\| !api` | 70 |
+| branch | `!container \|\| !viewer` | 73 |
+| branch | `status !== 'ready'` | 108 |
+| branch | `!c` | 110 |
+| branch | `!c` | 125 |
+| branch | `!c` | 133 |
+| branch | `findOpen` | 259 |
+| loading | `status === 'loading'` | 308 |
+| error | `status === 'error'` | 313 |
+| error | `error` | 322 |
 
 ### `modules/file/viewers/shared/RawCodeView`
 
@@ -1931,18 +1933,18 @@ Required states: `open`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!server` | 31 |
-| overlay | `<Drawer open>` | 52 |
-| branch | `server.description` | 63 |
-| branch | `firstRemote` | 72 |
-| branch | `firstPackage` | 91 |
-| branch | `firstPackage?.environmentVariables && firstPackage.environmentVariables.length > 0` | 126 |
-| branch | `ev.isSecret` | 138 |
-| branch | `firstRemote?.headers && firstRemote.headers.length > 0` | 151 |
-| branch | `h.isSecret` | 162 |
-| branch | `(server.repository?.url \|\| server.websiteUrl)` | 175 |
-| branch | `server.repository?.url` | 179 |
-| branch | `server.websiteUrl` | 189 |
+| branch | `!server` | 38 |
+| overlay | `<Drawer open>` | 69 |
+| branch | `server.description` | 80 |
+| branch | `firstRemote` | 89 |
+| branch | `firstPackage` | 108 |
+| branch | `firstPackage?.environmentVariables && firstPackage.environmentVariables.length > 0` | 143 |
+| branch | `ev.isSecret` | 155 |
+| branch | `firstRemote?.headers && firstRemote.headers.length > 0` | 168 |
+| branch | `h.isSecret` | 179 |
+| branch | `(server.repository?.url \|\| server.websiteUrl)` | 192 |
+| branch | `server.repository?.url` | 196 |
+| branch | `server.websiteUrl` | 206 |
 
 ### `modules/hub/modules/mcp/components/McpServerHubCard`
 
@@ -2441,32 +2443,32 @@ Required states: `delayed`, `empty`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!currentProvider` | 49 |
-| branch | `!currentProvider` | 107 |
-| branch | `!currentProvider \|\| currentProvider.provider_type !== 'local'` | 121 |
-| branch | `!currentProvider` | 145 |
-| branch | `!currentProvider` | 160 |
-| branch | `!currentProvider` | 167 |
-| branch | `!currentProvider` | 256 |
-| branch | `!canCreateModels` | 257 |
-| branch | `currentProvider.provider_type === 'local'` | 259 |
-| branch | `!currentProvider \|\| currentProvider.provider_type === 'local'` | 322 |
-| branch | `!canEditModels` | 325 |
-| branch | `!currentProvider` | 353 |
-| loading | `loading` | 359 |
-| empty | `llmModels.length === 0` | 361 |
-| branch | `llmModel.is_deprecated` | 377 |
-| branch | `llmModel.is_active && llmModel.port` | 398 |
-| branch | `llmModel.description` | 410 |
-| branch | `llmModel.capabilities` | 415 |
-| branch | `llmModel.capabilities.vision` | 417 |
-| branch | `llmModel.capabilities.audio` | 422 |
-| branch | `llmModel.capabilities.tools` | 427 |
-| branch | `llmModel.capabilities.code_interpreter` | 432 |
-| branch | `llmModel.capabilities.chat` | 437 |
-| branch | `llmModel.capabilities.text_embedding` | 442 |
-| branch | `llmModel.capabilities.image_generator` | 447 |
-| branch | `index < llmModels.length - 1` | 457 |
+| branch | `!currentProvider` | 54 |
+| branch | `!currentProvider` | 112 |
+| branch | `!currentProvider \|\| currentProvider.provider_type !== 'local'` | 126 |
+| branch | `!currentProvider` | 150 |
+| branch | `!currentProvider` | 165 |
+| branch | `!currentProvider` | 172 |
+| branch | `!currentProvider` | 261 |
+| branch | `!canCreateModels` | 262 |
+| branch | `currentProvider.provider_type === 'local'` | 264 |
+| branch | `!currentProvider \|\| currentProvider.provider_type === 'local'` | 327 |
+| branch | `!canEditModels` | 330 |
+| branch | `!currentProvider` | 358 |
+| loading | `loading` | 364 |
+| empty | `llmModels.length === 0` | 366 |
+| branch | `llmModel.is_deprecated` | 382 |
+| branch | `llmModel.is_active && llmModel.port` | 403 |
+| branch | `llmModel.description` | 415 |
+| branch | `llmModel.capabilities` | 420 |
+| branch | `llmModel.capabilities.vision` | 422 |
+| branch | `llmModel.capabilities.audio` | 427 |
+| branch | `llmModel.capabilities.tools` | 432 |
+| branch | `llmModel.capabilities.code_interpreter` | 437 |
+| branch | `llmModel.capabilities.chat` | 442 |
+| branch | `llmModel.capabilities.text_embedding` | 447 |
+| branch | `llmModel.capabilities.image_generator` | 452 |
+| branch | `index < llmModels.length - 1` | 462 |
 
 ### `modules/llm-provider/components/LlmProviderDrawer`
 
@@ -2629,10 +2631,10 @@ Required states: `open`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!currentModel \|\| !currentProvider` | 62 |
-| overlay | `<Drawer open>` | 96 |
-| branch | `isLocalModel && engineType === 'llamacpp'` | 124 |
-| branch | `isLocalModel && engineType === 'mistralrs'` | 127 |
+| branch | `!currentModel \|\| !currentProvider` | 66 |
+| overlay | `<Drawer open>` | 100 |
+| branch | `isLocalModel && engineType === 'llamacpp'` | 128 |
+| branch | `isLocalModel && engineType === 'mistralrs'` | 131 |
 
 ### `modules/llm-provider/components/llm-models/shared/LlmModelCapabilitiesSection`
 
@@ -2811,11 +2813,11 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!isControlWrite` | 226 |
-| branch | `mcpServerParenLabel(toolCall.server)` | 245 |
-| branch | `toolCall.dest_host` | 260 |
-| branch | `toolCall.description` | 285 |
-| branch | `toolCall.input !== undefined` | 300 |
+| branch | `!isControlWrite` | 289 |
+| branch | `mcpServerParenLabel(toolCall.server)` | 308 |
+| branch | `toolCall.dest_host` | 323 |
+| branch | `toolCall.description` | 352 |
+| branch | `toolCall.input !== undefined` | 360 |
 
 ### `modules/mcp/chat-extension/components/elicitationFields`
 
@@ -3111,9 +3113,9 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!canRead` | 50 |
-| branch | `!settings` | 61 |
-| branch | `canManage` | 89 |
+| branch | `!canRead` | 54 |
+| branch | `!settings` | 65 |
+| branch | `canManage` | 93 |
 
 ### `modules/memory/components/sections/FullTextSearchSection`
 
@@ -3121,17 +3123,17 @@ Required states: `open`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!settings` | 90 |
-| branch | `lastSettingsRef.current === settings` | 91 |
-| branch | `!canRead` | 120 |
-| branch | `!settings` | 131 |
-| branch | `dictionaryChanged` | 171 |
-| branch | `!pendingDictionary` | 182 |
-| branch | `canManage` | 232 |
-| branch | `bothArmsOff` | 243 |
-| overlay | `<Dialog open>` | 324 |
-| branch | `!open && (saving \|\| triggeringFtsRebuild)` | 329 |
-| branch | `saving \|\| triggeringFtsRebuild` | 347 |
+| branch | `!settings` | 94 |
+| branch | `lastSettingsRef.current === settings` | 95 |
+| branch | `!canRead` | 124 |
+| branch | `!settings` | 135 |
+| branch | `dictionaryChanged` | 175 |
+| branch | `!pendingDictionary` | 186 |
+| branch | `canManage` | 236 |
+| branch | `bothArmsOff` | 247 |
+| overlay | `<Dialog open>` | 328 |
+| branch | `!open && (saving \|\| triggeringFtsRebuild)` | 333 |
+| branch | `saving \|\| triggeringFtsRebuild` | 351 |
 
 ### `modules/memory/components/sections/MemorySection`
 
@@ -3139,10 +3141,10 @@ Required states: `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!canRead` | 52 |
-| error | `!settings && error` | 63 |
-| branch | `!settings` | 79 |
-| branch | `canManage` | 99 |
+| branch | `!canRead` | 56 |
+| error | `!settings && error` | 67 |
+| branch | `!settings` | 83 |
+| branch | `canManage` | 103 |
 
 ### `modules/memory/components/sections/MyMemoriesSection`
 
@@ -3196,9 +3198,9 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!canRead` | 53 |
-| branch | `!settings` | 64 |
-| branch | `canManage` | 93 |
+| branch | `!canRead` | 57 |
+| branch | `!settings` | 68 |
+| branch | `canManage` | 97 |
 
 ### `modules/memory/components/sections/SemanticSearchSection`
 
@@ -3206,15 +3208,15 @@ Required states: `empty`, `open`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!canRead` | 75 |
-| branch | `!settings` | 86 |
-| branch | `modelChanged && newEmbeddingId !== null && priorEmbeddingId !== null` | 128 |
-| branch | `!settings.embedding_model_id` | 136 |
-| branch | `canManage` | 166 |
-| empty | `noModelsAvailable` | 176 |
-| overlay | `<Dialog open>` | 264 |
-| overlay | `<Dialog open>` | 288 |
-| branch | `!pendingSwap` | 303 |
+| branch | `!canRead` | 79 |
+| branch | `!settings` | 90 |
+| branch | `modelChanged && newEmbeddingId !== null && priorEmbeddingId !== null` | 132 |
+| branch | `!settings.embedding_model_id` | 140 |
+| branch | `canManage` | 170 |
+| empty | `noModelsAvailable` | 180 |
+| overlay | `<Dialog open>` | 268 |
+| overlay | `<Dialog open>` | 292 |
+| branch | `!pendingSwap` | 307 |
 
 ### `modules/memory/pages/MemoryAdminPage`
 
@@ -3343,31 +3345,31 @@ Required states: `delayed`, `open`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!conversation?.id` | 162 |
-| branch | `!conversation?.id` | 169 |
-| branch | `!conversation?.id` | 172 |
-| branch | `getCached(conversation.id) !== undefined` | 173 |
-| branch | `cancelled` | 175 |
-| branch | `!conversation?.id \|\| !project?.name` | 183 |
-| branch | `!projectId` | 224 |
-| overlay | `<Confirm open>` | 346 |
-| branch | `cached !== undefined && (cached === null \|\| cached.name)` | 402 |
-| branch | `cancelled` | 404 |
-| branch | `event.data.conversationId !== conversationId` | 422 |
-| branch | `event.data.conversationId !== conversationId` | 436 |
-| branch | `!canUseProjects` | 450 |
-| loading | `state.kind === 'loading'` | 452 |
-| branch | `state.kind === 'in_project'` | 456 |
-| overlay | `<AddToProjectModal open>` | 493 |
-| branch | `loaded` | 539 |
-| branch | `cancelled` | 541 |
-| branch | `event.data.conversationId !== conversation.id` | 558 |
-| branch | `event.data.conversationId !== conversation.id` | 568 |
-| branch | `!project` | 589 |
-| branch | `!ok` | 596 |
-| branch | `project` | 608 |
-| branch | `loaded` | 625 |
-| overlay | `<AddToProjectModal open>` | 638 |
+| branch | `!conversation?.id` | 195 |
+| branch | `!conversation?.id` | 202 |
+| branch | `!conversation?.id` | 205 |
+| branch | `getCached(conversation.id) !== undefined` | 206 |
+| branch | `cancelled` | 208 |
+| branch | `!conversation?.id \|\| !project?.name` | 216 |
+| branch | `!projectId` | 257 |
+| overlay | `<Confirm open>` | 379 |
+| branch | `cached !== undefined && (cached === null \|\| cached.name)` | 435 |
+| branch | `cancelled` | 437 |
+| branch | `event.data.conversationId !== conversationId` | 455 |
+| branch | `event.data.conversationId !== conversationId` | 469 |
+| branch | `!canUseProjects` | 483 |
+| loading | `state.kind === 'loading'` | 485 |
+| branch | `state.kind === 'in_project'` | 489 |
+| overlay | `<AddToProjectModal open>` | 526 |
+| branch | `loaded` | 572 |
+| branch | `cancelled` | 574 |
+| branch | `event.data.conversationId !== conversation.id` | 591 |
+| branch | `event.data.conversationId !== conversation.id` | 601 |
+| branch | `!project` | 622 |
+| branch | `!ok` | 629 |
+| branch | `project` | 641 |
+| branch | `loaded` | 658 |
+| overlay | `<AddToProjectModal open>` | 671 |
 
 ### `modules/projects/components/AddToProjectModal`
 
@@ -3396,9 +3398,9 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!mountedRef.current` | 65 |
-| branch | `!mountedRef.current` | 72 |
-| branch | `showInitialSkeleton` | 231 |
+| branch | `!mountedRef.current` | 66 |
+| branch | `!mountedRef.current` | 73 |
+| branch | `showInitialSkeleton` | 232 |
 
 ### `modules/projects/components/ProjectFormDrawer`
 
@@ -3602,7 +3604,7 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `selected` | 87 |
+| branch | `selected` | 98 |
 
 ### `modules/settings/SettingsPage`
 
@@ -3773,14 +3775,14 @@ Required states: `delayed`, `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!canRead` | 85 |
-| error | `error && !settings` | 98 |
-| loading | `loading && !settings` | 112 |
-| branch | `!settings` | 121 |
-| branch | `values.full_summary_prompt && values.full_summary_prompt.trim() && !values.full_summary_prompt.includes('{transcript}')` | 127 |
-| branch | `values.incremental_summary_prompt && values.incremental_summary_prompt.trim() && (!values.incremental_summary_prompt.includes('{previous_summary}') \|\| !values.i` | 137 |
-| branch | `values.summarizer_keep_recent_tokens >= values.summarize_after_tokens` | 148 |
-| branch | `canManage` | 183 |
+| branch | `!canRead` | 89 |
+| error | `error && !settings` | 102 |
+| loading | `loading && !settings` | 116 |
+| branch | `!settings` | 125 |
+| branch | `values.full_summary_prompt && values.full_summary_prompt.trim() && !values.full_summary_prompt.includes('{transcript}')` | 131 |
+| branch | `values.incremental_summary_prompt && values.incremental_summary_prompt.trim() && (!values.incremental_summary_prompt.includes('{previous_summary}') \|\| !values.i` | 141 |
+| branch | `values.summarizer_keep_recent_tokens >= values.summarize_after_tokens` | 152 |
+| branch | `canManage` | 187 |
 
 ### `modules/user-llm-providers/UserLlmProvidersPage`
 

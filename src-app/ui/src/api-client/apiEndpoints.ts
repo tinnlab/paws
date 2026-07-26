@@ -306,6 +306,7 @@ export const ApiEndpoints = {
   'Project.detachFile': 'DELETE /api/projects/{id}/files/{file_id}',
   'Project.duplicate': 'POST /api/projects/{id}/duplicate',
   'Project.forConversation': 'GET /api/projects/by-conversation/{conversation_id}',
+  'Project.forConversations': 'POST /api/projects/by-conversations',
   'Project.get': 'GET /api/projects/{id}',
   'Project.getMcpSettings': 'GET /api/projects/{id}/mcp-settings',
   'Project.list': 'GET /api/projects',

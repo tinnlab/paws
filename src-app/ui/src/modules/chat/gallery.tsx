@@ -20,6 +20,7 @@ import {
   whenTrue,
 } from '@/dev/gallery/support'
 import { chatCassette } from '@/dev/gallery/fixtures/chat'
+import { LONG_TOOL_DESCRIPTION } from '@/dev/gallery/fixtures/longToolDescription'
 import { useChatStore } from '@/modules/chat/core/stores/chat'
 import { useFileStore } from '@/modules/file/stores/file'
 import { useMcpComposerStore } from '@/modules/mcp/stores/mcpComposer'
@@ -274,6 +275,32 @@ export const gallery: ModuleGallery = {
           dest_host: 'api.weather.example.com',
           description:
             'Fetch a multi-day weather forecast for a location from the Acme Weather API. The location is sent verbatim to the upstream service; results are not cached.',
+        })
+      },
+    },
+    {
+      // The POPULATED-with-real-data twin of the cell above. The short
+      // description there is exactly the case that HIDES the defect: an
+      // advertised description is attacker-influenced and unbounded, and a long
+      // one used to grow the card until Deny/Approve sat below the fold. This
+      // cell keeps the long-description state in the gallery's theme × viewport
+      // matrix so the clamp + "Show more" stay covered by the runtime-health /
+      // geometry sweeps, at mobile width too (where the card is tallest).
+      slug: 'deep-chat-tool-approval-long-desc',
+      title: 'Conversation — tool approval pending (long description)',
+      conversationId: CHAT_DEEP_CONVERSATION_IDS.toolRunning,
+      note: 'approval card with a ~2,000-char advertised description → the description block is CLAMPED with a "Show more" toggle (full text still in the DOM) so approve/deny stay reachable without scrolling',
+      setup: async () => {
+        await whenLoaded(CHAT_DEEP_CONVERSATION_IDS.toolRunning)
+        useMcpComposerStore.getState().addToolCall({
+          tool_use_id: 'toolu_running_1',
+          server: 'Acme Weather',
+          server_id: 'a1b2c3d4-0000-5000-8000-000000000001',
+          tool_name: 'get_forecast',
+          status: 'pending_approval',
+          input: { location: 'San Francisco, CA', units: 'metric', days: 5 },
+          dest_host: 'api.weather.example.com',
+          description: LONG_TOOL_DESCRIPTION,
         })
       },
     },

@@ -8,6 +8,7 @@ import type {
   ExtensionRequestFields,
   ContentRendererProps,
 } from '@/modules/chat/core/extensions/types'
+import { resolveCancel } from '@/modules/chat/core/extensions/beforeSendCancel'
 import React from 'react'
 import { createSlotRegistry } from '@ziee/framework/slots'
 
@@ -787,20 +788,25 @@ export class ChatExtensionRegistry {
       }
     }
 
-    // Check for remaining (non-discarded) cancellations
-    for (const [name, result] of results) {
-      if (result.cancel && !discarded.has(name)) {
-        console.log(
-          `[ChatExtensions] Message send cancelled by: ${name}`,
-        )
-        return {
-          cancel: true,
-          errorMessage: result.errorMessage,
-        }
-      }
-    }
+    // Resolve the remaining (non-discarded) cancellations. `resolveCancel`
+    // applies the fail-loud-wins rule: a silent (no-op) veto never masks a loud
+    // one, so a real blocker still reaches the user even if the composer also
+    // happens to be empty.
+    const decision = resolveCancel(results, discarded)
+    if (!decision.cancel) return { cancel: false }
 
-    return { cancel: false }
+    // A silent cancel is an ordinary no-op keypress, not an incident — logging
+    // it at `log` level on every empty Enter would be console noise.
+    if (!decision.silent) {
+      console.log(
+        `[ChatExtensions] Message send cancelled by: ${decision.cancelledBy}`,
+      )
+    }
+    return {
+      cancel: true,
+      silent: decision.silent,
+      errorMessage: decision.errorMessage,
+    }
   }
 
   /**

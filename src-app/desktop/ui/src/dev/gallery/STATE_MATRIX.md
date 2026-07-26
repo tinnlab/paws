@@ -71,11 +71,11 @@ Required states: `empty`, `open`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!conversationId` | 25 |
-| branch | `!picked \|\| Array.isArray(picked)` | 44 |
-| branch | `draft.some((m) => m.host_path === picked)` | 45 |
-| empty | `draft.length === 0` | 68 |
-| overlay | `<Popover open>` | 119 |
+| branch | `!conversationId` | 30 |
+| branch | `!picked \|\| Array.isArray(picked)` | 48 |
+| branch | `draft.some((m) => m.host_path === picked)` | 49 |
+| empty | `draft.length === 0` | 72 |
+| overlay | `<Popover open>` | 123 |
 
 ### `modules/host-mount/project-extension/components/ProjectMountsPanel`
 

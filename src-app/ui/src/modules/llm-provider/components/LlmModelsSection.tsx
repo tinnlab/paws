@@ -33,7 +33,12 @@ export function LlmModelsSection() {
   >({})
 
   // Store data
-  const { llmModelsLoading } = LlmProvider
+  // `refreshingModels` is read HERE, in the component body, not inside the
+  // `getRefreshButton` render helper below: a store-proxy field read IS a hook
+  // (useEffect + useStore — see framework/src/stores.ts), and inside that helper
+  // it sat behind two early returns, so the hook count varied with the provider
+  // type / edit permission (taxonomy O2).
+  const { llmModelsLoading, refreshingModels } = LlmProvider
   const canEditModels = usePermission(Permissions.LlmModelsEdit)
   const canDeleteModels = usePermission(Permissions.LlmModelsDelete)
   const canCreateModels = usePermission(Permissions.LlmModelsCreate)
@@ -323,7 +328,7 @@ export function LlmModelsSection() {
     // Refresh mutates is_deprecated → gate on edit (matches the backend's
     // llm_models::edit on POST /refresh-models), not create.
     if (!canEditModels) return null
-    const refreshing = Boolean(LlmProvider.refreshingModels[currentProvider.id])
+    const refreshing = Boolean(refreshingModels[currentProvider.id])
     return (
       <Tooltip content="Refresh models from provider">
         <span className="inline-flex">

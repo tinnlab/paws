@@ -1,5 +1,10 @@
 import { useState } from 'react'
 import { Button, Card, Text } from '@ziee/kit'
+import {
+  APPROVAL_DESCRIPTION_COLLAPSED_MAX_PX,
+  approvalDescriptionViewKey,
+} from '@/modules/mcp/chat-extension/components/approvalDescriptionClamp'
+import { CollapsibleBlock } from '@/modules/chat/components/CollapsibleBlock'
 import { Clock, Check, X, Send } from 'lucide-react'
 import {
   approvalKeyOf,
@@ -47,6 +52,64 @@ function argPreview(input: unknown): string {
     return truncatePreview(`${k}: ${String(v)}`)
   }
   return truncatePreview(JSON.stringify(input))
+}
+
+/**
+ * The advertised tool description, bounded so the card's decision controls stay
+ * on screen.
+ *
+ * REUSES the chat module's `CollapsibleBlock` rather than re-deriving a clamp.
+ * That component already encodes the non-obvious parts this surface needs and a
+ * hand-rolled version silently dropped: a bottom FADE MASK so the reader can SEE
+ * the text is cut (on a consent surface, "looks like the description just ended"
+ * is the failure mode that matters), `aria-controls` binding the toggle to the
+ * region, auto-expand when a descendant takes focus (WCAG 2.4.7/2.4.11), and
+ * `useInPlaceAnchor` so toggling inside the VIRTUALIZED message list grows the
+ * row downward without the viewport jumping.
+ *
+ * The clamp is CSS-only: the COMPLETE string is always rendered into the DOM, in
+ * both states, so it stays copyable, findable by in-page search, and readable by
+ * assistive tech — honoring the card's "FULL, EXACT … never truncated/
+ * summarized" contract while refusing to let an unbounded description bury
+ * Deny/Approve.
+ *
+ * `break-words` is load-bearing, not cosmetic: without it a description made of
+ * ONE unbroken token renders as a single line that never overflows VERTICALLY,
+ * so a height clamp alone would hide the remainder horizontally with no toggle
+ * and no cue — precisely the "poisoning hides in truncation" hole the contract
+ * exists to close.
+ *
+ * The collapsed flag is keyed by the tool-use id (namespaced so it cannot
+ * collide with a message id) so expanding survives the virtualizer unmounting
+ * and remounting this row mid-read.
+ */
+function ApprovalToolDescription({
+  description,
+  toolUseId,
+}: {
+  description: string
+  toolUseId: string
+}) {
+  return (
+    <div>
+      <Text strong className="text-xs">
+        Tool description:
+      </Text>
+      <CollapsibleBlock
+        maxHeightPx={APPROVAL_DESCRIPTION_COLLAPSED_MAX_PX}
+        messageId={approvalDescriptionViewKey(toolUseId)}
+        className="mt-0.5"
+        data-testid="approval-tool-description-collapsible"
+      >
+        <Text
+          className="text-sm whitespace-pre-wrap break-words block"
+          data-testid="approval-tool-description"
+        >
+          {description}
+        </Text>
+      </CollapsibleBlock>
+    </div>
+  )
 }
 
 /**
@@ -281,19 +344,16 @@ export function ToolCallPendingApprovalContent({
           )}
 
           {/* Full, EXACT tool description (never truncated): the description the
-              model was actually given, so a poisoned/misleading one is visible. */}
+              model was actually given, so a poisoned/misleading one is visible.
+              Visually CLAMPED (CSS max-height + "Show more"), never shortened —
+              an unbounded description pushed Deny/Approve below the fold, which
+              is both a usability defect and the cheapest way for a hostile
+              server to leave Approve as the only action in view. */}
           {toolCall.description && (
-            <div>
-              <Text strong className="text-xs">
-                Tool description:
-              </Text>
-              <Text
-                className="text-sm whitespace-pre-wrap block mt-0.5"
-                data-testid="approval-tool-description"
-              >
-                {toolCall.description}
-              </Text>
-            </div>
+            <ApprovalToolDescription
+              description={toolCall.description}
+              toolUseId={toolCall.tool_use_id}
+            />
           )}
 
           {/* Concrete args the model chose — shown verbatim (no summarization). */}

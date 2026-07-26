@@ -25,7 +25,7 @@ any detector fails to fire.**
 Source-lint classes (`[L]`) live in `__detector_fixtures__/` and are proven by
 running the lint with `--root` at that dir.
 
-## Result — 24/24 machine detectors FIRE
+## Result — 26/26 machine detectors FIRE
 
 | Miss | Class | Kind | Status |
 |---|---|---|---|
@@ -53,6 +53,8 @@ running the lint with `--root` at that dir.
 | #20 | **H7** | geometry | FIRES ✓ *(new detector)* |
 | #10b | C11 | lint | FIRES ✓ |
 | #17 | J8 | lint | FIRES ✓ |
+| crash-A | O1 | lint | FIRES ✓ |
+| crash-B | O2 | lint | FIRES ✓ |
 | #9a | J5 | vision | not machine-gated |
 | #13b | C13 | vision | not machine-gated |
 | #14 | M1 | vision | not machine-gated (affordance-matrix) |

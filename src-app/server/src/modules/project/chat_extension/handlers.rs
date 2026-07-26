@@ -25,6 +25,10 @@ use crate::modules::project::events::ProjectEvent;
 use crate::modules::project::handlers::PaginationQuery;
 use crate::modules::project::models::Project;
 use crate::modules::project::permissions::{ProjectsEdit, ProjectsRead};
+use crate::modules::project::types::{
+    ConversationProjectLink, MAX_CONVERSATIONS_PER_LOOKUP, ProjectsByConversationsRequest,
+    ProjectsByConversationsResponse,
+};
 use crate::modules::sync::{Audience, SyncAction, SyncEntity, SyncOrigin, publish as sync_publish};
 
 #[debug_handler]
@@ -91,6 +95,79 @@ pub fn project_for_conversation_docs(op: TransformOperation) -> TransformOperati
         .response::<200, Json<Option<Project>>>()
         .response_with::<401, (), _>(|res| res.description("Unauthorized"))
         .response_with::<403, (), _>(|res| res.description("Missing required permissions"))
+}
+
+/// Batch form of [`project_for_conversation`]: resolve the projects of MANY
+/// conversations in one round-trip.
+///
+/// A conversation list renders one membership badge per row, so the singular
+/// endpoint turned a 40-row sidebar into 40 requests (the `n+1` burst the
+/// live-ui-audit flags) — and 40 queries. This answers the whole set with ONE
+/// `= ANY($1)` query.
+///
+/// Contract mirrors the singular endpoint: always 200, and "unfiled" is
+/// legitimate data rather than an error — an unfiled conversation, one that
+/// doesn't exist, or one owned by another user is simply ABSENT from `links`
+/// (never a null entry, never a 404, never a foreign project).
+#[debug_handler]
+pub async fn projects_for_conversations(
+    auth: RequirePermissions<(ProjectsRead,)>,
+    Json(body): Json<ProjectsByConversationsRequest>,
+) -> ApiResult<Json<ProjectsByConversationsResponse>> {
+    body.validate()?;
+    let rows = Repos
+        .project
+        .get_for_conversations(&body.conversation_ids, auth.user.id)
+        .await?;
+
+    // De-duplicate the project rows: N conversations typically live in FEW
+    // projects, and a Project carries up to 64 KiB of `instructions`, so
+    // inlining the row per link would multiply the payload by the number of
+    // conversations in each project.
+    let mut projects: Vec<Project> = Vec::new();
+    let mut links = Vec::with_capacity(rows.len());
+    for (conversation_id, project) in rows {
+        let project_id = project.id;
+        if !projects.iter().any(|p| p.id == project_id) {
+            projects.push(project);
+        }
+        links.push(ConversationProjectLink {
+            conversation_id,
+            project_id,
+        });
+    }
+
+    Ok((
+        StatusCode::OK,
+        Json(ProjectsByConversationsResponse { links, projects }),
+    ))
+}
+
+pub fn projects_for_conversations_docs(op: TransformOperation) -> TransformOperation {
+    with_permission::<(ProjectsRead,)>(op)
+        .id("Project.forConversations")
+        .tag("Projects")
+        .summary("Resolve the projects of many conversations at once")
+        .description(&format!(
+            "Batch form of `GET /api/projects/by-conversation/{{conversation_id}}`. \
+             POST rather than GET only because the id set does not fit in a URL: this \
+             endpoint is a READ with NO side effects, gated on `projects::read`. \
+             Returns one `links` entry per conversation that IS attached to a project \
+             the caller owns, plus each referenced project EXACTLY ONCE in `projects` \
+             (join on `project_id`) so the payload never repeats a project per \
+             conversation. Unfiled, unknown, and foreign conversations are omitted \
+             from `links` — always 200, \"unfiled\" is legitimate data. At most \
+             {MAX_CONVERSATIONS_PER_LOOKUP} conversation_ids per call; over cap \
+             answers 422 with error_code TOO_MANY_CONVERSATION_IDS."
+        ))
+        .response::<200, Json<ProjectsByConversationsResponse>>()
+        .response_with::<401, (), _>(|res| res.description("Unauthorized"))
+        .response_with::<403, (), _>(|res| res.description("Missing required permissions"))
+        .response_with::<422, (), _>(|res| {
+            res.description(
+                "Too many conversation_ids in one call — split the list into smaller batches",
+            )
+        })
 }
 
 /// Attach an existing conversation to this project (or re-attach
