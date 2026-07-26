@@ -56,17 +56,22 @@ test.describe('tool-approval card — actions reachable, description complete', 
 
     // Collapsed by default — the toggle is offered, so we know it IS clamped
     // (and therefore that the next assertion is testing the collapsed state).
-    const toggle = card.getByTestId('approval-tool-description-toggle')
+    const toggle = card.getByTestId('collapsible-toggle')
     await expect(toggle).toBeVisible()
     await expect(toggle).toHaveText('Show more')
     await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    // The toggle is BOUND to the region it governs (assistive tech needs the
+    // association, not just the label).
+    const controls = await toggle.getAttribute('aria-controls')
+    expect(controls, 'the toggle must reference its region').toBeTruthy()
 
     // …yet every character of the advertised description is still present.
     // A string truncation would fail here; a CSS clamp passes.
     expect(await desc.textContent()).toBe(LONG_TOOL_DESCRIPTION)
 
     // The clamp is real: the content genuinely overflows its rendered box.
-    const box = await desc.evaluate(el => ({
+    const region = card.getByTestId('collapsible-content')
+    const box = await region.evaluate(el => ({
       scroll: el.scrollHeight,
       client: el.clientHeight,
     }))
@@ -78,22 +83,42 @@ test.describe('tool-approval card — actions reachable, description complete', 
     expect(pageErrors, pageErrors.join('\n')).toHaveLength(0)
   })
 
-  test('TEST-10b: Deny and Approve are inside a 1280x900 viewport without scrolling', async ({
+  test('TEST-10b: the whole approval card fits a 1280x900 viewport — request AND actions visible together', async ({
     page,
   }) => {
-    await page.setViewportSize({ width: 1280, height: 900 })
+    const VIEWPORT_H = 900
+    await page.setViewportSize({ width: 1280, height: VIEWPORT_H })
     const card = await openApprovalCard(page)
 
+    const box = await card.boundingBox()
+    expect(box, 'the approval card must have a layout box').not.toBeNull()
+
+    // The property that actually matters is that the card FITS. Asserting only
+    // "the buttons are on screen" is hollow here: the message list auto-scrolls
+    // to its tail, so an oversized card still ends with its footer in view — it
+    // just pushes its own HEADER off the top instead. Measured on this very
+    // surface: unclamped the card is 837px tall and its top sits at y=-235
+    // (the tool name, the destination host and the start of the description are
+    // all above the fold); clamped it is 457px tall starting at y=145. So the
+    // user could always reach Approve — what they could not do is see WHAT they
+    // were approving at the same time.
+    expect(
+      box!.y,
+      'the top of the card (tool name + what is being requested) must not be scrolled off',
+    ).toBeGreaterThanOrEqual(0)
+    expect(
+      box!.y + box!.height,
+      'the bottom of the card (the Deny/Approve row) must be within the fold',
+    ).toBeLessThanOrEqual(VIEWPORT_H)
+
+    // …and both decision controls are genuinely on screen within it.
     for (const id of ['tool-approval-deny', 'tool-approval-approve-once']) {
       const btn = card.getByTestId(id)
       await expect(btn, `${id} must be rendered`).toBeVisible()
-      const box = await btn.boundingBox()
-      expect(box, `${id} must have a layout box`).not.toBeNull()
-      expect(
-        box!.y + box!.height,
-        `${id} must sit within the 900px fold, not below it`,
-      ).toBeLessThanOrEqual(900)
-      expect(box!.y, `${id} must not be scrolled off the top`).toBeGreaterThanOrEqual(0)
+      const b = await btn.boundingBox()
+      expect(b, `${id} must have a layout box`).not.toBeNull()
+      expect(b!.y).toBeGreaterThanOrEqual(0)
+      expect(b!.y + b!.height).toBeLessThanOrEqual(VIEWPORT_H)
     }
   })
 
@@ -102,16 +127,17 @@ test.describe('tool-approval card — actions reachable, description complete', 
   }) => {
     const card = await openApprovalCard(page)
     const desc = card.getByTestId('approval-tool-description')
-    const toggle = card.getByTestId('approval-tool-description-toggle')
+    const toggle = card.getByTestId('collapsible-toggle')
 
-    const collapsedHeight = await desc.evaluate(el => el.clientHeight)
+    const region = card.getByTestId('collapsible-content')
+    const collapsedHeight = await region.evaluate(el => el.clientHeight)
 
     await toggle.click()
     await expect(toggle).toHaveText('Show less')
     await expect(toggle).toHaveAttribute('aria-expanded', 'true')
 
     // Expanded is genuinely unclamped — taller, and no longer overflowing.
-    const expanded = await desc.evaluate(el => ({
+    const expanded = await region.evaluate(el => ({
       scroll: el.scrollHeight,
       client: el.clientHeight,
     }))
@@ -122,7 +148,7 @@ test.describe('tool-approval card — actions reachable, description complete', 
     // …and it collapses back.
     await toggle.click()
     await expect(toggle).toHaveText('Show more')
-    await expect(await desc.evaluate(el => el.clientHeight)).toBeLessThanOrEqual(
+    expect(await region.evaluate(el => el.clientHeight)).toBeLessThanOrEqual(
       collapsedHeight + 2,
     )
   })
@@ -167,5 +193,31 @@ test.describe('tool-approval card — actions reachable, description complete', 
     await expect(page.locator('[data-testid^="mcp-toolcall-card-"]')).toHaveCount(0)
 
     expect(pageErrors, pageErrors.join('\n')).toHaveLength(0)
+  })
+
+  test('TEST-10d: an unbroken-token description cannot hide text horizontally', async ({
+    page,
+  }) => {
+    const card = await openApprovalCard(page)
+    const desc = card.getByTestId('approval-tool-description')
+
+    // A height clamp alone is not enough. A hostile server can put its payload
+    // in ONE unbroken token (no spaces): that renders as a single line, which
+    // never overflows VERTICALLY, so the "does it overflow?" measurement says no
+    // and no toggle appears — while the remainder is clipped off the right edge
+    // with no cue. `break-words` is what forces such a token to wrap, so it
+    // becomes tall (→ clamped, → toggled) instead of silently clipped.
+    const wraps = await desc.evaluate(
+      el => getComputedStyle(el).overflowWrap === 'break-word' ||
+            getComputedStyle(el).wordBreak === 'break-word',
+    )
+    expect(wraps, 'the description must wrap unbroken tokens, not clip them').toBe(true)
+
+    // Nothing is hidden sideways: the text never overflows its own width.
+    const h = await desc.evaluate(el => ({ scroll: el.scrollWidth, client: el.clientWidth }))
+    expect(
+      h.scroll,
+      'no part of the advertised description may sit outside its box horizontally',
+    ).toBeLessThanOrEqual(h.client + 1)
   })
 })

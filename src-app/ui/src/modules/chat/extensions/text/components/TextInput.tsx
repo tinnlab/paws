@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { Textarea, message } from '@ziee/kit'
+import { SEND_FAILED_FALLBACK_MESSAGE } from '@/modules/chat/core/stores/chat/sendFailureState'
 import { useChatPaneOrNull } from '@/modules/chat/core/pane/ChatPaneContext'
 import {
   getDraft,
@@ -22,6 +23,8 @@ import { Chat } from '@/modules/chat/core/stores/chatBridge'
  */
 export function TextInput() {
   const ref = useRef<HTMLTextAreaElement>(null)
+  // Synchronous re-entrancy latch for the Enter path — see handleKeyDown.
+  const inFlightRef = useRef(false)
   // Resolve THIS pane's chat store directly (not the focused-pane bridge): the
   // composer's TextStore is a NESTED store, and `Chat.TextStore` resolves
   // nested stores via getState()->focusedApi() (the focused pane), NOT the
@@ -103,26 +106,48 @@ export function TextInput() {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
 
-      // Mirror `ChatInput.handleSend` exactly. Enter and the Send button are two
-      // routes to ONE action, so they must agree:
-      //  - the same in-flight guard. The Send button is `disabled` while
-      //    sending/streaming; the textarea is only disabled on `sending`, so
-      //    without this an Enter mid-stream started a SECOND turn (the audit's
-      //    `rapid-double-submit` cell).
-      //  - the same try/catch. This handler is `async`, so an un-caught rejection
-      //    became an UNHANDLED one — a page-level error event with no toast, i.e.
-      //    a failure the user is never told about.
-      // (An empty composer no longer throws at all: it is a silent cancel that
-      // `sendMessage` returns from. This catch covers every OTHER cancel reason
-      // and any genuine send failure.)
-      if (sending || isStreaming) return
+      // Guard, then catch — the two things the Send button already did and this
+      // path did not.
+      //
+      // NOT a full mirror of `ChatInput.handleSend`: that also gates on
+      // `disabled` and on `useSendBlocked()`. Both are ChatInput-owned — the
+      // blocker hook returns probe NODES that its owner must render, so calling
+      // it here would mount a second copy of every extension's blocker hook.
+      // The consequence is bounded and acceptable: an extension that blocks
+      // (today only "files still uploading") returns a LOUD veto from
+      // `beforeSendMessage`, so Enter mid-upload still cannot send — it shows
+      // that extension's message via the catch below instead of being inert.
+      //
+      // `sending`/`isStreaming` come from the render closure, and the store only
+      // flips `sending` AFTER several awaits (including, on a new chat, a
+      // create-conversation round-trip), so they do NOT close the
+      // repeat-keypress window on their own. `inFlightRef` is the synchronous
+      // latch that does — a held Enter fires keydown repeatedly, which is the
+      // audit's `rapid-double-submit` cell. The reactive flags still matter:
+      // they cover a turn started by the BUTTON, which this ref knows nothing
+      // about.
+      if (sending || isStreaming || inFlightRef.current) return
 
+      inFlightRef.current = true
       try {
-        // Call sendMessage directly - model extension will provide model_id
-        await chatStore.sendMessage()
+        // `allowSilentCancel` is passed ONLY here, and deliberately NOT by the
+        // Send button. Enter on an empty composer is a stray keypress the user
+        // never aimed at anything, so it should do nothing; a deliberate click
+        // on a visible Send button still earns the explanatory toast. Every
+        // PROGRAMMATIC caller (regenerate, edit-resubmit, tool approval) also
+        // omits it, so a veto there still throws instead of evaporating.
+        await chatStore.sendMessage({ allowSilentCancel: true })
       } catch (error: any) {
+        // Reachable for a LOUD extension veto (e.g. "files still uploading")
+        // and for a pre-flight failure such as conversation creation. A failure
+        // of the send REQUEST itself is handled inside the store, which records
+        // it on `store.error` and renders it in the conversation's error Alert.
+        // Without this catch the rejection escaped an `async` React handler as
+        // an UNHANDLED one — a page-level error event, with nothing shown.
         console.error('Failed to send message:', error)
-        message.error(error?.message || 'Failed to send message')
+        message.error(error?.message || SEND_FAILED_FALLBACK_MESSAGE)
+      } finally {
+        inFlightRef.current = false
       }
     }
   }

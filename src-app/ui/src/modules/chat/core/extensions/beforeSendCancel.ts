@@ -81,13 +81,3 @@ export function resolveCancel(
 
   return firstSilent ?? NO_CANCEL
 }
-
-/**
- * Merge a flat list of results (no per-extension names, no `discardCancel`) —
- * the shape `mergeBeforeSendResults` works with. Same severity rule.
- */
-export function mergeCancelDecision(
-  results: readonly BeforeSendResult[],
-): CancelDecision {
-  return resolveCancel(results.map((r, i) => [String(i), r] as const))
-}

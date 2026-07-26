@@ -21,6 +21,15 @@ import { loginAsAdmin, getAdminToken } from '../../common/auth-helpers'
  * TEST-8 is the positive control: it proves the indicator genuinely appears for
  * an in-flight turn, so TEST-7 cannot pass merely because the element never
  * rendered at all.
+ *
+ * SCOPE, stated honestly: these specs fail the send POST, which was ALREADY
+ * inside the store's pre-existing try/catch — so they verify the USER-VISIBLE
+ * contract (spinner stops, error shows, composer recovers) but they do NOT by
+ * themselves prove the try-widening in `sendMessage`. The failures that used to
+ * wedge the flags (`loadMessages` / `provideUserContent` throwing between the
+ * flag-set and the old `try`) are not reachable from the network boundary; they
+ * are covered by `stores/chat/sendMessage.store.test.ts`, which drives the real
+ * action and was verified RED against the pre-fix code.
  */
 
 const SEND_ROUTE = /\/api\/conversations\/[^/]+\/messages$/
@@ -118,13 +127,28 @@ test.describe('Chat — a failed turn shows an error, not an eternal spinner', (
     // PRESENT while the turn is in flight — and it is a real, announced
     // affordance, not an anonymous spinning div.
     const indicator = byTestId(page, 'chat-streaming-indicator')
+    const region = byTestId(page, 'chat-busy-indicator')
     await expect(indicator).toBeVisible({ timeout: 15000 })
-    await expect(indicator).toHaveAttribute('role', 'status')
-    await expect(indicator).toHaveAttribute('aria-live', 'polite')
-    await expect(indicator.locator('[aria-label]')).toHaveCount(1)
 
-    // ABSENT once the turn terminates.
+    // The live region is ALWAYS mounted (only its content toggles) — a region
+    // inserted together with its text is unreliably announced.
+    await expect(region).toHaveAttribute('role', 'status')
+    await expect(region).toHaveAttribute('aria-live', 'polite')
+
+    // …and it names the state it is actually in. `data-busy` distinguishes a
+    // GENERATION from a plain message-history fetch, which share this spinner;
+    // asserting it is what stops "visible after clicking Send" being satisfied
+    // by an unrelated load.
+    await expect(region).toHaveAttribute('data-busy', 'streaming')
+    await expect(region).toHaveAttribute('aria-label', 'Generating response')
+
+    // ABSENT once the turn terminates — and NOTHING on the page still claims to
+    // be generating. (Asserted as a page-wide count rather than on `region`
+    // itself: a terminal failure can swap the whole transcript for an error
+    // state, so the region may legitimately be gone — what must never remain is
+    // a live "streaming" claim.)
     await expect(indicator).toHaveCount(0, { timeout: 30000 })
+    await expect(page.locator('[data-busy="streaming"]')).toHaveCount(0)
     await expect(byTestId(page, 'chat-conversation-error-alert')).toBeVisible({
       timeout: 30000,
     })

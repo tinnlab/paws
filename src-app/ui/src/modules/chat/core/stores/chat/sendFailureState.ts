@@ -61,3 +61,24 @@ export function buildSendFailureState(error: unknown): SendFailureState {
     lastTurnInterrupted: true,
   }
 }
+
+/**
+ * Options for `sendMessage`.
+ *
+ * Deliberately opt-IN: the default (omitting the object entirely) preserves the
+ * historical behaviour of throwing on any extension veto, so no existing caller
+ * changes meaning.
+ */
+export interface SendMessageOptions {
+  /**
+   * Treat a veto the extension classified as a no-op (`BeforeSendResult.silent`)
+   * as a quiet return instead of a throw.
+   *
+   * Pass this ONLY from a user-initiated composer submit. A programmatic caller
+   * must NOT: `startRegenerateMessage`, for instance, has already trimmed the
+   * transcript and latched the pending-branch fields before it calls
+   * `sendMessage`, so a quiet return there would leave the UI trimmed with
+   * nothing regenerating and no error shown.
+   */
+  allowSilentCancel?: boolean
+}

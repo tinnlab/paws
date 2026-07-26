@@ -9,23 +9,38 @@ import {
   buildSendFailureState,
   isAbortError,
   SEND_FAILED_FALLBACK_MESSAGE,
+  type SendMessageOptions,
 } from '@/modules/chat/core/stores/chat/sendFailureState'
 
 export default (set: ChatSet, getRaw: () => ChatInitialState) => {
   const get = getRaw as unknown as () => ChatState
   const extLifecycle = (): ExtensionLifecycle => get().extensionRuntime ?? chatExtensionRegistry
-  return async () => {
+  return async (options?: SendMessageOptions) => {
       let { conversation } = get()
 
       const beforeResult = await chatExtensionRegistry.beforeSendMessage()
 
       if (beforeResult.cancel) {
-        // A SILENT cancel is a no-op submit (today: an empty composer), not a
-        // failure — return without throwing and without touching state, so a
-        // stray Enter is exactly as uneventful as clicking the disabled Send
-        // button. A LOUD cancel is a real blocker the user must be told about,
-        // so it still throws for the caller to surface.
-        if (beforeResult.silent) return
+        // A cancel THROWS by default — byte-identical to the historical
+        // behaviour — because most callers of `sendMessage` are PROGRAMMATIC
+        // (regenerate, edit-resubmit, transmitting a tool approval/denial) and
+        // for them a veto is a genuine failure that must not evaporate: e.g.
+        // `startRegenerateMessage` has already trimmed the transcript and
+        // latched the pending-branch fields by the time it calls us, so a quiet
+        // return would leave the UI trimmed, nothing regenerating, and no error.
+        //
+        // Only a USER-INITIATED composer submit opts into the quiet path, and
+        // only for a cancel the extension itself classified as a no-op
+        // (`silent` — today just "the composer is empty"). Both signals are
+        // required: the REASON must be a non-failure, and the CALLER must be the
+        // one place where "the user submitted nothing" is not an error.
+        if (options?.allowSilentCancel && beforeResult.silent) {
+          console.debug(
+            '[Chat.store] send skipped (no-op):',
+            beforeResult.errorMessage || 'nothing to send',
+          )
+          return
+        }
         console.log('[Chat.store] Message send cancelled by extension')
         throw new Error(
           beforeResult.errorMessage || 'Message send was cancelled',
@@ -207,9 +222,20 @@ export default (set: ChatSet, getRaw: () => ChatInitialState) => {
         }
 
         if (aborted) {
-          const conversation = get().conversation
-          if (conversation) {
-            await get().loadMessages(conversation.id)
+          // Best-effort refetch after a user cancel. Guarded because the store
+          // is ALREADY fully reset above: letting a refetch failure reject
+          // `sendMessage` would surface an error toast for an action the user
+          // deliberately took, on top of a state that is already correct.
+          try {
+            const conversation = get().conversation
+            if (conversation) {
+              await get().loadMessages(conversation.id)
+            }
+          } catch (reloadError) {
+            console.error(
+              '[Chat.store] post-abort message reload failed; state already recovered',
+              reloadError,
+            )
           }
         }
       }

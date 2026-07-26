@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { resolveCancel, mergeCancelDecision } from './beforeSendCancel.ts'
+import { resolveCancel } from './beforeSendCancel.ts'
 
 /**
  * TEST-1 — the cancel-severity algebra.
@@ -89,14 +89,4 @@ test('a non-cancel result never becomes a cancel', () => {
     ['a', { cancel: false, silent: true, errorMessage: 'ignored' }],
   ])
   assert.equal(d.cancel, false)
-})
-
-test('mergeCancelDecision applies the same algebra to a flat list', () => {
-  assert.equal(mergeCancelDecision([{ cancel: false }]).cancel, false)
-  assert.equal(mergeCancelDecision([{ cancel: true, silent: true }]).silent, true)
-  assert.equal(
-    mergeCancelDecision([{ cancel: true, silent: true }, { cancel: true }]).silent,
-    false,
-    'fail-loud wins in the merge path too',
-  )
 })

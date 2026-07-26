@@ -1,5 +1,5 @@
 import { test, beforeEach, afterEach, expect } from 'vitest'
-import makeSendMessage from './sendMessage'
+import makeSendMessage from './actions/sendMessage'
 import { chatExtensionRegistry } from '@/modules/chat/core/extensions'
 
 /**
@@ -69,6 +69,8 @@ const REGISTRY_KEYS = [
 ] as const
 
 const reg = chatExtensionRegistry as unknown as Record<string, unknown>
+/** Own properties that did NOT exist before a stub shadowed the prototype. */
+let hadOwn: Record<string, boolean> = {}
 let saved: Record<string, unknown> = {}
 
 function stubRegistry(over: Record<string, unknown> = {}) {
@@ -87,11 +89,21 @@ function stubRegistry(over: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   saved = {}
-  for (const k of REGISTRY_KEYS) saved[k] = reg[k]
+  hadOwn = {}
+  for (const k of REGISTRY_KEYS) {
+    hadOwn[k] = Object.prototype.hasOwnProperty.call(reg, k)
+    saved[k] = reg[k]
+  }
 })
 
 afterEach(() => {
-  for (const k of REGISTRY_KEYS) reg[k] = saved[k]
+  // A real restore: the stubs are assigned as OWN properties that SHADOW the
+  // class prototype, so re-assigning the prototype method back would leave the
+  // shadow permanently in place. Delete what we created; restore what existed.
+  for (const k of REGISTRY_KEYS) {
+    if (hadOwn[k]) reg[k] = saved[k]
+    else delete reg[k]
+  }
 })
 
 /** Capture console.error for the duration of `fn`. */
@@ -123,7 +135,7 @@ test('a non-silent cancel still THROWS (never resolves quietly)', async () => {
 })
 
 // ── ITEM-1: a SILENT cancel is a true no-op ─────────────────────────────────
-test('a silent cancel returns without throwing and without touching state', async () => {
+test('a silent cancel is quiet ONLY when the caller opts in', async () => {
   stubRegistry({
     beforeSendMessage: async () => ({
       cancel: true,
@@ -131,10 +143,33 @@ test('a silent cancel returns without throwing and without touching state', asyn
       errorMessage: 'Message cannot be empty',
     }),
   })
-  const { set, get, sets } = makeStore()
-  await makeSendMessage(set as never, get as never)()
-  // An empty submit must not flip sending / isStreaming / error.
-  expect(sets.length).toBe(0)
+
+  // The composer opts in → quiet no-op, no state touched.
+  const a = makeStore()
+  await makeSendMessage(a.set as never, a.get as never)({ allowSilentCancel: true })
+  expect(a.sets.length).toBe(0)
+
+  // A PROGRAMMATIC caller does NOT opt in → the veto still throws. This is the
+  // guard that keeps `startRegenerateMessage` (which has already trimmed the
+  // transcript and latched the pending-branch fields before calling us) from
+  // silently doing nothing, and keeps a tool approval/denial from being dropped.
+  const b = makeStore()
+  await expect(makeSendMessage(b.set as never, b.get as never)()).rejects.toThrow(
+    /Message cannot be empty/,
+  )
+  expect(b.sets.length).toBe(0)
+})
+
+test('a LOUD cancel throws even when the caller opts into silent cancels', async () => {
+  // fail-loud wins at the call site too: opting in must not silence a real
+  // blocker (e.g. "files still uploading").
+  stubRegistry({
+    beforeSendMessage: async () => ({ cancel: true, errorMessage: 'still uploading' }),
+  })
+  const { set, get } = makeStore()
+  await expect(
+    makeSendMessage(set as never, get as never)({ allowSilentCancel: true }),
+  ).rejects.toThrow(/still uploading/)
 })
 
 // ── TEST-3: the previously-unprotected region ───────────────────────────────

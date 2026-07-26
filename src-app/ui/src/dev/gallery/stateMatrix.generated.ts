@@ -4,7 +4,7 @@
 // renders + overlay triggers + panel/slot registrations) that the reconciliation
 // gate (scripts/reconcile-state-matrix.mjs) checks the gallery entries against.
 //
-// 336 surfaces carry renderable-state signals; 2059 signals total.
+// 336 surfaces carry renderable-state signals; 2055 signals total.
 
 /** A signal is one mechanically-detected render fork (a state the surface can be in). */
 export interface StateSignal {
@@ -450,7 +450,7 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
       { kind: "branch", condition: "loadingOlder", line: 507 },
       { kind: "branch", condition: "virtualize", line: 517 },
       { kind: "branch", condition: "!msg", line: 532 },
-      { kind: "loading", condition: "(loading || isStreaming)", line: 601 },
+      { kind: "loading", condition: "(loading || isStreaming)", line: 623 },
     ],
   },
   "modules/chat/components/ModelSelector": {
@@ -569,7 +569,7 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/chat/core/extensions/utils",
     requiredStates: [],
     signals: [
-      { kind: "branch", condition: "!match", line: 208 },
+      { kind: "branch", condition: "!match", line: 203 },
     ],
   },
   "modules/chat/core/utils/CitationChip": {
@@ -729,11 +729,11 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/chat/extensions/text/components/TextInput",
     requiredStates: [],
     signals: [
-      { kind: "branch", condition: "!el", line: 80 },
-      { kind: "branch", condition: "isEditing", line: 81 },
-      { kind: "branch", condition: "restoredKeyRef.current === draftKey", line: 89 },
-      { kind: "branch", condition: "isEditingRef.current", line: 97 },
-      { kind: "branch", condition: "sending || isStreaming", line: 118 },
+      { kind: "branch", condition: "!el", line: 83 },
+      { kind: "branch", condition: "isEditing", line: 84 },
+      { kind: "branch", condition: "restoredKeyRef.current === draftKey", line: 92 },
+      { kind: "branch", condition: "isEditingRef.current", line: 100 },
+      { kind: "branch", condition: "sending || isStreaming || inFlightRef.current", line: 129 },
     ],
   },
   "modules/chat/extensions/text/components/ThinkingContent": {
@@ -2558,15 +2558,11 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/mcp/chat-extension/components/ToolCallPendingApprovalContent",
     requiredStates: [],
     signals: [
-      { kind: "branch", condition: "!el", line: 81 },
-      { kind: "branch", condition: "expanded", line: 86 },
-      { kind: "branch", condition: "typeof ResizeObserver === 'undefined'", line: 97 },
-      { kind: "branch", condition: "(overflowing || expanded)", line: 118 },
-      { kind: "branch", condition: "!isControlWrite", line: 307 },
-      { kind: "branch", condition: "mcpServerParenLabel(toolCall.server)", line: 326 },
-      { kind: "branch", condition: "toolCall.dest_host", line: 341 },
-      { kind: "branch", condition: "toolCall.description", line: 370 },
-      { kind: "branch", condition: "toolCall.input !== undefined", line: 375 },
+      { kind: "branch", condition: "!isControlWrite", line: 289 },
+      { kind: "branch", condition: "mcpServerParenLabel(toolCall.server)", line: 308 },
+      { kind: "branch", condition: "toolCall.dest_host", line: 323 },
+      { kind: "branch", condition: "toolCall.description", line: 352 },
+      { kind: "branch", condition: "toolCall.input !== undefined", line: 360 },
     ],
   },
   "modules/mcp/chat-extension/components/elicitationFields": {

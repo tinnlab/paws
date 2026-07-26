@@ -4,6 +4,7 @@ import {
   defineStore,
   type StoreInitCtx,
 } from '@ziee/framework/store-kit'
+import type { SendMessageOptions } from '@/modules/chat/core/stores/chat/sendFailureState'
 import { useMessageViewStateStore } from '@/modules/chat/core/stores/messageViewState'
 import { ApiClient } from '@/api-client'
 import type { Branch, Conversation, MessageWithContent } from '@/api-client/types'
@@ -402,7 +403,17 @@ export interface ChatState {
   /** Merge the newest page into the window without discarding loaded older
    *  pages (used after a streamed turn / cross-device change). */
   reconcileTail: (conversationId: string) => Promise<void>
-  sendMessage: () => Promise<void>
+  /**
+   * Send the composer's message.
+   *
+   * `allowSilentCancel` is opt-in and exists for exactly ONE caller shape: a
+   * USER-INITIATED composer submit, where an extension veto classified as a
+   * no-op (`BeforeSendResult.silent` — today only "the composer is empty") is
+   * not a failure and must not throw. Every PROGRAMMATIC caller (regenerate,
+   * edit-resubmit, transmitting a tool approval/denial) must omit it, so a veto
+   * still surfaces as an error rather than evaporating mid-flow.
+   */
+  sendMessage: (options?: SendMessageOptions) => Promise<void>
   applyStreamFrame: (conversationId: string, event: any) => Promise<void>
   updateConversation: (updates: { title?: string }) => Promise<void>
   clearError: () => Promise<void>

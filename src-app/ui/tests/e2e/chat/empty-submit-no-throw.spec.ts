@@ -14,30 +14,42 @@ import { loginAsAdmin, getAdminToken } from '../../common/auth-helpers'
  * composer is empty" one. The rejection escaped as an unhandled promise
  * rejection, i.e. a page-level error event, with no toast for the user.
  *
- * Two properties are asserted here, and they are different:
- *   1. an EMPTY submit raises nothing at all (it is now a silent cancel the
- *      store returns from) and changes nothing;
- *   2. a NON-EMPTY submit that genuinely fails is CAUGHT and surfaced to the
- *      user — the Enter path must not become quiet about real failures while
- *      fixing the noisy one.
+ * Three properties are asserted here, and they are different:
+ *   1. an EMPTY submit via ENTER raises nothing at all and changes nothing;
+ *   2. a NON-EMPTY submit that genuinely fails is still surfaced to the user —
+ *      the Enter path must not become quiet about real failures while fixing the
+ *      noisy one;
+ *   3. the SEND BUTTON is deliberately NOT quiet about an empty composer. Only
+ *      the Enter key opts into the silent path (`allowSilentCancel`), because a
+ *      stray keypress is not an action the user aimed at anything, whereas
+ *      clicking a visible control is. This test exists to stop a future change
+ *      widening the quiet path to the button and turning it into a dead click.
  */
 
 const SEND_ROUTE = /\/api\/conversations\/[^/]+\/messages$/
 
-/** Collect page-level errors + console errors for the life of the page. */
+/**
+ * Collect page-level errors + console errors, with an ARM point.
+ *
+ * Console errors are only counted after `arm()` is called. Asserting over the
+ * whole session (login → conversation load → chat mount) would make this spec
+ * fail on unrelated boot noise and invite ever-widening ignore regexes until the
+ * gate stops gating. `pageerror` is collected from the start — an uncaught
+ * exception at ANY point is in scope for INV-2 and there is no legitimate one.
+ */
 function collectErrors(page: import('@playwright/test').Page) {
   const pageErrors: string[] = []
   const consoleErrors: string[] = []
+  let armed = false
   page.on('pageerror', e => pageErrors.push(e.message))
   page.on('console', m => {
-    if (m.type() !== 'error') return
+    if (!armed || m.type() !== 'error') return
     const t = m.text()
-    // Ignore infrastructure noise unrelated to the composer: dev-server HMR
-    // chatter and resource-load failures are not what this spec is about.
+    // Dev-server chatter / resource loads are not composer behaviour.
     if (/Failed to load resource|\[vite\]|favicon/i.test(t)) return
     consoleErrors.push(t)
   })
-  return { pageErrors, consoleErrors }
+  return { pageErrors, consoleErrors, arm: () => { armed = true } }
 }
 
 async function seedConversation(
@@ -77,6 +89,9 @@ test.describe('Chat — composer submit never throws', () => {
 
     const userMessagesBefore = await page.locator('[data-role="user"]').count()
 
+    // From here on, ANY console error is attributable to the keypress.
+    errors.arm()
+
     // The literal repro: focus the empty composer and hit Enter. Repeat — a
     // stray double-Enter after a send is exactly how a real user hits this.
     await textarea.click()
@@ -106,7 +121,7 @@ test.describe('Chat — composer submit never throws', () => {
     await expect(textarea).toHaveValue('still works')
   })
 
-  test('a FAILING send via Enter surfaces a toast and still raises no pageerror', async ({
+  test('a FAILING send via Enter surfaces a visible error and raises no pageerror', async ({
     page,
     testInfra,
   }) => {
@@ -136,8 +151,14 @@ test.describe('Chat — composer submit never throws', () => {
     await textarea.fill('this send will fail')
     await textarea.press('Enter')
 
-    // The failure IS surfaced — the fix must not make the Enter path quiet
-    // about real errors while silencing the empty-composer one.
+    // The failure IS surfaced — the fix must not make the Enter path quiet about
+    // real errors while silencing the empty-composer one. NOTE the surface is
+    // the conversation error Alert, not the handler's toast: the store's own
+    // catch handles a failed send REQUEST and records it on `store.error`
+    // (it does not re-throw). The Enter handler's own `message.error` covers the
+    // other reachable class — a LOUD extension veto — which is driven directly
+    // by the store unit test (`sendMessage.store.test.ts`), where a veto can be
+    // provoked deterministically.
     await expect(byTestId(page, 'chat-conversation-error-alert')).toBeVisible({
       timeout: 30000,
     })
@@ -204,6 +225,35 @@ test.describe('Chat — composer submit never throws', () => {
     await page.waitForTimeout(1500)
 
     expect(sendRequests, 'Enter must be inert while a turn is streaming').toBe(1)
+    expect(errors.pageErrors).toEqual([])
+  })
+
+  test('the SEND BUTTON still gives feedback on an empty composer (quiet path is Enter-only)', async ({
+    page,
+    testInfra,
+  }) => {
+    const { baseURL, apiURL } = testInfra
+    const errors = collectErrors(page)
+
+    await loginAsAdmin(page, baseURL)
+    const conv = await seedConversation(page, apiURL, 'empty-submit-button')
+    await page.goto(`${baseURL}/chat/${conv.id}`)
+
+    const sendBtn = byTestId(page, 'chat-input-send-btn')
+    await expect(sendBtn).toBeVisible({ timeout: 30000 })
+    errors.arm()
+
+    await sendBtn.click()
+
+    // The button path keeps the explanatory toast it has always had. Making the
+    // whole cancel silent would have turned this into a dead click with no
+    // request, no toast and no disabled affordance — a silent failure, which is
+    // exactly what INV-1's "always show feedback after a mutation" forbids.
+    await expect(page.locator('[data-sonner-toast]').first()).toBeVisible({
+      timeout: 15000,
+    })
+
+    // …and it is still handled, not thrown.
     expect(errors.pageErrors).toEqual([])
   })
 })

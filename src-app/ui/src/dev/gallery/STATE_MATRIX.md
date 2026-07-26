@@ -8,7 +8,7 @@
 ## Summary
 
 - **336** surfaces carry at least one renderable-state signal.
-- **2059** signals total: 1613 branch, 136 empty, 117 error, 94 loading, 96 overlay, 3 panel.
+- **2055** signals total: 1609 branch, 136 empty, 117 error, 94 loading, 96 overlay, 3 panel.
 - **3** right-panel renderers registered (each a right-panel-open state).
 - **35** slot registrations (sidebar / settings / chat mount points).
 
@@ -528,7 +528,7 @@ Required states: `delayed`, `empty`
 | branch | `loadingOlder` | 507 |
 | branch | `virtualize` | 517 |
 | branch | `!msg` | 532 |
-| loading | `(loading \|\| isStreaming)` | 601 |
+| loading | `(loading \|\| isStreaming)` | 623 |
 
 ### `modules/chat/components/ModelSelector`
 
@@ -660,7 +660,7 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!match` | 208 |
+| branch | `!match` | 203 |
 
 ### `modules/chat/core/utils/CitationChip`
 
@@ -840,11 +840,11 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!el` | 80 |
-| branch | `isEditing` | 81 |
-| branch | `restoredKeyRef.current === draftKey` | 89 |
-| branch | `isEditingRef.current` | 97 |
-| branch | `sending \|\| isStreaming` | 118 |
+| branch | `!el` | 83 |
+| branch | `isEditing` | 84 |
+| branch | `restoredKeyRef.current === draftKey` | 92 |
+| branch | `isEditingRef.current` | 100 |
+| branch | `sending \|\| isStreaming \|\| inFlightRef.current` | 129 |
 
 ### `modules/chat/extensions/text/components/ThinkingContent`
 
@@ -2812,15 +2812,11 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!el` | 81 |
-| branch | `expanded` | 86 |
-| branch | `typeof ResizeObserver === 'undefined'` | 97 |
-| branch | `(overflowing \|\| expanded)` | 118 |
-| branch | `!isControlWrite` | 307 |
-| branch | `mcpServerParenLabel(toolCall.server)` | 326 |
-| branch | `toolCall.dest_host` | 341 |
-| branch | `toolCall.description` | 370 |
-| branch | `toolCall.input !== undefined` | 375 |
+| branch | `!isControlWrite` | 289 |
+| branch | `mcpServerParenLabel(toolCall.server)` | 308 |
+| branch | `toolCall.dest_host` | 323 |
+| branch | `toolCall.description` | 352 |
+| branch | `toolCall.input !== undefined` | 360 |
 
 ### `modules/mcp/chat-extension/components/elicitationFields`
 
