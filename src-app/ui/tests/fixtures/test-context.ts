@@ -553,7 +553,7 @@ export default defineConfig({
       // here (this hook body runs BEFORE vite installs the compression
       // middleware) forces uncompressed, Content-Length responses that cannot
       // be truncated the same way.
-      name: 'e2e-disable-preview-compression',
+      name: 'e2e-preview-static-serving-and-compression',
       configurePreviewServer(server) {
         // FIX #2 (graph-agnostic): serve every built asset from an in-memory
         // map with ONE res.end(buffer) BEFORE vite's own sirv static handler.

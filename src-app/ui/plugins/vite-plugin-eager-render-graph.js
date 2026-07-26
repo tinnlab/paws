@@ -40,17 +40,33 @@ import { fileURLToPath } from 'node:url'
 const VIRTUAL_ID = 'virtual:ziee-e2e-eager-render'
 const RESOLVED_ID = '\0' + VIRTUAL_ID
 
-/** True for the app entry module (src/main.tsx), ignoring any query suffix. */
-export function isEntryId(id) {
+/**
+ * True for the app entry module. Prefers an exact match against an explicit
+ * entry absolute path (passed by the build config); falls back to a
+ * `src/main.tsx` suffix match. The explicit form avoids over-matching a
+ * transitive dependency that happens to ship a `src/main.tsx`.
+ *
+ * @param {string} id            the module id vite is transforming
+ * @param {string} [entryAbs]    absolute path to the real entry (src/main.tsx)
+ */
+export function isEntryId(id, entryAbs) {
+  if (entryAbs) {
+    const norm = s => s.replace(/\\/g, '/').replace(/\?.*$/, '')
+    return norm(id) === norm(entryAbs)
+  }
   return /[\\/]src[\\/]main\.tsx($|\?)/.test(id)
 }
 
 /**
  * Resolve the streamdown package's internal dist chunks that are reached ONLY
- * via streamdown's own `import('./highlighted-body-*.js')` /
- * `import('./mermaid-*.js')`. Returns absolute POSIX paths. Throws if streamdown
- * (or its highlighted-body chunk) can't be resolved — a silent empty set would
- * reintroduce the very flake this plugin exists to remove.
+ * via streamdown's own `import('./…')` (highlighted-body, mermaid, and any
+ * FUTURE internal async chunk). DATA-DRIVEN: globs every `dist/*.js` EXCEPT the
+ * package entry (`index.js`) and the shared static chunk (`chunk-*.js`, which is
+ * already pulled in by the static `import 'streamdown'`) — so a new streamdown
+ * internal async chunk is folded in automatically, with no code change. Returns
+ * absolute POSIX paths. Throws if streamdown can't be resolved OR its
+ * highlighted-body chunk is absent (the layout-changed sanity guard) — a silent
+ * empty set would reintroduce the very flake this plugin exists to remove.
  *
  * @param {(spec: string) => string} resolveSpec  resolves a package specifier to
  *   an absolute file path (defaults to ESM `import.meta.resolve`; streamdown's
@@ -62,7 +78,7 @@ export function resolveStreamdownInternalChunks(resolveSpec) {
   const distDir = path.dirname(indexPath)
   const files = fs.readdirSync(distDir)
   const matched = files.filter(
-    f => /^highlighted-body-.*\.js$/.test(f) || /^mermaid-.*\.js$/.test(f),
+    f => f.endsWith('.js') && f !== 'index.js' && !/^chunk-/.test(f),
   )
   if (!matched.some(f => f.startsWith('highlighted-body-'))) {
     throw new Error(
@@ -101,13 +117,17 @@ export function buildEagerModuleSource(internalChunkAbsPaths) {
 }
 
 /**
- * @param {{ resolveSpec?: (spec: string) => string }} [opts]
+ * @param {{ resolveSpec?: (spec: string) => string, entry?: string }} [opts]
  *   - `resolveSpec`: override the package resolver (tests inject a fake). Default
  *     uses ESM `import.meta.resolve`, resolving relative to this plugin file.
+ *   - `entry`: absolute path to the app entry (`src/main.tsx`). When given, the
+ *     eager import is injected ONLY into that exact module (precise); otherwise
+ *     a `src/main.tsx` suffix match is used.
  */
 export function eagerRenderGraphPlugin(opts = {}) {
   const resolveSpec =
     opts.resolveSpec ?? (spec => fileURLToPath(import.meta.resolve(spec)))
+  const entryAbs = opts.entry
   let source = null // built lazily so a resolution error surfaces at build, with context
 
   return {
@@ -128,7 +148,7 @@ export function eagerRenderGraphPlugin(opts = {}) {
     transform(code, id) {
       // Inject the eager import at the top of the app entry so the whole render
       // graph lands in the entry's static (boot-preloaded) chunk graph.
-      if (isEntryId(id)) {
+      if (isEntryId(id, entryAbs)) {
         return { code: `import '${VIRTUAL_ID}'\n` + code, map: null }
       }
     },

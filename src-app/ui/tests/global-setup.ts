@@ -248,7 +248,7 @@ export default defineConfig({
     tailwindcss(),
     moduleManifestPlugin({ srcDir: ${JSON.stringify(srcRoot)} }),
     preloadGraphPlugin(),
-    eagerRenderGraphPlugin(),
+    eagerRenderGraphPlugin({ entry: ${JSON.stringify(resolve(srcRoot, 'main.tsx'))} }),
   ],
   root: ${JSON.stringify(srcRoot)},
   cacheDir: ${JSON.stringify(resolve(uiRoot, 'node_modules/.vite-e2e-build'))},

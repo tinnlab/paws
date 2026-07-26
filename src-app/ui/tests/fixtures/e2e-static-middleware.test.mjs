@@ -144,11 +144,40 @@ test('middleware falls through for /api, unknown paths, and non-GET', () => {
   }
 })
 
-test('serveDirFromMemory degrades to a no-op next() for a missing dir', () => {
+test('serveDirFromMemory degrades to a no-op next() for a missing dir (and warns)', () => {
   const mw = serveDirFromMemory(join(tmpdir(), 'definitely-not-here-' + Date.now()))
   const res = fakeRes()
   let nexted = false
   mw({ method: 'GET', url: '/assets/x.js' }, res, () => (nexted = true))
   assert.equal(nexted, true)
   assert.equal(res.ended, false)
+})
+
+test('serveDirFromMemory degrades to a no-op next() for an EMPTY dir', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'e2e-static-empty-'))
+  try {
+    const mw = serveDirFromMemory(dir)
+    const res = fakeRes()
+    let nexted = false
+    mw({ method: 'GET', url: '/anything.js' }, res, () => (nexted = true))
+    assert.equal(nexted, true)
+    assert.equal(res.ended, false)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('index.html is served no-cache (revalidatable), hashed assets immutable', () => {
+  const dir = makeDist()
+  try {
+    const mw = makeStaticMiddleware(buildAssetMap(dir))
+    const rHtml = fakeRes()
+    mw({ method: 'GET', url: '/index.html' }, rHtml, () => {})
+    assert.match(String(rHtml.headers['cache-control']), /no-cache/)
+    const rJs = fakeRes()
+    mw({ method: 'GET', url: '/assets/app-abc.js' }, rJs, () => {})
+    assert.match(String(rJs.headers['cache-control']), /immutable/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })

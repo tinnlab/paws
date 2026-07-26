@@ -106,8 +106,13 @@ export function makeStaticMiddleware(assetMap) {
     res.statusCode = 200
     res.setHeader('Content-Type', asset.type)
     res.setHeader('Content-Length', asset.buf.length)
-    // Hashed assets are immutable; this also stops any revalidation round-trip.
-    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+    // Hashed assets are immutable; index.html (unhashed) must stay revalidatable.
+    res.setHeader(
+      'Cache-Control',
+      asset.type.startsWith('text/html')
+        ? 'no-cache'
+        : 'public, max-age=31536000, immutable',
+    )
     if (method === 'HEAD') return res.end()
     // ONE write: the whole body goes to the OS socket buffer in this tick, so a
     // subsequently-starved event loop cannot cut the response mid-stream.
@@ -116,10 +121,11 @@ export function makeStaticMiddleware(assetMap) {
 }
 
 /**
- * Convenience: build the map from `dir` and return the middleware. Returns a
- * no-op `next()` middleware (never throws) if the dir is missing/empty, so a
- * misconfiguration degrades to the existing sirv behavior rather than breaking
- * the whole preview server.
+ * Convenience: build the map from `dir` and return the middleware. On a missing
+ * / unreadable dir it WARNS (loudly — a silent no-op would invisibly revert to
+ * the flaky sirv streaming path this exists to replace) and degrades to a
+ * pass-through `next()` so the preview server still boots. On an empty dir it
+ * also warns (zero assets loaded is a misconfiguration signal).
  *
  * @param {string} dir  absolute path to the built dist dir
  */
@@ -127,8 +133,18 @@ export function serveDirFromMemory(dir) {
   let assetMap
   try {
     assetMap = buildAssetMap(dir)
-  } catch {
+  } catch (e) {
+    console.warn(
+      `[e2e-static-middleware] could not read assets from ${dir} (${e?.message || e}); ` +
+        `falling back to vite preview's default static serving (responses may be cut under CPU load).`,
+    )
     return (_req, _res, next) => next()
+  }
+  if (assetMap.size === 0) {
+    console.warn(
+      `[e2e-static-middleware] loaded ZERO assets from ${dir} — is the build present? ` +
+        `Falling back to vite preview's default static serving.`,
+    )
   }
   return makeStaticMiddleware(assetMap)
 }
