@@ -5,6 +5,7 @@ import type {
   AfterStreamCompleteResult,
   HandleSSEEventResult,
 } from '@/modules/chat/core/extensions/types'
+import { mergeCancelDecision } from '@/modules/chat/core/extensions/beforeSendCancel'
 
 /**
  * Helper to create a basic extension with common defaults
@@ -129,13 +130,17 @@ export function createSlotRenderer(
 export function mergeBeforeSendResults(
   results: BeforeSendResult[],
 ): BeforeSendResult {
-  return results.reduce(
-    (merged, result) => ({
-      cancel: merged.cancel || result.cancel,
-      errorMessage: result.errorMessage || merged.errorMessage,
-    }),
-    { cancel: false } as BeforeSendResult,
-  )
+  // Severity resolution lives in ONE place (`beforeSendCancel.ts`) so this merge
+  // and the registry's aggregation can never drift apart. fail-loud wins: a
+  // silent (no-op) cancel merged with a loud one yields a LOUD cancel, so a real
+  // blocker is never downgraded into a quiet dead Enter key.
+  const decision = mergeCancelDecision(results)
+  if (!decision.cancel) return { cancel: false }
+  return {
+    cancel: true,
+    silent: decision.silent,
+    errorMessage: decision.errorMessage,
+  }
 }
 
 /**

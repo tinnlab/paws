@@ -198,6 +198,18 @@ Only ONE surface changes visually (the approval card); the rest are behavioral.
   (NEW — ITEM-6 pure helper) + its `.test.ts`
 - `src-app/ui/src/modules/chat/core/extensions/beforeSendCancel.ts` (NEW —
   ITEM-1 pure merge/severity helper) + its `.test.ts`
+- `src-app/ui/src/modules/chat/core/stores/chat/sendFailureState.ts` (NEW —
+  ITEM-3 pure recovery-state builder) + its `.test.ts`. Note it sits BESIDE
+  `actions/`, not inside it: `check:store-actions` treats every file under a
+  store's `actions/` dir as an action (DRIFT-1.2).
+- `src-app/ui/src/dev/gallery/fixtures/longToolDescription.ts` (NEW — the
+  ~2,000-char seed, shared by the ITEM-9 gallery cell and the tests that assert
+  nothing was truncated; DRIFT-1.4)
+- `sdk/packages/kit/src/testIds.generated.ts` (mechanically regenerated for the
+  two new testids — committed in the `sdk` SUBMODULE, superproject pointer
+  bumped) and `src-app/ui/src/dev/gallery/stateMatrix.generated.ts` +
+  `STATE_MATRIX.md` (regenerated for the new conditional render). All three are
+  `--check`-gated inside `npm run check` (DRIFT-1.6).
 - `src-app/ui/src/modules/chat/gallery.tsx` (ITEM-9 — a sibling cell next to the
   existing `deep-chat-tool-approval` cell at `gallery.tsx:253-278`; the seed is
   declared there, NOT in `dev/gallery/fixtures/chat-deep.ts`) + the
@@ -206,8 +218,9 @@ Only ONE surface changes visually (the approval card); the rest are behavioral.
   `check:testid-registry`)
 - `src-app/ui/tests/e2e/chat/empty-submit-no-throw.spec.ts` (NEW — ITEM-1/2)
 - `src-app/ui/tests/e2e/chat/failed-stream-error-state.spec.ts` (NEW — ITEM-3/4/5)
-- `src-app/ui/tests/e2e/07-mcp/approval-actions-reachable.spec.ts` (NEW —
-  ITEM-6/7)
+- `src-app/ui/tests/e2e/visual/approval-actions-reachable.spec.ts` (NEW —
+  ITEM-6/7; gallery-driven so it RUNS without an LLM bridge instead of
+  self-skipping — DRIFT-1.3)
 - Mirrors of every changed `src/` file under `src-app/desktop/ui/src/…` if and
   only if the desktop workspace carries its own copy of that file (checked per
   file at implement time; codegen'd files are untouched here).

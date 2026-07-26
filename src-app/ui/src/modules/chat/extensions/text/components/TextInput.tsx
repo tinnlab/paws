@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { Textarea } from '@ziee/kit'
+import { Textarea, message } from '@ziee/kit'
 import { useChatPaneOrNull } from '@/modules/chat/core/pane/ChatPaneContext'
 import {
   getDraft,
@@ -31,7 +31,9 @@ export function TextInput() {
   // Chat, unchanged).
   const pane = useChatPaneOrNull()
   const chatStore = (pane?.store ?? Chat) as typeof Chat
-  const { sending } = chatStore
+  // `isStreaming` is read alongside `sending` so the Enter guard matches the
+  // Send button's `disabled` condition (ChatInput.tsx) — see handleKeyDown.
+  const { sending, isStreaming } = chatStore
   const { setGetMessage, setSetMessage, setClearMessage } = chatStore.TextStore
 
   // The draft bucket for the composer's CURRENT conversation. `new` when there
@@ -101,8 +103,27 @@ export function TextInput() {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
 
-      // Call sendMessage directly - model extension will provide model_id
-      await chatStore.sendMessage()
+      // Mirror `ChatInput.handleSend` exactly. Enter and the Send button are two
+      // routes to ONE action, so they must agree:
+      //  - the same in-flight guard. The Send button is `disabled` while
+      //    sending/streaming; the textarea is only disabled on `sending`, so
+      //    without this an Enter mid-stream started a SECOND turn (the audit's
+      //    `rapid-double-submit` cell).
+      //  - the same try/catch. This handler is `async`, so an un-caught rejection
+      //    became an UNHANDLED one — a page-level error event with no toast, i.e.
+      //    a failure the user is never told about.
+      // (An empty composer no longer throws at all: it is a silent cancel that
+      // `sendMessage` returns from. This catch covers every OTHER cancel reason
+      // and any genuine send failure.)
+      if (sending || isStreaming) return
+
+      try {
+        // Call sendMessage directly - model extension will provide model_id
+        await chatStore.sendMessage()
+      } catch (error: any) {
+        console.error('Failed to send message:', error)
+        message.error(error?.message || 'Failed to send message')
+      }
     }
   }
 

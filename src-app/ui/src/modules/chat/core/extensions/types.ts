@@ -198,6 +198,21 @@ export type GroupingContentRenderer = React.ComponentType<ContentRendererProps> 
 export interface BeforeSendResult {
   /** Set to true to cancel the send operation */
   cancel?: boolean
+  /**
+   * Marks a cancellation as a NO-OP rather than a failure.
+   *
+   * A plain `{ cancel: true }` is a LOUD veto: the send was blocked by something
+   * the user needs to know about, so `sendMessage` throws and the caller shows
+   * the `errorMessage`. Set `silent: true` only when there is genuinely no
+   * outcome to report — the sole case today is an empty composer (the user
+   * pressed Enter with nothing typed), where `sendMessage` returns without
+   * throwing and without mutating state.
+   *
+   * Deliberately opt-in per cancel reason so the quiet path can never widen to
+   * swallow a real error (CODING_GUIDELINES §6). When several extensions veto at
+   * once, **fail-loud wins** — see `beforeSendCancel.ts::resolveCancel`.
+   */
+  silent?: boolean
   /** Error/warning message to display to user if operation is cancelled */
   errorMessage?: string
   /** Extension names whose cancellations should be discarded */

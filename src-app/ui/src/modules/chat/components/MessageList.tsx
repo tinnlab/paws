@@ -592,10 +592,23 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(
           </div>
         )}
 
-        {/* Streaming indicator (non-virtualized sibling below the list). */}
+        {/* Streaming indicator (non-virtualized sibling below the list).
+            Named + announced like its older-messages sibling above: this is the
+            single affordance that tells the user "a turn is in flight", so it
+            must be identifiable — both to assistive tech and to the tests that
+            assert it STOPS once a turn terminates (a spinner that never clears
+            is indistinguishable from "still thinking"). */}
         {(loading || isStreaming) && (
-          <div className={'w-full h-20 mt-3'}>
-            <Loader2 className={'text-xl animate-spin'} />
+          <div
+            className={'w-full h-20 mt-3'}
+            role="status"
+            aria-live="polite"
+            data-testid="chat-streaming-indicator"
+          >
+            <Loader2
+              className={'text-xl animate-spin'}
+              aria-label="Generating response"
+            />
           </div>
         )}
 

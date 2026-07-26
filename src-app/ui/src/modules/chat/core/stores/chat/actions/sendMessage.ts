@@ -5,6 +5,11 @@ import type { MessageWithContent } from '@/api-client/types'
 import type { ChatSet, ChatInitialState, ChatState } from '@/modules/chat/core/stores/chat'
 import type { ExtensionLifecycle } from '@/modules/chat/core/extensions/types'
 import { EventBus } from '@ziee/framework/stores'
+import {
+  buildSendFailureState,
+  isAbortError,
+  SEND_FAILED_FALLBACK_MESSAGE,
+} from '@/modules/chat/core/stores/chat/sendFailureState'
 
 export default (set: ChatSet, getRaw: () => ChatInitialState) => {
   const get = getRaw as unknown as () => ChatState
@@ -15,6 +20,12 @@ export default (set: ChatSet, getRaw: () => ChatInitialState) => {
       const beforeResult = await chatExtensionRegistry.beforeSendMessage()
 
       if (beforeResult.cancel) {
+        // A SILENT cancel is a no-op submit (today: an empty composer), not a
+        // failure — return without throwing and without touching state, so a
+        // stray Enter is exactly as uneventful as clicking the disabled Send
+        // button. A LOUD cancel is a real blocker the user must be told about,
+        // so it still throws for the caller to surface.
+        if (beforeResult.silent) return
         console.log('[Chat.store] Message send cancelled by extension')
         throw new Error(
           beforeResult.errorMessage || 'Message send was cancelled',
@@ -69,41 +80,48 @@ export default (set: ChatSet, getRaw: () => ChatInitialState) => {
         finalizingTurn: false,
       })
 
-      // If the window is anchored MID-conversation (after an around=/find/
-      // deep-link jump, so `hasMoreAfter` is true), the loaded slice does not
-      // abut the real tail. Snap to the tail first so the new turn's optimistic
-      // bubble appends at the actual end instead of after a gap of unloaded
-      // messages (reconciled again on `complete`, but this fixes the optimistic
-      // render order too).
-      if (get().hasMoreAfter) {
-        await get().loadMessages(conversation.id)
-      }
-
-      const userContents = await chatExtensionRegistry.provideUserContent(
-        (allRequestFields.content as string) || '',
-        allRequestFields,
-        get().paneId,
-      )
-
-      const tempUserMessage: MessageWithContent = {
-        id: `temp-${Date.now()}`,
-        role: 'user',
-        contents: userContents,
-        originated_from_id: '',
-        edit_count: 0,
-        created_at: new Date().toISOString(),
-      }
-
-      set(state => {
-        const newMessages = new Map(state.messages)
-        newMessages.set(tempUserMessage.id, tempUserMessage)
-        return {
-          messages: newMessages,
-          tempUserMessageId: tempUserMessage.id,
-        }
-      })
-
+      // EVERYTHING after the flags go true lives inside this try. The flags are
+      // what render the streaming spinner and disable the composer, so any throw
+      // that escapes without running the catch below wedges the UI permanently:
+      // a spinner that never stops, a composer that never re-enables, no error
+      // text, and — because `reloadOpen` bails while `isStreaming` is true — no
+      // recovery even on stream reconnect. The `try` used to open ~40 lines
+      // lower, leaving `loadMessages` and `provideUserContent` unprotected.
       try {
+        // If the window is anchored MID-conversation (after an around=/find/
+        // deep-link jump, so `hasMoreAfter` is true), the loaded slice does not
+        // abut the real tail. Snap to the tail first so the new turn's optimistic
+        // bubble appends at the actual end instead of after a gap of unloaded
+        // messages (reconciled again on `complete`, but this fixes the optimistic
+        // render order too).
+        if (get().hasMoreAfter) {
+          await get().loadMessages(conversation.id)
+        }
+
+        const userContents = await chatExtensionRegistry.provideUserContent(
+          (allRequestFields.content as string) || '',
+          allRequestFields,
+          get().paneId,
+        )
+
+        const tempUserMessage: MessageWithContent = {
+          id: `temp-${Date.now()}`,
+          role: 'user',
+          contents: userContents,
+          originated_from_id: '',
+          edit_count: 0,
+          created_at: new Date().toISOString(),
+        }
+
+        set(state => {
+          const newMessages = new Map(state.messages)
+          newMessages.set(tempUserMessage.id, tempUserMessage)
+          return {
+            messages: newMessages,
+            tempUserMessageId: tempUserMessage.id,
+          }
+        })
+
         // Subscribe this device's token stream to the (possibly just-created)
         // conversation BEFORE kicking off generation, so it receives all of its
         // own tokens. Idempotent/deduped for an already-open conversation.
@@ -148,30 +166,31 @@ export default (set: ChatSet, getRaw: () => ChatInitialState) => {
         await get().clearPendingBranch()
         set({ sending: false })
       } catch (error: any) {
-        const isAborted = error instanceof Error && error.name === 'AbortError'
+        const aborted = isAbortError(error)
 
-        if (!isAborted) {
-          await chatExtensionRegistry.onStreamError(
-            error instanceof Error
-              ? error
-              : new Error(error.message || 'Failed to send message'),
-            get().paneId,
-          )
+        if (!aborted) {
+          // The extension hook runs BEFORE the state reset, so a hook that
+          // throws would take the whole recovery down with it and leave exactly
+          // the wedged spinner this catch exists to prevent. Notifying
+          // extensions is best-effort; resetting the store is not. The
+          // secondary error is logged, never discarded.
+          try {
+            await chatExtensionRegistry.onStreamError(
+              error instanceof Error
+                ? error
+                : new Error(error?.message || SEND_FAILED_FALLBACK_MESSAGE),
+              get().paneId,
+            )
+          } catch (hookError) {
+            console.error(
+              '[Chat.store] onStreamError extension hook failed; continuing with state recovery',
+              hookError,
+            )
+          }
         }
 
         const state = get()
-        const baseUpdate = {
-          error: isAborted ? null : error.message || 'Failed to send message',
-          sending: false,
-          isStreaming: false,
-          streamingMessage: null,
-          streamingAbortController: null,
-          streamingMessageId: null,
-          finalizingTurn: false,
-          // Aborted (user cancel) or a transport error — either way the turn's
-          // partial is not a genuine empty completion.
-          lastTurnInterrupted: true,
-        }
+        const baseUpdate = buildSendFailureState(error)
 
         if (state.tempUserMessageId) {
           set(state => {
@@ -187,7 +206,7 @@ export default (set: ChatSet, getRaw: () => ChatInitialState) => {
           set(baseUpdate)
         }
 
-        if (isAborted) {
+        if (aborted) {
           const conversation = get().conversation
           if (conversation) {
             await get().loadMessages(conversation.id)
