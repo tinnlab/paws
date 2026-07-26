@@ -1,4 +1,0 @@
-file	start	end	angles
-src-app/ui/src/modules/chat/core/utils/useStreamdownComponents.tsx	1	70	correctness,patterns-conformance,state-management,error-handling,perf,modularity,maintainability,api-friendliness,extensibility,security
-src-app/ui/src/components/common/MarkdownCodeBlock.tsx	1	71	correctness,perf,modularity,maintainability,error-handling,scope-drift
-src-app/ui/tests/e2e/chat/markdown-rendering.spec.ts	1	420	tests-quality,test-reality,security,i18n,scope-drift,correctness,patterns-conformance
