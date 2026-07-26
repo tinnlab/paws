@@ -675,7 +675,7 @@ Required states: `empty`
 | branch | `this.initialized` | 432 |
 | empty | `extensions.length === 0` | 610 |
 | empty | `extensions.length === 0` | 643 |
-| empty | `!registered \|\| registered.length === 0` | 938 |
+| empty | `!registered \|\| registered.length === 0` | 932 |
 
 ### `modules/chat/core/extensions/utils`
 

@@ -65,6 +65,7 @@ src-app/ui/src/dev/gallery/STATE_MATRIX.md	327	338	correctness,security,api-cont
 src-app/ui/src/dev/gallery/STATE_MATRIX.md	356	356	correctness,security,api-contract,design-conformance,tests-quality,maintainability
 src-app/ui/src/dev/gallery/STATE_MATRIX.md	358	368	correctness,security,api-contract,design-conformance,tests-quality,maintainability
 src-app/ui/src/dev/gallery/STATE_MATRIX.md	372	378	correctness,security,api-contract,design-conformance,tests-quality,maintainability
+src-app/ui/src/dev/gallery/STATE_MATRIX.md	678	678	correctness,security,api-contract,design-conformance,tests-quality,maintainability
 src-app/ui/src/dev/gallery/coverage.ts	104	104	correctness,security,api-contract,design-conformance,tests-quality,maintainability
 src-app/ui/src/dev/gallery/coverage.ts	106	108	correctness,security,api-contract,design-conformance,tests-quality,maintainability
 src-app/ui/src/dev/gallery/galleryCoverage.generated.ts	2	2	correctness,security,api-contract,design-conformance,tests-quality,maintainability
@@ -77,6 +78,7 @@ src-app/ui/src/dev/gallery/stateMatrix.generated.ts	252	258	correctness,security
 src-app/ui/src/dev/gallery/stateMatrix.generated.ts	263	274	correctness,security,api-contract,design-conformance,tests-quality,maintainability
 src-app/ui/src/dev/gallery/stateMatrix.generated.ts	292	303	correctness,security,api-contract,design-conformance,tests-quality,maintainability
 src-app/ui/src/dev/gallery/stateMatrix.generated.ts	305	311	correctness,security,api-contract,design-conformance,tests-quality,maintainability
+src-app/ui/src/dev/gallery/stateMatrix.generated.ts	585	585	correctness,security,api-contract,design-conformance,tests-quality,maintainability
 src-app/ui/src/dev/gallery/stateMatrix.generated.ts	4134	4134	correctness,security,api-contract,design-conformance,tests-quality,maintainability
 src-app/ui/src/dev/gallery/stateMatrix.generated.ts	4187	4187	correctness,security,api-contract,design-conformance,tests-quality,maintainability
 src-app/ui/src/dev/gallery/stateMatrix.generated.ts	4217	4217	correctness,security,api-contract,design-conformance,tests-quality,maintainability

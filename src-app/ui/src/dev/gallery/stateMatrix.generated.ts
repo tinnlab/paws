@@ -582,7 +582,7 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
       { kind: "branch", condition: "this.initialized", line: 432 },
       { kind: "empty", condition: "extensions.length === 0", line: 610 },
       { kind: "empty", condition: "extensions.length === 0", line: 643 },
-      { kind: "empty", condition: "!registered || registered.length === 0", line: 938 },
+      { kind: "empty", condition: "!registered || registered.length === 0", line: 932 },
     ],
   },
   "modules/chat/core/extensions/utils": {
