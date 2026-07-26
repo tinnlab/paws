@@ -235,6 +235,12 @@ import path from 'node:path'
 // the prod-mode e2e build matches prod (and doesn't 404 on the graph fetch).
 import { moduleManifestPlugin } from ${JSON.stringify(resolve(uiRoot, 'plugins/vite-plugin-module-manifest.js'))}
 import { preloadGraphPlugin } from ${JSON.stringify(resolve(uiRoot, 'plugins/vite-plugin-preload-graph.js'))}
+// eagerRenderGraphPlugin folds the chat markdown/HTML render graph (streamdown +
+// its plugins + the internal highlighted-body/mermaid chunks) into the entry
+// static graph so it is modulepreloaded at boot and never fetched on-demand at
+// render time — removing the render-time server-delivery dependency that made
+// the deterministic render specs flake under CPU load. (e2e build ONLY.)
+import { eagerRenderGraphPlugin } from ${JSON.stringify(resolve(uiRoot, 'plugins/vite-plugin-eager-render-graph.js'))}
 
 export default defineConfig({
   plugins: [
@@ -242,6 +248,7 @@ export default defineConfig({
     tailwindcss(),
     moduleManifestPlugin({ srcDir: ${JSON.stringify(srcRoot)} }),
     preloadGraphPlugin(),
+    eagerRenderGraphPlugin(),
   ],
   root: ${JSON.stringify(srcRoot)},
   cacheDir: ${JSON.stringify(resolve(uiRoot, 'node_modules/.vite-e2e-build'))},
@@ -273,7 +280,9 @@ export default defineConfig({
       'mermaid',
     ],
   },
-  optimizeDeps: { include: ['streamdown', 'streamdown/dist/*.js'] },
+  // (optimizeDeps is a DEV-server prebundle knob — a no-op for this static
+  // build. The streamdown render graph is instead folded into the entry static
+  // graph by eagerRenderGraphPlugin above.)
   build: {
     outDir: ${JSON.stringify(distDir)},
     emptyOutDir: true,

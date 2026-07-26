@@ -139,18 +139,6 @@ test.describe('Tier 1 — streamdown lock-in (chat assistant markdown rendering)
   test(
     'mermaid block renders as a styled code-block (no SVG: plugin not installed)',
     async ({ page, testInfra }) => {
-      // FIXME: vite cold-start + streamdown 2's dynamic-import of
-      // `dist/highlighted-body-*.js` (Shiki) interact badly in this
-      // test infra. When the SPEC starts with a test that triggers
-      // any code-block render, vite hits a 504 "Outdated Optimize
-      // Dep" on the lazy chunk, the React error boundary fires, and
-      // the assistant bubble never mounts in time. Tried
-      // optimizeDeps.include / .exclude / .entries — none reliably
-      // pre-bundle the hashed internal chunk.
-      // The underlying behavior IS verified manually + via the
-      // shiki test below (which catches code-block rendering more
-      // directly). Re-enable when a fix lands for the test infra
-      // (see [[streamdown-v2-unbundled-plugins]]).
     // Streamdown 2 unbundled mermaid into the `@streamdown/mermaid`
     // plugin package, which this project intentionally does NOT install
     // (per [[no-katex-remark-rehype]] — keep dep surface small, no

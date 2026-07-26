@@ -532,7 +532,12 @@ ${
     // server refuses a 2nd context, which broke the multi-context sync specs.
     // `/api` proxies to THIS test's backend.
     const distDir = resolve(projectRoot, 'dist-e2e')
+    // Absolute path to the in-memory static middleware helper (fix #2): serves
+    // every built asset from RAM with a single res.end(buffer)+Content-Length,
+    // so a CPU-starved event loop cannot cut a render chunk mid-stream.
+    const staticMwPath = resolve(__dirname, 'e2e-static-middleware.mjs')
     const viteConfigContent = `import { defineConfig } from 'vite'
+import { serveDirFromMemory } from ${JSON.stringify(staticMwPath)}
 
 export default defineConfig({
   root: ${JSON.stringify(srcRoot)},
@@ -550,6 +555,14 @@ export default defineConfig({
       // be truncated the same way.
       name: 'e2e-disable-preview-compression',
       configurePreviewServer(server) {
+        // FIX #2 (graph-agnostic): serve every built asset from an in-memory
+        // map with ONE res.end(buffer) BEFORE vite's own sirv static handler.
+        // The whole body reaches the OS socket buffer in a single event-loop
+        // tick, so CPU starvation afterward cannot truncate it — covering the
+        // streamdown internal chunks AND the ~200 hashed shiki grammar chunks
+        // (which no enumerated eager-include could cover). Non-asset paths (/,
+        // SPA routes, /api proxy) fall through to the behavior below.
+        server.middlewares.use(serveDirFromMemory(${JSON.stringify(distDir)}))
         server.middlewares.use((req, _res, next) => {
           delete req.headers['accept-encoding']
           next()
