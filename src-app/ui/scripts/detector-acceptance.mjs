@@ -16,7 +16,7 @@
  * each detector reports ≥1 finding of its expected class on its expected cell.
  * RED (exit 1) if any detector fails to fire.
  *
- * Source-lint classes (`[L]`: C11 icon-action, J8 native-scroll) can't be seen
+ * Source-lint classes (`[L]`: C11 icon-action, J8 native-scroll, O1/O2 rules-of-hooks) can't be seen
  * by DOM geometry — their bad instance lives in SOURCE — so their fixtures live
  * in `src/dev/gallery/__detector_fixtures__/` and the harness runs the lint with
  * `--root` at that dir, expecting a violation.
@@ -88,8 +88,10 @@ const ACCEPTANCE = [
   { miss: '#20', cls: 'H7', kind: 'geometry', where: 'repro-h7', desc: 'empty model select renders nothing' },
   { miss: '#10b', cls: 'C11', kind: 'lint', lint: 'lint-icon-action.mjs', desc: 'open-in-new-tab renders the wrong glyph' },
   { miss: '#17', cls: 'J8', kind: 'lint', lint: 'lint-native-scroll.mjs', extra: ['--gate'], desc: 'raw native scroll instead of DivScrollY' },
-  { miss: 'crash-A', cls: 'O1', kind: 'lint', lint: 'lint-hooks.mjs', desc: 'usePermission(A) || usePermission(B) — the 2nd hook is short-circuited away' },
-  { miss: 'crash-B', cls: 'O2', kind: 'lint', lint: 'lint-hooks.mjs', desc: 'store-proxy field read inside a ternary / behind an early return' },
+  // O1 and O2 are the first two rows to share ONE script, so each carries an
+  // `expect` regex: without it, O2 would count as "fired" on O1's finding alone.
+  { miss: 'crash-A', cls: 'O1', kind: 'lint', lint: 'lint-hooks.mjs', expect: /H1 .*__detector_fixtures__/, desc: 'usePermission(A) || usePermission(B) — the 2nd hook is short-circuited away' },
+  { miss: 'crash-B', cls: 'O2', kind: 'lint', lint: 'lint-hooks.mjs', expect: /H2 .*__detector_fixtures__/, desc: 'store-proxy field read inside a ternary / behind an early return' },
   { miss: '#9a', cls: 'J5', kind: 'vision', desc: 'button-look tabs in a dense side panel (density-variant)' },
   { miss: '#13b', cls: 'C13', kind: 'vision', desc: 'valueless decoration (avatar with no value)' },
   { miss: '#14', cls: 'M1', kind: 'vision', desc: 'affordance absent (mermaid/html need source/render toggle)' },
@@ -137,7 +139,7 @@ async function collectGeometryFindings() {
   return findings.map(f => ({ ...f, severity: f.severity || CLASS_SEVERITY[f.cls] || 'LOW' }))
 }
 
-function runLint(script, extra = []) {
+function runLint(script, extra = [], expect = null) {
   const res = spawnSync(
     'node',
     [path.join('scripts', script), `--root=${FIXTURE_DIR}`, ...extra],
@@ -145,7 +147,10 @@ function runLint(script, extra = []) {
   )
   const out = `${res.stdout || ''}${res.stderr || ''}`
   // A lint FIRES when it exits non-zero OR prints a finding line for the fixture.
-  const fired = res.status !== 0 || /__detector_fixtures__/.test(out)
+  // When TWO rows share one script (O1/O2), the row's `expect` regex is what
+  // makes each row prove ITS OWN detector — otherwise the second row would pass
+  // on the first one's finding.
+  const fired = expect ? expect.test(out) : res.status !== 0 || /__detector_fixtures__/.test(out)
   return { fired, exit: res.status, out }
 }
 
@@ -170,7 +175,7 @@ async function main() {
         detail: hits[0]?.selector || (firedClasses.has(item.cls) ? '(class fired on a different cell)' : '(no finding)'),
       })
     } else if (item.kind === 'lint') {
-      const r = runLint(item.lint, item.extra)
+      const r = runLint(item.lint, item.extra, item.expect)
       rows.push({ ...item, fired: r.fired, detail: `exit ${r.exit}` })
     } else {
       rows.push({ ...item, fired: null, detail: 'vision rubric — not machine-gated' })

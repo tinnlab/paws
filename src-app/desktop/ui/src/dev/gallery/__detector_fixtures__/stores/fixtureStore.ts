@@ -3,10 +3,11 @@
  * runtime, NEVER rendered — lint fodder only.
  *
  * `ConditionalHooks.tsx` needs a binding that passes BOTH factors of the lint's
- * store-proxy test: imported from a `…/stores/…` specifier AND exported here by
- * one of the proxy factories. Declaring it locally (instead of importing a real
- * app store) keeps the fixture self-contained and byte-identical between the two
- * UI workspaces, whose `@/` aliases point at different trees.
+ * store-proxy test: an import specifier that resolves to the file DEFINING the
+ * proxy, and a proxy-factory-shaped export here. Declaring it locally (rather
+ * than importing a real app store) means the STORE half of the fixture depends on
+ * no app internals; the fixture still imports `usePermission`/`Permissions` via
+ * `@/`, which each workspace resolves into its own tree.
  *
  * `registerLazyStore` is `declare`d rather than imported: the lint pattern-matches
  * the SHAPE of the declaration (a proxy-factory call assigned to an exported

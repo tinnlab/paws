@@ -30,14 +30,17 @@
  * stopping at the nearest enclosing function boundary, it sits in one of:
  *   ternary-branch · logical-rhs (&&, ||, ??) · if-body · loop-body ·
  *   switch-case · after-early-return
- * Stopping at the function boundary is what keeps callbacks (`onClick={() => …}`,
- * `useEffect(() => …)`) out of scope — their body is not the enclosing
- * component's render path.
+ * The walk never crosses OUT of a function, so a callback does not inherit the
+ * conditions of the component around it (a read that is UNCONDITIONAL inside an
+ * `onClick={() => …}` is not reported just because the component has an early
+ * return). A read that is CONDITIONAL within the callback itself IS reported —
+ * a reactive proxy read in a callback is an invalid hook call regardless, so
+ * there is nothing to lose by flagging it.
  *
  *   H1  any `use[A-Z]…()` call in a conditional context, EXCLUDING
- *       `after-early-return` (that is the classic type-guard idiom, ~20
- *       pre-existing sites, and is the standard rules-of-hooks rule's territory —
- *       see DEC-6).
+ *       `after-early-return` (that is the classic type-guard idiom — 5 such hook
+ *       calls across 3 pre-existing components — and is the standard
+ *       rules-of-hooks rule's territory; see DEC-6).
  *   H2  a read of `Proxy.field` (or `const { … } = Proxy`) in ANY of the six
  *       contexts, where `Proxy` passes a two-factor store-proxy test and `field`
  *       is neither a hook-free special, nor an action, nor a call callee.
@@ -51,11 +54,21 @@
  *      `export const X = registerLazyStore|defineStore|defineLocalStore|
  *      createStoreProxy|…(…)` or `= <Ident>.store` found across the roots.
  *
- * NOT a hook, never flagged (paths 1-3 of `createStoreProxy`): the specials
- * `$` / `__setState` / `__refCount` / `__refTracker` / `__destroyed`; ACTIONS,
- * whether called (`Store.doThing()`) or passed by reference
+ * NOT a hook, never flagged: the path-1 specials `$` / `__setState` /
+ * `__refCount` / `__refTracker` / `__destroyed`; and path-2 ACTIONS, whether
+ * called (`Store.doThing()`) or passed by reference
  * (`onClose={Auth.clearAuthenticationError}` — the only shape that produces false
- * positives without the action registry); and a member that is a call callee.
+ * positives without the action registry). Actions are tracked PER PROXY: a single
+ * global name set would permanently exempt every state field whose name collides
+ * with some action somewhere (`error`, `open`, `progress`, `refresh` are all both).
+ * Path 3 (a NESTED proxy — an object carrying `__refTracker`, also hook-free) is
+ * NOT statically distinguishable from a plain state object here, so a conditional
+ * nested-proxy read would be reported; none exists in either tree today.
+ *
+ * Known gaps, all measured against the live tree (0 instances of each today):
+ * a proxy reached through a namespace/default import; a `defineLocalStore(…).use()`
+ * instance bound to a local (only a hook-returned `handle.store.<field>` is
+ * covered); and a proxy imported through a barrel that re-exports it.
  *
  * Escape hatch: a genuinely-stable conditional (a value that cannot flip for the
  * lifetime of a mounted component) opts out with an inline `hook-order-ok` marker
@@ -93,13 +106,25 @@ const ROOT_CANDIDATES = ['../src', '../../desktop/ui/src', '../../../ui/src']
 const FIXTURE_DIR_NAME = '__detector_fixtures__'
 const OPT_OUT = 'hook-order-ok'
 
-// Paths 1-3 of createStoreProxy: returned synchronously, no hooks, safe anywhere.
+// Path 1 of createStoreProxy: returned synchronously, no hooks, safe anywhere.
+// (Path 2 = actions, handled by the per-proxy action registry. Path 3 = a NESTED
+// proxy — an object carrying `__refTracker`, also hook-free — is not statically
+// distinguishable from a plain state object here, so a conditional nested-proxy
+// read would be reported; none exists in either tree today. Known limit.)
 const SPECIAL_PROPS = new Set(['$', '__setState', '__refCount', '__refTracker', '__destroyed'])
 const PROXY_FACTORY =
-  /^(registerLazyStore|registerStore|defineStore|defineLocalStore|createStoreProxy|createNotificationsStore)$/
+  /^(registerLazyStore|registerStore|defineStore|defineLocalStore|createStoreProxy|createNotificationsStore|lazyStoreProxy)$/
+// Fallback factor-1 shape, used ONLY when an import specifier cannot be resolved
+// to a file on disk (an alias this script does not know). The primary factor 1 is
+// real module resolution — see `resolveSpecifier`.
 const STORE_SPECIFIER = /(^|\/)stores?(\/|$)|\.store$|\/store$/
 const HOOK_NAME = /^use[A-Z]/
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', '.git', 'tests', 'coverage'])
+// The registry must never be silently empty: a rename inside the SDK's store-kit
+// would otherwise drop the proxy set to 0 and turn H2 into a green no-op. The
+// floor is deliberately far below the real count (~300) so it only ever trips on
+// a structural break, never on ordinary churn.
+export const PROXY_REGISTRY_FLOOR = 50
 
 const uniq = (xs) => [...new Set(xs)]
 const defaultRoots = () =>
@@ -156,23 +181,36 @@ const isFunctionValued = (n) =>
 
 /**
  * Registries built once over the roots:
- *   proxies — names exported as a store proxy (factor 2 of the proxy test)
- *   actions — property names that resolve to an ACTION (hook-free, path 2), so a
- *             conditional `Store.someAction` reference is never reported. Union of
- *             (a) `stores/<store>/actions/<name>.ts` basenames (the
- *             `import.meta.glob` action convention), (b) function-valued / function-typed members
- *             declared in store files, (c) any property observed being CALLED on a
- *             known proxy anywhere in the tree.
+ *   proxies — `name -> Set<defining file>`; the name is factor 2 of the proxy
+ *             test and the defining files are what factor 1 resolves against.
+ *   actions — `proxy name -> Set<action property>`. PER PROXY, deliberately: a
+ *             single global name set makes any state field whose name collides
+ *             with SOME action anywhere (`error`, `open`, `progress`, `refresh` —
+ *             all common reactive fields here) permanently un-lintable. Sources:
+ *             (a) `<storeDir>/actions/<name>.ts` basenames (the `import.meta.glob`
+ *             action convention), (b) function-valued / function-typed members
+ *             declared inside that store's own directory, (c) any property
+ *             observed being CALLED on THAT proxy anywhere in the tree.
  */
 function buildRegistries(asts) {
-  const proxies = new Set()
-  const actions = new Set()
+  const proxies = new Map() // name -> Set<file>
+  const actions = new Map() // proxy name -> Set<prop>
+  const dirActions = new Map() // store dir -> Set<prop>
   const isStoreFile = (f) => /[\\/]stores?[\\/]/.test(f) || /\.store\.tsx?$/.test(f)
+  const addTo = (map, key, value) => {
+    let s = map.get(key)
+    if (!s) map.set(key, (s = new Set()))
+    s.add(value)
+  }
+  /** The directory that owns a store: `…/stores/<store>/index.ts` -> `…/stores/<store>`. */
+  const storeDirOf = (file) => path.dirname(/[\\/]actions[\\/]/.test(file) ? path.dirname(file) : file)
 
   for (const [file, src] of asts) {
     const actionFile = file.match(/[\\/]actions[\\/]([A-Za-z0-9_$]+)\.tsx?$/)
-    if (actionFile && isStoreFile(file) && !actionFile[1].startsWith('_')) actions.add(actionFile[1])
+    if (actionFile && isStoreFile(file) && !actionFile[1].startsWith('_'))
+      addTo(dirActions, storeDirOf(file), actionFile[1])
     const storeFile = isStoreFile(file)
+    const dir = path.dirname(file)
 
     const visit = (n) => {
       if (ts.isVariableStatement(n) && n.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)) {
@@ -186,25 +224,36 @@ function buildRegistries(asts) {
               : ts.isPropertyAccessExpression(callee)
                 ? callee.name.text
                 : null
-            if (name && PROXY_FACTORY.test(name)) proxies.add(d.name.text)
+            if (name && PROXY_FACTORY.test(name)) addTo(proxies, d.name.text, file)
           }
           // `export const Foo = FooDef.store` — the defineStore(...).store accessor.
-          if (ts.isPropertyAccessExpression(init) && init.name.text === 'store') proxies.add(d.name.text)
+          if (ts.isPropertyAccessExpression(init) && init.name.text === 'store') addTo(proxies, d.name.text, file)
         }
       }
       if (storeFile) {
+        const add = (nm) => addTo(dirActions, dir, nm)
         if (ts.isPropertyAssignment(n) && (ts.isIdentifier(n.name) || ts.isStringLiteral(n.name)) && isFunctionValued(n.initializer))
-          actions.add(n.name.text)
-        if (ts.isMethodDeclaration(n) && ts.isIdentifier(n.name)) actions.add(n.name.text)
-        if (ts.isMethodSignature(n) && ts.isIdentifier(n.name)) actions.add(n.name.text)
-        if (ts.isPropertySignature(n) && ts.isIdentifier(n.name) && isFunctionValued(n.type)) actions.add(n.name.text)
+          add(n.name.text)
+        if (ts.isMethodDeclaration(n) && ts.isIdentifier(n.name)) add(n.name.text)
+        if (ts.isMethodSignature(n) && ts.isIdentifier(n.name)) add(n.name.text)
+        if (ts.isPropertySignature(n) && ts.isIdentifier(n.name) && isFunctionValued(n.type)) add(n.name.text)
       }
       ts.forEachChild(n, visit)
     }
     visit(src)
   }
 
-  // (c) any property CALLED on a known proxy is an action, wherever it appears.
+  // Attribute each directory's actions to the proxies DEFINED in that directory
+  // (or in its `index.ts`), so `LlmProvider.providers` is never exempted by an
+  // action of some unrelated store that happens to share the name.
+  for (const [name, files] of proxies) {
+    for (const file of files) {
+      const dir = path.dirname(file)
+      for (const d of [dir, storeDirOf(file)]) for (const a of dirActions.get(d) ?? []) addTo(actions, name, a)
+    }
+  }
+
+  // (c) any property CALLED on a known proxy is an action OF THAT PROXY.
   for (const [, src] of asts) {
     const visit = (n) => {
       if (
@@ -213,7 +262,7 @@ function buildRegistries(asts) {
         ts.isIdentifier(n.expression.expression) &&
         proxies.has(n.expression.expression.text)
       )
-        actions.add(n.expression.name.text)
+        addTo(actions, n.expression.expression.text, n.expression.name.text)
       ts.forEachChild(n, visit)
     }
     visit(src)
@@ -221,18 +270,43 @@ function buildRegistries(asts) {
   return { proxies, actions }
 }
 
+const MODULE_EXTS = ['.ts', '.tsx', '/index.ts', '/index.tsx', '']
+/**
+ * Factor 1 of the store-proxy test: resolve an import specifier to the file(s) it
+ * could denote, so a proxy is recognised by WHERE IT IS DEFINED rather than by
+ * whether its path happens to contain a `stores/` segment. That path-shape
+ * heuristic (kept below as the unresolvable-specifier fallback) silently excluded
+ * ~44 real proxies — `AppLayout` from `@/modules/layouts/app-layout/appLayout`,
+ * `Hardware`, and most drawer stores — which is exactly BUG-B's own class.
+ * Handles the `@/` alias (against every root, since desktop's `@/` falls back to
+ * the web tree) and relative specifiers. Returns [] when it cannot resolve.
+ */
+function resolveSpecifier(spec, fromFile, roots) {
+  const bases = []
+  if (spec.startsWith('.')) bases.push(path.resolve(path.dirname(fromFile), spec))
+  else if (spec.startsWith('@/')) for (const r of roots) bases.push(path.join(r, spec.slice(2)))
+  else return []
+  return bases.flatMap((b) => MODULE_EXTS.map((e) => b + e))
+}
+
 /** Local bindings in `src` that pass BOTH factors of the store-proxy test. */
-function localProxyBindings(src, proxies) {
+function localProxyBindings(src, proxies, roots) {
   const local = new Set()
   for (const st of src.statements) {
     if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier)) continue
-    if (!STORE_SPECIFIER.test(st.moduleSpecifier.text)) continue
     if (st.importClause?.isTypeOnly) continue
     const bindings = st.importClause?.namedBindings
     if (!bindings || !ts.isNamedImports(bindings)) continue
+    const spec = st.moduleSpecifier.text
+    const candidates = resolveSpecifier(spec, src.fileName, roots)
     for (const el of bindings.elements) {
       if (el.isTypeOnly) continue
-      if (proxies.has((el.propertyName || el.name).text)) local.add(el.name.text)
+      const definedIn = proxies.get((el.propertyName || el.name).text)
+      if (!definedIn) continue
+      // Factor 1: the specifier resolves to a file that DEFINES this proxy;
+      // or, when the specifier is un-resolvable here, the legacy path shape.
+      const resolved = candidates.length > 0
+      if (resolved ? candidates.some((c) => definedIn.has(c)) : STORE_SPECIFIER.test(spec)) local.add(el.name.text)
     }
   }
   return local
@@ -258,12 +332,13 @@ function conditionalContext(node, { allowEarlyReturn }) {
     )
       return 'logical-rhs'
     if (ts.isIfStatement(parent) && (parent.thenStatement === cur || parent.elseStatement === cur)) return 'if-body'
+    // NB: `do { … } while (…)` is deliberately absent — its body always runs at
+    // least once, so it is not conditionally evaluated.
     if (
       (ts.isForStatement(parent) ||
         ts.isForOfStatement(parent) ||
         ts.isForInStatement(parent) ||
-        ts.isWhileStatement(parent) ||
-        ts.isDoStatement(parent)) &&
+        ts.isWhileStatement(parent)) &&
       parent.statement === cur
     )
       return 'loop-body'
@@ -280,8 +355,12 @@ function conditionalContext(node, { allowEarlyReturn }) {
   const idx = body.statements.findIndex((s) => s.pos <= node.pos && node.end <= s.end)
   if (idx <= 0) return null
   for (let i = 0; i < idx; i++) {
+    // Any preceding statement that CAN exit the function — `if (…) return`, a
+    // guard nested in a block, a `switch` arm that returns, a try/catch rethrow.
+    // (A bare top-level `return`/`throw` would make everything after it dead
+    // code, so restricting to `if` was both narrower and arbitrary.)
     const stmt = body.statements[i]
-    if (!ts.isIfStatement(stmt)) continue
+    if (ts.isReturnStatement(stmt) || ts.isThrowStatement(stmt)) return 'after-early-return'
     let exits = false
     const walk = (n) => {
       if (ts.isReturnStatement(n) || ts.isThrowStatement(n)) exits = true
@@ -304,13 +383,19 @@ function conditionalContext(node, { allowEarlyReturn }) {
 /**
  * Parsing the ~2.2k-file registry dominates the runtime (~0.8s of a ~1.3s run),
  * and a single process may call `analyze()` many times (the test suite does).
- * Cache the ROOT parse per root-set for the life of the process. Targets are
- * always re-read, so a caller linting a file it just wrote still sees it; the
- * cache only ever holds the immutable-for-this-run source roots.
+ * Cache the ROOT parse per root-set for the life of the process.
+ *
+ * CORRECTNESS RULE: only files that are NOT being reported on may come from the
+ * cache. Every TARGET file is re-read and re-parsed on every call — otherwise a
+ * second `analyze()` after an edit would mix a stale AST with freshly-read line
+ * text and could report an already-fixed violation, or (worse) miss a new one.
+ * In the default whole-tree scan the targets ARE the roots, so nothing is served
+ * from the cache and the CLI always sees the disk; the cache pays off exactly
+ * where it is safe — repeated calls reporting on a small explicit target.
  */
 const rootAstCache = new Map()
-function rootAsts(roots, read) {
-  const key = roots.join(' ')
+function registryAsts(roots, targetSet, read) {
+  const key = roots.join('\u0000')
   let cached = rootAstCache.get(key)
   if (!cached) {
     cached = new Map(
@@ -318,12 +403,15 @@ function rootAsts(roots, read) {
     )
     rootAstCache.set(key, cached)
   }
-  return cached
+  const out = new Map()
+  for (const [f, ast] of cached) out.set(f, targetSet.has(f) ? parse(f, read(f)) : ast)
+  return out
 }
 
-export function analyze(opts = {}) {
-  const roots = opts.registryRoots?.length ? opts.registryRoots : defaultRoots()
-  const explicitTargets = opts.targets?.length ? opts.targets.map((t) => path.resolve(t)) : null
+export function analyze(opts) {
+  const o = opts ?? {}
+  const roots = o.registryRoots?.length ? o.registryRoots : defaultRoots()
+  const explicitTargets = o.targets?.length ? o.targets.map((t) => path.resolve(t)) : null
   const includeFixtures = !!explicitTargets
 
   const texts = new Map()
@@ -332,15 +420,15 @@ export function analyze(opts = {}) {
     return texts.get(f)
   }
 
-  const asts = new Map(rootAsts(roots, read))
-  // Targets outside the roots (a fixture dir, a temp file) join the registry so
-  // a self-describing fixture store is recognised — and are always re-parsed.
-  for (const f of uniq((explicitTargets ?? []).flatMap((t) => findFiles(t, { includeFixtures: true }))))
-    asts.set(f, parse(f, read(f)))
-
   const targetFiles = explicitTargets
     ? uniq(explicitTargets.flatMap((t) => findFiles(t, { includeFixtures: true })))
     : uniq(roots.flatMap((r) => findFiles(r, { includeFixtures })))
+  const targetSet = new Set(targetFiles)
+
+  const asts = registryAsts(roots, targetSet, read)
+  // Targets outside the roots (a fixture dir, a temp file) join the registry so
+  // a self-describing fixture store is recognised.
+  for (const f of targetFiles) if (!asts.has(f)) asts.set(f, parse(f, read(f)))
 
   const { proxies, actions } = buildRegistries(asts)
 
@@ -348,30 +436,86 @@ export function analyze(opts = {}) {
   for (const file of targetFiles) {
     const src = asts.get(file) ?? parse(file, read(file))
     const lines = read(file).split('\n')
-    const local = localProxyBindings(src, proxies)
+    const local = localProxyBindings(src, proxies, roots)
+    const paneHandles = hookHandleBindings(src)
     const lineOf = (pos) => src.getLineAndCharacterOfPosition(pos).line + 1
-    const optedOut = (line) =>
-      (lines[line - 1] ?? '').includes(OPT_OUT) || (lines[line - 2] ?? '').includes(OPT_OUT)
+    // The marker must be a COMMENT and must carry a reason (`hook-order-ok: …`),
+    // so neither an incidental occurrence in a string nor a bare, unexplained
+    // marker can silence a real violation.
+    const hasMarker = (text) => {
+      const at = text.indexOf('//')
+      if (at < 0) return false
+      const m = text.slice(at).match(new RegExp(`${OPT_OUT}\\s*:\\s*\\S`))
+      return !!m
+    }
+    const optedOut = (line) => hasMarker(lines[line - 1] ?? '') || hasMarker(lines[line - 2] ?? '')
 
     const report = (rule, node, context, code) => {
       const line = lineOf(node.getStart(src))
       if (optedOut(line)) return
       findings.push({ rule, file, line, context, code })
     }
+    const isAction = (proxyName, prop) => actions.get(proxyName)?.has(prop) ?? false
+    /** A property read that is NOT one of createStoreProxy's hook-free paths. */
+    const isReactiveRead = (node, proxyName, prop) =>
+      !(ts.isCallExpression(node.parent) && node.parent.expression === node) &&
+      !SPECIAL_PROPS.has(prop) &&
+      !isAction(proxyName, prop)
 
     const visit = (n) => {
-      // H1 — a hook CALL that is only conditionally evaluated.
-      if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && HOOK_NAME.test(n.expression.text)) {
-        const ctx = conditionalContext(n, { allowEarlyReturn: false })
-        if (ctx) report('H1', n, ctx, `${n.expression.text}(…)`)
+      // H1 — a hook CALL that is only conditionally evaluated. Both the bare
+      // `useX()` and the namespaced `React.useX()` forms (both are live here).
+      if (ts.isCallExpression(n)) {
+        const callee = n.expression
+        const hookName = ts.isIdentifier(callee)
+          ? callee.text
+          : ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression)
+            ? callee.name.text
+            : null
+        if (hookName && HOOK_NAME.test(hookName)) {
+          const ctx = conditionalContext(n, { allowEarlyReturn: false })
+          if (ctx) report('H1', n, ctx, `${callee.getText(src)}(…)`)
+        }
       }
       // H2 — a store-proxy field read that is only conditionally evaluated.
       if (ts.isPropertyAccessExpression(n) && ts.isIdentifier(n.expression) && local.has(n.expression.text)) {
-        const prop = n.name.text
-        const isCallee = ts.isCallExpression(n.parent) && n.parent.expression === n
-        if (!isCallee && !SPECIAL_PROPS.has(prop) && !actions.has(prop)) {
+        const proxyName = n.expression.text
+        if (isReactiveRead(n, proxyName, n.name.text)) {
           const ctx = conditionalContext(n, { allowEarlyReturn: true })
-          if (ctx) report('H2', n, ctx, `${n.expression.text}.${prop}`)
+          if (ctx) report('H2', n, ctx, `${proxyName}.${n.name.text}`)
+        }
+      }
+      // H2 — the same read via element access: `Proxy['field']`.
+      if (
+        ts.isElementAccessExpression(n) &&
+        ts.isIdentifier(n.expression) &&
+        local.has(n.expression.text) &&
+        ts.isStringLiteralLike(n.argumentExpression)
+      ) {
+        const proxyName = n.expression.text
+        const prop = n.argumentExpression.text
+        if (isReactiveRead(n, proxyName, prop)) {
+          const ctx = conditionalContext(n, { allowEarlyReturn: true })
+          if (ctx) report('H2', n, ctx, `${proxyName}['${prop}']`)
+        }
+      }
+      // H2 — a PER-INSTANCE store reached through a hook handle:
+      // `const pane = useChatPane(); … pane.store.conversation`. This is the
+      // second half of the very bug ITEM-10 fixes (its pre-image read
+      // `pane.store.conversation` in one ternary branch and an imported proxy in
+      // the other), and an imported-proxy-only rule cannot see it.
+      if (ts.isPropertyAccessExpression(n) && ts.isPropertyAccessExpression(unwrap(n.expression))) {
+        const inner = unwrap(n.expression)
+        const base = unwrap(inner.expression)
+        if (inner.name.text === 'store' && ts.isIdentifier(base) && paneHandles.has(base.text)) {
+          const prop = n.name.text
+          const isCallee = ts.isCallExpression(n.parent) && n.parent.expression === n
+          // No per-store action list exists for an anonymous handle, so fall back
+          // to the union of every known action name (over-exempting, never over-reporting).
+          if (!isCallee && !SPECIAL_PROPS.has(prop) && !anyAction(actions, prop)) {
+            const ctx = conditionalContext(n, { allowEarlyReturn: true })
+            if (ctx) report('H2', n, ctx, `${base.text}.store.${prop}`)
+          }
         }
       }
       // H2 — `const { a, b } = Proxy` destructure (one hook per read field).
@@ -391,7 +535,45 @@ export function analyze(opts = {}) {
   }
 
   findings.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line)
-  return { findings, proxyCount: proxies.size, actionCount: actions.size, fileCount: targetFiles.length }
+  const actionCount = [...actions.values()].reduce((n, s) => n + s.size, 0)
+  return { findings, proxyCount: proxies.size, actionCount, fileCount: targetFiles.length }
+}
+
+/** Strip `!` / `(…)` so `pane!.store.x` and `(pane).store.x` read the same. */
+const unwrap = (n) => {
+  let cur = n
+  while (cur && (ts.isNonNullExpression(cur) || ts.isParenthesizedExpression(cur))) cur = cur.expression
+  return cur
+}
+
+const anyAction = (actions, prop) => {
+  for (const set of actions.values()) if (set.has(prop)) return true
+  return false
+}
+
+/**
+ * Locals bound from a `use*()` call — `const pane = useChatPaneOrNull()`. Their
+ * `.store` is a per-instance store proxy (see `ChatPaneContext`), so
+ * `handle.store.<field>` is a path-4 reactive read. Requiring a HOOK-call
+ * initializer is what keeps this precise: `extension.store.name` (a store
+ * DEFINITION reached from a registry loop) is not a hook handle and is ignored.
+ */
+function hookHandleBindings(src) {
+  const handles = new Set()
+  const visit = (n) => {
+    if (
+      ts.isVariableDeclaration(n) &&
+      ts.isIdentifier(n.name) &&
+      n.initializer &&
+      ts.isCallExpression(n.initializer) &&
+      ts.isIdentifier(n.initializer.expression) &&
+      HOOK_NAME.test(n.initializer.expression.text)
+    )
+      handles.add(n.name.text)
+    ts.forEachChild(n, visit)
+  }
+  visit(src)
+  return handles
 }
 
 const EXPLAIN = {
@@ -399,14 +581,89 @@ const EXPLAIN = {
   H2: 'store-proxy field read is only conditionally evaluated — a reactive proxy read IS a hook (useEffect + useStore). Hoist the read above the condition, or use the hook-free `.$` snapshot.',
 }
 
+/**
+ * The two workspace copies of this file are kept byte-identical (DEC-3). The
+ * only assertions of that live in test suites which are NOT in `check`, so a
+ * divergence could ship green — check it HERE, where the gate always runs.
+ */
+export function siblingDriftError() {
+  const self = fileURLToPath(import.meta.url)
+  for (const rel of ['../../desktop/ui/scripts/lint-hooks.mjs', '../../../ui/scripts/lint-hooks.mjs']) {
+    const sibling = path.resolve(HERE, rel)
+    if (sibling === self || !fs.existsSync(sibling)) continue
+    if (fs.readFileSync(sibling, 'utf8') !== fs.readFileSync(self, 'utf8'))
+      return `the two workspace copies have DIVERGED:\n    ${self}\n    ${sibling}\n  Copy one over the other (they are required to be byte-identical).`
+  }
+  return null
+}
+
+/** `--root=<dir>` (repeatable) and `--root <dir>`, matching the sibling lints. */
+export function parseArgs(argv) {
+  const roots = []
+  let json = false
+  const bad = []
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]
+    if (a === '--json') json = true
+    else if (a.startsWith('--root=')) roots.push(a.slice('--root='.length))
+    else if (a === '--root') {
+      const next = argv[++i]
+      if (next === undefined || next.startsWith('--')) bad.push('--root needs a directory')
+      else roots.push(next)
+    } else bad.push(`unknown argument \`${a}\``)
+  }
+  return { roots, json, bad }
+}
+
+/**
+ * A detector that reports 0 because it learned NOTHING is indistinguishable from
+ * a clean tree. Separated out so it is directly testable — this is the guard that
+ * turns an upstream store-kit rename from a silent no-op into a loud failure.
+ * @returns an error string, or null when the run is trustworthy.
+ */
+export function registryHealthError({ fileCount, proxyCount, targets = [] }) {
+  if (fileCount === 0)
+    return `scanned 0 files${targets.length ? ` under ${targets.join(', ')}` : ''} — nothing was checked`
+  if (proxyCount < PROXY_REGISTRY_FLOOR)
+    return (
+      `the store-proxy registry looks broken — learned only ${proxyCount} proxies (floor ${PROXY_REGISTRY_FLOOR}).\n` +
+      `  H2 cannot detect anything in this state. Check PROXY_FACTORY against sdk/packages/framework/src/{stores,store-kit}.ts.`
+    )
+  return null
+}
+
 function main() {
-  const rootArg = (process.argv.find((a) => a.startsWith('--root=')) || '').split('=').slice(1).join('=')
-  const asJson = process.argv.includes('--json')
-  const targets = rootArg ? [path.resolve(process.cwd(), rootArg)] : null
-  const { findings, fileCount } = analyze(targets ? { targets } : {})
+  const { roots: rootArgs, json: asJson, bad } = parseArgs(process.argv.slice(2))
+  const fail = (msg) => {
+    console.error(`lint-hooks: ${msg}`)
+    process.exit(2)
+  }
+  // Exit 2 (never 0, never the 1 that means "violations found") for every
+  // operator error, so a typo can never masquerade as a passing gate.
+  if (bad.length) fail(`${bad.join('; ')}\n  usage: node scripts/lint-hooks.mjs [--root=<dir>]... [--json]`)
+
+  const drift = siblingDriftError()
+  if (drift) fail(drift)
+
+  const targets = rootArgs.map((r) => path.resolve(process.cwd(), r))
+  for (const t of targets) {
+    if (!fs.existsSync(t)) fail(`--root ${t} does not exist`)
+    if (!fs.statSync(t).isDirectory()) fail(`--root ${t} is not a directory`)
+  }
+
+  let result
+  try {
+    result = analyze(targets.length ? { targets } : {})
+  } catch (e) {
+    fail(`crashed while scanning: ${e?.stack || e}`)
+  }
+  const { findings, fileCount, proxyCount, actionCount } = result
+
+  const unhealthy = registryHealthError({ fileCount, proxyCount, targets })
+  if (unhealthy) fail(unhealthy)
 
   if (asJson) {
-    console.log(JSON.stringify(findings, null, 2))
+    console.log(JSON.stringify({ findings, fileCount, proxyCount, actionCount }, null, 2))
   } else if (findings.length) {
     console.error(`lint-hooks: ${findings.length} Rules-of-Hooks violation(s) in ${fileCount} file(s)\n`)
     for (const f of findings) {
@@ -414,10 +671,12 @@ function main() {
       console.error(`     ${EXPLAIN[f.rule]}`)
     }
     console.error(
-      `\n  A justified, provably-stable condition opts out with an inline \`${OPT_OUT}\` marker (+ a reason) on the line or the line above.`,
+      `\n  A provably mount-stable condition opts out with an inline \`${OPT_OUT}: <reason>\` comment on the line or the line above.`,
     )
   } else {
-    console.log(`lint-hooks: OK — 0 violations across ${fileCount} file(s)`)
+    console.log(
+      `lint-hooks: OK — 0 violations across ${fileCount} file(s) (registry: ${proxyCount} store proxies, ${actionCount} actions)`,
+    )
   }
   process.exit(findings.length ? 1 : 0)
 }

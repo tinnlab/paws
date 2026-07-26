@@ -17,7 +17,13 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { analyze } from './lint-hooks.mjs'
+import {
+  analyze,
+  parseArgs,
+  registryHealthError,
+  siblingDriftError,
+  PROXY_REGISTRY_FLOOR,
+} from './lint-hooks.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const UI = path.resolve(HERE, '..') // src-app/ui
@@ -38,8 +44,23 @@ const BUG_B = {
   file: 'src-app/ui/src/modules/llm-provider/components/llm-models/EditLlmModelDrawer.tsx',
 }
 
-const gitShow = (rev, file) =>
-  execFileSync('git', ['show', `${rev}:${file}`], { cwd: REPO, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 })
+const gitShow = (rev, file) => {
+  try {
+    return execFileSync('git', ['show', `${rev}:${file}`], {
+      cwd: REPO,
+      encoding: 'utf8',
+      maxBuffer: 32 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+  } catch (e) {
+    // A shallow clone (CI `fetch-depth: 1`) or a rewritten history would make
+    // this die with a raw git error; say what is actually needed instead.
+    throw new Error(
+      `cannot read ${rev}:${file} — the acceptance tests lint the VERBATIM pre-fix source of the two ` +
+        `shipped crashes, so the repo needs full history (git fetch --unshallow). Underlying: ${e.message}`,
+    )
+  }
+}
 
 /** Write `source` to a temp file whose NAME matches the original, then lint it
  *  with the registries learned from the live roots (so `LlmProvider` is known to
@@ -58,7 +79,10 @@ function lintSource(source, originalPath) {
 /** Lint an inline snippet as a component file. */
 const lintSnippet = (source) => lintSource(source, 'Snippet.tsx')
 
-const PROXY_IMPORT = `import { FixtureStore } from '@/modules/x/stores/fixtureStore'\n`
+// The real fixture store, so factor 1 (module resolution) genuinely resolves to
+// the file that DEFINES the proxy — the same path the shipped fixture uses.
+const FIXTURE_STORE_SPEC = '@/dev/gallery/__detector_fixtures__/stores/fixtureStore'
+const PROXY_IMPORT = `import { FixtureStore } from '${FIXTURE_STORE_SPEC}'\n`
 
 describe('TEST-1 [acceptance][INV-1]: catches the shipped `usePermission(A) || usePermission(B)` crash', () => {
   test('FIRES on the verbatim pre-fix EnableSection.tsx', () => {
@@ -196,27 +220,90 @@ describe('TEST-5: the conditional-evaluation core', () => {
     })
   }
 
-  test('the walk STOPS at the nearest function boundary (a callback body is not the render path)', () => {
+  test('the walk does not cross OUT of a function boundary — the enclosing function is the unit', () => {
+    // The component has BOTH an early return and an `if`; the reads live inside
+    // callbacks where they are UNCONDITIONAL, so the enclosing component's
+    // conditions must not be attributed to them. (A conditional read INSIDE a
+    // callback is still reported — see the next test; the boundary rule is about
+    // not inheriting the OUTER function's conditions, not about ignoring
+    // callbacks.) Removing the `!isFunctionBoundary(parent)` stop turns this red.
     const findings = lintSnippet(
       `import { useEffect } from 'react'\n${PROXY_IMPORT}` +
         `export function C({ a }: { a: boolean }) {\n` +
-        `  useEffect(() => { if (a) { console.error(FixtureStore.$.ready) } }, [a])\n` +
-        `  return <button onClick={() => { if (a) console.error(1) }}>x</button>\n` +
+        `  if (!a) return null\n` +
+        `  useEffect(() => { console.error(FixtureStore.items) }, [])\n` +
+        `  if (a) { return <button onClick={() => console.error(FixtureStore.items)}>x</button> }\n` +
+        `  return null\n` +
         `}\n`,
     )
     assert.deepEqual(findings, [])
   })
 
+  test('a conditional read INSIDE a callback is still reported (it is illegal there anyway)', () => {
+    const findings = lintSnippet(
+      `import { useEffect } from 'react'\n${PROXY_IMPORT}` +
+        `export function C({ a }: { a: boolean }) {\n` +
+        `  useEffect(() => { const v = a ? FixtureStore.items : null; console.error(v) }, [a])\n` +
+        `  return <div/>\n` +
+        `}\n`,
+    )
+    assert.equal(findings.length, 1)
+    assert.equal(findings[0].context, 'ternary-branch')
+  })
+
+  test('a do-while body is NOT conditional (it always runs at least once)', () => {
+    const findings = lintSnippet(
+      `${PROXY_IMPORT}export function C({ a }: { a: boolean }) {\n` +
+        `  let v: unknown = null\n  do { v = FixtureStore.items } while (a)\n` +
+        `  return <div>{String(v)}</div>\n}\n`,
+    )
+    assert.deepEqual(findings, [])
+  })
+
+  test('after-early-return also covers non-`if` guards (nested block, switch arm)', () => {
+    for (const guard of [`  { if (!a) return null }`, `  switch (String(a)) { case 'x': return null }`]) {
+      const findings = lintSnippet(
+        `${PROXY_IMPORT}export function C({ a }: { a: boolean }) {\n${guard}\n` +
+          `  const v = FixtureStore.items\n  return <div>{String(v)}</div>\n}\n`,
+      )
+      assert.equal(findings.length, 1, `guard \`${guard}\` should have produced a finding`)
+      assert.equal(findings[0].context, 'after-early-return')
+    }
+  })
+
   test('after-early-return applies to H2 but NOT to H1 (DEC-6: the type-guard idiom)', () => {
+    // BOTH halves in one snippet, so the test fails if either side flips: the
+    // `useState` must stay silent and the proxy read must fire, at the same
+    // position after the same guard.
     const findings = lintSnippet(
       `import { useState } from 'react'\n${PROXY_IMPORT}` +
         `export function C({ a }: { a: boolean }) {\n` +
         `  if (!a) return null\n` +
         `  const [s] = useState(0)\n` +
-        `  return <div>{s}</div>\n` +
+        `  const v = FixtureStore.items\n` +
+        `  return <div>{s}{String(v)}</div>\n` +
         `}\n`,
     )
-    assert.deepEqual(findings, [], 'a plain hook after an early return is out of scope for H1')
+    assert.equal(findings.length, 1, `expected exactly the H2 half, got ${JSON.stringify(findings)}`)
+    assert.equal(findings[0].rule, 'H2')
+    assert.equal(findings[0].context, 'after-early-return')
+  })
+
+  test('the `hook-order-ok` marker must be a COMMENT and must carry a reason', () => {
+    const bare = lintSnippet(
+      `${PROXY_IMPORT}export function C({ a }: { a: boolean }) {\n` +
+        `  const v = a ? FixtureStore.items : null // hook-order-ok\n` +
+        `  return <div>{String(v)}</div>\n}\n`,
+    )
+    assert.equal(bare.length, 1, 'a reasonless marker must NOT suppress')
+
+    const inString = lintSnippet(
+      `${PROXY_IMPORT}export function C({ a }: { a: boolean }) {\n` +
+        `  const doc = 'see hook-order-ok: the docs'\n` +
+        `  const v = a ? FixtureStore.items : null\n` +
+        `  return <div>{doc}{String(v)}</div>\n}\n`,
+    )
+    assert.equal(inString.length, 1, 'an occurrence inside a string must NOT suppress')
   })
 
   test('the `hook-order-ok` marker opts out — on the line, and on the line above', () => {
@@ -273,6 +360,7 @@ describe('TEST-6: the non-firing shapes stay silent (zero-false-positive budget)
     'unconditional proxy read': `  const items = FixtureStore.items\n  const v = a ? items : null`,
     'the `$` snapshot in a conditional': `  const v = a ? FixtureStore.$.items : null`,
     'an action CALL in a conditional': `  if (a) FixtureStore.reload()\n  const v = null`,
+    'an action read (not called) in a conditional': `  const v = a ? FixtureStore.reload : null`,
     'an action BY REFERENCE in a conditional': `  const v = a && <button onClick={FixtureStore.reload}>x</button>`,
     'a special property in a conditional': `  const v = a ? FixtureStore.__destroyed : null`,
   }
@@ -306,13 +394,63 @@ describe('TEST-6: the non-firing shapes stay silent (zero-false-positive budget)
   })
 
   test('a type-only import of a proxy name is not a value read', () => {
-    const findings = lintSnippet(
-      `import type { FixtureStore } from '@/modules/x/stores/fixtureStore'\n` +
-        `export function C({ a }: { a: boolean }) {\n` +
-        `  const v: typeof FixtureStore | null = null\n` +
-        `  return <div>{String(a)}{String(v)}</div>\n}\n`,
+    // A REAL conditional property access on the type-only binding: identical
+    // syntax to a firing case, silent only because the import is type-only.
+    // Dropping either `isTypeOnly` guard turns this red.
+    for (const imp of [
+      `import type { FixtureStore } from '${FIXTURE_STORE_SPEC}'`,
+      `import { type FixtureStore } from '${FIXTURE_STORE_SPEC}'`,
+    ]) {
+      const findings = lintSnippet(
+        `${imp}\nexport function C({ a }: { a: boolean }) {\n` +
+          `  type T = typeof FixtureStore.items\n` +
+          `  const v: T | null = a ? ([] as T) : null\n` +
+          `  return <div>{String(v)}</div>\n}\n`,
+      )
+      assert.deepEqual(findings, [], imp)
+    }
+  })
+})
+
+describe('TEST-15: the gate fails LOUDLY instead of silently passing', () => {
+  test('registryHealthError trips on an empty scan and on a broken proxy registry', () => {
+    assert.match(registryHealthError({ fileCount: 0, proxyCount: 300 }), /scanned 0 files/)
+    assert.match(
+      registryHealthError({ fileCount: 2000, proxyCount: PROXY_REGISTRY_FLOOR - 1 }),
+      /store-proxy registry looks broken/,
     )
-    assert.deepEqual(findings, [])
+    assert.equal(registryHealthError({ fileCount: 2000, proxyCount: PROXY_REGISTRY_FLOOR }), null)
+  })
+
+  test('the live registry sits comfortably above the floor', () => {
+    const { proxyCount } = analyze()
+    assert.ok(
+      proxyCount > PROXY_REGISTRY_FLOOR * 2,
+      `only ${proxyCount} proxies learned — the floor would not catch a partial break`,
+    )
+  })
+
+  test('an unusable --root exits 2 (an operator error is never a passing gate)', () => {
+    const run = (...args) => spawnSync('node', ['scripts/lint-hooks.mjs', ...args], { cwd: UI, encoding: 'utf8' })
+    for (const args of [['--root=src/does/not/exist'], ['--root', 'package.json'], ['--root'], ['--roots=src']]) {
+      const res = run(...args)
+      assert.equal(res.status, 2, `${args.join(' ')} should be an operator error, got ${res.status}: ${res.stdout}`)
+    }
+    // …and 2 is distinct from BOTH the clean (0) and the violation (1) codes.
+    assert.equal(run().status, 0)
+    assert.equal(run(`--root=${path.relative(UI, FIXTURES)}`).status, 1)
+  })
+
+  test('--root is repeatable and accepts the space form, like the sibling lints', () => {
+    assert.deepEqual(parseArgs(['--root=a', '--root', 'b', '--json']), { roots: ['a', 'b'], json: true, bad: [] })
+    assert.equal(parseArgs(['--nope']).bad.length, 1)
+    assert.equal(parseArgs(['--root']).bad.length, 1)
+  })
+
+  test('the byte-identity drift guard runs INSIDE the gate (not only in a test)', () => {
+    assert.equal(siblingDriftError(), null, 'the two workspace copies must be byte-identical')
+    const src = fs.readFileSync(path.join(UI, 'scripts/lint-hooks.mjs'), 'utf8')
+    assert.match(src, /siblingDriftError\(\)/, 'main() must consult the drift guard')
   })
 })
 
@@ -359,11 +497,16 @@ describe('TEST-7: fixtures + detector-acceptance wiring', () => {
     assert.deepEqual(findings.filter((f) => f.file.endsWith('ConditionalHooksClean.tsx')), [])
   })
 
-  test('both detector-acceptance tables carry the O1 + O2 lint rows', () => {
+  test('both detector-acceptance tables carry the O1 + O2 lint rows, each with its OWN expectation', () => {
     for (const ws of [UI, DESKTOP_UI]) {
       const src = fs.readFileSync(path.join(ws, 'scripts/detector-acceptance.mjs'), 'utf8')
       assert.match(src, /cls: 'O1'[\s\S]*?lint-hooks\.mjs/, `${ws}: missing the O1 row`)
       assert.match(src, /cls: 'O2'[\s\S]*?lint-hooks\.mjs/, `${ws}: missing the O2 row`)
+      // O1 and O2 share ONE script, so without a per-row `expect` the O2 row
+      // would count as "fired" on O1's finding alone — a hollow acceptance row.
+      assert.match(src, /cls: 'O1'[\s\S]*?expect: \/H1 /, `${ws}: O1 row must assert an H1 finding`)
+      assert.match(src, /cls: 'O2'[\s\S]*?expect: \/H2 /, `${ws}: O2 row must assert an H2 finding`)
+      assert.match(src, /expect \? expect\.test\(out\)/, `${ws}: runLint must honour the row's expect`)
     }
   })
 

@@ -28,12 +28,24 @@ export function McpServerDetailsDrawer({
   onClose,
   footer,
 }: McpServerDetailsDrawerProps) {
-  // Read the reactive `catalog` proxy field BEFORE the `!server` guard: a
-  // store-proxy field read IS a hook (useEffect + useStore — see
-  // framework/src/stores.ts), so reading it after an early return made the hook
-  // count depend on whether a server was selected (taxonomy O2).
-  const catalog = HubCatalog.catalog
+  // Component-per-case, NOT a hoisted read: a store-proxy field read IS a hook
+  // (useEffect + useStore — see framework/src/stores.ts), so reading
+  // `HubCatalog.catalog` after the `!server` guard made the hook count depend on
+  // whether a server was selected (taxonomy O2). Hoisting it above the guard
+  // would fix the hook order but touch the LAZY hub store on a render that shows
+  // nothing (first access runs the store's `init`, which fetches the catalog), so
+  // the guard lives in this wrapper and the body only mounts with a real server.
   if (!server) return null
+  return <McpServerDetails server={server} open={open} onClose={onClose} footer={footer} />
+}
+
+function McpServerDetails({
+  server,
+  open,
+  onClose,
+  footer,
+}: McpServerDetailsDrawerProps & { server: HubMCPServer }) {
+  const catalog = HubCatalog.catalog
 
   // Display title: prefer the curated `IndexItem.title` (publisher
   // sets via `_hub_curation.title` in the source YAML); fall back to
