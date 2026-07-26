@@ -457,19 +457,18 @@ fn prune_closed_for_user_locked(inner: &mut RegistryInner, user_id: Uuid) -> usi
         .collect();
     let n = dead.len();
     for cid in dead {
-        // Repair, not just remove: `remove_conn` is keyed off `clients`, so it
-        // no-ops on an orphan. Drop the index entry directly first so the
-        // orphan can never keep counting against the cap.
-        if !inner.clients.contains_key(&cid) {
-            if let Some(set) = inner.by_user.get_mut(&user_id) {
-                set.remove(&cid);
-                if set.is_empty() {
-                    inner.by_user.remove(&user_id);
-                }
-            }
-            continue;
-        }
+        // `remove_conn` is keyed off `clients`: it no-ops entirely when the row
+        // is missing (an orphan), and when `clients[cid].user_id` disagrees with
+        // `user_id` it would clean the OTHER user's index. So drop THIS user's
+        // index entry unconditionally as well — that is what actually guarantees
+        // the id stops counting against `user_id`'s cap, for every desync shape.
         remove_conn(inner, cid);
+        if let Some(set) = inner.by_user.get_mut(&user_id) {
+            set.remove(&cid);
+            if set.is_empty() {
+                inner.by_user.remove(&user_id);
+            }
+        }
     }
     if n > 0 {
         tracing::debug!("chat-stream registry: reclaimed {n} dead connection(s) for one user");
@@ -862,6 +861,53 @@ mod tests {
         reg.register(Uuid::new_v4(), fresh)
             .expect("a registry full of DEAD connections must not lock everyone out");
         assert_eq!(reg.inner.lock().unwrap().clients.len(), 1);
+    }
+
+    /// TEST-21b — the chat twin of the SDK's orphan-repair test. The repair
+    /// branch is duplicated into this registry, and defensive code with no
+    /// natural trigger is exactly the code that needs a test: an id in
+    /// `by_user` with no `clients` row would otherwise count against the
+    /// per-user cap forever, which is the permanently-429'd account this module
+    /// exists to prevent.
+    #[test]
+    fn prune_closed_for_user_repairs_an_orphaned_index_entry() {
+        let reg = empty_registry();
+        let uid = Uuid::new_v4();
+        let orphan = Uuid::new_v4();
+
+        // Forge the desync: an id in `by_user` with no `clients` row.
+        {
+            let mut inner = reg.inner.lock().unwrap_or_else(|e| e.into_inner());
+            inner.by_user.entry(uid).or_default().insert(orphan);
+        }
+
+        assert_eq!(
+            reg.prune_closed_for_user(uid),
+            1,
+            "the orphaned index entry must be counted as reclaimed"
+        );
+        {
+            let inner = reg.inner.lock().unwrap_or_else(|e| e.into_inner());
+            assert!(
+                inner.by_user.get(&uid).is_none(),
+                "the orphan must actually be REMOVED from by_user"
+            );
+        }
+
+        // Orphan alongside a LIVE connection: the entry shrinks, it does not vanish.
+        let (live, _live_rx) = conn(uid, None);
+        let live_id = Uuid::new_v4();
+        reg.register(live_id, live).unwrap();
+        {
+            let mut inner = reg.inner.lock().unwrap_or_else(|e| e.into_inner());
+            inner.by_user.entry(uid).or_default().insert(Uuid::new_v4());
+        }
+        assert_eq!(reg.prune_closed_for_user(uid), 1, "only the orphan is freed");
+        let inner = reg.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let set = inner.by_user.get(&uid).expect("the live connection keeps the entry");
+        assert_eq!(set.len(), 1);
+        assert!(set.contains(&live_id));
+        assert_eq!(inner.clients.len(), 1, "`clients` is left untouched");
     }
 
     /// A sweep NEVER reclaims a live connection.

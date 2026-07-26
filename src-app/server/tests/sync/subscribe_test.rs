@@ -870,16 +870,25 @@ async fn owner_scoping_and_notify_only_wire_format_survive_slot_reclamation() {
 /// TEST-19 [acceptance INV-1] — the never-polled leak IS reachable through the
 /// real endpoint, via `HEAD`.
 ///
-/// axum routes `HEAD` to the `GET` handler, and hyper encodes a HEAD response
-/// with a zero-length body encoder — so it DROPS the SSE body without ever
-/// polling it. That is exactly the termination the old guard placement could not
-/// see, and unlike an abandoned GET it is remotely triggerable by anything that
-/// HEADs a URL: uptime monitors, reverse proxies, link previewers, security
-/// scanners. Before the fix, `PER_USER_MAX_CONNECTIONS` HEADs permanently 429 a
-/// user's realtime sync (and `GLOBAL_MAX_CONNECTIONS` of them take the whole
-/// deployment down) with no client left connected to explain it.
+/// axum routes `HEAD` to the `GET` handler (`method_routing.rs`,
+/// `call!(req, HEAD, get)`) and then replaces the response body with
+/// `Body::empty()` inside `RouteFuture::poll` — synchronously, before the
+/// response reaches hyper. The SSE body is therefore DROPPED WITHOUT EVER BEING
+/// POLLED: exactly the termination the old guard placement could not see, and
+/// unlike an abandoned GET it is remotely triggerable by anything that HEADs a
+/// URL — uptime monitors, reverse proxies, link previewers, security scanners.
+/// Before the fix, `PER_USER_MAX_CONNECTIONS` HEADs permanently 429 a user's
+/// realtime sync (and `GLOBAL_MAX_CONNECTIONS` of them take the whole deployment
+/// down) with no client left connected to explain it.
 ///
-/// This is the red-before-fix proof THROUGH THE REAL HTTP ENDPOINT.
+/// This is the red-before-fix proof THROUGH THE REAL HTTP ENDPOINT — measured
+/// with the fix reverted: `HEAD #13` → `429`.
+///
+/// SCOPE: it exercises the fix AS A WHOLE. With the guard reverted but the sweep
+/// kept, the (cap+1)th HEAD would reclaim the leaked entries and this would
+/// still pass, so it does not isolate the guard placement — the unpolled-drop
+/// unit tests (`ziee-framework`'s `tests/sync_routes.rs`, and
+/// `chat/stream/handler.rs`) do that.
 #[tokio::test]
 async fn head_requests_do_not_leak_connection_slots() {
     let server = crate::common::TestServer::start().await;
@@ -891,6 +900,43 @@ async fn head_requests_do_not_leak_connection_slots() {
     )
     .await;
     let client = reqwest::Client::new();
+
+    // NON-VACUITY ANCHOR — pin the premise. If a future axum change, a proxy, or
+    // a HEAD-handling layer short-circuited HEAD before the handler, everything
+    // below would pass while testing nothing. Hold the user's whole allowance
+    // open with LIVE streams and check a HEAD is refused: it can only 429 if it
+    // reached `register()`.
+    {
+        use futures_util::StreamExt;
+        let mut held = Vec::new();
+        for _ in 0..per_user_max {
+            let res = client
+                .get(server.api_url("/sync/subscribe"))
+                .header("Authorization", format!("Bearer {}", user.token))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(res.status(), 200);
+            let mut body = res.bytes_stream();
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(10), body.next()).await;
+            held.push(body);
+        }
+        let head = client
+            .head(server.api_url("/sync/subscribe"))
+            .header("Authorization", format!("Bearer {}", user.token))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            head.status(),
+            429,
+            "a HEAD must reach register() — if it is short-circuited before the \
+             handler, the rest of this test proves nothing"
+        );
+        drop(held);
+    }
+    // Let those streams settle before measuring the HEAD-only behaviour.
+    let _ = count_available_slots(&server, &user.token, per_user_max + 1).await;
 
     // Well past the cap: every one of these registers server-side, and every one
     // has its body dropped unpolled.

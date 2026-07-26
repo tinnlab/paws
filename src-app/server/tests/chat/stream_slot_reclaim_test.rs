@@ -17,10 +17,13 @@
 //!   response body while writing it (measured: 400 concurrent abandoned raw
 //!   sockets leak 0 slots).
 //! - `head_requests_do_not_leak_chat_stream_slots` IS the red-before-fix proof
-//!   through the real endpoint: axum routes `HEAD` to the `GET` handler and
-//!   hyper drops a HEAD response's body unpolled, so before the fix each HEAD
-//!   permanently consumed a slot. This is the production-reachable form of the
-//!   bug — anything that HEADs a URL triggers it.
+//!   through the real endpoint: axum routes `HEAD` to the `GET` handler and then
+//!   swaps the response body for `Body::empty()` in `RouteFuture::poll`, before
+//!   it is ever polled — so before the fix each HEAD permanently consumed a
+//!   slot. This is the production-reachable form of the bug: anything that HEADs
+//!   a URL triggers it. NOTE it exercises the fix AS A WHOLE (guard + sweep);
+//!   the guard placement specifically is isolated by
+//!   `modules::chat::stream::handler::tests::an_unpolled_stream_still_releases_its_slot`.
 //!
 //! The registry's own logic is covered by the unit tests in
 //! `modules/chat/stream/registry.rs`.
@@ -233,6 +236,39 @@ async fn head_requests_do_not_leak_chat_stream_slots() {
     let cap = discover_per_user_cap(&server).await;
     let user = stream_user(&server, "chat_head_leak").await;
     let client = reqwest::Client::new();
+
+    // NON-VACUITY ANCHOR — see the sync twin: a HEAD can only 429 if it actually
+    // reached `register()`, which pins the premise the rest of the test rests on.
+    {
+        use futures_util::StreamExt;
+        let mut held = Vec::new();
+        for _ in 0..cap {
+            let res = client
+                .get(server.api_url("/chat/stream"))
+                .header("Authorization", format!("Bearer {}", user.token))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(res.status(), 200);
+            let mut body = res.bytes_stream();
+            let _ = tokio::time::timeout(Duration::from_secs(10), body.next()).await;
+            held.push(body);
+        }
+        let head = client
+            .head(server.api_url("/chat/stream"))
+            .header("Authorization", format!("Bearer {}", user.token))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            head.status(),
+            429,
+            "a HEAD must reach register() — if it is short-circuited before the \
+             handler, the rest of this test proves nothing"
+        );
+        drop(held);
+    }
+    let _ = count_available_slots(&server, &user.token, cap + 1).await;
 
     for i in 0..(cap * 2) {
         let res = client

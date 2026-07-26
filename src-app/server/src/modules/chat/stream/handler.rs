@@ -70,12 +70,18 @@ pub async fn subscribe_chat_stream(
 /// termination the previous guard placement could not see.
 ///
 /// It is emphatically NOT a hypothetical path. axum routes `HEAD` to the `GET`
-/// handler and hyper encodes a HEAD response with a zero-length body encoder, so
-/// it drops the SSE body WITHOUT EVER POLLING IT — meaning any `HEAD
+/// handler (`method_routing.rs`, `call!(req, HEAD, get)`) and then REPLACES the
+/// response body with `Body::empty()` inside `RouteFuture::poll`
+/// (`routing/route.rs`) — synchronously, before the response ever reaches hyper.
+/// The SSE body is therefore dropped WITHOUT EVER BEING POLLED, so any `HEAD
 /// /api/chat/stream` (uptime monitor, reverse proxy, link previewer, scanner)
-/// used to consume a per-user slot permanently. That is covered end-to-end by
-/// `tests/chat/stream_slot_reclaim_test.rs::head_requests_do_not_leak_chat_stream_slots`;
-/// this seam additionally covers the path with no HTTP stack in the way.
+/// used to consume a per-user slot permanently.
+///
+/// `head_requests_do_not_leak_chat_stream_slots` covers that end-to-end, but
+/// note it does not ISOLATE the guard placement: with the guard reverted and the
+/// sweep kept, the (cap+1)th HEAD would reclaim the leaked entries and the test
+/// would still pass. The test below is what isolates it — it asserts the slot
+/// count after EVERY drop, staying below the cap so the sweep never runs.
 fn open_chat_stream(
     user_id: Uuid,
     exp_unix: Option<i64>,
@@ -288,13 +294,18 @@ mod tests {
     ///
     /// An abandoned GET does NOT reach this path (measured: 400 concurrent
     /// abandoned raw sockets leak 0 slots, because hyper polls the body while
-    /// writing it) — but a `HEAD` does, because hyper drops a HEAD response's
-    /// body unpolled. The end-to-end proof of that is
-    /// `head_requests_do_not_leak_chat_stream_slots`; this test covers the same
-    /// contract directly, with no HTTP stack in the way, via the
-    /// `open_chat_stream` seam (no extractor, no HTTP, no DB — the only DB
+    /// writing it) — but a `HEAD` does, because axum swaps the body for
+    /// `Body::empty()` before it is ever polled.
+    ///
+    /// **This test is the one that ISOLATES the guard placement.** It stays
+    /// BELOW the per-user cap between assertions, so `register`'s sweep never
+    /// runs and cannot mask a reverted guard: the count must be 0 after every
+    /// single drop. (The end-to-end `head_requests_do_not_leak_chat_stream_slots`
+    /// is satisfied by the sweep alone, so it proves the user is not locked out
+    /// — not where the release came from.) Driven through the
+    /// `open_chat_stream` seam: no extractor, no HTTP, no DB — the only DB
     /// access is in the periodic re-check arm, which lives inside the generator
-    /// and never runs here).
+    /// and never runs here.
     #[tokio::test]
     async fn an_unpolled_stream_still_releases_its_slot() {
         let uid = Uuid::new_v4();
