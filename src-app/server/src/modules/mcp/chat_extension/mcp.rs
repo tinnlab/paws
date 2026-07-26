@@ -348,6 +348,61 @@ fn recover_server_id_for_bare_name(
     map.get(bare).copied().flatten()
 }
 
+/// Render the per-message bare-name map for a diagnostic, naming each advertised
+/// tool and whether it was uniquely attributable.
+///
+/// When recovery fails there are three causes, indistinguishable from the failed
+/// name alone but needing different fixes: nothing was advertised this turn, the
+/// model named a tool that was not advertised, or the name is ambiguous (≥2
+/// servers advertise it, so auto-resolving could mis-dispatch a side-effecting
+/// tool). The advertised set is only in scope at the failure site, so it has to
+/// be rendered there or the information is lost.
+/// Cap on tools named in one diagnostic line. A deployment with many servers can
+/// advertise hundreds; a single unbounded log line helps nobody and bloats the
+/// log. The count is always reported, so truncation is visible rather than
+/// silent.
+const DIAGNOSTIC_TOOL_LIST_CAP: usize = 40;
+
+/// Cap on each rendered tool name — they come from third-party MCP servers.
+const DIAGNOSTIC_TOOL_NAME_CAP: usize = 64;
+
+fn describe_advertised_tools(map: &HashMap<String, Option<Uuid>>) -> String {
+    if map.is_empty() {
+        return "<none advertised this turn>".to_string();
+    }
+    // Sorted so the line is stable across runs (HashMap order is not) — a
+    // diagnostic you can diff between two reports is worth more than one you
+    // cannot.
+    let mut entries: Vec<String> = map
+        .iter()
+        .map(|(name, sid)| {
+            // Tool names are THIRD-PARTY input (an MCP server chooses them), so
+            // they are sanitized before reaching the log: `sanitize_prompt_field`
+            // collapses control characters, which stops a name containing
+            // newlines from forging additional log lines.
+            let name = sanitize_prompt_field(name, DIAGNOSTIC_TOOL_NAME_CAP);
+            match sid {
+                Some(id) => format!("{name}={id}"),
+                None => format!("{name}=<ambiguous>"),
+            }
+        })
+        .collect();
+    entries.sort();
+
+    let total = entries.len();
+    if total > DIAGNOSTIC_TOOL_LIST_CAP {
+        entries.truncate(DIAGNOSTIC_TOOL_LIST_CAP);
+        format!(
+            "[{}, … {} more of {} total]",
+            entries.join(", "),
+            total - DIAGNOSTIC_TOOL_LIST_CAP,
+            total
+        )
+    } else {
+        format!("[{}]", entries.join(", "))
+    }
+}
+
 /// Resolve `(server_id, tool_name)` from a finalized tool-call wire name.
 ///
 /// A well-formed name is `<server_uuid>__<tool>` — split on the FIRST `__` into a
@@ -622,6 +677,52 @@ fn resolve_tool_approval(
                 ToolApprovalOutcome::Execute
             }
         }
+    }
+}
+
+/// Resolve the approval mode + auto-approved tool list that govern this turn.
+///
+/// Three-branch precedence, most-specific first:
+/// 1. **conversation settings** — used verbatim, including their (possibly empty)
+///    auto-approved list. An explicit per-conversation choice always wins.
+/// 2. **user defaults** — the mode + list the user configured at
+///    `/api/mcp/defaults`, so a fresh conversation inherits their preference.
+/// 3. **neither** — [`ApprovalMode::default()`], the deployment default (see the
+///    type-level docs on `ApprovalMode`), with an empty list.
+///
+/// Extracted from `after_llm_call` as a pure function so the precedence is directly
+/// testable: branch 3 is what the whole "auto-approved on turn 1, prompts on turn 2"
+/// bug turned on, and branch 1 vs 3 is exactly the transition the client's turn-1
+/// auto-persist used to force.
+///
+/// The result feeds BOTH the MCP tool gate below and `execute_run_js_call`, so the
+/// `run_js` inner-tool gate resolves identically rather than diverging.
+fn resolve_approval(
+    settings: Option<&super::approval::models::ConversationMcpSettings>,
+    user_defaults: Option<&super::defaults::models::UserMcpDefaults>,
+) -> (
+    crate::modules::mcp::chat_extension::ApprovalMode,
+    Vec<super::approval::models::AutoApprovedServer>,
+) {
+    if let Some(settings) = settings {
+        // Conversation-specific settings exist — use them verbatim.
+        let servers: Vec<super::approval::models::AutoApprovedServer> =
+            serde_json::from_value(settings.auto_approved_tools.clone()).unwrap_or_default();
+        (settings.get_approval_mode(), servers)
+    } else if let Some(defaults) = user_defaults {
+        // No conversation override — inherit the user's defaults so the
+        // approval_mode they configured in `/api/mcp/defaults` actually
+        // takes effect for fresh conversations.
+        (
+            defaults.get_approval_mode(),
+            defaults.get_auto_approved_tools(),
+        )
+    } else {
+        // No conversation override AND no user defaults: the deployment default.
+        (
+            crate::modules::mcp::chat_extension::ApprovalMode::default(),
+            Vec::new(),
+        )
     }
 }
 
@@ -2677,20 +2778,8 @@ impl ChatExtension for McpChatExtension {
             .map(|d| d.get_auto_approved_tools())
             .unwrap_or_default();
 
-        let (approval_mode, auto_approved_servers) = if let Some(ref settings) = settings {
-            // Conversation-specific settings exist — use them verbatim.
-            let servers: Vec<super::approval::models::AutoApprovedServer> =
-                serde_json::from_value(settings.auto_approved_tools.clone()).unwrap_or_default();
-            (settings.get_approval_mode(), servers)
-        } else if let Some(ref defaults) = user_defaults {
-            // No conversation override — inherit the user's defaults so the
-            // approval_mode they configured in `/api/mcp/defaults` actually
-            // takes effect for fresh conversations.
-            (defaults.get_approval_mode(), defaults.get_auto_approved_tools())
-        } else {
-            // No conversation override AND no user defaults: be conservative.
-            (crate::modules::mcp::chat_extension::ApprovalMode::ManualApprove, Vec::new())
-        };
+        let (approval_mode, auto_approved_servers) =
+            resolve_approval(settings.as_ref(), user_defaults.as_ref());
 
         tracing::info!(
             "MCP extension: {} tools, approval_mode={}, auto_approved_servers={}",
@@ -3916,10 +4005,20 @@ impl ChatExtension for McpChatExtension {
                     sid.to_string()
                 }
                 None => {
+                    // Report WHY recovery failed, not just that it did. The three
+                    // causes need different fixes and are indistinguishable from
+                    // the bare name alone:
+                    //   - the map is EMPTY  → no tools were advertised this turn
+                    //   - the name is absent → the model invented/renamed a tool
+                    //   - the name maps to `None` → ≥2 servers advertise it, so
+                    //     auto-resolving could mis-dispatch a side-effecting tool
+                    // Diagnosing a live report previously meant guessing between
+                    // them; the advertised set is only in scope right here.
                     tracing::warn!(
                         "[mcp] Tool name has no valid server_id prefix and is not uniquely \
-                         recoverable: {}",
-                        full_name
+                         recoverable: '{}' (advertised this turn: {})",
+                        full_name,
+                        describe_advertised_tools(&bare_name_map)
                     );
                     String::new()
                 }
@@ -3959,14 +4058,140 @@ impl ChatExtension for McpChatExtension {
 mod tests {
     use super::{
         build_artifact_download_url, claim_outcome, file_download_origin,
-        replace_or_collect_tool_results, saved_artifact_hidden_content_guidance,
-        tool_system_guidance, ClaimOutcome,
+        replace_or_collect_tool_results, resolve_approval,
+        saved_artifact_hidden_content_guidance, tool_system_guidance, ClaimOutcome,
     };
     use crate::core::config::CodeSandboxConfig;
     use uuid::Uuid;
 
     fn tool(name: &str) -> ai_providers::Tool {
         ai_providers::Tool::function(name.to_string(), String::new(), serde_json::json!({}))
+    }
+
+    // ── fix-mcp-auto-approve-default ─────────────────────────────────────────
+    // TEST-5: the three-branch approval precedence. Branch 3 (no row anywhere) is
+    // what the live bug hinged on — it is the ONLY branch that produced
+    // auto-approve on a deploy build, so the moment the client wrote a
+    // conversation row, resolution jumped to branch 1 and started prompting.
+
+    use super::super::approval::models::{
+        ApprovalMode, AutoApprovedServer, ConversationMcpSettings,
+    };
+    use super::super::defaults::models::UserMcpDefaults;
+    use chrono::Utc;
+
+    fn conv_settings(mode: &str, auto: serde_json::Value) -> ConversationMcpSettings {
+        ConversationMcpSettings {
+            id: Uuid::nil(),
+            conversation_id: Uuid::nil(),
+            user_id: Uuid::nil(),
+            approval_mode: mode.to_string(),
+            auto_approved_tools: auto,
+            disabled_servers: serde_json::json!([]),
+            loop_settings: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    fn user_defaults(mode: &str, auto: serde_json::Value) -> UserMcpDefaults {
+        UserMcpDefaults {
+            id: Uuid::nil(),
+            user_id: Uuid::nil(),
+            approval_mode: mode.to_string(),
+            auto_approved_tools: auto,
+            disabled_servers: serde_json::json!([]),
+            loop_settings: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    fn auto_list(server: Uuid, tool: &str) -> serde_json::Value {
+        serde_json::json!([{ "server_id": server, "tools": [tool] }])
+    }
+
+    fn tool_names(servers: &[AutoApprovedServer]) -> Vec<String> {
+        servers.iter().flat_map(|s| s.tools.clone()).collect()
+    }
+
+    /// Branch 1: a conversation row wins outright — its mode AND its list — even
+    /// when user defaults say something else.
+    #[test]
+    fn resolve_approval_prefers_conversation_settings_over_user_defaults() {
+        let sid = Uuid::from_u128(1);
+        let (mode, servers) = resolve_approval(
+            Some(&conv_settings("manual_approve", auto_list(sid, "conv_tool"))),
+            Some(&user_defaults("auto_approve", auto_list(sid, "default_tool"))),
+        );
+        assert_eq!(mode, ApprovalMode::ManualApprove);
+        assert_eq!(tool_names(&servers), vec!["conv_tool".to_string()]);
+
+        // ...and in the other direction, so this isn't just "manual always wins".
+        let (mode, _) = resolve_approval(
+            Some(&conv_settings("auto_approve", serde_json::json!([]))),
+            Some(&user_defaults("manual_approve", serde_json::json!([]))),
+        );
+        assert_eq!(mode, ApprovalMode::AutoApprove);
+    }
+
+    /// Branch 1 edge: a conversation row with an EMPTY auto-approved list must not
+    /// silently fall through to the user's list — that would auto-run a tool the
+    /// conversation deliberately un-approved.
+    #[test]
+    fn resolve_approval_conversation_empty_list_does_not_inherit_user_list() {
+        let sid = Uuid::from_u128(2);
+        let (mode, servers) = resolve_approval(
+            Some(&conv_settings("manual_approve", serde_json::json!([]))),
+            Some(&user_defaults("manual_approve", auto_list(sid, "default_tool"))),
+        );
+        assert_eq!(mode, ApprovalMode::ManualApprove);
+        assert!(
+            servers.is_empty(),
+            "conversation scope must not inherit the user default allow-list",
+        );
+    }
+
+    /// Branch 2: no conversation row → the user's configured defaults apply.
+    #[test]
+    fn resolve_approval_falls_back_to_user_defaults() {
+        let sid = Uuid::from_u128(3);
+        let (mode, servers) = resolve_approval(
+            None,
+            Some(&user_defaults("auto_approve", auto_list(sid, "default_tool"))),
+        );
+        assert_eq!(mode, ApprovalMode::AutoApprove);
+        assert_eq!(tool_names(&servers), vec!["default_tool".to_string()]);
+    }
+
+    /// Branch 3: nothing stored anywhere → the DEPLOYMENT default, with an empty
+    /// list. Asserted against `ApprovalMode::default()` rather than a literal, so
+    /// this same test holds on deploy-schedule (where the default is AutoApprove).
+    #[test]
+    fn resolve_approval_with_nothing_stored_uses_the_deployment_default() {
+        let (mode, servers) = resolve_approval(None, None);
+        assert_eq!(mode, ApprovalMode::default());
+        assert!(servers.is_empty());
+    }
+
+    /// The regression itself, at resolution level: turn 1 (no row) and turn 2
+    /// (a row the client wrote WITHOUT an explicit user choice, so it carries the
+    /// server default) must resolve to the SAME mode. Before the fix the client
+    /// pinned `manual_approve` here regardless of the deployment default, and these
+    /// two diverged.
+    #[test]
+    fn resolve_approval_is_stable_across_the_turn_1_auto_persist() {
+        let (turn_1, _) = resolve_approval(None, None);
+        let persisted = conv_settings(
+            &ApprovalMode::default().to_string(),
+            serde_json::json!([]),
+        );
+        let (turn_2, _) = resolve_approval(Some(&persisted), None);
+        assert_eq!(
+            turn_1, turn_2,
+            "a conversation must not change approval behaviour just because the \
+             client persisted the server default after the first message",
+        );
     }
 
     // ── fix-duplicate-tool-result ────────────────────────────────────────────
@@ -4864,7 +5089,8 @@ mod builtin_tests {
 #[cfg(test)]
 mod approval_loop_tests {
     use super::{
-        recover_server_id_for_bare_name, resolve_server_and_tool, resolve_unique_tool_use_id,
+        describe_advertised_tools, recover_server_id_for_bare_name, resolve_server_and_tool,
+        resolve_unique_tool_use_id,
     };
     use std::collections::{HashMap, HashSet};
     use uuid::Uuid;
@@ -4920,6 +5146,63 @@ mod approval_loop_tests {
         let (got_sid, tool) = resolve_server_and_tool("get__weather", &map);
         assert_eq!(got_sid, None, "must not recover to the unrelated `weather` server");
         assert_eq!(tool, "get__weather");
+    }
+
+    /// TEST-9 — the failure diagnostic must distinguish the three causes.
+    ///
+    /// Recovery failing tells you nothing on its own; these three cases need
+    /// different fixes and previously produced the SAME log line, which is why a
+    /// live report could not be diagnosed without guessing.
+    #[test]
+    fn advertised_tools_diagnostic_distinguishes_the_three_causes() {
+        // (a) nothing advertised — MCP was off / no accessible server.
+        assert_eq!(
+            describe_advertised_tools(&HashMap::new()),
+            "<none advertised this turn>"
+        );
+
+        let sid = Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap();
+        let mut map = HashMap::new();
+        map.insert("query_rag".to_string(), Some(sid));
+        // (c) advertised by >=2 servers → deliberately not auto-resolved.
+        map.insert("validate_input_file".to_string(), None);
+
+        let rendered = describe_advertised_tools(&map);
+        assert_eq!(
+            rendered,
+            "[query_rag=11111111-1111-4111-8111-111111111111, validate_input_file=<ambiguous>]",
+            "must name each advertised tool AND mark the ambiguous ones; \
+             sorted so two reports can be diffed"
+        );
+        // (b) a name absent from this rendering is one the model invented.
+        assert!(!rendered.contains("ghost_tool"));
+    }
+
+    /// The diagnostic renders THIRD-PARTY strings (an MCP server names its own
+    /// tools), so it must not become a log-forging or log-flooding vector.
+    #[test]
+    fn advertised_tools_diagnostic_is_bounded_and_escaped() {
+        // A newline-laden tool name must not forge extra log lines.
+        let mut map = HashMap::new();
+        map.insert(
+            "evil\n2026-01-01 ERROR forged log line".to_string(),
+            Some(Uuid::new_v4()),
+        );
+        let rendered = describe_advertised_tools(&map);
+        assert!(!rendered.contains('\n'), "no newline survives: {rendered:?}");
+
+        // A large advertised set is truncated, and says so — silent truncation
+        // would read as "that's all there was".
+        let mut big = HashMap::new();
+        for i in 0..100 {
+            big.insert(format!("tool_{i:03}"), None);
+        }
+        let rendered = describe_advertised_tools(&big);
+        assert!(
+            rendered.contains("60 more of 100 total"),
+            "truncation must be explicit: {rendered}"
+        );
+        assert!(rendered.len() < 4000, "line stays bounded");
     }
 
     #[test]

@@ -1,9 +1,10 @@
 import type { McpComposerSet, McpComposerGet } from '../state'
+import { blankMcpConfig, type ApprovalModeValue } from '../../approvalDefaults'
 
 interface ConversationMcpConfig {
   selectedServers: Map<string, { server_id: string; tools: string[] }>
   disabledServers?: import('@/api-client/types').DisabledServer[]
-  approvalMode?: 'disabled' | 'auto_approve' | 'manual_approve'
+  approvalMode?: ApprovalModeValue
   autoApprovedTools?: import('@/api-client/types').AutoApprovedServer[]
   loopSettings?: import('@/api-client/types').LoopSettings
 }
@@ -20,11 +21,10 @@ export default (set: McpComposerSet, _get: McpComposerGet) => (
       state.conversationConfigs.set(conversationId, config)
     } else {
       // Create default config
-      state.conversationConfigs.set(conversationId, {
-        selectedServers: new Map(),
-        approvalMode: 'manual_approve',
-        autoApprovedTools: [],
-      })
+      state.conversationConfigs.set(
+        conversationId,
+        blankMcpConfig(state.serverDefaultApprovalMode),
+      )
     }
 
     // If this is current conversation, update selectedServers

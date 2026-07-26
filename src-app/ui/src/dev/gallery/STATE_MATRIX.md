@@ -8,7 +8,7 @@
 ## Summary
 
 - **336** surfaces carry at least one renderable-state signal.
-- **2055** signals total: 1609 branch, 136 empty, 117 error, 94 loading, 96 overlay, 3 panel.
+- **2059** signals total: 1613 branch, 136 empty, 117 error, 94 loading, 96 overlay, 3 panel.
 - **3** right-panel renderers registered (each a right-panel-open state).
 - **35** slot registrations (sidebar / settings / chat mount points).
 
@@ -383,7 +383,7 @@ Required states: `open`
 |---|---|---|
 | branch | `!extensionsReady` | 29 |
 | branch | `sending \|\| isStreaming \|\| disabled \|\| isBlockedByExtension` | 76 |
-| overlay | `<Popover open>` | 130 |
+| overlay | `<Popover open>` | 149 |
 
 ### `modules/chat/components/ChatMessage`
 
@@ -405,10 +405,10 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!el` | 79 |
-| branch | `!el \|\| typeof ResizeObserver === 'undefined'` | 90 |
-| branch | `overflowing` | 125 |
-| branch | `collapsed` | 130 |
+| branch | `!el` | 96 |
+| branch | `!el \|\| typeof ResizeObserver === 'undefined'` | 107 |
+| branch | `overflowing` | 189 |
+| branch | `collapsed` | 197 |
 
 ### `modules/chat/components/ContentRenderer`
 
@@ -424,12 +424,12 @@ Required states: `open`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `isInSelectionMode && onSelect` | 64 |
-| branch | `e && e.button === 2` | 70 |
-| branch | `conversation.message_count > 0` | 158 |
-| branch | `canDelete && !isInSelectionMode` | 196 |
-| overlay | `<Confirm open>` | 220 |
-| branch | `onSelect` | 238 |
+| branch | `isInSelectionMode && onSelect` | 65 |
+| branch | `e && e.button === 2` | 71 |
+| branch | `conversation.message_count > 0` | 159 |
+| branch | `canDelete && !isInSelectionMode` | 197 |
+| overlay | `<Confirm open>` | 221 |
+| branch | `onSelect` | 239 |
 
 ### `modules/chat/components/ConversationFindBar`
 
@@ -469,9 +469,9 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `openIds.has(c.id)` | 46 |
-| branch | `mode === 'new'` | 80 |
-| empty | `filtered.length === 0` | 130 |
+| branch | `openIds.has(c.id)` | 47 |
+| branch | `mode === 'new'` | 81 |
+| empty | `filtered.length === 0` | 131 |
 
 ### `modules/chat/components/EditingMessageBanner`
 
@@ -555,13 +555,13 @@ Required states: `empty`, `open`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `SplitViewStore.$.panes.length < 2` | 66 |
-| branch | `openIds.has(c.id)` | 121 |
-| overlay | `<Drawer open>` | 163 |
-| branch | `e.active` | 203 |
-| branch | `e.closable && e.paneId` | 209 |
-| branch | `atCap` | 252 |
-| empty | `filtered.length === 0` | 258 |
+| branch | `SplitViewStore.$.panes.length < 2` | 67 |
+| branch | `openIds.has(c.id)` | 122 |
+| overlay | `<Drawer open>` | 164 |
+| branch | `e.active` | 204 |
+| branch | `e.closable && e.paneId` | 210 |
+| branch | `atCap` | 253 |
+| empty | `filtered.length === 0` | 259 |
 
 ### `modules/chat/components/PlusMenuItem`
 
@@ -586,8 +586,8 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!textData.text` | 23 |
-| branch | `isUser` | 28 |
+| branch | `!textData.text` | 28 |
+| branch | `isUser` | 33 |
 
 ### `modules/chat/components/TitleEditor`
 
@@ -595,8 +595,8 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `isEditing` | 92 |
-| branch | `showBackButton` | 138 |
+| branch | `isEditing` | 94 |
+| branch | `showBackButton` | 140 |
 
 ### `modules/chat/components/VirtualizedConversationList`
 
@@ -653,7 +653,7 @@ Required states: `empty`
 | branch | `this.initialized` | 432 |
 | empty | `extensions.length === 0` | 610 |
 | empty | `extensions.length === 0` | 643 |
-| empty | `!registered \|\| registered.length === 0` | 938 |
+| empty | `!registered \|\| registered.length === 0` | 932 |
 
 ### `modules/chat/core/extensions/utils`
 
@@ -703,13 +703,15 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `isFootnoteLabel(props.id)` | 69 |
-| branch | `(rest as Record<string, unknown>)['data-footnotes'] === undefined` | 85 |
-| branch | `citeN !== null` | 101 |
-| branch | `className?.includes('data-footnote-backref') \|\| (rest as Record<string, unknown>)['data-footnote-backref'] !== undefined` | 105 |
-| branch | `scopedHref?.startsWith('#')` | 122 |
-| empty | `verdict === 'empty'` | 188 |
-| branch | `verdict === 'allowed'` | 189 |
+| branch | `isFootnoteLabel(props.id)` | 71 |
+| branch | `(rest as Record<string, unknown>)['data-footnotes'] === undefined` | 87 |
+| branch | `citeN !== null` | 103 |
+| branch | `className?.includes('data-footnote-backref') \|\| (rest as Record<string, unknown>)['data-footnote-backref'] !== undefined` | 107 |
+| branch | `scopedHref?.startsWith('#')` | 144 |
+| empty | `verdict === 'empty'` | 211 |
+| branch | `verdict === 'allowed'` | 212 |
+| branch | `typeof paperLabel === 'string'` | 226 |
+| branch | `typeof excerptLabel === 'string'` | 244 |
 
 ### `modules/chat/extensions/compaction/components/CompactButton`
 
@@ -833,7 +835,7 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!textData.text` | 26 |
+| branch | `!textData.text` | 30 |
 
 ### `modules/chat/extensions/text/components/TextInput`
 
@@ -956,17 +958,17 @@ Required states: `empty`, `open`
 
 | kind | condition | line |
 |---|---|---|
-| empty | `recentError && recentConversations.length === 0` | 146 |
-| branch | `!recentInitialized` | 163 |
-| empty | `recentConversations.length === 0` | 174 |
-| branch | `!(e.metaKey \|\| e.ctrlKey \|\| e.button === 1)` | 205 |
-| branch | `!c` | 213 |
-| branch | `!c` | 249 |
-| branch | `active?.closest('[role="menu"]')` | 278 |
-| branch | `recentLoadingMore` | 307 |
-| branch | `recentError && !recentLoadingMore && recentConversations.length > 0` | 322 |
-| overlay | `<Dropdown open>` | 472 |
-| branch | `!open && keepMenuOpen` | 479 |
+| empty | `recentError && recentConversations.length === 0` | 150 |
+| branch | `!recentInitialized` | 167 |
+| empty | `recentConversations.length === 0` | 178 |
+| branch | `!(e.metaKey \|\| e.ctrlKey \|\| e.button === 1)` | 209 |
+| branch | `!c` | 217 |
+| branch | `!c` | 253 |
+| branch | `active?.closest('[role="menu"]')` | 282 |
+| branch | `recentLoadingMore` | 311 |
+| branch | `recentError && !recentLoadingMore && recentConversations.length > 0` | 326 |
+| overlay | `<Dropdown open>` | 476 |
+| branch | `!open && keepMenuOpen` | 483 |
 
 ### `modules/citations/components/CitationCard`
 
@@ -2236,14 +2238,14 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!item` | 171 |
-| branch | `primaryItems.length > 0` | 192 |
-| branch | `navigationItems.length > 0` | 207 |
-| branch | `!isIconOnly` | 229 |
-| branch | `isIconOnly` | 242 |
-| branch | `toolsItems.length > 0` | 245 |
-| branch | `!isIconOnly && bottomWidgets.length > 0` | 265 |
-| branch | `footerWidgets.length > 0` | 280 |
+| branch | `!item` | 172 |
+| branch | `primaryItems.length > 0` | 193 |
+| branch | `navigationItems.length > 0` | 214 |
+| branch | `!isIconOnly` | 233 |
+| branch | `isIconOnly` | 246 |
+| branch | `toolsItems.length > 0` | 249 |
+| branch | `!isIconOnly && bottomWidgets.length > 0` | 266 |
+| branch | `footerWidgets.length > 0` | 281 |
 
 ### `modules/layouts/app-layout/components/SidebarToggleButton`
 
@@ -2869,20 +2871,20 @@ Required states: `empty`, `open`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!configModalVisible \|\| !isProjectScope` | 139 |
-| branch | `selectedServers.size > 0` | 142 |
-| branch | `!selection` | 190 |
-| branch | `!selection` | 212 |
-| branch | `!isProjectScope && !currentConversationId` | 243 |
-| empty | `tools.length === 0` | 335 |
-| branch | `approvalMode === 'manual_approve'` | 350 |
-| branch | `tool.description` | 364 |
-| branch | `!isPrimaryModal` | 377 |
-| branch | `!isProjectScope` | 386 |
-| empty | `enabledServers.length === 0` | 428 |
-| branch | `isMobile` | 554 |
-| overlay | `<Drawer open>` | 555 |
-| overlay | `<Dialog open>` | 567 |
+| branch | `!configModalVisible \|\| !isProjectScope` | 147 |
+| branch | `selectedServers.size > 0` | 150 |
+| branch | `!selection` | 198 |
+| branch | `!selection` | 220 |
+| branch | `!isProjectScope && !currentConversationId` | 251 |
+| empty | `tools.length === 0` | 343 |
+| branch | `approvalMode === 'manual_approve'` | 358 |
+| branch | `tool.description` | 372 |
+| branch | `!isPrimaryModal` | 385 |
+| branch | `!isProjectScope` | 394 |
+| empty | `enabledServers.length === 0` | 436 |
+| branch | `isMobile` | 562 |
+| overlay | `<Drawer open>` | 563 |
+| overlay | `<Dialog open>` | 575 |
 
 ### `modules/mcp/components/common/KeyValueSecretEditor`
 
@@ -3448,18 +3450,18 @@ Required states: `delayed`, `empty`
 
 | kind | condition | line |
 |---|---|---|
-| empty | `selectedIds.size === 0` | 126 |
-| empty | `selectedIds.size === 0 \|\| !projectId` | 153 |
-| branch | `!projectId` | 202 |
-| branch | `!projectId` | 219 |
-| loading | `loading` | 223 |
-| branch | `!project` | 233 |
-| branch | `!copy` | 264 |
-| branch | `selectedIds.size > 0` | 360 |
-| branch | `canDeleteConversations` | 395 |
-| branch | `toolbarInCardBody && bulkToolbar` | 425 |
-| branch | `project.description` | 474 |
-| branch | `project.instructions` | 495 |
+| empty | `selectedIds.size === 0` | 127 |
+| empty | `selectedIds.size === 0 \|\| !projectId` | 154 |
+| branch | `!projectId` | 203 |
+| branch | `!projectId` | 235 |
+| loading | `loading` | 239 |
+| branch | `!project` | 249 |
+| branch | `!copy` | 280 |
+| branch | `selectedIds.size > 0` | 376 |
+| branch | `canDeleteConversations` | 411 |
+| branch | `toolbarInCardBody && bulkToolbar` | 441 |
+| branch | `project.description` | 490 |
+| branch | `project.instructions` | 511 |
 
 ### `modules/projects/pages/ProjectsListPage`
 
@@ -3814,7 +3816,8 @@ Required states: `error`
 | branch | `!value` | 91 |
 | branch | `model` | 97 |
 | error | `error && providers.length === 0` | 118 |
-| branch | `pendingProviderForKey` | 151 |
+| branch | `opt` | 174 |
+| branch | `pendingProviderForKey` | 194 |
 
 ### `modules/user-llm-providers/chat-extension/components/ProviderApiKeyModal`
 
@@ -3835,7 +3838,7 @@ Required states: `delayed`
 | loading | `isInitializing \|\| isLoading` | 87 |
 | branch | `!isSidebarCollapsed` | 95 |
 | branch | `canViewProfile` | 103 |
-| branch | `isSidebarCollapsed` | 144 |
+| branch | `isSidebarCollapsed` | 159 |
 
 ### `modules/user/components/PermissionsField`
 

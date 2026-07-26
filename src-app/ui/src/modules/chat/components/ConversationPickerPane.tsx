@@ -7,6 +7,7 @@ import { ChatInput } from '@/modules/chat/components/ChatInput'
 import { useClosePane } from '@/modules/chat/core/pane/useOpenConversation'
 import { ChatHistory } from '@/modules/chat/stores/chatHistory'
 import { SplitView } from '@/modules/chat/core/stores/splitView'
+import { conversationDisplayLabel } from '@/modules/chat/core/utils/conversationDisplayLabel'
 
 dayjs.extend(relativeTime)
 
@@ -45,7 +46,7 @@ export function ConversationPickerPane({ paneId }: { paneId: string }) {
     return conversations.filter((c) => {
       if (openIds.has(c.id)) return false
       if (!q) return true
-      return (c.title || 'Untitled Conversation').toLowerCase().includes(q)
+      return conversationDisplayLabel(c).toLowerCase().includes(q)
     })
   }, [conversations, query])
 
@@ -150,7 +151,7 @@ export function ConversationPickerPane({ paneId }: { paneId: string }) {
                     }
                   >
                     <span className="min-w-0 flex-1 truncate text-start text-sm">
-                      {c.title || 'Untitled Conversation'}
+                      {conversationDisplayLabel(c)}
                     </span>
                     <span className="shrink-0 text-xs text-muted-foreground">
                       {dayjs(c.updated_at).fromNow()}

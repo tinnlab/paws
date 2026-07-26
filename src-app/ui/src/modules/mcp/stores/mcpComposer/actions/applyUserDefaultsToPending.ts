@@ -1,5 +1,6 @@
 import { pendingConversationKey } from '../../approvalRouting'
 import type { McpComposerSet, McpComposerGet } from '../state'
+import type { ApprovalModeValue } from '../../approvalDefaults'
 
 /**
  * Apply user defaults to pending config (for new conversations).
@@ -34,7 +35,7 @@ export default (set: McpComposerSet, get: McpComposerGet) => (
     s.conversationConfigs.set(pendingConversationKey(paneId), {
       selectedServers,
       disabledServers: defaults.disabled_servers || [],
-      approvalMode: defaults.approval_mode as 'disabled' | 'auto_approve' | 'manual_approve',
+      approvalMode: defaults.approval_mode as ApprovalModeValue,
       autoApprovedTools: defaults.auto_approved_tools || [],
       loopSettings: defaults.loop_settings,
     })

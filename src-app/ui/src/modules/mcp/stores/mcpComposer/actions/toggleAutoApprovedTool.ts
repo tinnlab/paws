@@ -1,5 +1,6 @@
 import { resolveConfigKey } from '../state'
 import type { McpComposerSet, McpComposerGet } from '../state'
+import { blankMcpConfig } from '../../approvalDefaults'
 
 
 /**
@@ -16,12 +17,7 @@ export default (set: McpComposerSet, _get: McpComposerGet) => (
 
     // Create pending config if it doesn't exist (for new conversations)
     if (!config && !conversationId) {
-      config = {
-        selectedServers: new Map(),
-        disabledServers: [],
-        approvalMode: 'manual_approve',
-        autoApprovedTools: [],
-      }
+      config = blankMcpConfig(state.serverDefaultApprovalMode)
       state.conversationConfigs.set(configKey, config)
     }
 

@@ -1,6 +1,7 @@
 import { resolveConfigKey } from '../state'
 import type { McpComposerSet, McpComposerGet } from '../state'
 import type { DisabledServer } from '@/api-client/types'
+import { approvalModePayload } from '../../approvalDefaults'
 
 /**
  * Save current config as user defaults.
@@ -25,7 +26,14 @@ export default (set: McpComposerSet, get: McpComposerGet) => async (
   try {
     const { ApiClient } = await import('@/api-client')
     const response = await ApiClient.Mcp.updateDefaults({
-      approval_mode: config?.approvalMode || 'manual_approve',
+      // Only send approval_mode when this config actually HAS one. This save is
+      // often a SIDE EFFECT of an unrelated action — removing an MCP server chip
+      // on a new chat persists the server list here — and a mode pinned by such a
+      // write becomes the fallback for EVERY future conversation of this user,
+      // not just the current one. Backend COALESCE applies the server default on
+      // insert and preserves the stored value on update.
+      ...approvalModePayload(config?.approvalMode),
+      // Only send auto_approved_tools when explicitly changing approvals — backend COALESCE preserves DB value otherwise
       ...(updateAutoApproved ? { auto_approved_tools: config?.autoApprovedTools || [] } : {}),
       disabled_servers: disabledServers,
       loop_settings: config?.loopSettings,

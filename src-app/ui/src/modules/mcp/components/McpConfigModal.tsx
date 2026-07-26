@@ -7,6 +7,7 @@ import type { Tool } from '@/api-client/types'
 import { pendingConversationKey, projectConfigKey } from '@/modules/mcp/stores/mcpComposer'
 import { McpComposer } from '@/modules/mcp/stores/mcpComposer'
 import { McpServer } from '@/modules/mcp/stores/mcpServer'
+import { effectiveApprovalMode } from '@/modules/mcp/stores/approvalDefaults'
 
 /**
  * MCP Configuration Modal
@@ -58,6 +59,7 @@ export function McpConfigModal() {
     currentProjectId,
     conversationConfigs,
     configModalVisible,
+    serverDefaultApprovalMode,
   } = mcpStore
 
   // Project scope dispatch: project is in effect only when there is no
@@ -83,7 +85,13 @@ export function McpConfigModal() {
     ? projectConfigKey(currentProjectId!)
     : currentConversationId || pendingConversationKey(currentPaneId)
   const conversationConfig = conversationConfigs.get(configKey)
-  const approvalMode = conversationConfig?.approvalMode || 'manual_approve'
+  // A scope with no config yet (a brand-new chat opened before McpInitializer
+  // seeds) shows the SERVER's default. Hardcoding manual here told the user
+  // "Manual" on a deployment that will in fact auto-approve.
+  const approvalMode = effectiveApprovalMode(
+    conversationConfig?.approvalMode,
+    serverDefaultApprovalMode,
+  )
   const loopSettings = conversationConfig?.loopSettings || {
     stop_when_no_tool_calling: true,
     max_iteration: 10,

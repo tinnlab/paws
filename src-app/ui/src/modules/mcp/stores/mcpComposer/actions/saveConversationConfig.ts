@@ -1,6 +1,7 @@
 
 import type { McpComposerSet, McpComposerGet } from '../state'
 import type { DisabledServer } from '@/api-client/types'
+import { approvalModePayload } from '../../approvalDefaults'
 
 /**
  * Save conversation config changes.
@@ -51,7 +52,14 @@ export default (set: McpComposerSet, get: McpComposerGet) => async (
   const { ApiClient } = await import('@/api-client')
   await ApiClient.Conversation.updateMcpSettings({
     id: conversationId,
-    approval_mode: config.approvalMode || 'manual_approve',
+    // Only send approval_mode when this config actually HAS one — backend
+    // COALESCE applies the server default on insert and preserves the stored
+    // value on update. The unconditional `|| 'manual_approve'` this replaces
+    // is what made a brand-new conversation's first save pin manual approval
+    // on a deployment whose default is auto-approve (auto-approved on turn 1,
+    // prompted from turn 2). This save exists to snapshot the SERVER LIST.
+    ...approvalModePayload(config.approvalMode),
+    // Only send auto_approved_tools when explicitly changing approvals — backend COALESCE preserves DB value otherwise
     ...(updateAutoApproved ? { auto_approved_tools: config.autoApprovedTools } : {}),
     disabled_servers: disabledServers,
     loop_settings: config.loopSettings,

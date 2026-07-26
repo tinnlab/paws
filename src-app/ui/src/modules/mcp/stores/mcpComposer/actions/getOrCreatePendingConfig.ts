@@ -1,10 +1,11 @@
 import { PENDING_CONVERSATION_KEY } from '../../approvalRouting'
 import type { McpComposerSet, McpComposerGet } from '../state'
+import { blankMcpConfig, type ApprovalModeValue } from '../../approvalDefaults'
 
 interface ConversationMcpConfig {
   selectedServers: Map<string, { server_id: string; tools: string[] }>
   disabledServers?: import('@/api-client/types').DisabledServer[]
-  approvalMode?: 'disabled' | 'auto_approve' | 'manual_approve'
+  approvalMode?: ApprovalModeValue
   autoApprovedTools?: import('@/api-client/types').AutoApprovedServer[]
   loopSettings?: import('@/api-client/types').LoopSettings
 }
@@ -17,12 +18,7 @@ export default (set: McpComposerSet, get: McpComposerGet): () => ConversationMcp
     const state = get()
     let config = state.conversationConfigs.get(PENDING_CONVERSATION_KEY)
     if (!config) {
-      config = {
-        selectedServers: new Map(),
-        disabledServers: [],
-        approvalMode: 'manual_approve',
-        autoApprovedTools: [],
-      }
+      config = blankMcpConfig(state.serverDefaultApprovalMode)
       set(s => {
         s.conversationConfigs.set(PENDING_CONVERSATION_KEY, config!)
       })

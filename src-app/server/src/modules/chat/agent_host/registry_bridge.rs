@@ -151,7 +151,28 @@ impl AgentExtension for RegistryBridge {
             // ends the turn on ShortCircuit; a `CompleteWithContent{text}` early
             // answer is a rare pre-LLM optimization — its text is handled by the
             // dispatcher's short-circuit fallback (persist + emit) when needed.
-            _ => Flow::ShortCircuit,
+            _ => {
+                // Turn-end pass for the LLM-SKIPPED paths — the agent-core-host
+                // counterpart of the two `call_after_llm_skipped` call sites in the
+                // legacy `StreamingService` loop. Without it, an approved
+                // `audience:["user"]` tool result (which IS the answer, so no LLM
+                // round-trip happens) leaves the conversation permanently untitled
+                // on this host: the crate `break`s straight out of the loop after a
+                // `ShortCircuit`, so neither `after_round` nor `after_llm_call` runs.
+                //
+                // Ordering note vs the legacy loop: the MCP extension persists its
+                // tool_results BEFORE returning Complete/CompleteWithContent, so the
+                // assistant row already carries the answer here and the title
+                // extension's `assistant_produced_output` gate sees it. A
+                // `CompleteWithContent{text}` whose TEXT is the only output is
+                // persisted later by the dispatcher fallback; such a turn simply
+                // titles on the next one (the extension is self-gating and
+                // single-shot, so a re-run is free).
+                self.registry
+                    .call_after_llm_skipped(&ctx, self.tx.as_ref())
+                    .await;
+                Flow::ShortCircuit
+            }
         })
     }
 

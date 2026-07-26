@@ -4,6 +4,7 @@ import { Button, Empty, Input, Tooltip } from '@ziee/kit'
 import { cn } from '@/lib/utils'
 import { Drawer } from '@/modules/layouts/app-layout/components/Drawer'
 import { SPLIT_LIMITS } from '@/modules/chat/core/split/limits'
+import { conversationDisplayLabel } from '@/modules/chat/core/utils/conversationDisplayLabel'
 import {
   useClosePane,
   useOpenConversationInWorkspace,
@@ -74,7 +75,7 @@ export function PaneManagerDrawer() {
 
   const titleFor = (id: string | null): string =>
     id
-      ? conversations.find((c) => c.id === id)?.title || 'Conversation'
+      ? conversationDisplayLabel(conversations.find((c) => c.id === id))
       : 'New chat'
 
   // Conversations currently open in this window. A split (≥1 pane) → the pane list;
@@ -120,7 +121,7 @@ export function PaneManagerDrawer() {
     return conversations.filter((c) => {
       if (openIds.has(c.id)) return false
       if (!q) return true
-      return (c.title || 'Untitled Conversation').toLowerCase().includes(q)
+      return conversationDisplayLabel(c).toLowerCase().includes(q)
     })
   }, [conversations, openIds, query])
 
@@ -276,7 +277,7 @@ export function PaneManagerDrawer() {
                       onClick={() => openAnother(c.id)}
                     >
                       <span className="min-w-0 flex-1 truncate text-start text-sm">
-                        {c.title || 'Untitled Conversation'}
+                        {conversationDisplayLabel(c)}
                       </span>
                     </Button>
                   </li>

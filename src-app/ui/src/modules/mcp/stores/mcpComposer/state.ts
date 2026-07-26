@@ -5,6 +5,7 @@ import {
   pendingConversationKey,
   approvalKeyOf,
 } from '../approvalRouting'
+import { FALLBACK_APPROVAL_MODE, type ApprovalModeValue } from '../approvalDefaults'
 
 // Re-export so consumers of this module don't need approvalRouting directly.
 export {
@@ -12,6 +13,10 @@ export {
   pendingConversationKey,
   approvalKeyOf,
 }
+
+// Re-export the approval-mode vocabulary so action files get it from the
+// state barrel they already import (mirrors the approvalRouting re-exports).
+export { FALLBACK_APPROVAL_MODE, type ApprovalModeValue }
 
 /**
  * Elicitation request state — a pending form the user needs to fill in.
@@ -87,7 +92,7 @@ interface ConversationMcpConfig {
   /** Disabled servers (persisted to backend) - allows all servers by default */
   disabledServers?: import('@/api-client/types').DisabledServer[]
   /** Approval mode from conversation_mcp_settings */
-  approvalMode?: 'disabled' | 'auto_approve' | 'manual_approve'
+  approvalMode?: ApprovalModeValue
   /** Auto-approved tools grouped by server */
   autoApprovedTools?: import('@/api-client/types').AutoApprovedServer[]
   /** Loop settings for controlling iteration behavior */
@@ -153,6 +158,17 @@ export const mcpComposerState = {
   selectedServers: new Map<string, ServerSelection>(),
   userDefaults: null as import('@/api-client/types').UserMcpDefaultsResponse | null,
   userDefaultsLoaded: false,
+  /**
+   * The SERVER's approval mode for any scope with no stored row — i.e. what a
+   * brand-new conversation actually gets. Reported by `GET /api/mcp/defaults`
+   * as `default_approval_mode`; the client must never assume it.
+   *
+   * Seeded with the safe restrictive fallback until that fetch resolves (see
+   * `approvalDefaults.ts`). It is used for DISPLAY and for seeding blank configs
+   * — never sent on a write (writes omit the field so the server stays
+   * authoritative).
+   */
+  serverDefaultApprovalMode: FALLBACK_APPROVAL_MODE as ApprovalModeValue,
   configModalVisible: false,
   elicitationRequests: new Map<string, ElicitationRequestState>(),
 }

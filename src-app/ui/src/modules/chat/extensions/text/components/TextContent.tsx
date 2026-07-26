@@ -5,6 +5,10 @@ import type { MessageContent } from '@/api-client/types'
 import { useStreamdownComponents } from '@/modules/chat/core/utils/useStreamdownComponents'
 import { StreamdownErrorBoundary } from '@/modules/chat/core/utils/StreamdownErrorBoundary'
 import { streamdownUrlTransform } from '@/modules/chat/core/utils/streamdownUrlTransform'
+import {
+  chatMarkdownPlugins,
+  chatRehypePlugins,
+} from '@/modules/chat/core/utils/chatMarkdownPlugins'
 import { preprocessMarkdown } from '@/components/common/markdownPreprocess'
 import { citationTokenize } from '@/modules/chat/core/utils/citationTokenize'
 import { Chat } from '@/modules/chat/core/stores/chatBridge'
@@ -42,6 +46,9 @@ export const TextContent = memo(function TextContent({
         <Streamdown
           variant="chat"
           isAnimating={!isUser && isStreaming}
+          shikiTheme={['github-light-high-contrast', 'github-dark-high-contrast']}
+          plugins={chatMarkdownPlugins}
+          rehypePlugins={chatRehypePlugins}
           components={components}
           urlTransform={streamdownUrlTransform}
         >

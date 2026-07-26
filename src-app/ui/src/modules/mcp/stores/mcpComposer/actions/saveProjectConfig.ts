@@ -47,7 +47,12 @@ export default (set: McpComposerSet, get: McpComposerGet) => async (
   const { ApiClient } = await import('@/api-client')
   await ApiClient.Project.updateMcpSettings({
     id: projectId,
-    approval_mode: config.approvalMode || 'manual_approve',
+    // The project endpoint's approval_mode is REQUIRED (a project's MCP
+    // settings are only ever written by an explicit user action in the project
+    // modal — there is no turn-1 auto-persist here, so the omit-on-unset rule
+    // that the conversation/user-defaults writes use doesn't apply). Still
+    // source the value from the SERVER default rather than a literal.
+    approval_mode: config.approvalMode || state.serverDefaultApprovalMode,
     auto_approved_tools: config.autoApprovedTools || [],
     disabled_servers: disabledServers,
     loop_settings: config.loopSettings,

@@ -18,9 +18,11 @@ import { MessageSquare, Trash2, MoreVertical, Columns2 } from 'lucide-react'
 import { useLocation } from 'react-router-dom'
 import type { ConversationResponse } from '@/api-client/types'
 import { DivScrollY } from '@/components/common/DivScrollY'
+import { SidebarSectionTitle } from '@/components/common/SidebarSectionTitle'
 import { useOpenConversationInWorkspace } from '@/modules/chat/core/pane/useOpenConversation'
 import { setConversationDragData } from '@/modules/chat/core/pane/paneDnd'
 import { useConversationTearOff } from '@/modules/chat/core/popout/useConversationTearOff'
+import { conversationDisplayLabel } from '@/modules/chat/core/utils/conversationDisplayLabel'
 import {
   chatExtensionRegistry,
   ConversationMenuContributions,
@@ -132,12 +134,14 @@ export function RecentConversationsWidget() {
     return undefined
   }, [recentConversations, location.pathname])
 
-  // Section header (standalone, above the scroll area) — its typography mirrors
-  // the Menu group-title so it reads identically to the sections above.
+  // Section header (standalone, above the scroll area). Shares ONE component —
+  // and therefore one inset and one type treatment — with the "Navigation" and
+  // "Tools" captions above it; this used to be a hand-rolled div that had
+  // silently drifted from them in both.
   const headerOnly = (
-    <div className="px-3 pt-0 pb-0.5 text-xs font-semibold tracking-wide text-muted-foreground">
+    <SidebarSectionTitle data-testid="chat-recent-title">
       Recent chats
-    </div>
+    </SidebarSectionTitle>
   )
 
   // First-load failure (nothing loaded yet): show a retryable error, never wedge
@@ -247,7 +251,7 @@ export function RecentConversationsWidget() {
           {virtualItems.map(vi => {
             const c = recentConversations[vi.index]
             if (!c) return null
-            const title = c.title || 'Untitled Conversation'
+            const title = conversationDisplayLabel(c)
             const selected = c.id === selectedId
             const cls = menuRowClasses({ selected, hasActions: true })
             return (
@@ -398,7 +402,7 @@ function ConversationRowActionsView({
   const openConversation = useOpenConversationInWorkspace()
 
   const confirmDelete = async () => {
-    const title = conversation.title || 'Untitled Conversation'
+    const title = conversationDisplayLabel(conversation)
     const ok = await dialog.confirm({
       title: 'Delete conversation?',
       description: `"${title}" will be permanently deleted.`,

@@ -15,6 +15,8 @@ import { useIsPopoutWindow } from '@/modules/chat/core/popout/useIsPopoutWindow'
 import { useChatPaneOrNull } from '@/modules/chat/core/pane/ChatPaneContext'
 import { SplitView } from '@/modules/chat/core/stores/splitView'
 import { Chat } from '@/modules/chat/core/stores/chatBridge'
+import { UNTITLED_CONVERSATION_LABEL } from '@/modules/chat/core/utils/conversationDisplayLabel'
+import { mathToPlainText } from '@/components/common/mathPlainText'
 
 interface TitleFormValues {
   title: string
@@ -151,7 +153,15 @@ export function TitleEditor() {
         className="!m-0 !leading-tight truncate"
         data-testid="conversation-title"
       >
-        {conversation?.title || 'Untitled Conversation'}
+        {/* Deliberately NOT `conversationDisplayLabel`: this header is the EDIT
+            affordance, so showing a derived first-message label here would imply
+            a title exists and invite the user to "edit" a value that is never
+            persisted. The placeholder is the honest label at the one place you
+            go to set a real title. List surfaces use the derived label.
+            `mathToPlainText` only affects how the title READS — the editor above
+            is seeded from the raw `title`, so editing still shows what is
+            actually stored. */}
+        {mathToPlainText(conversation?.title?.trim() || '') || UNTITLED_CONVERSATION_LABEL}
       </Title>
       <Tooltip title="Edit title">
         <Button

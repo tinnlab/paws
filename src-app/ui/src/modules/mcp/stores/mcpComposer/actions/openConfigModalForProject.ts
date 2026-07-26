@@ -1,5 +1,6 @@
 import { projectConfigKey } from '../state'
 import type { McpComposerSet, McpComposerGet } from '../state'
+import type { ApprovalModeValue } from '../../approvalDefaults'
 
 /**
  * Open the config modal in PROJECT scope. Seeds a config under
@@ -35,10 +36,12 @@ export default (set: McpComposerSet, _get: McpComposerGet) => (
     state.conversationConfigs.set(key, {
       selectedServers,
       disabledServers: disabledRaw,
-      approvalMode: (settings?.approval_mode as
-        | 'disabled'
-        | 'auto_approve'
-        | 'manual_approve') || 'manual_approve',
+      // A project that has never customized its MCP settings falls back to the
+      // SERVER's default, not a client literal (the project GET already applies
+      // that default server-side, so this arm is belt-and-braces).
+      approvalMode:
+        (settings?.approval_mode as ApprovalModeValue) ||
+        state.serverDefaultApprovalMode,
       autoApprovedTools: autoApprovedRaw,
       loopSettings: loop,
     })

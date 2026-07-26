@@ -1028,6 +1028,10 @@ const mcpExtension: ChatExtension = createExtension({
   onConversationLoad: async (conversation) => {
     const mcpStore = McpComposer
     const mcpStoreProxy = McpComposer
+    // STATE reads must go through the `$` snapshot — a non-function prop on the
+    // store proxy resolves via `useStore` (a HOOK), which is invalid in this
+    // async, non-component hook. Actions are hook-free and stay on `mcpStore`.
+    const serverDefaultApprovalMode = McpComposer.$.serverDefaultApprovalMode
 
     // Set current conversation ID
     mcpStore.setCurrentConversation(conversation.id)
@@ -1094,7 +1098,10 @@ const mcpExtension: ChatExtension = createExtension({
         const config = {
           selectedServers,
           disabledServers: [],
-          approvalMode: 'manual_approve' as const,
+          // No stored settings yet → the SERVER's default, not a client literal.
+          // Hardcoding manual here misreported (and, via the first save, then
+          // PERSISTED) the wrong mode on an auto-approving deployment.
+          approvalMode: serverDefaultApprovalMode,
           autoApprovedTools: [],
           loopSettings: undefined,  // Use defaults
         }
@@ -1113,7 +1120,9 @@ const mcpExtension: ChatExtension = createExtension({
       const config = {
         selectedServers,
         disabledServers: [],
-        approvalMode: 'manual_approve' as const,
+        // Settings fetch failed → still use the SERVER's default rather than a
+        // client literal (same reason as the no-settings branch above).
+        approvalMode: serverDefaultApprovalMode,
         autoApprovedTools: [],
         loopSettings: undefined,  // Use defaults
       }

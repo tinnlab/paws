@@ -1,6 +1,7 @@
 import { pendingConversationKey } from '../../approvalRouting'
 import { resolveConfigKey } from '../state'
 import type { McpComposerSet, McpComposerGet } from '../state'
+import { blankMcpConfig, type ApprovalModeValue } from '../../approvalDefaults'
 
 /**
  * Set current conversation ID and load its config.
@@ -23,20 +24,25 @@ export default (set: McpComposerSet, _get: McpComposerGet) => (
       const config = state.conversationConfigs.get(configKey)!
       state.selectedServers = new Map(config.selectedServers)
     } else if (!conversationId) {
-      // New conversation without pending config - create one with user defaults if available
+      // New conversation without pending config - create one with user defaults if available.
+      // With no saved defaults the approval mode comes from the SERVER's default,
+      // never a client-side literal (that hardcode is what used to get persisted
+      // on the first send and downgrade an auto-approving deployment).
       const defaults = state.userDefaults
       const pendingConfig: {
         selectedServers: Map<string, { server_id: string; tools: string[] }>
         disabledServers?: import('@/api-client/types').DisabledServer[]
-        approvalMode?: 'disabled' | 'auto_approve' | 'manual_approve'
+        approvalMode?: ApprovalModeValue
         autoApprovedTools?: import('@/api-client/types').AutoApprovedServer[]
         loopSettings?: import('@/api-client/types').LoopSettings
       } = {
-        selectedServers: new Map(),
+        ...blankMcpConfig(
+          (defaults?.approval_mode as ApprovalModeValue) ??
+            state.serverDefaultApprovalMode,
+          defaults?.loop_settings,
+        ),
         disabledServers: defaults?.disabled_servers || [],
-        approvalMode: (defaults?.approval_mode as 'disabled' | 'auto_approve' | 'manual_approve') || 'manual_approve',
         autoApprovedTools: defaults?.auto_approved_tools || [],
-        loopSettings: defaults?.loop_settings,
       }
       // THIS pane's pending config key (ITEM-51), not the single shared one.
       state.conversationConfigs.set(pendingConversationKey(paneId), pendingConfig)

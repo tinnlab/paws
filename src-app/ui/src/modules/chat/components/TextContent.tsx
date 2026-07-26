@@ -4,8 +4,13 @@ import type { MessageContent } from '@/api-client/types'
 import { useStreamdownComponents } from '@/modules/chat/core/utils/useStreamdownComponents'
 import { StreamdownErrorBoundary } from '@/modules/chat/core/utils/StreamdownErrorBoundary'
 import { citationTokenize } from '@/modules/chat/core/utils/citationTokenize'
+import { preprocessMarkdown } from '@/components/common/markdownPreprocess'
 import { streamdownUrlTransform } from '@/modules/chat/core/utils/streamdownUrlTransform'
 import { Chat } from '@/modules/chat/core/stores/chatBridge'
+import {
+  chatMarkdownPlugins,
+  chatRehypePlugins,
+} from '@/modules/chat/core/utils/chatMarkdownPlugins'
 
 interface TextContentProps {
   content: MessageContent
@@ -36,10 +41,16 @@ export const TextContent = memo(function TextContent({
         <Streamdown
           variant="chat"
           isAnimating={isStreaming}
+          shikiTheme={['github-light-high-contrast', 'github-dark-high-contrast']}
+          plugins={chatMarkdownPlugins}
+          rehypePlugins={chatRehypePlugins}
           components={components}
           urlTransform={streamdownUrlTransform}
         >
-          {citationTokenize(textData.text)}
+          {preprocessMarkdown(
+            // Assistant-only: rewrite bare `[n]` KB citations into chip links.
+            citationTokenize(textData.text),
+          )}
         </Streamdown>
       </StreamdownErrorBoundary>
     </div>

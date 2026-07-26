@@ -1,6 +1,7 @@
 import { pendingConversationKey } from '../../approvalRouting'
 import { resolveConfigKey } from '../state'
 import type { McpComposerSet, McpComposerGet } from '../state'
+import { blankMcpConfig } from '../../approvalDefaults'
 
 /**
  * Select a server (tools=[] means all tools).
@@ -29,7 +30,7 @@ export default (set: McpComposerSet, _get: McpComposerGet) => (
     // Seeding a specific pane's pending config (paneId given) may run before
     // that config exists — create an empty one so the selection isn't dropped.
     if (!config && paneId !== undefined) {
-      config = { selectedServers: new Map(), approvalMode: 'manual_approve', autoApprovedTools: [] }
+      config = blankMcpConfig(state.serverDefaultApprovalMode)
       state.conversationConfigs.set(configKey, config)
     }
     if (config) {

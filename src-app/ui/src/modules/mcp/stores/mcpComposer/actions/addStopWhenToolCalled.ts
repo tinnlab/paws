@@ -1,5 +1,6 @@
 import { resolveConfigKey } from '../state'
 import type { McpComposerSet, McpComposerGet } from '../state'
+import { blankMcpConfig } from '../../approvalDefaults'
 import type { ToolIdentifier } from '@/api-client/types'
 
 /**
@@ -15,13 +16,7 @@ export default (set: McpComposerSet, _get: McpComposerGet) => (
 
     // Create config if it doesn't exist (for both new and existing conversations)
     if (!config) {
-      config = {
-        selectedServers: new Map(),
-        disabledServers: [],
-        approvalMode: 'manual_approve',
-        autoApprovedTools: [],
-        loopSettings: {},
-      }
+      config = { ...blankMcpConfig(state.serverDefaultApprovalMode), loopSettings: {} }
       state.conversationConfigs.set(configKey, config)
     }
 
