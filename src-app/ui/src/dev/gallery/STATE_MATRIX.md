@@ -8,7 +8,7 @@
 ## Summary
 
 - **336** surfaces carry at least one renderable-state signal.
-- **2055** signals total: 1609 branch, 136 empty, 117 error, 94 loading, 96 overlay, 3 panel.
+- **2056** signals total: 1610 branch, 136 empty, 117 error, 94 loading, 96 overlay, 3 panel.
 - **3** right-panel renderers registered (each a right-panel-open state).
 - **35** slot registrations (sidebar / settings / chat mount points).
 
@@ -653,7 +653,7 @@ Required states: `empty`
 | branch | `this.initialized` | 432 |
 | empty | `extensions.length === 0` | 610 |
 | empty | `extensions.length === 0` | 643 |
-| empty | `!registered \|\| registered.length === 0` | 938 |
+| empty | `!registered \|\| registered.length === 0` | 932 |
 
 ### `modules/chat/core/extensions/utils`
 

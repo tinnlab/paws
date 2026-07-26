@@ -4,7 +4,7 @@
 // renders + overlay triggers + panel/slot registrations) that the reconciliation
 // gate (scripts/reconcile-state-matrix.mjs) checks the gallery entries against.
 //
-// 336 surfaces carry renderable-state signals; 2055 signals total.
+// 336 surfaces carry renderable-state signals; 2056 signals total.
 
 /** A signal is one mechanically-detected render fork (a state the surface can be in). */
 export interface StateSignal {
@@ -563,7 +563,7 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
       { kind: "branch", condition: "this.initialized", line: 432 },
       { kind: "empty", condition: "extensions.length === 0", line: 610 },
       { kind: "empty", condition: "extensions.length === 0", line: 643 },
-      { kind: "empty", condition: "!registered || registered.length === 0", line: 938 },
+      { kind: "empty", condition: "!registered || registered.length === 0", line: 932 },
     ],
   },
   "modules/chat/core/extensions/utils": {
