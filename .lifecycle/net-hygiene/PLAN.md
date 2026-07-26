@@ -38,6 +38,11 @@
 ## Files to touch
 
 - `sdk/packages/framework/src/api-client/inflight.ts` (new)
+- `sdk/packages/framework/src/lazy-dispatch.ts` (new — DRIFT-1.1: extracted from
+  store-kit so the dispatcher is unit-testable without the zustand/EventBus graph)
+- `sdk/packages/framework/src/sync/backoff.ts` (new — DRIFT-1.2: same, for the
+  reconnect policy)
+- `sdk/packages/framework/src/__test-stubs__/permissions.ts` (new — DRIFT-1.5)
 - `sdk/packages/framework/src/api-client/core.ts`
 - `sdk/packages/framework/src/sync/SyncClient.ts`
 - `sdk/packages/framework/src/store-kit.ts`
@@ -48,9 +53,16 @@
 - `src-app/ui/src/modules/auth/module.tsx`
 - `src-app/ui/src/modules/auth/Auth.store.ts`
 - `src-app/ui/src/modules/loadContext.ts`
+- `src-app/ui/src/modules/liveSession.ts` (new — DRIFT-1.3: the predicate, kept
+  dependency-free so it is testable without the Auth store graph)
+- `src-app/ui/scripts/node-test-hooks.mjs` (DRIFT-1.5, sdk-scoped)
+- `src-app/ui/src/dev/gallery/{stateMatrix.generated.ts,STATE_MATRIX.md}`
+  (regenerated — DRIFT-1.7)
 - `src-app/ui/src/core/overrides/OVERRIDE_MANIFEST.md` (regenerated)
 - tests: `src-app/ui/src/api-client/inflight.test.ts`,
-  `src-app/ui/src/modules/loadContext.test.ts`,
+  `src-app/ui/src/modules/liveSession.test.ts`,
+  `src-app/ui/src/api-client/{lazy-dispatch,shared-infra}.test.ts`,
+  `src-app/ui/src/modules/auth/{meFreshness,syncBackoff}.test.ts`,
   `src-app/ui/tests/e2e/perf/boot-parallelism.spec.ts`,
   `.lifecycle/net-hygiene/tests/excluded-endpoints.test.mjs`
 

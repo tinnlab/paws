@@ -669,6 +669,18 @@ const AuthDef = defineStore('Auth', {
           if (state.isLoading) {
             return
           }
+          // Boot verification now starts from the auth module's `initialize()`
+          // (bootSessionVerify), and AuthGuard's mount effect still calls this
+          // as the backstop for the paths that reach the guard WITHOUT a boot
+          // (an in-session user switch, a remount after logout). On a cold boot
+          // the guard mounts a few hundred ms after the boot call has already
+          // RESOLVED, so `isLoading` is false again and it would verify a second
+          // time. Freshness closes that: a `/me` that just landed makes this a
+          // no-op, and any logout / mutation / sync frame moves the epoch, so a
+          // genuine re-verification is never suppressed.
+          if (state.isAuthenticated && isMeFresh()) {
+            return
+          }
           set({ isLoading: true, isInitializing: true, error: null })
 
           try {

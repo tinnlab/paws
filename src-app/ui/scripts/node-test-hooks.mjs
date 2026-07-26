@@ -40,15 +40,20 @@ export async function resolve(spec, ctx, next) {
     const hit = probe(`${SDK}${pkg}/src/${rest.join('/') || 'index'}`)
     if (hit) return hit
   }
-  // Extensionless RELATIVE specifiers (`./x`, `../y/z`). The app + sdk sources
-  // are written for Vite, which fills in `.ts`/`/index.ts`; node's ESM resolver
-  // does not, so a spec that reaches a real module through one of those hops
-  // would fail with ERR_MODULE_NOT_FOUND. Applied only as a FALLBACK for specs
-  // node could not already resolve, so no existing resolution changes.
-  if ((spec.startsWith('./') || spec.startsWith('../')) && ctx.parentURL) {
-    const parentDir = dirname(fileURLToPath(ctx.parentURL))
-    const hit = probe(presolve(parentDir, spec))
-    if (hit) return hit
+  // Extensionless RELATIVE specifiers INSIDE the sdk packages (`./x`, `../y/z`).
+  // The sdk sources are written for Vite, which fills in `.ts` / `/index.ts`;
+  // node's ESM resolver does not, so a spec that reaches an sdk module through
+  // one of those hops dies with ERR_MODULE_NOT_FOUND before any assertion runs.
+  //
+  // Deliberately scoped to the SDK tree: the app tree (`src-app/ui/src`) resolves
+  // exactly as it did before, so no existing app spec's behaviour — including its
+  // failure signature — changes.
+  if ((spec.startsWith('./') || spec.startsWith('../')) && ctx.parentURL?.startsWith('file:')) {
+    const parentFile = fileURLToPath(ctx.parentURL)
+    if (parentFile.startsWith(SDK_SRC)) {
+      const hit = probe(presolve(dirname(parentFile), spec))
+      if (hit) return hit
+    }
   }
   return next(spec, ctx)
 }

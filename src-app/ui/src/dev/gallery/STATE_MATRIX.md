@@ -42,7 +42,7 @@ conversation page.
 | `settingsAdminPages` | `modules/agent/module`:46 |
 | `settingsAdminPages` | `modules/assistant/module`:59 |
 | `settingsAdminPages` | `modules/auth-providers/module`:40 |
-| `settingsAdminPages` | `modules/auth/module`:70 |
+| `settingsAdminPages` | `modules/auth/module`:75 |
 | `settingsAdminPages` | `modules/code-sandbox/module`:50 |
 | `settingsAdminPages` | `modules/file-rag/module`:32 |
 | `settingsAdminPages` | `modules/hardware/module`:42 |
@@ -238,8 +238,8 @@ Required states: `delayed`
 | branch | `!multiUserMode` | 41 |
 | branch | `!isAuthenticated` | 42 |
 | loading | `isInitializing \|\| needsSetup === null` | 49 |
-| branch | `needsSetup` | 54 |
-| branch | `!isAuthenticated` | 60 |
+| branch | `needsSetup` | 59 |
+| branch | `!isAuthenticated` | 64 |
 
 ### `modules/auth/AuthPage`
 
@@ -702,13 +702,13 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `isFootnoteLabel(props.id)` | 62 |
-| branch | `(rest as Record<string, unknown>)['data-footnotes'] === undefined` | 78 |
-| branch | `citeN !== null` | 94 |
-| branch | `className?.includes('data-footnote-backref') \|\| (rest as Record<string, unknown>)['data-footnote-backref'] !== undefined` | 98 |
-| branch | `scopedHref?.startsWith('#')` | 115 |
-| empty | `verdict === 'empty'` | 181 |
-| branch | `verdict === 'allowed'` | 182 |
+| branch | `isFootnoteLabel(props.id)` | 69 |
+| branch | `(rest as Record<string, unknown>)['data-footnotes'] === undefined` | 85 |
+| branch | `citeN !== null` | 101 |
+| branch | `className?.includes('data-footnote-backref') \|\| (rest as Record<string, unknown>)['data-footnote-backref'] !== undefined` | 105 |
+| branch | `scopedHref?.startsWith('#')` | 122 |
+| empty | `verdict === 'empty'` | 188 |
+| branch | `verdict === 'allowed'` | 189 |
 
 ### `modules/chat/extensions/compaction/components/CompactButton`
 
@@ -1099,11 +1099,11 @@ Required states: `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!canRead` | 64 |
-| branch | `!settings` | 75 |
-| branch | `values.chunk_overlap_chars >= values.chunk_chars` | 85 |
-| branch | `canManage` | 117 |
-| error | `(error \|\| validationError)` | 127 |
+| branch | `!canRead` | 68 |
+| branch | `!settings` | 79 |
+| branch | `values.chunk_overlap_chars >= values.chunk_chars` | 89 |
+| branch | `canManage` | 121 |
+| error | `(error \|\| validationError)` | 131 |
 
 ### `modules/file-rag/components/sections/EmbeddingSection`
 
@@ -1111,16 +1111,16 @@ Required states: `empty`, `error`, `open`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!canRead` | 81 |
-| branch | `!settings` | 92 |
-| branch | `modelChanged && newId !== null && priorId !== null` | 127 |
-| branch | `!settings.embedding_model_id` | 135 |
-| branch | `canManage` | 159 |
-| error | `error` | 169 |
-| empty | `noModelsAvailable` | 170 |
-| overlay | `<Dialog open>` | 259 |
-| overlay | `<Dialog open>` | 282 |
-| branch | `!pendingSwap` | 297 |
+| branch | `!canRead` | 85 |
+| branch | `!settings` | 96 |
+| branch | `modelChanged && newId !== null && priorId !== null` | 131 |
+| branch | `!settings.embedding_model_id` | 139 |
+| branch | `canManage` | 163 |
+| error | `error` | 173 |
+| empty | `noModelsAvailable` | 174 |
+| overlay | `<Dialog open>` | 263 |
+| overlay | `<Dialog open>` | 286 |
+| branch | `!pendingSwap` | 301 |
 
 ### `modules/file-rag/components/sections/EnableSection`
 
@@ -1128,10 +1128,10 @@ Required states: `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!canRead` | 42 |
-| branch | `!settings` | 53 |
-| branch | `canManage` | 80 |
-| error | `error` | 90 |
+| branch | `!canRead` | 46 |
+| branch | `!settings` | 57 |
+| branch | `canManage` | 84 |
+| error | `error` | 94 |
 
 ### `modules/file-rag/components/sections/FullTextSection`
 
@@ -1139,10 +1139,10 @@ Required states: `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!canRead` | 68 |
-| branch | `!settings` | 79 |
-| branch | `canManage` | 108 |
-| error | `error` | 118 |
+| branch | `!canRead` | 72 |
+| branch | `!settings` | 83 |
+| branch | `canManage` | 112 |
+| error | `error` | 122 |
 
 ### `modules/file-rag/components/sections/MaintenanceSection`
 
@@ -1150,9 +1150,9 @@ Required states: `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!canRead` | 22 |
-| branch | `!settings` | 33 |
-| error | `error` | 55 |
+| branch | `!canRead` | 26 |
+| branch | `!settings` | 37 |
+| error | `error` | 59 |
 
 ### `modules/file-rag/components/sections/RerankSection`
 
@@ -1160,10 +1160,10 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!canRead` | 66 |
-| branch | `!settings` | 77 |
-| empty | `noModels` | 116 |
-| branch | `canManage` | 170 |
+| branch | `!canRead` | 70 |
+| branch | `!settings` | 81 |
+| empty | `noModels` | 120 |
+| branch | `canManage` | 174 |
 
 ### `modules/file-rag/components/sections/RetrievalLimitsSection`
 
@@ -1171,10 +1171,10 @@ Required states: `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!canRead` | 62 |
-| branch | `!settings` | 73 |
-| branch | `canManage` | 100 |
-| error | `error` | 110 |
+| branch | `!canRead` | 66 |
+| branch | `!settings` | 77 |
+| branch | `canManage` | 104 |
+| error | `error` | 114 |
 
 ### `modules/file-rag/pages/FileRagAdminPage`
 
@@ -2629,10 +2629,10 @@ Required states: `open`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!currentModel \|\| !currentProvider` | 62 |
-| overlay | `<Drawer open>` | 96 |
-| branch | `isLocalModel && engineType === 'llamacpp'` | 124 |
-| branch | `isLocalModel && engineType === 'mistralrs'` | 127 |
+| branch | `!currentModel \|\| !currentProvider` | 66 |
+| overlay | `<Drawer open>` | 100 |
+| branch | `isLocalModel && engineType === 'llamacpp'` | 128 |
+| branch | `isLocalModel && engineType === 'mistralrs'` | 131 |
 
 ### `modules/llm-provider/components/llm-models/shared/LlmModelCapabilitiesSection`
 
@@ -3111,9 +3111,9 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!canRead` | 50 |
-| branch | `!settings` | 61 |
-| branch | `canManage` | 89 |
+| branch | `!canRead` | 54 |
+| branch | `!settings` | 65 |
+| branch | `canManage` | 93 |
 
 ### `modules/memory/components/sections/FullTextSearchSection`
 
@@ -3121,17 +3121,17 @@ Required states: `open`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!settings` | 90 |
-| branch | `lastSettingsRef.current === settings` | 91 |
-| branch | `!canRead` | 120 |
-| branch | `!settings` | 131 |
-| branch | `dictionaryChanged` | 171 |
-| branch | `!pendingDictionary` | 182 |
-| branch | `canManage` | 232 |
-| branch | `bothArmsOff` | 243 |
-| overlay | `<Dialog open>` | 324 |
-| branch | `!open && (saving \|\| triggeringFtsRebuild)` | 329 |
-| branch | `saving \|\| triggeringFtsRebuild` | 347 |
+| branch | `!settings` | 94 |
+| branch | `lastSettingsRef.current === settings` | 95 |
+| branch | `!canRead` | 124 |
+| branch | `!settings` | 135 |
+| branch | `dictionaryChanged` | 175 |
+| branch | `!pendingDictionary` | 186 |
+| branch | `canManage` | 236 |
+| branch | `bothArmsOff` | 247 |
+| overlay | `<Dialog open>` | 328 |
+| branch | `!open && (saving \|\| triggeringFtsRebuild)` | 333 |
+| branch | `saving \|\| triggeringFtsRebuild` | 351 |
 
 ### `modules/memory/components/sections/MemorySection`
 
@@ -3139,10 +3139,10 @@ Required states: `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!canRead` | 52 |
-| error | `!settings && error` | 63 |
-| branch | `!settings` | 79 |
-| branch | `canManage` | 99 |
+| branch | `!canRead` | 56 |
+| error | `!settings && error` | 67 |
+| branch | `!settings` | 83 |
+| branch | `canManage` | 103 |
 
 ### `modules/memory/components/sections/MyMemoriesSection`
 
@@ -3196,9 +3196,9 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!canRead` | 53 |
-| branch | `!settings` | 64 |
-| branch | `canManage` | 93 |
+| branch | `!canRead` | 57 |
+| branch | `!settings` | 68 |
+| branch | `canManage` | 97 |
 
 ### `modules/memory/components/sections/SemanticSearchSection`
 
@@ -3206,15 +3206,15 @@ Required states: `empty`, `open`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!canRead` | 75 |
-| branch | `!settings` | 86 |
-| branch | `modelChanged && newEmbeddingId !== null && priorEmbeddingId !== null` | 128 |
-| branch | `!settings.embedding_model_id` | 136 |
-| branch | `canManage` | 166 |
-| empty | `noModelsAvailable` | 176 |
-| overlay | `<Dialog open>` | 264 |
-| overlay | `<Dialog open>` | 288 |
-| branch | `!pendingSwap` | 303 |
+| branch | `!canRead` | 79 |
+| branch | `!settings` | 90 |
+| branch | `modelChanged && newEmbeddingId !== null && priorEmbeddingId !== null` | 132 |
+| branch | `!settings.embedding_model_id` | 140 |
+| branch | `canManage` | 170 |
+| empty | `noModelsAvailable` | 180 |
+| overlay | `<Dialog open>` | 268 |
+| overlay | `<Dialog open>` | 292 |
+| branch | `!pendingSwap` | 307 |
 
 ### `modules/memory/pages/MemoryAdminPage`
 
@@ -3773,14 +3773,14 @@ Required states: `delayed`, `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!canRead` | 85 |
-| error | `error && !settings` | 98 |
-| loading | `loading && !settings` | 112 |
-| branch | `!settings` | 121 |
-| branch | `values.full_summary_prompt && values.full_summary_prompt.trim() && !values.full_summary_prompt.includes('{transcript}')` | 127 |
-| branch | `values.incremental_summary_prompt && values.incremental_summary_prompt.trim() && (!values.incremental_summary_prompt.includes('{previous_summary}') \|\| !values.i` | 137 |
-| branch | `values.summarizer_keep_recent_tokens >= values.summarize_after_tokens` | 148 |
-| branch | `canManage` | 183 |
+| branch | `!canRead` | 89 |
+| error | `error && !settings` | 102 |
+| loading | `loading && !settings` | 116 |
+| branch | `!settings` | 125 |
+| branch | `values.full_summary_prompt && values.full_summary_prompt.trim() && !values.full_summary_prompt.includes('{transcript}')` | 131 |
+| branch | `values.incremental_summary_prompt && values.incremental_summary_prompt.trim() && (!values.incremental_summary_prompt.includes('{previous_summary}') \|\| !values.i` | 141 |
+| branch | `values.summarizer_keep_recent_tokens >= values.summarize_after_tokens` | 152 |
+| branch | `canManage` | 187 |
 
 ### `modules/user-llm-providers/UserLlmProvidersPage`
 
