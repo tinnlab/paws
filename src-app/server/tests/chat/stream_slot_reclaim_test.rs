@@ -266,6 +266,23 @@ async fn head_requests_do_not_leak_chat_stream_slots() {
             "a HEAD must reach register() — if it is short-circuited before the \
              handler, the rest of this test proves nothing"
         );
+        // A HEAD response carries NO body (axum swaps it for `Body::empty()` —
+        // which is precisely the mechanism under test), so the error code cannot
+        // be read from it. Establish that the refusal is the PER-USER cap — not
+        // a global one, which would make the anchor vacuous — with a GET in the
+        // same state, whose body IS readable.
+        let get_at_cap = client
+            .get(server.api_url("/chat/stream"))
+            .header("Authorization", format!("Bearer {}", user.token))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(get_at_cap.status(), 429);
+        let body = get_at_cap.text().await.unwrap_or_default();
+        assert!(
+            body.contains("CHAT_STREAM_USER_LIMIT"),
+            "the refusal at this point must be the PER-USER cap, got: {body}"
+        );
         drop(held);
     }
     let _ = count_available_slots(&server, &user.token, cap + 1).await;
