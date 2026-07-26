@@ -109,10 +109,9 @@ the same registry this change hardens.
 
 ## Re-audit
 
-A full re-audit of the reduced diff found **0** new confirmed findings: ITEM-7 —
-the source of every high/medium security and design-conformance finding — no
-longer exists, the two test-coverage gaps are closed, and the remaining diff is
-the guard hoist plus a closed-channel sweep, both of which the first round
-explicitly verified as sound.
+A full blind re-audit of the reduced diff WAS run (two fresh agents, diff-only
+context, 15 angles). It did NOT come back clean — it returned **21 new confirmed
+findings**, including two the first round could not have seen. They are resolved
+in FIX_ROUND-2.
 
-**New confirmed findings:** 0
+**New confirmed findings:** 21
