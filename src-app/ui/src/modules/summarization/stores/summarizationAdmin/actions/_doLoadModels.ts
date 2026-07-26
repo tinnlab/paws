@@ -1,4 +1,4 @@
-import { ApiClient } from '@/api-client'
+import { filterByCapability, loadLlmModelCatalog } from '@/core/llmModelCatalog'
 import { Permissions } from '@/api-client/permissions'
 import { hasPermissionNow } from '@/core/permissions'
 import type {
@@ -25,8 +25,10 @@ export default (set: SummarizationAdminSet, _get: SummarizationAdminGet) =>
     try {
       // Any chat-capable model can summarize — pass `chat` (an earlier draft
       // passed `text_completion`, which the backend rejects with 400).
-      const body = await ApiClient.LlmModel.list({ capability: 'chat', page: 1, perPage: 200 })
-      const rows: SummarizationModelRow[] = body.models.map(m => ({
+      // Shared catalog + the same `capabilities.chat === true` rule the server
+      // applies to `?capability=chat` — one fetch shared with the other pickers.
+      const models = filterByCapability(await loadLlmModelCatalog(), 'chat')
+      const rows: SummarizationModelRow[] = models.map(m => ({
         id: m.id,
         name: m.name,
         display_name: m.display_name,

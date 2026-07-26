@@ -1,4 +1,4 @@
-import { ApiClient } from '@/api-client'
+import { filterByCapability, loadLlmModelCatalog } from '@/core/llmModelCatalog'
 import type { MemoryAdminGet, MemoryAdminSet } from '../state'
 
 const toRow = (m: import('@/api-client/types').LlmModel) => ({
@@ -14,18 +14,21 @@ export default (set: MemoryAdminSet, _get: MemoryAdminGet) => async () => {
     s.loadingModels = true
   })
   try {
-    // Two capped fetches: embedding picker (server-filtered) + all models
-    // (extraction picker keeps the non-embedders).
-    const [allBody, embeddingBody] = await Promise.all([
-      ApiClient.LlmModel.list({ page: 1, perPage: 200 }),
-      ApiClient.LlmModel.list({ capability: 'text_embedding', page: 1, perPage: 200 }),
-    ])
+    // ONE fetch through the shared catalog (was two: unfiltered + a
+    // server-side `capability=text_embedding` filter). The embedding filter is
+    // applied client-side with the SAME rule the server uses, so both pickers
+    // show identical rows for one round-trip instead of two.
+    const all = await loadLlmModelCatalog()
     set(s => {
       // Extraction picker = all models MINUS embedders ("not an embedder"
       // rather than "is chat", so a chat model with no capability flag
       // still appears).
-      s.availableModels = allBody.models.map(toRow).filter(m => !m.capabilities?.text_embedding)
-      s.embeddingModels = embeddingBody.models.map(toRow)
+      // Both lists use the SAME predicate (`capabilities.text_embedding ===
+      // true`, the server's rule) so a model with a non-boolean flag cannot
+      // fall out of both pickers.
+      const embedders = new Set(filterByCapability(all, 'text_embedding'))
+      s.availableModels = all.filter(m => !embedders.has(m)).map(toRow)
+      s.embeddingModels = [...embedders].map(toRow)
       s.loadingModels = false
     })
   } catch (error) {

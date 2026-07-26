@@ -1,3 +1,4 @@
+import { loadLlmModelCatalog } from '@/core/llmModelCatalog'
 import { ApiClient } from '@/api-client'
 import {
   type AgentAdminSettings as AgentAdminSettingsRow,
@@ -79,9 +80,9 @@ const AgentAdminSettingsDef = defineStore('AgentAdminSettings', {
         s.loadingModels = true
       })
       try {
-        const body = await ApiClient.LlmModel.list({ page: 1, perPage: 200 })
+        const models = await loadLlmModelCatalog()
         set(s => {
-          s.availableModels = body.models.map(toRow)
+          s.availableModels = models.map(toRow)
           s.loadingModels = false
         })
       } catch (e: any) {

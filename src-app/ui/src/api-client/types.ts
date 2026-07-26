@@ -847,6 +847,25 @@ export interface ConversationMemoryModeResponse {
   memory_mode: string
 }
 
+/**
+ * One resolved membership: `conversation_id` is attached to `project_id`.
+ *
+ *  Carries the project ID rather than the project ROW: a conversation list is
+ *  typically many conversations across FEW projects, so inlining the row per
+ *  link would repeat the same (up-to-64-KiB `instructions`) project up to 200
+ *  times in one response. The rows are de-duplicated into
+ *  [`ProjectsByConversationsResponse::projects`]; join on `project_id`.
+ *
+ *  Conversations that are unfiled — or that belong to another user, or don't
+ *  exist — are simply ABSENT from `links` (never a null entry), mirroring the
+ *  singular endpoint's `null` answer and its "unfiled is legitimate data, not
+ *  an error" contract.
+ */
+export interface ConversationProjectLink {
+  conversation_id: string
+  project_id: string
+}
+
 /** Conversation response with additional metadata */
 export interface ConversationResponse {
   title?: string
@@ -4659,6 +4678,32 @@ export interface ProjectMcpSettingsResponse {
 }
 
 /**
+ * Request body for `POST /api/projects/by-conversations` — the BATCH form of
+ *  `GET /api/projects/by-conversation/{id}`.
+ *
+ *  Exists because a conversation list renders one membership badge per row: the
+ *  per-id endpoint turned a 40-row sidebar into 40 requests (an `n+1` burst the
+ *  live-ui-audit flags). Duplicate ids are tolerated (de-duplicated server-side).
+ */
+export interface ProjectsByConversationsRequest {
+  /** The conversations to resolve. At most `MAX_CONVERSATIONS_PER_LOOKUP`. */
+  conversation_ids: string[]
+}
+
+/**
+ * Response body for `POST /api/projects/by-conversations`.
+ *
+ *  `links` maps each ATTACHED conversation to a project id; `projects` lists
+ *  each referenced project EXACTLY ONCE (the same shape the singular endpoint
+ *  returns), so the payload is O(conversations + projects), not
+ *  O(conversations x project size).
+ */
+export interface ProjectsByConversationsResponse {
+  links: ConversationProjectLink[]
+  projects: Project[]
+}
+
+/**
  * MCP Prompt template metadata (per MCP spec § server/prompts).
  *  Returned by `prompts/list`.
  */
@@ -8109,6 +8154,7 @@ export type ApiEndpointParameters = {
   'Project.detachFile': { id: string; file_id: string }
   'Project.duplicate': { id: string }
   'Project.forConversation': { conversation_id: string }
+  'Project.forConversations': ProjectsByConversationsRequest
   'Project.get': { id: string }
   'Project.getMcpSettings': { id: string }
   'Project.list': { limit?: number; page?: number; search?: string }
@@ -8554,6 +8600,7 @@ export type ApiEndpointResponses = {
   'Project.detachFile': void
   'Project.duplicate': Project
   'Project.forConversation': Project | null
+  'Project.forConversations': ProjectsByConversationsResponse
   'Project.get': Project
   'Project.getMcpSettings': ProjectMcpSettingsResponse
   'Project.list': ProjectListResponse
