@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
-import { Textarea } from '@ziee/kit'
+import { Textarea, message } from '@ziee/kit'
+import { SEND_FAILED_FALLBACK_MESSAGE } from '@/modules/chat/core/stores/chat/sendFailureState'
 import { useChatPaneOrNull } from '@/modules/chat/core/pane/ChatPaneContext'
 import {
   getDraft,
@@ -22,6 +23,8 @@ import { Chat } from '@/modules/chat/core/stores/chatBridge'
  */
 export function TextInput() {
   const ref = useRef<HTMLTextAreaElement>(null)
+  // Synchronous re-entrancy latch for the Enter path — see handleKeyDown.
+  const inFlightRef = useRef(false)
   // Resolve THIS pane's chat store directly (not the focused-pane bridge): the
   // composer's TextStore is a NESTED store, and `Chat.TextStore` resolves
   // nested stores via getState()->focusedApi() (the focused pane), NOT the
@@ -31,7 +34,9 @@ export function TextInput() {
   // Chat, unchanged).
   const pane = useChatPaneOrNull()
   const chatStore = (pane?.store ?? Chat) as typeof Chat
-  const { sending } = chatStore
+  // `isStreaming` is read alongside `sending` so the Enter guard matches the
+  // Send button's `disabled` condition (ChatInput.tsx) — see handleKeyDown.
+  const { sending, isStreaming } = chatStore
   const { setGetMessage, setSetMessage, setClearMessage } = chatStore.TextStore
 
   // The draft bucket for the composer's CURRENT conversation. `new` when there
@@ -101,8 +106,49 @@ export function TextInput() {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
 
-      // Call sendMessage directly - model extension will provide model_id
-      await chatStore.sendMessage()
+      // Guard, then catch — the two things the Send button already did and this
+      // path did not.
+      //
+      // NOT a full mirror of `ChatInput.handleSend`: that also gates on
+      // `disabled` and on `useSendBlocked()`. Both are ChatInput-owned — the
+      // blocker hook returns probe NODES that its owner must render, so calling
+      // it here would mount a second copy of every extension's blocker hook.
+      // The consequence is bounded and acceptable: an extension that blocks
+      // (today only "files still uploading") returns a LOUD veto from
+      // `beforeSendMessage`, so Enter mid-upload still cannot send — it shows
+      // that extension's message via the catch below instead of being inert.
+      //
+      // `sending`/`isStreaming` come from the render closure, and the store only
+      // flips `sending` AFTER several awaits (including, on a new chat, a
+      // create-conversation round-trip), so they do NOT close the
+      // repeat-keypress window on their own. `inFlightRef` is the synchronous
+      // latch that does — a held Enter fires keydown repeatedly, which is the
+      // audit's `rapid-double-submit` cell. The reactive flags still matter:
+      // they cover a turn started by the BUTTON, which this ref knows nothing
+      // about.
+      if (sending || isStreaming || inFlightRef.current) return
+
+      inFlightRef.current = true
+      try {
+        // `allowSilentCancel` is passed ONLY here, and deliberately NOT by the
+        // Send button. Enter on an empty composer is a stray keypress the user
+        // never aimed at anything, so it should do nothing; a deliberate click
+        // on a visible Send button still earns the explanatory toast. Every
+        // PROGRAMMATIC caller (regenerate, edit-resubmit, tool approval) also
+        // omits it, so a veto there still throws instead of evaporating.
+        await chatStore.sendMessage({ allowSilentCancel: true })
+      } catch (error: any) {
+        // Reachable for a LOUD extension veto (e.g. "files still uploading")
+        // and for a pre-flight failure such as conversation creation. A failure
+        // of the send REQUEST itself is handled inside the store, which records
+        // it on `store.error` and renders it in the conversation's error Alert.
+        // Without this catch the rejection escaped an `async` React handler as
+        // an UNHANDLED one — a page-level error event, with nothing shown.
+        console.error('Failed to send message:', error)
+        message.error(error?.message || SEND_FAILED_FALLBACK_MESSAGE)
+      } finally {
+        inFlightRef.current = false
+      }
     }
   }
 

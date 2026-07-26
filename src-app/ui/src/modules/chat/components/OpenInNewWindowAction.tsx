@@ -3,7 +3,10 @@ import { SquareArrowOutUpRight } from 'lucide-react'
 import { openConversationWindow } from '@/modules/chat/core/popout/openConversationWindow'
 import { popoutActionVisible } from '@/modules/chat/core/popout/popoutVisibility'
 import { useIsPopoutWindow } from '@/modules/chat/core/popout/useIsPopoutWindow'
-import { useChatPaneOrNull } from '@/modules/chat/core/pane/ChatPaneContext'
+import {
+  useChatPaneOrNull,
+  type ChatPaneHandle,
+} from '@/modules/chat/core/pane/ChatPaneContext'
 import { useClosePane } from '@/modules/chat/core/pane/useOpenConversation'
 import { Chat } from '@/modules/chat/core/stores/chatBridge'
 
@@ -27,12 +30,38 @@ import { Chat } from '@/modules/chat/core/stores/chatBridge'
  */
 export function OpenInNewWindowAction() {
   const pane = useChatPaneOrNull()
+  // Component-per-case, NOT a ternary: a reactive store-proxy field read IS a
+  // hook (useEffect + useStore — see framework/src/stores.ts), so reading
+  // `pane.store.conversation` in one branch and `Chat.conversation` in the other
+  // put a hook behind a condition and made the hook count depend on whether this
+  // action rendered inside a pane (taxonomy O2; same shape as 57f9fdb5b). Each
+  // component below reads exactly one source, unconditionally.
+  return pane ? (
+    <OpenInNewWindowInPane pane={pane} />
+  ) : (
+    <OpenInNewWindowSinglePane />
+  )
+}
+
+function OpenInNewWindowInPane({ pane }: { pane: ChatPaneHandle }) {
+  const conversation = pane.store.conversation
+  return <OpenInNewWindowButton conversation={conversation} pane={pane} />
+}
+
+function OpenInNewWindowSinglePane() {
+  const conversation = Chat.conversation
+  return <OpenInNewWindowButton conversation={conversation} pane={null} />
+}
+
+function OpenInNewWindowButton({
+  conversation,
+  pane,
+}: {
+  conversation: { id: string; title?: string | null } | null | undefined
+  pane: ChatPaneHandle | null
+}) {
   const closePane = useClosePane()
   const isPopoutWindow = useIsPopoutWindow()
-  // In a pane, act on THAT pane's conversation; single-pane reads the bridge.
-  const conversation = pane
-    ? pane.store.conversation
-    : Chat.conversation
   if (!conversation) return null
 
   const isDesktop = typeof window !== 'undefined' && '__TAURI__' in window

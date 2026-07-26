@@ -171,8 +171,15 @@ const textExtension: ChatExtension = createExtension({
     const content = ChatStore.$.TextStore.getText()
 
     if (!content || !content.trim()) {
+      // A SILENT cancel: submitting an empty composer is a no-op keypress, not a
+      // failure, so `sendMessage` returns without throwing and without touching
+      // state. Previously this threw, and the Enter path had no catch — which
+      // surfaced as an uncaught `Message cannot be empty` page error on every
+      // stray Enter. `errorMessage` is kept for diagnostics; a silent cancel is
+      // never shown to the user.
       return {
         cancel: true,
+        silent: true,
         errorMessage: 'Message cannot be empty',
       }
     }

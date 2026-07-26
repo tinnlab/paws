@@ -5,16 +5,42 @@ import type { MessageWithContent } from '@/api-client/types'
 import type { ChatSet, ChatInitialState, ChatState } from '@/modules/chat/core/stores/chat'
 import type { ExtensionLifecycle } from '@/modules/chat/core/extensions/types'
 import { EventBus } from '@ziee/framework/stores'
+import {
+  buildSendFailureState,
+  isAbortError,
+  SEND_FAILED_FALLBACK_MESSAGE,
+  type SendMessageOptions,
+} from '@/modules/chat/core/stores/chat/sendFailureState'
 
 export default (set: ChatSet, getRaw: () => ChatInitialState) => {
   const get = getRaw as unknown as () => ChatState
   const extLifecycle = (): ExtensionLifecycle => get().extensionRuntime ?? chatExtensionRegistry
-  return async () => {
+  return async (options?: SendMessageOptions) => {
       let { conversation } = get()
 
       const beforeResult = await chatExtensionRegistry.beforeSendMessage()
 
       if (beforeResult.cancel) {
+        // A cancel THROWS by default — byte-identical to the historical
+        // behaviour — because most callers of `sendMessage` are PROGRAMMATIC
+        // (regenerate, edit-resubmit, transmitting a tool approval/denial) and
+        // for them a veto is a genuine failure that must not evaporate: e.g.
+        // `startRegenerateMessage` has already trimmed the transcript and
+        // latched the pending-branch fields by the time it calls us, so a quiet
+        // return would leave the UI trimmed, nothing regenerating, and no error.
+        //
+        // Only a USER-INITIATED composer submit opts into the quiet path, and
+        // only for a cancel the extension itself classified as a no-op
+        // (`silent` — today just "the composer is empty"). Both signals are
+        // required: the REASON must be a non-failure, and the CALLER must be the
+        // one place where "the user submitted nothing" is not an error.
+        if (options?.allowSilentCancel && beforeResult.silent) {
+          console.debug(
+            '[Chat.store] send skipped (no-op):',
+            beforeResult.errorMessage || 'nothing to send',
+          )
+          return
+        }
         console.log('[Chat.store] Message send cancelled by extension')
         throw new Error(
           beforeResult.errorMessage || 'Message send was cancelled',
@@ -69,41 +95,48 @@ export default (set: ChatSet, getRaw: () => ChatInitialState) => {
         finalizingTurn: false,
       })
 
-      // If the window is anchored MID-conversation (after an around=/find/
-      // deep-link jump, so `hasMoreAfter` is true), the loaded slice does not
-      // abut the real tail. Snap to the tail first so the new turn's optimistic
-      // bubble appends at the actual end instead of after a gap of unloaded
-      // messages (reconciled again on `complete`, but this fixes the optimistic
-      // render order too).
-      if (get().hasMoreAfter) {
-        await get().loadMessages(conversation.id)
-      }
-
-      const userContents = await chatExtensionRegistry.provideUserContent(
-        (allRequestFields.content as string) || '',
-        allRequestFields,
-        get().paneId,
-      )
-
-      const tempUserMessage: MessageWithContent = {
-        id: `temp-${Date.now()}`,
-        role: 'user',
-        contents: userContents,
-        originated_from_id: '',
-        edit_count: 0,
-        created_at: new Date().toISOString(),
-      }
-
-      set(state => {
-        const newMessages = new Map(state.messages)
-        newMessages.set(tempUserMessage.id, tempUserMessage)
-        return {
-          messages: newMessages,
-          tempUserMessageId: tempUserMessage.id,
-        }
-      })
-
+      // EVERYTHING after the flags go true lives inside this try. The flags are
+      // what render the streaming spinner and disable the composer, so any throw
+      // that escapes without running the catch below wedges the UI permanently:
+      // a spinner that never stops, a composer that never re-enables, no error
+      // text, and — because `reloadOpen` bails while `isStreaming` is true — no
+      // recovery even on stream reconnect. The `try` used to open ~40 lines
+      // lower, leaving `loadMessages` and `provideUserContent` unprotected.
       try {
+        // If the window is anchored MID-conversation (after an around=/find/
+        // deep-link jump, so `hasMoreAfter` is true), the loaded slice does not
+        // abut the real tail. Snap to the tail first so the new turn's optimistic
+        // bubble appends at the actual end instead of after a gap of unloaded
+        // messages (reconciled again on `complete`, but this fixes the optimistic
+        // render order too).
+        if (get().hasMoreAfter) {
+          await get().loadMessages(conversation.id)
+        }
+
+        const userContents = await chatExtensionRegistry.provideUserContent(
+          (allRequestFields.content as string) || '',
+          allRequestFields,
+          get().paneId,
+        )
+
+        const tempUserMessage: MessageWithContent = {
+          id: `temp-${Date.now()}`,
+          role: 'user',
+          contents: userContents,
+          originated_from_id: '',
+          edit_count: 0,
+          created_at: new Date().toISOString(),
+        }
+
+        set(state => {
+          const newMessages = new Map(state.messages)
+          newMessages.set(tempUserMessage.id, tempUserMessage)
+          return {
+            messages: newMessages,
+            tempUserMessageId: tempUserMessage.id,
+          }
+        })
+
         // Subscribe this device's token stream to the (possibly just-created)
         // conversation BEFORE kicking off generation, so it receives all of its
         // own tokens. Idempotent/deduped for an already-open conversation.
@@ -148,30 +181,31 @@ export default (set: ChatSet, getRaw: () => ChatInitialState) => {
         await get().clearPendingBranch()
         set({ sending: false })
       } catch (error: any) {
-        const isAborted = error instanceof Error && error.name === 'AbortError'
+        const aborted = isAbortError(error)
 
-        if (!isAborted) {
-          await chatExtensionRegistry.onStreamError(
-            error instanceof Error
-              ? error
-              : new Error(error.message || 'Failed to send message'),
-            get().paneId,
-          )
+        if (!aborted) {
+          // The extension hook runs BEFORE the state reset, so a hook that
+          // throws would take the whole recovery down with it and leave exactly
+          // the wedged spinner this catch exists to prevent. Notifying
+          // extensions is best-effort; resetting the store is not. The
+          // secondary error is logged, never discarded.
+          try {
+            await chatExtensionRegistry.onStreamError(
+              error instanceof Error
+                ? error
+                : new Error(error?.message || SEND_FAILED_FALLBACK_MESSAGE),
+              get().paneId,
+            )
+          } catch (hookError) {
+            console.error(
+              '[Chat.store] onStreamError extension hook failed; continuing with state recovery',
+              hookError,
+            )
+          }
         }
 
         const state = get()
-        const baseUpdate = {
-          error: isAborted ? null : error.message || 'Failed to send message',
-          sending: false,
-          isStreaming: false,
-          streamingMessage: null,
-          streamingAbortController: null,
-          streamingMessageId: null,
-          finalizingTurn: false,
-          // Aborted (user cancel) or a transport error — either way the turn's
-          // partial is not a genuine empty completion.
-          lastTurnInterrupted: true,
-        }
+        const baseUpdate = buildSendFailureState(error)
 
         if (state.tempUserMessageId) {
           set(state => {
@@ -187,10 +221,21 @@ export default (set: ChatSet, getRaw: () => ChatInitialState) => {
           set(baseUpdate)
         }
 
-        if (isAborted) {
-          const conversation = get().conversation
-          if (conversation) {
-            await get().loadMessages(conversation.id)
+        if (aborted) {
+          // Best-effort refetch after a user cancel. Guarded because the store
+          // is ALREADY fully reset above: letting a refetch failure reject
+          // `sendMessage` would surface an error toast for an action the user
+          // deliberately took, on top of a state that is already correct.
+          try {
+            const conversation = get().conversation
+            if (conversation) {
+              await get().loadMessages(conversation.id)
+            }
+          } catch (reloadError) {
+            console.error(
+              '[Chat.store] post-abort message reload failed; state already recovered',
+              reloadError,
+            )
           }
         }
       }

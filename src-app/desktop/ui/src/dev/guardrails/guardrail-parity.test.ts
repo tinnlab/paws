@@ -20,6 +20,7 @@ describe('TEST-1: backfilled static gates chained into `check`', () => {
   for (const gate of [
     'lint:adjacent-inline',
     'lint:icon-action',
+    'lint:hooks',
     'check:kit-manifest',
     'check:testid-registry',
     'check:design-spec',

@@ -51,9 +51,13 @@ const FIXTURE_DIR = 'src/dev/gallery/__detector_fixtures__'
 const LINT_CASES = [
   { miss: '#10b', cls: 'C11', lint: 'lint-icon-action.mjs', extra: [], desc: 'open-in-new-tab renders the wrong glyph' },
   { miss: '#17', cls: 'J8', lint: 'lint-native-scroll.mjs', extra: ['--gate'], desc: 'raw native scroll instead of DivScrollY' },
+  // O1 and O2 are the first two rows to share ONE script, so each carries an
+  // `expect` regex: without it, O2 would count as "fired" on O1's finding alone.
+  { miss: 'crash-A', cls: 'O1', lint: 'lint-hooks.mjs', extra: [], expect: /H1 .*__detector_fixtures__/, desc: 'usePermission(A) || usePermission(B) — the 2nd hook is short-circuited away' },
+  { miss: 'crash-B', cls: 'O2', lint: 'lint-hooks.mjs', extra: [], expect: /H2 .*__detector_fixtures__/, desc: 'store-proxy field read inside a ternary / behind an early return' },
 ]
 
-function runLint(script, extra = []) {
+function runLint(script, extra = [], expect = null) {
   // Fail loudly if the detector itself is missing — otherwise `node` exits
   // non-zero for a MISSING script and we would miscount that as the detector
   // "firing" (a false pass that hides a dropped detector).
@@ -68,7 +72,10 @@ function runLint(script, extra = []) {
   )
   const out = `${res.stdout || ''}${res.stderr || ''}`
   // A lint FIRES when it exits non-zero OR prints a finding line for the fixture.
-  const fired = res.status !== 0 || /__detector_fixtures__/.test(out)
+  // When TWO rows share one script (O1/O2), the row's `expect` regex is what
+  // makes each row prove ITS OWN detector — otherwise the second row would pass
+  // on the first one's finding.
+  const fired = expect ? expect.test(out) : res.status !== 0 || /__detector_fixtures__/.test(out)
   return { fired, exit: res.status, out }
 }
 
@@ -94,7 +101,7 @@ function main() {
   const rows = []
 
   for (const c of LINT_CASES) {
-    const r = runLint(c.lint, c.extra)
+    const r = runLint(c.lint, c.extra, c.expect)
     rows.push({ ...c, kind: 'lint', fired: r.fired, detail: `exit ${r.exit}` })
   }
 
