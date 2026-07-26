@@ -64,3 +64,22 @@ guardrail vitest cases are red on an untouched `origin/feat/agent-core` worktree
 * `npm run check` — PASS in both workspaces. `gate:ui` — 197/197 surfaces PASS.
 
 **New confirmed findings:** 0
+
+## Honest limit of this round
+
+Two blind agents were dispatched for round 2. The **conformance** agent returned
+the four findings above (all fixed). The second agent — assigned correctness /
+error-handling / tests-quality / state-management / security on the lint core —
+did not return within the session window, so its lens is covered here by
+*my own* targeted mutation matrix rather than by an independent reviewer:
+
+* the stale-cache class it was specifically asked to attack is proven closed by a
+  direct probe (clean → violation added → violation fixed, in ONE process:
+  `0 → 1 → 0`, plus two default-path calls both reflecting disk);
+* every rule and sub-rule now has a mutation that turns the suite red (the table
+  in `TEST_RESULTS.md`), which is the property that agent was asked to falsify;
+* exit-code behaviour (0 / 1 / 2) is asserted end-to-end in TEST-15.
+
+That substitution is recorded rather than papered over: it is a self-review of the
+one lens that lacked a second pair of eyes this round, and it is the first thing a
+follow-up review should re-run independently.
