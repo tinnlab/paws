@@ -49,6 +49,14 @@ pub(crate) const CHAT_STREAM_CHANNEL_CAPACITY: usize = 2048;
 
 type ConnId = Uuid;
 
+/// Grace period added to a connection's own `exp` deadline before a sweep
+/// treats it as stale. The stream's `select!` breaks AT the deadline and its
+/// guard then unregisters, so any connection still present well past its own
+/// deadline is definitionally broken; this slack only avoids racing a normal
+/// teardown. Derived from the connection, not a tunable — no arbitrary TTL to
+/// configure and no risk of reaping a healthy idle stream.
+const DEADLINE_SLACK: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// One live chat-token connection. `active_conversation` is the conversation
 /// whose frames this connection currently wants (set via the subscription PUT);
 /// `None` means "subscribed to nothing" — receives no frames.
@@ -56,6 +64,30 @@ pub struct ChatConn {
     pub user_id: Uuid,
     pub active_conversation: Option<Uuid>,
     pub sender: Sender<Result<Event, axum::Error>>,
+    /// When this connection's stream is guaranteed to have ended: the access
+    /// token's `exp` deadline, which the subscribe handler already `select!`s
+    /// on. `None` = no bound known (the handler's far-future fallback), which
+    /// opts the connection out of deadline-based reclamation.
+    ///
+    /// The liveness backstop for a peer that vanished WITHOUT the socket
+    /// erroring — hyper only learns the client is gone when a write fails, so
+    /// an idle stream to a black-holed peer could otherwise hold its slot far
+    /// longer than its own token was ever valid for.
+    pub expires_at: Option<std::time::Instant>,
+}
+
+impl ChatConn {
+    /// Is this connection past its own `exp` deadline (plus slack)?
+    fn is_past_deadline(&self, now: std::time::Instant) -> bool {
+        self.expires_at
+            .is_some_and(|deadline| now.saturating_duration_since(deadline) > DEADLINE_SLACK)
+    }
+
+    /// Is this connection reclaimable — its stream gone (receiver dropped), or
+    /// still present long past the deadline at which it should have ended?
+    fn is_reclaimable(&self, now: std::time::Instant) -> bool {
+        self.sender.is_closed() || self.is_past_deadline(now)
+    }
 }
 
 struct RegistryInner {
@@ -91,22 +123,41 @@ pub fn registry() -> &'static ChatStreamRegistry {
 
 impl ChatStreamRegistry {
     /// Register a new connection. 429 on a global or per-user cap.
+    ///
+    /// A cap is only ever charged for connections that are still ALIVE: before
+    /// each cap check the corresponding set is swept of connections whose
+    /// stream is gone (`prune_closed_locked`). Without that sweep a user whose
+    /// slots leaked would be refused forever — the registry's other reapers
+    /// (`publish_frame` / `publish_raw_event` / `set_subscription`) only run
+    /// when there is something to deliver, so a quiescent deployment never
+    /// reclaims anything. Mirrors `SyncRegistry::register`.
     pub fn register(&self, conn_id: ConnId, conn: ChatConn) -> Result<(), AppError> {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
 
-        if inner.clients.len() >= inner.limits.global_max_connections {
-            return Err(AppError::new(
-                StatusCode::TOO_MANY_REQUESTS,
-                "CHAT_STREAM_GLOBAL_LIMIT",
-                "Chat streaming is at capacity; retry shortly",
-            ));
+        // Per-user first: bounded by the configured per-user cap, so the common
+        // path stays O(cap) rather than O(global).
+        let mut user_count = inner.by_user.get(&conn.user_id).map_or(0, |s| s.len());
+        if user_count >= inner.limits.per_user_max_connections {
+            prune_closed_for_user_locked(&mut inner, conn.user_id);
+            user_count = inner.by_user.get(&conn.user_id).map_or(0, |s| s.len());
         }
-        let user_count = inner.by_user.get(&conn.user_id).map_or(0, |s| s.len());
         if user_count >= inner.limits.per_user_max_connections {
             return Err(AppError::new(
                 StatusCode::TOO_MANY_REQUESTS,
                 "CHAT_STREAM_USER_LIMIT",
                 "Too many open chat-stream connections for this account",
+            ));
+        }
+
+        // Global sweep only when the global cap would otherwise trip.
+        if inner.clients.len() >= inner.limits.global_max_connections {
+            prune_closed_locked(&mut inner);
+        }
+        if inner.clients.len() >= inner.limits.global_max_connections {
+            return Err(AppError::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                "CHAT_STREAM_GLOBAL_LIMIT",
+                "Chat streaming is at capacity; retry shortly",
             ));
         }
 
@@ -119,6 +170,42 @@ impl ChatStreamRegistry {
     pub fn unregister(&self, conn_id: ConnId) {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         remove_conn(&mut inner, conn_id);
+    }
+
+    /// Sweep every reclaimable connection, returning how many were freed. Two
+    /// independent signals, neither of which can false-positive a healthy
+    /// stream: the receiver being dropped (`sender.is_closed()` — the stream is
+    /// gone), and the connection outliving its own `exp` deadline (the stream
+    /// `select!`s on it and breaks there, so a survivor is definitionally
+    /// broken; this is the only signal available for a peer that vanished
+    /// without the socket erroring). The per-conversation `generations` replay
+    /// buffers are keyed by conversation, not connection, and are deliberately
+    /// untouched by a sweep.
+    ///
+    /// This is the BACKSTOP; the primary, deterministic release is the
+    /// subscribe handler's `ConnGuard`, constructed at registration and moved
+    /// into the stream so it drops even if the stream is never polled.
+    ///
+    /// `#[cfg(test)]`: on the production path the sweep runs inside `register`,
+    /// which already holds the lock and therefore calls `prune_closed_locked`
+    /// directly. This lock-taking wrapper exists only so the unit tests can
+    /// drive a sweep in isolation — shipping it as unused public API would be
+    /// dead code. (The framework twin IS `pub`: its crate-level integration
+    /// test lives in a separate crate and genuinely needs the public entry.)
+    #[cfg(test)]
+    pub fn prune_closed(&self) -> usize {
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        prune_closed_locked(&mut inner)
+    }
+
+    /// Sweep only `user_id`'s reclaimable connections (same two signals as
+    /// [`Self::prune_closed`]), returning how many were freed. Other users'
+    /// connections are never inspected or touched. `#[cfg(test)]` for the same
+    /// reason as [`Self::prune_closed`].
+    #[cfg(test)]
+    pub fn prune_closed_for_user(&self, user_id: Uuid) -> usize {
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        prune_closed_for_user_locked(&mut inner, user_id)
     }
 
     /// Override the connection caps (called once at server boot from deployment
@@ -318,6 +405,48 @@ pub fn apply_config_limits(chat: &crate::core::config::ChatConfig) {
 }
 
 /// Remove a connection from both indexes (shared by unregister + pruning).
+/// Sweep every reclaimable connection. Caller holds the lock.
+/// Collect-then-remove (mirroring `publish_frame`'s dead-connection handling)
+/// so the two-index invariant is maintained by the single `remove_conn` helper.
+fn prune_closed_locked(inner: &mut RegistryInner) -> usize {
+    let now = std::time::Instant::now();
+    let dead: Vec<ConnId> = inner
+        .clients
+        .iter()
+        .filter(|(_, c)| c.is_reclaimable(now))
+        .map(|(id, _)| *id)
+        .collect();
+    let n = dead.len();
+    for cid in dead {
+        remove_conn(inner, cid);
+    }
+    if n > 0 {
+        tracing::debug!("chat-stream registry: reclaimed {n} dead/expired connection(s)");
+    }
+    n
+}
+
+/// Sweep only `user_id`'s reclaimable connections. Caller holds the lock.
+fn prune_closed_for_user_locked(inner: &mut RegistryInner, user_id: Uuid) -> usize {
+    let Some(set) = inner.by_user.get(&user_id) else {
+        return 0;
+    };
+    let now = std::time::Instant::now();
+    let dead: Vec<ConnId> = set
+        .iter()
+        .filter(|cid| inner.clients.get(*cid).is_some_and(|c| c.is_reclaimable(now)))
+        .copied()
+        .collect();
+    let n = dead.len();
+    for cid in dead {
+        remove_conn(inner, cid);
+    }
+    if n > 0 {
+        tracing::debug!("chat-stream registry: reclaimed {n} dead/expired connection(s) for one user");
+    }
+    n
+}
+
 fn remove_conn(inner: &mut RegistryInner, conn_id: ConnId) {
     if let Some(conn) = inner.clients.remove(&conn_id) {
         if let Some(set) = inner.by_user.get_mut(&conn.user_id) {
@@ -352,13 +481,25 @@ mod tests {
     }
 
     /// A connection for `user_id` subscribed to `active` (None = nothing).
+    /// No `exp` deadline, so only the receiver-dropped signal can reclaim it.
     fn conn(user_id: Uuid, active: Option<Uuid>) -> (ChatConn, Rx) {
+        conn_expiring(user_id, active, None)
+    }
+
+    /// A connection whose stream was bound to end at `expires_at` — used to
+    /// exercise the deadline staleness backstop.
+    fn conn_expiring(
+        user_id: Uuid,
+        active: Option<Uuid>,
+        expires_at: Option<std::time::Instant>,
+    ) -> (ChatConn, Rx) {
         let (tx, rx) = tokio::sync::mpsc::channel(CHAT_STREAM_CHANNEL_CAPACITY);
         (
             ChatConn {
                 user_id,
                 active_conversation: active,
                 sender: tx,
+                expires_at,
             },
             rx,
         )
@@ -501,15 +642,22 @@ mod tests {
         let reg = empty_registry();
         let cap = ChatStreamLimits::default().per_user_max_connections;
         let uid = Uuid::new_v4();
+        // The receivers must be HELD: a cap is charged for live connections
+        // only, so a per-iteration `_rx` binding (dropped at the end of each
+        // iteration) would register connections whose streams are already gone
+        // and `register`'s sweep would rightly reclaim them.
+        let mut alive = Vec::new();
         for _ in 0..cap {
-            let (c, _rx) = conn(uid, None);
+            let (c, rx) = conn(uid, None);
             reg.register(Uuid::new_v4(), c).unwrap();
+            alive.push(rx);
         }
         let (overflow, _rx) = conn(uid, None);
         assert!(
             reg.register(Uuid::new_v4(), overflow).is_err(),
             "the (cap+1)th connection for one user must be refused (429)"
         );
+        drop(alive);
     }
 
     /// TEST-36: the per-user cap reads the CONFIGURED value (via `set_limits`),
@@ -524,15 +672,210 @@ mod tests {
             global_max_connections: 512,
         });
         let uid = Uuid::new_v4();
+        // Receivers HELD — see `per_user_cap_rejects_excess_connections`.
+        let mut alive = Vec::new();
         for _ in 0..3 {
-            let (c, _rx) = conn(uid, None);
+            let (c, rx) = conn(uid, None);
             reg.register(Uuid::new_v4(), c).unwrap();
+            alive.push(rx);
         }
         let (overflow, _rx) = conn(uid, None);
         assert!(
             reg.register(Uuid::new_v4(), overflow).is_err(),
             "the 4th connection must 429 at the CONFIGURED cap of 3"
         );
+        drop(alive);
+    }
+
+    // ---- slot reclamation (sse-slot-leak) --------------------------------
+    //
+    // The chat-token registry's only pre-existing reapers (`publish_frame` /
+    // `publish_raw_event` / `set_subscription`) require something to deliver, so
+    // on a quiescent deployment a connection whose stream was gone held its slot
+    // forever and every reconnect burned another until the account was
+    // permanently 429'd on `GET /api/chat/stream`.
+
+    /// TEST-5 — a connection whose receiver has been dropped is reclaimed from
+    /// BOTH indexes, a live one survives, and the per-conversation replay
+    /// buffers (keyed by conversation, not connection) are left alone.
+    #[test]
+    fn prune_closed_reclaims_dead_connections_and_leaves_live_ones_and_buffers() {
+        let reg = empty_registry();
+        let uid = Uuid::new_v4();
+        let conv = Uuid::new_v4();
+
+        let (dead_conn, dead_rx) = conn(uid, Some(conv));
+        let (live_conn, mut live_rx) = conn(uid, Some(conv));
+        reg.register(Uuid::new_v4(), dead_conn).unwrap();
+        reg.register(Uuid::new_v4(), live_conn).unwrap();
+
+        // An in-flight generation with a buffered frame.
+        assert!(reg.begin_generation(conv));
+        reg.publish_frame(uid, started(conv));
+        let _ = drain(&mut live_rx);
+
+        drop(dead_rx); // that stream went away
+
+        assert_eq!(reg.prune_closed(), 1, "only the dead connection is reclaimed");
+        assert_eq!(
+            reg.inner.lock().unwrap().clients.len(),
+            1,
+            "the live connection survives the sweep"
+        );
+        assert!(
+            reg.is_generating(conv),
+            "a sweep must NOT disturb the per-conversation replay buffers"
+        );
+
+        // The survivor is still functional, not merely still counted.
+        reg.publish_frame(uid, started(conv));
+        assert!(drain(&mut live_rx) > 0, "the survivor still receives frames");
+    }
+
+    /// TEST-12 [acceptance INV-3] — the chat cap is charged for LIVE
+    /// connections only, at the CONFIGURED limit (not a hardcoded number).
+    /// Both halves in ONE test: raising/removing the cap fails the first, and
+    /// removing the sweep fails the second.
+    #[test]
+    fn per_user_cap_counts_live_connections_only_at_the_configured_limit() {
+        let reg = empty_registry();
+        // A configured cap distinct from both the legacy 12 and the default 24,
+        // so the test proves the CONFIGURED value is what is enforced.
+        let cap = 3usize;
+        reg.set_limits(ChatStreamLimits {
+            per_user_max_connections: cap,
+            global_max_connections: 512,
+        });
+        let uid = Uuid::new_v4();
+
+        // (a) cap value unchanged: with every receiver ALIVE the (cap+1)th
+        //     registration is still refused with 429.
+        let mut alive = Vec::new();
+        for _ in 0..cap {
+            let (c, rx) = conn(uid, None);
+            reg.register(Uuid::new_v4(), c).unwrap();
+            alive.push(rx);
+        }
+        let (overflow, _rx) = conn(uid, None);
+        let err = reg
+            .register(Uuid::new_v4(), overflow)
+            .expect_err("the configured cap must still refuse a (cap+1)th LIVE connection");
+        assert_eq!(err.status_code(), 429, "the per-user cap still surfaces 429");
+
+        // (b) the user's streams all go away → the next registration succeeds
+        //     and the registry holds exactly the one new connection.
+        drop(alive);
+        let (fresh, _rx) = conn(uid, None);
+        reg.register(Uuid::new_v4(), fresh)
+            .expect("a user whose chat streams are gone must be able to reconnect");
+        assert_eq!(
+            reg.inner.lock().unwrap().clients.len(),
+            1,
+            "all {cap} dead slots must be reclaimed, leaving only the new connection",
+        );
+    }
+
+    /// A user-scoped sweep touches ONLY that user.
+    #[test]
+    fn prune_closed_for_user_is_scoped_to_that_user() {
+        let reg = empty_registry();
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        let (a_dead, a_rx) = conn(a, None);
+        let (b_dead, b_rx) = conn(b, None);
+        reg.register(Uuid::new_v4(), a_dead).unwrap();
+        reg.register(Uuid::new_v4(), b_dead).unwrap();
+        drop(a_rx);
+        drop(b_rx);
+
+        assert_eq!(reg.prune_closed_for_user(a), 1, "only A's is reclaimed");
+        assert_eq!(
+            reg.inner.lock().unwrap().clients.len(),
+            1,
+            "B's dead connection survives an A-scoped sweep"
+        );
+        assert_eq!(reg.prune_closed(), 1, "a global sweep then reclaims B's");
+    }
+
+    /// TEST-14 — the deadline backstop: a connection whose stream is STILL
+    /// ALIVE (its receiver held open — the peer vanished without the socket
+    /// ever erroring, so hyper never noticed) is nevertheless reclaimed once it
+    /// is past the `exp` deadline its own stream was bound to. A live
+    /// connection whose deadline is in the FUTURE, and one with no deadline at
+    /// all, are both left alone.
+    #[test]
+    fn prune_reclaims_a_connection_past_its_own_exp_deadline_even_if_alive() {
+        let reg = empty_registry();
+        let uid = Uuid::new_v4();
+        let now = std::time::Instant::now();
+
+        // Past its deadline by more than the slack — the stream should have
+        // torn itself down long ago, so it is definitionally broken.
+        let (expired, _expired_rx) = conn_expiring(
+            uid,
+            None,
+            Some(now - DEADLINE_SLACK - std::time::Duration::from_secs(30)),
+        );
+        // Deadline still in the future — a perfectly healthy long-lived stream.
+        let (future, _future_rx) = conn_expiring(
+            uid,
+            None,
+            Some(now + std::time::Duration::from_secs(3600)),
+        );
+        // No deadline known — opted out of deadline reclamation entirely.
+        let (unbounded, _unbounded_rx) = conn(uid, None);
+        reg.register(Uuid::new_v4(), expired).unwrap();
+        reg.register(Uuid::new_v4(), future).unwrap();
+        reg.register(Uuid::new_v4(), unbounded).unwrap();
+        assert_eq!(reg.inner.lock().unwrap().clients.len(), 3);
+
+        // Every receiver is still held, so `sender.is_closed()` is false for
+        // all three: ONLY the deadline signal can distinguish them.
+        assert_eq!(
+            reg.prune_closed(),
+            1,
+            "only the past-deadline connection is reclaimed"
+        );
+        assert_eq!(
+            reg.inner.lock().unwrap().clients.len(),
+            2,
+            "the future-deadline and no-deadline connections both survive"
+        );
+    }
+
+    /// A connection barely past its deadline (inside the slack window) is NOT
+    /// reclaimed — the slack exists so a normal teardown is never raced.
+    #[test]
+    fn prune_respects_the_deadline_slack_window() {
+        let reg = empty_registry();
+        let uid = Uuid::new_v4();
+        let just_lapsed = std::time::Instant::now() - std::time::Duration::from_secs(1);
+        let (c, _rx) = conn_expiring(uid, None, Some(just_lapsed));
+        reg.register(Uuid::new_v4(), c).unwrap();
+
+        assert_eq!(
+            reg.prune_closed(),
+            0,
+            "a connection whose deadline just lapsed is still inside the slack window"
+        );
+        assert_eq!(reg.inner.lock().unwrap().clients.len(), 1);
+    }
+
+    /// A sweep NEVER reclaims a live connection.
+    #[test]
+    fn prune_closed_never_removes_a_live_connection() {
+        let reg = empty_registry();
+        let uid = Uuid::new_v4();
+        let conv = Uuid::new_v4();
+        let (c, mut rx) = conn(uid, Some(conv));
+        reg.register(Uuid::new_v4(), c).unwrap();
+
+        assert_eq!(reg.prune_closed(), 0, "a live connection is never reclaimed");
+        assert_eq!(reg.prune_closed_for_user(uid), 0);
+        assert_eq!(reg.inner.lock().unwrap().clients.len(), 1);
+
+        reg.publish_frame(uid, started(conv));
+        assert!(drain(&mut rx) > 0, "the survivor still receives frames");
     }
 
     /// The default per-user cap was raised above the legacy 12 (DEC-34) so

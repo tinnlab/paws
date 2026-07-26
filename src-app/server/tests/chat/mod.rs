@@ -39,6 +39,9 @@ mod assistant_injection_test;
 // New fire-and-forget send + per-user chat-token stream (stub-backed,
 // deterministic) and the `sync:conversation` emit coverage.
 mod chat_stream_test;
+// Per-user chat-stream connection-slot reclamation on client disconnect
+// (sse-slot-leak): a reconnect storm must never permanently 429 the account.
+mod stream_slot_reclaim_test;
 mod agent_core_migration_test;
 mod agent_core_parity_test;
 mod extension_split_test;

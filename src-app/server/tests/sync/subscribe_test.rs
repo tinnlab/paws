@@ -556,3 +556,256 @@ async fn subscribe_enforces_per_user_connection_cap_with_429() {
     drop(held);
 }
 
+
+// ---------------------------------------------------------------------------
+// Slot reclamation (sse-slot-leak) — the reported production failure.
+//
+// The per-user cap was charged for connections that no longer existed:
+// `register()` claims the slot eagerly in the handler, but the `ConnGuard` that
+// releases it was a LOCAL of the `async_stream::stream!` generator body, which
+// does not run until the stream's FIRST poll. A client that went away before
+// its body was ever polled left a registration with no guard, so the slot was
+// held for the life of the process; the registry's only other reaper is
+// `deliver`'s send-failure prune, which never runs on a quiescent deployment.
+// Measured symptom: a user at the cap was 429'd on `/api/sync/subscribe` AND
+// `/api/chat/stream` forever — chat entirely non-functional for that account.
+// ---------------------------------------------------------------------------
+
+/// How many concurrent `/sync/subscribe` streams this user can currently open.
+/// Opens streams until one is refused, then closes them all. This is the
+/// free-slot count measured THROUGH the real endpoint (the 200/429 boundary),
+/// which is the same number an operator would observe.
+async fn count_available_slots(
+    server: &crate::common::TestServer,
+    token: &str,
+    ceiling: usize,
+) -> usize {
+    let client = reqwest::Client::new();
+    let mut held = Vec::new();
+    for _ in 0..ceiling {
+        let res = client
+            .get(server.api_url("/sync/subscribe"))
+            .header("Authorization", format!("Bearer {token}"))
+            .send()
+            .await
+            .expect("subscribe request completes");
+        if res.status() != 200 {
+            assert_eq!(res.status(), 429, "the only expected refusal is the cap 429");
+            break;
+        }
+        held.push(res);
+    }
+    let n = held.len();
+    drop(held);
+    n
+}
+
+/// TEST-6 [acceptance INV-1] — "Unregister on ANY stream termination — client
+/// disconnect, exp, or deactivation."
+///
+/// The reported production symptom, reproduced and then proven gone through the
+/// REAL `GET /api/sync/subscribe`: one user opens and ABANDONS 20 sequential
+/// connections (> the per-user cap of 12 — a reconnect storm, e.g. repeated
+/// page reloads). Every one must be accepted (a leak 429s partway through), and
+/// afterwards the user must still be able to open a FULL set of 12 concurrent
+/// streams — i.e. every abandoned slot was reclaimed, not just one.
+///
+/// Before the fix the 13th subscribe in the storm returns 429 and the user is
+/// permanently locked out.
+#[tokio::test]
+async fn abandoned_reconnects_release_their_slots_and_never_lock_the_user_out() {
+    const PER_USER_MAX: usize = 12;
+    const STORM: usize = 20; // deliberately > the cap
+
+    let server = crate::common::TestServer::start().await;
+    let user = crate::common::test_helpers::create_user_with_permissions(
+        &server,
+        "sync_reconnect_storm",
+        &["profile::read"],
+    )
+    .await;
+    let client = reqwest::Client::new();
+
+    // A reconnect storm: open and abandon STORM connections, one at a time.
+    for i in 0..STORM {
+        let res = client
+            .get(server.api_url("/sync/subscribe"))
+            .header("Authorization", format!("Bearer {}", user.token))
+            .send()
+            .await
+            .expect("subscribe request completes");
+        assert_eq!(
+            res.status(),
+            200,
+            "reconnect #{} of {STORM} must be accepted — a 429 here means the \
+             previous connections' slots were never reclaimed",
+            i + 1,
+        );
+        drop(res); // the client goes away
+    }
+
+    // The account is NOT locked out: a fresh connect still succeeds …
+    let fresh = client
+        .get(server.api_url("/sync/subscribe"))
+        .header("Authorization", format!("Bearer {}", user.token))
+        .send()
+        .await
+        .expect("subscribe request completes");
+    assert_eq!(
+        fresh.status(),
+        200,
+        "after {STORM} abandoned reconnects a fresh subscribe must still return 200"
+    );
+    drop(fresh);
+
+    // … and the user's FULL per-user allowance is available again, proving all
+    // STORM slots came back rather than a single one.
+    let available = count_available_slots(&server, &user.token, PER_USER_MAX + 1).await;
+    assert_eq!(
+        available, PER_USER_MAX,
+        "the user's whole per-user allowance must be free again after the storm; \
+         only {available} of {PER_USER_MAX} slots were available"
+    );
+}
+
+/// TEST-8 [acceptance INV-3] — "Caps: 512 global / 12 per-user …". The cap is
+/// still REAL after the fix: this is the guard against "fix the leak by
+/// weakening the cap". 12 concurrently-held, ACTIVELY-STREAMING connections
+/// (each body polled to its `connected` handshake, so they are unambiguously
+/// live) still make the 13th subscribe 429 — and the refusal frees nothing, so
+/// a 14th is refused too.
+#[tokio::test]
+async fn the_per_user_cap_is_still_enforced_for_live_streams() {
+    use futures_util::StreamExt;
+
+    const PER_USER_MAX: usize = 12;
+    let server = crate::common::TestServer::start().await;
+    let user = crate::common::test_helpers::create_user_with_permissions(
+        &server,
+        "sync_cap_live",
+        &["profile::read"],
+    )
+    .await;
+    let client = reqwest::Client::new();
+
+    // 12 LIVE streams — each driven far enough to receive its handshake frame,
+    // so none of them can be dismissed as "never really opened".
+    let mut held = Vec::new();
+    for i in 0..PER_USER_MAX {
+        let res = client
+            .get(server.api_url("/sync/subscribe"))
+            .header("Authorization", format!("Bearer {}", user.token))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 200, "connection #{} must open", i + 1);
+        let mut body = res.bytes_stream();
+        let first = tokio::time::timeout(std::time::Duration::from_secs(10), body.next())
+            .await
+            .expect("handshake arrives")
+            .expect("a frame")
+            .expect("frame ok");
+        assert!(
+            String::from_utf8_lossy(&first).contains("connected"),
+            "stream #{} really opened (handshake received)",
+            i + 1
+        );
+        held.push(body); // keep it live
+    }
+
+    for attempt in 0..2 {
+        let over = client
+            .get(server.api_url("/sync/subscribe"))
+            .header("Authorization", format!("Bearer {}", user.token))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            over.status(),
+            429,
+            "attempt {attempt}: the (cap+1)th LIVE connection must be refused — \
+             reclamation must never become a cap raise"
+        );
+        let body = over.text().await.unwrap_or_default();
+        assert!(
+            body.contains("SYNC_USER_LIMIT") || body.contains("Too many open sync connections"),
+            "the 429 must still carry SYNC_USER_LIMIT, got: {body}"
+        );
+    }
+
+    drop(held);
+}
+
+/// TEST-10 [acceptance INV-4] — "The wire payload is notify-and-refetch only —
+/// `{entity, action, id}`, never row data … Each emitting handler picks the
+/// `Audience` explicitly." The registry change must not perturb delivery: after
+/// a reclamation storm on the SAME user, a mutation still delivers exactly one
+/// `{entity, action, id}` frame carrying NO row data to the owner's live
+/// stream, and a second user's live stream receives nothing.
+#[tokio::test]
+async fn owner_scoping_and_notify_only_wire_format_survive_slot_reclamation() {
+    use crate::common::sync_probe::SyncProbe;
+    use std::time::Duration;
+
+    let server = crate::common::TestServer::start().await;
+    let owner = crate::common::test_helpers::create_user_with_permissions(
+        &server,
+        "sync_reclaim_owner",
+        &["files::upload", "files::read", "profile::read"],
+    )
+    .await;
+    let other = crate::common::test_helpers::create_user_with_permissions(
+        &server,
+        "sync_reclaim_other",
+        &["files::upload", "files::read", "profile::read"],
+    )
+    .await;
+    let client = reqwest::Client::new();
+
+    // A reconnect storm on the OWNER, exhausting and reclaiming their slots.
+    for _ in 0..20 {
+        let res = client
+            .get(server.api_url("/sync/subscribe"))
+            .header("Authorization", format!("Bearer {}", owner.token))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 200);
+        drop(res);
+    }
+
+    // Both users now open a live probe (the owner's must still fit).
+    let mut owner_probe = SyncProbe::open(&server, &owner.token).await;
+    let mut other_probe = SyncProbe::open(&server, &other.token).await;
+
+    let form = reqwest::multipart::Form::new().part(
+        "file",
+        reqwest::multipart::Part::bytes(b"reclaimed".to_vec())
+            .file_name("reclaim.txt")
+            .mime_str("text/plain")
+            .unwrap(),
+    );
+    let res = client
+        .post(server.api_url("/files/upload"))
+        .header("Authorization", format!("Bearer {}", owner.token))
+        .multipart(form)
+        .send()
+        .await
+        .expect("upload");
+    assert!(res.status().is_success(), "upload should succeed: {}", res.status());
+    let body: serde_json::Value = res.json().await.unwrap();
+    let file_id = body["id"].as_str().expect("uploaded file id").to_string();
+
+    // The OWNER's stream still receives the notify-only frame …
+    let frame = owner_probe
+        .expect_event("file", "update", Duration::from_secs(10))
+        .await;
+    assert_eq!(
+        frame.id, file_id,
+        "the frame must carry the file id (notify-and-refetch), and nothing more"
+    );
+
+    // … and the OTHER user's stream receives NOTHING at all (owner-scoping is
+    // untouched by the registry change).
+    other_probe.expect_silence(Duration::from_secs(2)).await;
+}

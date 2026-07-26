@@ -61,6 +61,17 @@ pub async fn subscribe_chat_stream(
     let (tx, mut rx) =
         tokio::sync::mpsc::channel::<Result<Event, axum::Error>>(CHAT_STREAM_CHANNEL_CAPACITY);
 
+    // The wall-clock instant at which this stream's own `exp` deadline lapses
+    // (None when the token carried no `exp` — the far-future fallback below).
+    // The registry uses it as a staleness backstop: a connection still present
+    // long past the instant its stream was guaranteed to end is definitionally
+    // broken, which is the only signal available for a peer that vanished
+    // without the socket ever erroring.
+    let expires_at = exp_unix.map(|exp| {
+        std::time::Instant::now()
+            + Duration::from_secs((exp - chrono::Utc::now().timestamp()).max(0) as u64)
+    });
+
     registry()
         .register(
             conn_id,
@@ -68,9 +79,25 @@ pub async fn subscribe_chat_stream(
                 user_id,
                 active_conversation: None,
                 sender: tx.clone(),
+                expires_at,
             },
         )
         .map_err(|e| e.to_api_error())?;
+
+    // The slot is now OWNED by this guard — constructed eagerly the instant
+    // registration succeeds (and only on success: the 429 path inserted
+    // nothing, so nothing may claim ownership). It is moved into the stream
+    // below.
+    //
+    // It CANNOT be declared inside the `stream!` body: that body is a generator
+    // that does not run until the stream's FIRST poll, so a client that goes
+    // away before the response body is ever polled would leave a registration
+    // whose guard was never constructed — the slot would be held for the life
+    // of the process, and every reconnect would burn another until the account
+    // is permanently 429'd. Captured by the `async move` generator instead, the
+    // guard lives in the future's state and is dropped when the future is
+    // dropped, polled or not.
+    let guard = ConnGuard(conn_id);
 
     // Handshake: hand the client its connection id to echo on the subscription PUT.
     let _ = tx.try_send(Ok(connected_event(conn_id)));
@@ -81,8 +108,10 @@ pub async fn subscribe_chat_stream(
     let deadline = tokio::time::Instant::now() + Duration::from_secs(secs_remaining);
 
     let stream = async_stream::stream! {
-        // Unregister on ANY termination — disconnect, exp, or deactivation.
-        let _guard = ConnGuard(conn_id);
+        // Unregister on ANY termination — disconnect, exp, or deactivation,
+        // INCLUDING a stream dropped before it was ever polled (the guard was
+        // constructed at registration and is merely MOVED in here).
+        let _guard = guard;
 
         let mut recheck = tokio::time::interval_at(
             tokio::time::Instant::now() + RECHECK_INTERVAL,
