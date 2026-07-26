@@ -1,6 +1,7 @@
 import { defineStore , registerLazyStore } from '@ziee/framework/store-kit'
 import { ApiClient } from '@/api-client'
 import { setUnauthorizedHandler } from '@ziee/framework/api-client/core'
+import { isMeFresh, noteMeLoaded } from '@/modules/auth/meFreshness'
 import type {
   CreateUserRequest,
   LinkAccountRequest,
@@ -699,6 +700,9 @@ const AuthDef = defineStore('Auth', {
                   isLoading: false,
                   isInitializing: false,
                 })
+                // A page that mounts moments later (e.g. ProfileSettingsPage's
+                // `has_password` refresh) must not re-fetch what just landed.
+                noteMeLoaded()
                 return
               } catch (err) {
                 lastError = err
@@ -747,6 +751,12 @@ const AuthDef = defineStore('Auth', {
         refreshCurrentUser: async () => {
           // Collapse concurrent callers onto one in-flight /me request.
           if (refreshInFlight) return refreshInFlight
+          // Near-miss collapse: a `/me` that landed moments ago (the boot
+          // verification) already carries exactly what this refresh would
+          // fetch. Only suppressed while NOTHING has changed since — a
+          // completed mutation or an inbound sync frame moves the freshness
+          // epoch, so the post-save refresh in `updateProfile` always runs.
+          if (isMeFresh()) return
           refreshInFlight = (async () => {
             try {
               const response = await ApiClient.Auth.me(undefined, undefined)
@@ -755,6 +765,7 @@ const AuthDef = defineStore('Auth', {
                 permissions: response.permissions,
                 hasPassword: response.has_password,
               })
+              noteMeLoaded()
             } finally {
               refreshInFlight = null
             }
