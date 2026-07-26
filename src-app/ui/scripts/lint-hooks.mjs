@@ -98,11 +98,21 @@ const require = createRequire(import.meta.url)
 const ts = require('typescript')
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 
-// Both UI workspaces are scanned from EITHER copy of this script: resolve every
-// candidate relative to this file's own dir and keep the ones that exist.
-//   from src-app/ui/scripts      → ui/src + desktop/ui/src
-//   from src-app/desktop/ui/scripts → desktop/ui/src + ui/src
-const ROOT_CANDIDATES = ['../src', '../../desktop/ui/src', '../../../ui/src']
+// Both UI workspaces AND the shared SDK React packages are scanned from EITHER
+// copy of this script: resolve every candidate relative to this file's own dir
+// and keep the ones that exist.
+//   from src-app/ui/scripts         → ui/src + desktop/ui/src + sdk/packages
+//   from src-app/desktop/ui/scripts → desktop/ui/src + ui/src + sdk/packages
+// The SDK is in scope because its components render inside BOTH apps, so an
+// O1/O2 defect there crashes both — and because it is where the store proxy
+// itself is implemented.
+const ROOT_CANDIDATES = [
+  '../src',
+  '../../desktop/ui/src',
+  '../../../ui/src',
+  '../../../sdk/packages',
+  '../../../../sdk/packages',
+]
 const FIXTURE_DIR_NAME = '__detector_fixtures__'
 const OPT_OUT = 'hook-order-ok'
 

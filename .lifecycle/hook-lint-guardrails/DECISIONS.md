@@ -32,7 +32,7 @@ and is a mechanical file move (the script's only dependency is `typescript`).
 ### DEC-3: One implementation + relative cross-workspace call, or a byte-identical copy per workspace?
 **Resolution:** A byte-identical **copy in both workspaces**
 (`src-app/ui/scripts/lint-hooks.mjs` and `src-app/desktop/ui/scripts/lint-hooks.mjs`),
-with a byte-identity drift-guard assertion in the desktop test suite.
+with a byte-identity drift guard that runs INSIDE the lint itself (DEC-16).
 **Basis:** convention — this is exactly how `lint-icon-action.mjs` and
 `lint-native-scroll.mjs` already live in this repo, and the desktop workspace has a
 standing parity contract (`src/dev/guardrails/guardrail-parity.test.ts` asserts the
@@ -46,8 +46,9 @@ section, which was written before the desktop parity contract was found.)*
 
 ### DEC-4: How does a byte-identical copy scan the right roots from two different directories?
 **Resolution:** Candidate-relative-root list filtered by existence:
-`['../src', '../../desktop/ui/src', '../../../ui/src']` resolved against the
-script's own dir, de-duplicated, non-existent dropped.
+`['../src', '../../desktop/ui/src', '../../../ui/src', '../../../sdk/packages',
+'../../../../sdk/packages']` resolved against the script's own dir, de-duplicated,
+non-existent dropped. A test asserts both copies resolve an IDENTICAL root set.
 **Basis:** codebase — from `src-app/ui/scripts` this yields `ui/src` +
 `desktop/ui/src`; from `src-app/desktop/ui/scripts` it yields `desktop/ui/src` +
 `ui/src`. Both copies therefore scan BOTH roots, which matters because a desktop
@@ -62,32 +63,48 @@ specifier (`…/stores/…`, `…/store`, `*.store`, `@ziee/framework/stores`) A
 original exported name is in a registry built by scanning the roots for
 `export const X = registerLazyStore|registerStore|defineStore|defineLocalStore|createStoreProxy|createNotificationsStore(…)`
 or `= <Ident>.store`.
-**Basis:** codebase — measured on the tree: 297 proxy names, and the two-factor test
+**Basis:** codebase — measured on the tree: 300 proxy names, and the two-factor test
 is load-bearing rather than defensive, because `EditLlmModelDrawer` is BOTH a store
 proxy export and a component name. A `ts.Program` + checker would be exact but costs
 a full type-check per lint run inside `check` (which already runs `tsc` separately);
 the registry approach is O(parse) and dependency-free.
+**AMENDED after the blind audit:** factor 1 is now real module RESOLUTION (does the
+specifier resolve to a file that DEFINES this proxy?), with the path-shape heuristic
+kept only for specifiers that cannot be resolved. The pure path-shape test silently
+excluded ~44 real proxies (`AppLayout`, `Hardware`, most drawer stores) — the very
+class BUG-B belongs to. Actions are additionally scoped PER PROXY: a global name set
+exempted `error`/`open`/`progress`/`refresh` on every store, and `store.error` is a
+field CODING_GUIDELINES §13 mandates rendering.
 
 ### DEC-6: Does H1 (plain `use*()` calls) also flag `after-early-return`?
 **Resolution:** **No** — H1 covers `ternary-branch`, `logical-rhs`, `if-body`,
 `loop-body`, `switch-case` only. H2 (proxy reads) DOES include
 `after-early-return`.
-**Basis:** measured — including it in H1 fires on **20 pre-existing sites** (the
-type-guard idiom: `if (!('file' in props)) return null` followed by hooks, in the
-pdf/web file viewers etc.), which would make INV-3 unreachable without an unrelated
-20-site refactor, and it is the standard `rules-of-hooks` rule's own territory. For
+**Basis:** measured — including it in H1 fires on **5 hook calls across 3
+pre-existing components** (the type-guard idiom: `if (!('file' in props)) return
+null` followed by hooks, in `pdf/body.tsx`, `web/body.tsx` and
+`SearchKnowledgeToolResultCard.tsx`; 0 in desktop). (An earlier draft of this
+decision said "~20 sites" — an unmeasured figure the blind audit corrected; the
+decision itself is unchanged, since those sites are still the standard
+`rules-of-hooks` rule's own territory and out of this feature's scope.) For
 H2 the same context fires on exactly **3** sites, all genuine instances of the
 shipped bug class, all fixed here (ITEM-11/12/13). The asymmetry is deliberate and
 documented in DESIGN §3 + PLAN `## Non-goals`, not a silent narrowing.
 
 ### DEC-7: Are hook calls / proxy reads inside `.map()` (and other callbacks) in scope?
-**Resolution:** No. The conditional walk stops at the nearest enclosing function
-boundary, so a callback body is out of scope for these two rules.
+**Resolution:** A callback never inherits the ENCLOSING component's conditions (the
+walk does not cross out of a function), so an unconditional read inside a callback
+is not reported. A read that is CONDITIONAL within the callback itself IS reported.
+What remains out of scope is the pure per-iteration case — an unconditional read
+inside a `.map()` callback, which varies the hook count with list length.
 **Basis:** convention — "reactive-read-in-loop" is already a named, separate audit
 angle in the feature-lifecycle roster with its own remediation idiom
 (`7bb34e223` "component-per-extension", the `.$` snapshot rule), and folding it in
 would change the FP profile of a gate whose whole value proposition is zero FPs.
-Recorded as an explicit non-goal, not an omission.
+Recorded as an explicit non-goal, not an omission. (An earlier draft of this
+decision claimed categorically that "a callback body is out of scope"; the blind
+audit showed the code never behaved that way — the resolution above states what
+actually ships.)
 
 ### DEC-8: `lifecycle-check` A1 fails (8 feature dirs) — remove the strays?
 **Resolution:** No. Leave them; record the condition.
@@ -111,9 +128,11 @@ conversation cassette) or a new render-test dependency is strictly larger than t
 early return, with the indexing expression unchanged, and it is compile-checked.
 
 ### DEC-10: What is the escape hatch for a genuinely-stable conditional?
-**Resolution:** An inline `hook-order-ok` marker on the offending line or the line
-immediately above, which must carry a reason. Ships with **zero** uses — all five
-current violations are fixed, not suppressed.
+**Resolution:** An inline `hook-order-ok: <reason>` COMMENT on the offending line or
+the line immediately above. The reason is ENFORCED (a bare marker does not suppress)
+and the marker is honoured only inside a `//` comment, so an incidental occurrence in
+a string cannot silence a violation. Ships with **zero** uses — all six current
+violations are fixed, not suppressed.
 **Basis:** convention — mirrors `rtl-ok` (N1 logical-direction lint) and
 `data-allow-custom-color` / `data-allow-icon`. A gate with no escape hatch gets
 disabled wholesale the first time it is genuinely wrong; a gate whose escape hatch
@@ -144,3 +163,32 @@ a source-level opt-out marker (DEC-10), neither of which is an operational setti
 **Basis:** convention — the Phase-4 configurable-settings rule applies to
 server-side operational tunables (`code_sandbox_settings` / `session_settings`
 pattern); a developer-tooling lint has no deployment-time audience.
+
+
+### DEC-14: Are the shared SDK React packages in scope for the gate?
+**Resolution:** Yes — `sdk/packages` is a scanned root alongside both app `src`
+trees (251 additional files, 0 findings today).
+**Basis:** codebase — those components render INSIDE both apps, so an O1/O2 defect
+there crashes both, and `sdk/packages/framework/src/stores.ts` is where the store
+proxy that makes H2 necessary is implemented. Excluding it would have left the
+shared kit permanently un-gated. Raised by the blind audit (modularity).
+
+### DEC-15: What exit code does an operator error use?
+**Resolution:** **2** — distinct from 0 (clean) and 1 (violations found). Every
+unusable input (a non-existent `--root`, a file where a directory is required, an
+unknown flag, a zero-file scan, a proxy registry below its floor, a crash, a
+divergence between the two workspace copies) exits 2 with a diagnostic.
+**Basis:** the blind audit — a bad `--root` previously printed "OK — 0 violations
+across 0 file(s)" and exited 0, so a typo in a package.json wiring or an
+acceptance-harness invocation turned the gate into a green no-op. A gate that can
+silently pass on operator error is worse than no gate; and reusing exit 1 would make
+a crash indistinguishable from a real finding inside `npm run check`.
+
+### DEC-16: How is the byte-identity of the two copies enforced?
+**Resolution:** Inside the lint itself — `main()` compares its own bytes with the
+sibling workspace's copy and exits 2 on a divergence.
+**Basis:** the blind audit — the only assertions of byte-identity lived in
+`npm run test:unit` / `npm run test:lint-hooks`, neither of which is in either
+`check` chain nor in CI, so the two copies could diverge and ship green while the
+script's header claimed "a drift guard asserts it". Putting the check in the gate
+that always runs makes the claim true.

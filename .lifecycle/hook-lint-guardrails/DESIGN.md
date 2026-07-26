@@ -89,9 +89,11 @@ An expression is *conditionally evaluated* when, walking up its ancestors and
 | `switch-case` | `case 'a': HERE` |
 | `after-early-return` | a statement that follows an `if (…) return/throw` guard in the same function body |
 
-Stopping at the function boundary is what keeps callbacks (`onClick={() => …}`,
-`useEffect(() => …)`) out of scope — their body is not the render path of the
-enclosing component.
+The walk never crosses OUT of a function, so a callback does not inherit the
+conditions of the component around it (an UNCONDITIONAL read inside an
+`onClick={() => …}` is not reported just because the component has an early
+return). A read that is CONDITIONAL within the callback itself IS reported — a
+reactive proxy read in a callback is an invalid hook call regardless.
 
 ### Rule H1 — conditionally-evaluated hook call
 
@@ -101,9 +103,9 @@ Any call to an identifier matching `/^use[A-Z]/` in a conditional
 
 `after-early-return` is **deliberately excluded from H1**: it is the classic
 type-guard pattern (`if (!('file' in props)) return null` then hooks), present at
-~20 pre-existing sites, and is the standard `rules-of-hooks` rule's territory —
-including it would make the gate un-green-able without a large unrelated refactor.
-Recorded as a known, deliberate gap (DEC-6).
+5 call sites across 3 pre-existing components, and is the standard
+`rules-of-hooks` rule's territory. Recorded as a known, deliberate gap (DEC-6).
+Both the bare `useX()` and the namespaced `React.useX()` call forms are matched.
 
 ### Rule H2 — conditionally-evaluated store-proxy read
 
@@ -114,11 +116,19 @@ not a hook-free special.
 Store-proxy identification is a two-factor test (both must hold — this is what
 buys the zero-FP budget):
 
-1. the local binding is imported from a **store module specifier**
-   (`…/stores/…`, `…/store`, `*.store`, `@ziee/framework/stores`), AND
+1. the import specifier **resolves to a file that DEFINES the proxy** (the `@/`
+   alias and relative specifiers are resolved against every scanned root). Only
+   when a specifier cannot be resolved at all does it fall back to the legacy
+   path-shape heuristic (`…/stores/…`, `…/store`, `*.store`). Resolution matters:
+   the path-shape test alone silently excluded ~44 real proxies — `AppLayout`,
+   `Hardware`, and most drawer stores — which is exactly BUG-B's own class, AND
 2. its *original* exported name is in the **proxy registry** — every
    `export const X = registerLazyStore(…) | defineStore(…) | defineLocalStore(…) |
-   createStoreProxy(…) | …Def.store` found by scanning the same roots.
+   createStoreProxy(…) | lazyStoreProxy(…) | …Def.store` found by scanning the roots.
+
+A per-instance store reached through a hook handle (`const pane = useChatPane();
+pane.store.<field>`) is covered too — that is the OTHER half of the residual
+`OpenInNewWindowAction` defect.
 
 Not a hook (never flagged):
 
@@ -126,7 +136,11 @@ Not a hook (never flagged):
   `__destroyed` — they return synchronously (path 1 of `createStoreProxy`).
 * **actions** (path 2) — resolved from `getState()`, safe anywhere, including when
   passed by reference (`onClose={Auth.clearAuthenticationError}` — the shape that
-  otherwise produces the only false positives). The action registry is the union of
+  otherwise produces the only false positives). Actions are tracked **per proxy**:
+  a single global name set permanently exempts every state field whose name
+  collides with some action somewhere (`error`, `open`, `progress`, `refresh` are
+  all both), and `store.error` is a field CODING_GUIDELINES §13 mandates rendering.
+  Each proxy's action set is the union of
   (a) file basenames under `**/stores/**/actions/*.ts` (the `import.meta.glob`
   action convention), (b) function-valued / function-typed members declared in
   store files, and (c) any property observed being CALLED on a proxy anywhere.
@@ -135,9 +149,11 @@ Not a hook (never flagged):
 ### Escape hatch
 
 A genuinely-stable conditional (a value that cannot flip for the lifetime of a
-mounted component) opts out with an inline **`hook-order-ok`** marker on the
-offending line or the line above — mirroring the repo's existing `rtl-ok` /
-`data-allow-icon` idiom. It must carry a reason. Ships with **zero** uses.
+mounted component) opts out with an inline **`hook-order-ok: <reason>`** COMMENT
+on the offending line or the line above — mirroring the repo's existing `rtl-ok` /
+`data-allow-icon` idiom. The reason is **enforced** (a bare marker does not
+suppress) and the marker is only honoured inside a `//` comment, so an incidental
+occurrence in a string cannot silence a violation. Ships with **zero** uses.
 
 ## 4. Home
 
@@ -159,7 +175,7 @@ promotion is a mechanical move (the script is dependency-free apart from
 ## 5. Blast radius on the current tree
 
 Running the calibrated detector over `src-app/ui/src` + `src-app/desktop/ui/src`
-yields **5 findings, 0 false positives** — all five are genuine, still-unfixed
+yields **6 findings, 0 false positives** — all five are genuine, still-unfixed
 instances of the two bug classes that survived the original fixes. They must be
 fixed for INV-3 to hold:
 
@@ -170,3 +186,4 @@ fixed for INV-3 to hold:
 | 3 | `hub/modules/mcp/components/McpServerDetailsDrawer.tsx:41` | H2 after `if (!server) return null` |
 | 4 | `llm-provider/components/LlmModelsSection.tsx:326` | H2 after two early returns |
 | 5 | desktop `host-mount/…/ConversationMountsControl.tsx:28` | H2 after `if (!conversationId) return null` |
+| 6 | `file/viewers/pdf/pdfjs-body.tsx:46` | H2 after the `'file' in props` type guard (missed by the hand tally; found by the real lint — DRIFT-1.1) |

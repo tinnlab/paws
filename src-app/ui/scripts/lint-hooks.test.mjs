@@ -140,7 +140,7 @@ describe('TEST-2 [acceptance][INV-2]: catches the shipped conditional store-prox
 describe('TEST-3 [acceptance][INV-3]: zero findings across the live tree', () => {
   test('the real lint reports 0 over ui/src + desktop/ui/src', () => {
     const { findings, fileCount } = analyze()
-    assert.ok(fileCount > 1500, `expected the full tree to be scanned, got ${fileCount} files`)
+    assert.ok(fileCount > 2000, `expected the full tree to be scanned, got ${fileCount} files`)
     assert.deepEqual(
       findings.map((f) => `${f.rule} ${path.relative(REPO, f.file)}:${f.line}`),
       [],
@@ -153,13 +153,23 @@ describe('TEST-3 [acceptance][INV-3]: zero findings across the live tree', () =>
     assert.match(res.stdout, /0 violations/)
   })
 
-  test('both workspace copies see BOTH roots (a desktop-only regression is caught from ui and vice versa)', () => {
+  test('both workspace copies see the SAME roots (ui, desktop/ui and the shared SDK packages)', () => {
+    const counts = []
     for (const ws of [UI, DESKTOP_UI]) {
       const res = spawnSync('node', ['scripts/lint-hooks.mjs'], { cwd: ws, encoding: 'utf8' })
       assert.equal(res.status, 0, `${ws}: ${res.stdout}${res.stderr}`)
       const scanned = Number(res.stdout.match(/across (\d+) file/)?.[1] ?? 0)
-      assert.ok(scanned > 1500, `${ws} scanned only ${scanned} files — a root was not resolved`)
+      assert.ok(scanned > 2000, `${ws} scanned only ${scanned} files — a root was not resolved`)
+      counts.push(scanned)
     }
+    assert.equal(counts[0], counts[1], 'the two copies must resolve an identical root set')
+  })
+
+  test('the shared SDK React packages are in scope (they render inside BOTH apps)', () => {
+    const sdk = path.resolve(REPO, 'sdk/packages')
+    const { findings, fileCount } = analyze({ targets: [sdk] })
+    assert.ok(fileCount > 100, `expected the SDK packages to be scanned, got ${fileCount}`)
+    assert.deepEqual(findings, [])
   })
 })
 
