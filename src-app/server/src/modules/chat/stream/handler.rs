@@ -67,9 +67,15 @@ pub async fn subscribe_chat_stream(
 /// TESTABLE: this fn needs no `RequirePermissions` extractor, no HTTP request and
 /// no database, so a unit test can call it, drop the returned `Sse` **without
 /// ever polling it**, and assert the connection's slot was released. That is the
-/// one termination path the previous guard placement could not see, and it is
-/// unreachable through the real endpoint (hyper always polls the body while
-/// writing it), so this seam is the only way to cover it on this handler.
+/// termination the previous guard placement could not see.
+///
+/// It is emphatically NOT a hypothetical path. axum routes `HEAD` to the `GET`
+/// handler and hyper encodes a HEAD response with a zero-length body encoder, so
+/// it drops the SSE body WITHOUT EVER POLLING IT — meaning any `HEAD
+/// /api/chat/stream` (uptime monitor, reverse proxy, link previewer, scanner)
+/// used to consume a per-user slot permanently. That is covered end-to-end by
+/// `tests/chat/stream_slot_reclaim_test.rs::head_requests_do_not_leak_chat_stream_slots`;
+/// this seam additionally covers the path with no HTTP stack in the way.
 fn open_chat_stream(
     user_id: Uuid,
     exp_unix: Option<i64>,
@@ -280,20 +286,27 @@ mod tests {
     /// never constructed, holding its slot for the life of the process. Every
     /// reconnect burned another until the account was permanently 429'd.
     ///
-    /// It is asserted here rather than through `GET /api/chat/stream` because
-    /// over real HTTP the path is unreachable: hyper always polls the body while
-    /// writing it (measured — 400 concurrent abandoned raw sockets leak 0
-    /// slots). `open_chat_stream` exists as the seam that makes it reachable: no
-    /// extractor, no HTTP, no DB (the only DB access is in the periodic re-check
-    /// arm, which lives inside the generator and never runs here).
+    /// An abandoned GET does NOT reach this path (measured: 400 concurrent
+    /// abandoned raw sockets leak 0 slots, because hyper polls the body while
+    /// writing it) — but a `HEAD` does, because hyper drops a HEAD response's
+    /// body unpolled. The end-to-end proof of that is
+    /// `head_requests_do_not_leak_chat_stream_slots`; this test covers the same
+    /// contract directly, with no HTTP stack in the way, via the
+    /// `open_chat_stream` seam (no extractor, no HTTP, no DB — the only DB
+    /// access is in the periodic re-check arm, which lives inside the generator
+    /// and never runs here).
     #[tokio::test]
     async fn an_unpolled_stream_still_releases_its_slot() {
         let uid = Uuid::new_v4();
         let exp = chrono::Utc::now().timestamp() + 3600;
         let reg = registry();
 
-        // Deliberately more than any configured per-user cap, so a leak would
-        // additionally start refusing registrations partway through.
+        // More than the default per-user cap, so the leak's downstream effect
+        // (registrations start being refused) would also show up. NOTE the
+        // assertion that actually discriminates is the per-iteration slot count
+        // below: `register` sweeps closed channels at the cap, and dropping an
+        // unpolled stream closes its channel, so a guard-only regression is
+        // caught by the count long before any 429.
         let n = ChatStreamLimits::default().per_user_max_connections + 8;
         for i in 0..n {
             let sse = open_chat_stream(uid, Some(exp), None)
@@ -309,9 +322,12 @@ mod tests {
         assert_eq!(reg.connection_count_for_user(uid), 0);
     }
 
-    /// The same contract on the other two exit paths, so "release on ANY
-    /// termination" is checked for every path rather than just the broken one:
-    /// a stream held alive keeps its slot, and releases it when dropped.
+    /// The complementary direction, so the contract is not satisfied by "always
+    /// release": an OPEN stream holds exactly one slot for as long as it is
+    /// held, and gives it back on drop. (The post-first-poll and exp-deadline
+    /// exits are covered on the structurally identical sync handler by
+    /// `ziee-framework`'s `every_stream_exit_path_releases_its_slot`; this pair
+    /// covers the registration/​release edges on THIS handler.)
     #[tokio::test]
     async fn a_live_stream_keeps_its_slot_until_dropped() {
         let uid = Uuid::new_v4();

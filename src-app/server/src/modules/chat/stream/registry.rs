@@ -457,6 +457,18 @@ fn prune_closed_for_user_locked(inner: &mut RegistryInner, user_id: Uuid) -> usi
         .collect();
     let n = dead.len();
     for cid in dead {
+        // Repair, not just remove: `remove_conn` is keyed off `clients`, so it
+        // no-ops on an orphan. Drop the index entry directly first so the
+        // orphan can never keep counting against the cap.
+        if !inner.clients.contains_key(&cid) {
+            if let Some(set) = inner.by_user.get_mut(&user_id) {
+                set.remove(&cid);
+                if set.is_empty() {
+                    inner.by_user.remove(&user_id);
+                }
+            }
+            continue;
+        }
         remove_conn(inner, cid);
     }
     if n > 0 {

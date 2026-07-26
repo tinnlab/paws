@@ -66,24 +66,44 @@ Measured with a scratch repro against the real mounted `sync_routes` handler
 | response dropped BEFORE first body poll | **0 → 5** (every slot leaked) |
 | response dropped AFTER first body poll | 0 → 0 (guard fires) |
 
-**Measured limit of that mechanism (added in DRIFT-1, phase 5).** Driving the
-UNFIXED server through real hyper, the never-polled window is not reachable:
-100 sequential and 400 concurrent raw-socket "write the request then vanish"
-clients leaked **0** slots, because hyper always polls the response body while
-writing it. So the never-polled hole is real and deterministic at the handler /
-tower level, but it does NOT by itself explain the reported production 429s.
-The mechanism the bug report names —
+**How it is triggered in production: `HEAD` (found in FIX_ROUND-3).** An
+abandoned GET does NOT reach the never-polled window — measured on the unfixed
+server, 20 sequential, 100 sequential and 400 concurrent raw-socket "write the
+request then vanish" clients each leaked **0** slots, because hyper polls the
+response body while writing it. For a while that left the reported 429s
+unexplained. The answer is `HEAD`:
+
+- axum routes `HEAD` to the `GET` handler
+  (`axum-0.8` `method_routing.rs`, `call!(req, HEAD, get)`), and
+- hyper encodes a HEAD response with a zero-length body encoder
+  (`can_have_body == false`), so it **drops the SSE body without ever polling
+  it**.
+
+The handler has therefore already run `register()` and claimed a slot, while the
+generator holding the guard never starts. **Measured through the real endpoint on
+the unfixed server: `HEAD /api/sync/subscribe` #13 returns `429`** — twelve HEADs
+permanently lock an account out of realtime sync, and `GLOBAL_MAX_CONNECTIONS` of
+them take the deployment down. This is remotely triggerable by anything that HEADs
+a URL: uptime monitors, reverse proxies, link previewers, security scanners. There
+is no method-filtering middleware in front of these routes. It fits the report
+exactly — accounts permanently 429'd on a QUIESCENT box with no client connected
+to explain it.
+
+This is now the branch's red-before-fix proof through the real HTTP endpoint
+(TEST-19 / TEST-20), and it retires the earlier "the never-polled hole does not
+explain the production 429s" caveat.
+
+The report's own phrasing —
 
 > an SSE client going away doesn't necessarily error a send until something is
 > pushed, so an idle-but-dead connection holds its slot indefinitely
 
-— is a connection whose server-side stream is STILL ALIVE (so
-`sender.is_closed()` is false and the guard has not fired) because hyper never
-discovered the peer was gone. ITEM-7 records the conclusion reached about that
-case: it must NOT be reclaimed by a deadline or TTL (doing so frees the
-accounting slot while the socket survives, so the cap stops bounding real
-resources), and it is already bounded by axum's keep-alive writes failing on a
-dead peer. See FIX_ROUND-1.
+— describes a DIFFERENT case: a connection whose server-side stream is STILL
+ALIVE (so `sender.is_closed()` is false and the guard has not fired). ITEM-7
+records the conclusion for that one: it must NOT be reclaimed by a deadline or
+TTL (doing so frees the accounting slot while the socket survives, so the cap
+stops bounding real resources), and it is already bounded by axum's keep-alive
+writes failing on a dead peer. See FIX_ROUND-1.
 
 Both per-user SSE registries have the identical shape and therefore the
 identical bug:

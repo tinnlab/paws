@@ -656,15 +656,14 @@ async fn discover_per_user_cap(server: &crate::common::TestServer) -> usize {
 /// afterwards the user must still be able to open a FULL set of 12 concurrent
 /// streams — i.e. every abandoned slot was reclaimed, not just one.
 ///
-/// SCOPE — be precise about what this does and does not prove. It passes both
-/// BEFORE and AFTER the guard fix: over real HTTP hyper always polls the
-/// response body while writing it, so the never-polled leak is unreachable here
-/// (measured on the unfixed server: 20 sequential, then 100 sequential, then 400
-/// concurrent abandoned raw sockets all leaked 0 slots). It is an end-to-end
-/// guarantee that the reported symptom cannot occur through the real endpoint —
-/// a genuine regression net — NOT the proof of the fix. The red-before-fix
-/// proofs are the unpolled-drop tests in `ziee-framework`'s `tests/sync_routes.rs`
-/// and in `chat/stream/handler.rs`'s own `#[cfg(test)]` module.
+/// SCOPE — be precise. This test uses abandoned **GET**s, and those do NOT leak
+/// even before the fix: hyper polls the response body while writing it (measured
+/// on the unfixed server — 20 sequential, then 100 sequential, then 400
+/// concurrent abandoned raw sockets all leaked 0 slots). So it passes both
+/// before and after, and is a regression net rather than a proof.
+/// The red-before-fix proof THROUGH THIS ENDPOINT is
+/// `head_requests_do_not_leak_connection_slots` below — a `HEAD` response's body
+/// IS dropped unpolled, which is the production-reachable form of the leak.
 #[tokio::test]
 async fn abandoned_reconnects_release_their_slots_and_never_lock_the_user_out() {
     let server = crate::common::TestServer::start().await;
@@ -866,4 +865,57 @@ async fn owner_scoping_and_notify_only_wire_format_survive_slot_reclamation() {
     // … and the OTHER user's stream receives NOTHING at all (owner-scoping is
     // untouched by the registry change).
     other_probe.expect_silence(Duration::from_secs(2)).await;
+}
+
+/// TEST-19 [acceptance INV-1] — the never-polled leak IS reachable through the
+/// real endpoint, via `HEAD`.
+///
+/// axum routes `HEAD` to the `GET` handler, and hyper encodes a HEAD response
+/// with a zero-length body encoder — so it DROPS the SSE body without ever
+/// polling it. That is exactly the termination the old guard placement could not
+/// see, and unlike an abandoned GET it is remotely triggerable by anything that
+/// HEADs a URL: uptime monitors, reverse proxies, link previewers, security
+/// scanners. Before the fix, `PER_USER_MAX_CONNECTIONS` HEADs permanently 429 a
+/// user's realtime sync (and `GLOBAL_MAX_CONNECTIONS` of them take the whole
+/// deployment down) with no client left connected to explain it.
+///
+/// This is the red-before-fix proof THROUGH THE REAL HTTP ENDPOINT.
+#[tokio::test]
+async fn head_requests_do_not_leak_connection_slots() {
+    let server = crate::common::TestServer::start().await;
+    let per_user_max = discover_per_user_cap(&server).await;
+    let user = crate::common::test_helpers::create_user_with_permissions(
+        &server,
+        "sync_head_leak",
+        &["profile::read"],
+    )
+    .await;
+    let client = reqwest::Client::new();
+
+    // Well past the cap: every one of these registers server-side, and every one
+    // has its body dropped unpolled.
+    for i in 0..(per_user_max * 2) {
+        let res = client
+            .head(server.api_url("/sync/subscribe"))
+            .header("Authorization", format!("Bearer {}", user.token))
+            .send()
+            .await
+            .expect("HEAD request completes");
+        assert_eq!(
+            res.status(),
+            200,
+            "HEAD #{} must be accepted — a 429 here means the previous HEADs \
+             permanently consumed this account's connection slots",
+            i + 1
+        );
+    }
+
+    // The account must NOT be locked out: its full allowance is still available.
+    let available = count_available_slots(&server, &user.token, per_user_max + 1).await;
+    assert_eq!(
+        available, per_user_max,
+        "after {} HEAD requests the user's whole allowance must still be free; \
+         only {available} of {per_user_max} slots were",
+        per_user_max * 2
+    );
 }

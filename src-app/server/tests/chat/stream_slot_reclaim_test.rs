@@ -10,16 +10,20 @@
 //! quiescent deployment never reclaimed anything: every reconnect burned a slot
 //! until the account was permanently 429'd and chat stopped working for it.
 //!
-//! These drive the REAL endpoint (a live `TestServer`) as an END-TO-END
-//! regression net: they prove the reported symptom cannot occur through
-//! `GET /api/chat/stream`. They are NOT the proof of the guard fix and pass both
-//! before and after it — over real HTTP hyper always polls the response body
-//! while writing it, so the never-polled path is unreachable here (measured: 400
-//! concurrent abandoned raw sockets leak 0 slots). That path is proven
-//! behaviourally by `modules::chat::stream::handler::tests::
-//! an_unpolled_stream_still_releases_its_slot`, which drives `open_chat_stream`
-//! directly and IS red before the fix. The registry's own logic is covered by
-//! the unit tests in `modules/chat/stream/registry.rs`.
+//! These drive the REAL endpoint (a live `TestServer`). Two different shapes:
+//!
+//! - The abandoned-**GET** storm tests are a regression net, not a proof: an
+//!   abandoned GET does not leak even before the fix, because hyper polls the
+//!   response body while writing it (measured: 400 concurrent abandoned raw
+//!   sockets leak 0 slots).
+//! - `head_requests_do_not_leak_chat_stream_slots` IS the red-before-fix proof
+//!   through the real endpoint: axum routes `HEAD` to the `GET` handler and
+//!   hyper drops a HEAD response's body unpolled, so before the fix each HEAD
+//!   permanently consumed a slot. This is the production-reachable form of the
+//!   bug — anything that HEADs a URL triggers it.
+//!
+//! The registry's own logic is covered by the unit tests in
+//! `modules/chat/stream/registry.rs`.
 
 use std::time::Duration;
 
@@ -215,4 +219,42 @@ async fn the_chat_stream_per_user_cap_is_still_enforced_for_live_streams() {
     }
 
     drop(held);
+}
+
+/// TEST-20 — the same `HEAD` leak on the chat-token stream. See the sync twin
+/// (`sync::subscribe_test::head_requests_do_not_leak_connection_slots`) for the
+/// mechanism: axum routes `HEAD` to the `GET` handler and hyper drops the SSE
+/// body without ever polling it, so before the fix each HEAD permanently
+/// consumed a per-user slot and enough of them made chat non-functional for the
+/// account — with no client connected to explain it.
+#[tokio::test]
+async fn head_requests_do_not_leak_chat_stream_slots() {
+    let server = crate::common::TestServer::start().await;
+    let cap = discover_per_user_cap(&server).await;
+    let user = stream_user(&server, "chat_head_leak").await;
+    let client = reqwest::Client::new();
+
+    for i in 0..(cap * 2) {
+        let res = client
+            .head(server.api_url("/chat/stream"))
+            .header("Authorization", format!("Bearer {}", user.token))
+            .send()
+            .await
+            .expect("HEAD request completes");
+        assert_eq!(
+            res.status(),
+            200,
+            "HEAD #{} must be accepted — a 429 here means the previous HEADs \
+             permanently consumed this account's chat-stream slots",
+            i + 1
+        );
+    }
+
+    let available = count_available_slots(&server, &user.token, cap + 1).await;
+    assert_eq!(
+        available, cap,
+        "after {} HEAD requests the user's whole chat-stream allowance must \
+         still be free; only {available} of {cap} were",
+        cap * 2
+    );
 }
