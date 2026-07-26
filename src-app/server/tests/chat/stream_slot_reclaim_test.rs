@@ -17,41 +17,72 @@ use std::time::Duration;
 
 use crate::common::test_helpers::TestUser;
 
-/// The configured per-user chat-stream cap in the test harness. Mirrors
-/// `ChatStreamLimits::default().per_user_max_connections`; asserted against the
-/// live endpoint below rather than trusted, so a config change surfaces here.
-const CHAT_PER_USER_MAX: usize = 24;
+/// Ceiling for cap DISCOVERY — comfortably above any sane configured per-user
+/// cap. Only `cap + 1` connections are ever actually opened (the loop stops at
+/// the first 429).
+const DISCOVERY_CEILING: usize = 64;
+
+/// Discover the server's CONFIGURED per-user chat-stream cap by probing the
+/// live endpoint with a FRESH user: open streams until one is refused; the
+/// number accepted IS the cap. Probing beats hardcoding a literal — the cap is
+/// deployment-config-driven (`ChatStreamLimits`), the server crate's `modules`
+/// tree is private to integration tests, and a hardcoded copy would silently
+/// desync the moment an operator (or a default) changes it.
+async fn discover_per_user_cap(server: &crate::common::TestServer) -> usize {
+    let probe = stream_user(server, "chat_stream_cap_probe").await;
+    let cap = count_available_slots(server, &probe.token, DISCOVERY_CEILING).await;
+    assert!(
+        cap > 0 && cap < DISCOVERY_CEILING,
+        "discovered per-user chat-stream cap {cap} is implausible \
+         (0 means every subscribe was refused; {DISCOVERY_CEILING} means the \
+         cap is at or above the discovery ceiling)"
+    );
+    cap
+}
 
 async fn stream_user(server: &crate::common::TestServer, name: &str) -> TestUser {
     crate::common::test_helpers::create_user_with_permissions(server, name, &["profile::read"]).await
 }
 
-/// How many concurrent `/chat/stream` connections this user can open right now,
-/// measured through the real 200/429 boundary (the same number an operator
-/// would observe). Opens until refused, then closes them all.
+/// How many concurrent `/chat/stream` streams this user can currently open, measured
+/// through the real 200/429 boundary (the same number an operator would see).
+/// Opens streams until one is refused, then closes them all.
+///
+/// Retried: server-side reclamation is ASYNCHRONOUS — dropping a client
+/// response does not synchronously drop the server's stream future, so a slot
+/// freed microseconds ago may not be free yet. We poll until the count stops
+/// growing or the deadline passes, so the test measures the settled state
+/// rather than racing the scheduler.
 async fn count_available_slots(
     server: &crate::common::TestServer,
     token: &str,
     ceiling: usize,
 ) -> usize {
     let client = reqwest::Client::new();
-    let mut held = Vec::new();
-    for _ in 0..ceiling {
-        let res = client
-            .get(server.api_url("/chat/stream"))
-            .header("Authorization", format!("Bearer {token}"))
-            .send()
-            .await
-            .expect("chat-stream request completes");
-        if res.status() != 200 {
-            assert_eq!(res.status(), 429, "the only expected refusal is the cap 429");
-            break;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let mut best = 0usize;
+    loop {
+        let mut held = Vec::new();
+        for _ in 0..ceiling {
+            let res = client
+                .get(server.api_url("/chat/stream"))
+                .header("Authorization", format!("Bearer {token}"))
+                .send()
+                .await
+                .expect("subscribe request completes");
+            if res.status() != 200 {
+                assert_eq!(res.status(), 429, "the only expected refusal is the cap 429");
+                break;
+            }
+            held.push(res);
         }
-        held.push(res);
+        best = best.max(held.len());
+        drop(held);
+        if best + 1 >= ceiling || std::time::Instant::now() >= deadline {
+            return best;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     }
-    let n = held.len();
-    drop(held);
-    n
 }
 
 /// TEST-7 — the reported production symptom on `/api/chat/stream` (the endpoint
@@ -60,13 +91,13 @@ async fn count_available_slots(
 /// user's FULL allowance available, not lock them out.
 #[tokio::test]
 async fn abandoned_chat_stream_reconnects_release_their_slots() {
-    const STORM: usize = CHAT_PER_USER_MAX + 8; // deliberately > the cap
-
     let server = crate::common::TestServer::start().await;
+    let cap = discover_per_user_cap(&server).await;
+    let storm = cap + 8; // deliberately > the cap
     let user = stream_user(&server, "chat_stream_storm").await;
     let client = reqwest::Client::new();
 
-    for i in 0..STORM {
+    for i in 0..storm {
         let res = client
             .get(server.api_url("/chat/stream"))
             .header("Authorization", format!("Bearer {}", user.token))
@@ -76,7 +107,7 @@ async fn abandoned_chat_stream_reconnects_release_their_slots() {
         assert_eq!(
             res.status(),
             200,
-            "reconnect #{} of {STORM} must be accepted — a 429 here means the \
+            "reconnect #{} of {storm} must be accepted — a 429 here means the \
              previous connections' slots were never reclaimed",
             i + 1,
         );
@@ -93,17 +124,17 @@ async fn abandoned_chat_stream_reconnects_release_their_slots() {
     assert_eq!(
         fresh.status(),
         200,
-        "after {STORM} abandoned reconnects a fresh chat-stream subscribe must return 200"
+        "after {storm} abandoned reconnects a fresh chat-stream subscribe must return 200"
     );
     drop(fresh);
 
     // … and the WHOLE per-user allowance is free again, proving every abandoned
     // slot came back rather than a single one.
-    let available = count_available_slots(&server, &user.token, CHAT_PER_USER_MAX + 1).await;
+    let available = count_available_slots(&server, &user.token, cap + 1).await;
     assert_eq!(
-        available, CHAT_PER_USER_MAX,
+        available, cap,
         "the user's whole per-user chat-stream allowance must be free again; \
-         only {available} of {CHAT_PER_USER_MAX} slots were available"
+         only {available} of {cap} slots were available"
     );
 }
 
@@ -119,8 +150,9 @@ async fn the_chat_stream_per_user_cap_is_still_enforced_for_live_streams() {
     let user = stream_user(&server, "chat_stream_cap_live").await;
     let client = reqwest::Client::new();
 
+    let cap = discover_per_user_cap(&server).await;
     let mut held = Vec::new();
-    for i in 0..CHAT_PER_USER_MAX {
+    for i in 0..cap {
         let res = client
             .get(server.api_url("/chat/stream"))
             .header("Authorization", format!("Bearer {}", user.token))

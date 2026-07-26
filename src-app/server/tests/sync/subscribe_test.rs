@@ -571,33 +571,68 @@ async fn subscribe_enforces_per_user_connection_cap_with_429() {
 // `/api/chat/stream` forever — chat entirely non-functional for that account.
 // ---------------------------------------------------------------------------
 
-/// How many concurrent `/sync/subscribe` streams this user can currently open.
-/// Opens streams until one is refused, then closes them all. This is the
-/// free-slot count measured THROUGH the real endpoint (the 200/429 boundary),
-/// which is the same number an operator would observe.
+/// How many concurrent `/sync/subscribe` streams this user can currently open, measured
+/// through the real 200/429 boundary (the same number an operator would see).
+/// Opens streams until one is refused, then closes them all.
+///
+/// Retried: server-side reclamation is ASYNCHRONOUS — dropping a client
+/// response does not synchronously drop the server's stream future, so a slot
+/// freed microseconds ago may not be free yet. We poll until the count stops
+/// growing or the deadline passes, so the test measures the settled state
+/// rather than racing the scheduler.
 async fn count_available_slots(
     server: &crate::common::TestServer,
     token: &str,
     ceiling: usize,
 ) -> usize {
     let client = reqwest::Client::new();
-    let mut held = Vec::new();
-    for _ in 0..ceiling {
-        let res = client
-            .get(server.api_url("/sync/subscribe"))
-            .header("Authorization", format!("Bearer {token}"))
-            .send()
-            .await
-            .expect("subscribe request completes");
-        if res.status() != 200 {
-            assert_eq!(res.status(), 429, "the only expected refusal is the cap 429");
-            break;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let mut best = 0usize;
+    loop {
+        let mut held = Vec::new();
+        for _ in 0..ceiling {
+            let res = client
+                .get(server.api_url("/sync/subscribe"))
+                .header("Authorization", format!("Bearer {token}"))
+                .send()
+                .await
+                .expect("subscribe request completes");
+            if res.status() != 200 {
+                assert_eq!(res.status(), 429, "the only expected refusal is the cap 429");
+                break;
+            }
+            held.push(res);
         }
-        held.push(res);
+        best = best.max(held.len());
+        drop(held);
+        if best + 1 >= ceiling || std::time::Instant::now() >= deadline {
+            return best;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     }
-    let n = held.len();
-    drop(held);
-    n
+}
+
+/// Ceiling for cap DISCOVERY — comfortably above the per-user cap. Only
+/// `cap + 1` connections are ever actually opened (the loop stops at the 429).
+const DISCOVERY_CEILING: usize = 64;
+
+/// Discover the server's per-user sync cap by probing the live endpoint with a
+/// FRESH user: the number of streams accepted before a 429 IS the cap. Probing
+/// beats hardcoding `12` — the constant is private to the framework crate, so a
+/// literal here would silently desync if it ever changed.
+async fn discover_per_user_cap(server: &crate::common::TestServer) -> usize {
+    let probe = crate::common::test_helpers::create_user_with_permissions(
+        server,
+        "sync_cap_probe",
+        &["profile::read"],
+    )
+    .await;
+    let cap = count_available_slots(server, &probe.token, DISCOVERY_CEILING).await;
+    assert!(
+        cap > 0 && cap < DISCOVERY_CEILING,
+        "discovered per-user sync cap {cap} is implausible"
+    );
+    cap
 }
 
 /// TEST-6 [acceptance INV-1] — "Unregister on ANY stream termination — client
@@ -614,10 +649,9 @@ async fn count_available_slots(
 /// permanently locked out.
 #[tokio::test]
 async fn abandoned_reconnects_release_their_slots_and_never_lock_the_user_out() {
-    const PER_USER_MAX: usize = 12;
-    const STORM: usize = 20; // deliberately > the cap
-
     let server = crate::common::TestServer::start().await;
+    let per_user_max = discover_per_user_cap(&server).await;
+    let storm = per_user_max + 8; // deliberately > the cap
     let user = crate::common::test_helpers::create_user_with_permissions(
         &server,
         "sync_reconnect_storm",
@@ -627,7 +661,7 @@ async fn abandoned_reconnects_release_their_slots_and_never_lock_the_user_out() 
     let client = reqwest::Client::new();
 
     // A reconnect storm: open and abandon STORM connections, one at a time.
-    for i in 0..STORM {
+    for i in 0..storm {
         let res = client
             .get(server.api_url("/sync/subscribe"))
             .header("Authorization", format!("Bearer {}", user.token))
@@ -637,7 +671,7 @@ async fn abandoned_reconnects_release_their_slots_and_never_lock_the_user_out() 
         assert_eq!(
             res.status(),
             200,
-            "reconnect #{} of {STORM} must be accepted — a 429 here means the \
+            "reconnect #{} of {storm} must be accepted — a 429 here means the \
              previous connections' slots were never reclaimed",
             i + 1,
         );
@@ -654,17 +688,17 @@ async fn abandoned_reconnects_release_their_slots_and_never_lock_the_user_out() 
     assert_eq!(
         fresh.status(),
         200,
-        "after {STORM} abandoned reconnects a fresh subscribe must still return 200"
+        "after {storm} abandoned reconnects a fresh subscribe must still return 200"
     );
     drop(fresh);
 
     // … and the user's FULL per-user allowance is available again, proving all
     // STORM slots came back rather than a single one.
-    let available = count_available_slots(&server, &user.token, PER_USER_MAX + 1).await;
+    let available = count_available_slots(&server, &user.token, per_user_max + 1).await;
     assert_eq!(
-        available, PER_USER_MAX,
+        available, per_user_max,
         "the user's whole per-user allowance must be free again after the storm; \
-         only {available} of {PER_USER_MAX} slots were available"
+         only {available} of {per_user_max} slots were available"
     );
 }
 
@@ -678,8 +712,8 @@ async fn abandoned_reconnects_release_their_slots_and_never_lock_the_user_out() 
 async fn the_per_user_cap_is_still_enforced_for_live_streams() {
     use futures_util::StreamExt;
 
-    const PER_USER_MAX: usize = 12;
     let server = crate::common::TestServer::start().await;
+    let per_user_max = discover_per_user_cap(&server).await;
     let user = crate::common::test_helpers::create_user_with_permissions(
         &server,
         "sync_cap_live",
@@ -691,7 +725,7 @@ async fn the_per_user_cap_is_still_enforced_for_live_streams() {
     // 12 LIVE streams — each driven far enough to receive its handshake frame,
     // so none of them can be dismissed as "never really opened".
     let mut held = Vec::new();
-    for i in 0..PER_USER_MAX {
+    for i in 0..per_user_max {
         let res = client
             .get(server.api_url("/sync/subscribe"))
             .header("Authorization", format!("Bearer {}", user.token))

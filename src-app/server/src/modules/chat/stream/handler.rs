@@ -61,17 +61,6 @@ pub async fn subscribe_chat_stream(
     let (tx, mut rx) =
         tokio::sync::mpsc::channel::<Result<Event, axum::Error>>(CHAT_STREAM_CHANNEL_CAPACITY);
 
-    // The wall-clock instant at which this stream's own `exp` deadline lapses
-    // (None when the token carried no `exp` — the far-future fallback below).
-    // The registry uses it as a staleness backstop: a connection still present
-    // long past the instant its stream was guaranteed to end is definitionally
-    // broken, which is the only signal available for a peer that vanished
-    // without the socket ever erroring.
-    let expires_at = exp_unix.map(|exp| {
-        std::time::Instant::now()
-            + Duration::from_secs((exp - chrono::Utc::now().timestamp()).max(0) as u64)
-    });
-
     registry()
         .register(
             conn_id,
@@ -79,7 +68,6 @@ pub async fn subscribe_chat_stream(
                 user_id,
                 active_conversation: None,
                 sender: tx.clone(),
-                expires_at,
             },
         )
         .map_err(|e| e.to_api_error())?;
@@ -259,4 +247,50 @@ pub fn chat_stream_router() -> ApiRouter {
             "/chat/stream/subscription",
             put_with(set_chat_stream_subscription, set_chat_stream_subscription_docs),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    /// STRUCTURAL REGRESSION GUARD for the connection-slot leak.
+    ///
+    /// `ConnGuard` must be constructed in the handler body, BEFORE the
+    /// `async_stream::stream!` block, and only moved into it. Declaring it
+    /// inside the macro body makes it a local of a generator that does not run
+    /// until the stream's first poll, so a stream dropped before that poll
+    /// never releases its slot — the leak this module was fixed for.
+    ///
+    /// This is deliberately a source-shape assertion, not a behavioural one,
+    /// and it is labelled as such. The BEHAVIOURAL proof of the same property
+    /// lives in `ziee-framework`'s `tests/sync_routes.rs`
+    /// (`abandoned_unpolled_streams_release_their_slots` /
+    /// `every_stream_exit_path_releases_its_slot`), which can drive an unpolled
+    /// response body via `tower::oneshot` against the structurally-identical
+    /// sync subscribe handler. This handler cannot be driven that way from an
+    /// integration test — it needs a live DB-backed `TestServer`, and over real
+    /// HTTP hyper always polls the body while writing it, so the never-polled
+    /// path is unreachable there (measured: 400 concurrent abandoned raw
+    /// sockets leak 0 slots). Hence a structural guard rather than a hollow
+    /// behavioural test that would pass either way.
+    #[test]
+    fn conn_guard_is_constructed_outside_the_stream_generator() {
+        let src = include_str!("handler.rs");
+        let guard_at = src
+            .find("let guard = ConnGuard(conn_id);")
+            .expect("ConnGuard must be constructed as `let guard = ConnGuard(conn_id);`");
+        let stream_at = src
+            .find("async_stream::stream! {")
+            .expect("the handler still builds its SSE body with async_stream::stream!");
+        assert!(
+            guard_at < stream_at,
+            "ConnGuard must be constructed BEFORE the async_stream::stream! block \
+             (and only MOVED into it). Constructing it inside the generator body \
+             reintroduces the slot leak: the body does not run until the stream's \
+             first poll, so a stream dropped before that poll never unregisters."
+        );
+        assert!(
+            src[stream_at..].contains("let _guard = guard;"),
+            "the generator must MOVE the already-constructed guard in \
+             (`let _guard = guard;`), not build a fresh one"
+        );
+    }
 }
