@@ -1,11 +1,16 @@
 # BASE — conflict-surface scoping for `feat/net-hygiene`
 
-Branch base: `origin/feat/agent-core`. Cut at `60b0db310`; **merged onto the new
-tip `a72553e6e` mid-lifecycle** (DRIFT-2.10) once the concurrent
+Branch base: `origin/feat/agent-core`. Cut at `60b0db310`; re-baselined TWICE as
+the branch moved under it — onto `a72553e6e` (DRIFT-2.10) and then onto
+`a02c09a04` (DRIFT-4.1), with the `sdk` submodule onto
+`origin/sdk/agent-core-and-perf` @ `ebe3ff8262`. Every gate's diff base is
+`a02c09a04`. The original re-baseline note follows.
+
+Merged onto `a72553e6e` once the concurrent
 `feat/live-ui-audit-fixes` landed there, so the before→after numbers are measured
 against the CURRENT baseline and this branch is credited with none of that work.
 The merge was clean — no conflict, and no `openapi.json` / `api-client` regen on
-this side. Every gate's diff base is `a72553e6e`. Worktree
+this side. Worktree
 `/data/pbya/ziee/tmp/net-hygiene-wt`.
 
 ## Migrations

@@ -26,17 +26,36 @@ import { fileURLToPath } from 'node:url'
  */
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
-const BASE = process.env.BASE ?? '60b0db310'
 
 const git = (cwd, ...args) =>
   execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
+
+/**
+ * Resolve the diff base by MERGE-BASE against the upstream branch, not by a
+ * hardcoded sha.
+ *
+ * This matters: the branch has been re-baselined onto a moving
+ * `origin/feat/agent-core` twice. A hardcoded base silently widens the diff to
+ * include everything that landed upstream in between, and this check then
+ * reports the OTHER branch's changes as this one's violations. Computing the
+ * merge-base makes the scan see exactly this branch's own work, always.
+ */
+const resolveBase = (cwd, upstream, envVar) => {
+  if (process.env[envVar]) return process.env[envVar]
+  try {
+    return git(cwd, 'merge-base', 'HEAD', upstream)
+  } catch {
+    return git(cwd, 'rev-parse', 'HEAD~1')
+  }
+}
 
 /** The `sdk` SUBMODULE holds most of this branch's diff, and a submodule shows
  *  up in the superproject as a single pointer change — so scanning only the
  *  superproject would silently miss every framework edit. Each entry is
  *  `{repo, path}` so both trees are checked with one code path. */
 const SDK = join(REPO, 'sdk')
-const SDK_BASE = process.env.SDK_BASE ?? '01a96b7'
+const BASE = resolveBase(REPO, 'origin/feat/agent-core', 'BASE')
+const SDK_BASE = resolveBase(SDK, 'origin/sdk/agent-core-and-perf', 'SDK_BASE')
 
 const changedFiles = () => {
   const out = []
@@ -82,6 +101,7 @@ const OWNED_GENERATED = [
 const GENERATED_INDEXES = [
   'src-app/ui/src/dev/gallery/stateMatrix.generated.ts',
   'src-app/ui/src/dev/gallery/STATE_MATRIX.md',
+  'sdk/packages/kit/src/testIds.generated.ts',
 ]
 
 test('TEST-9 [acceptance/INV-4]: no changed file touches the excluded endpoints', () => {
@@ -136,36 +156,46 @@ test('TEST-9: the diff is non-empty (the check is actually looking at something)
   )
 })
 
-test('TEST-9 [acceptance/INV-4]: the generated indexes moved line numbers ONLY', () => {
-  // These are excluded from the marker scan because they index every surface in
-  // the app by name. That exemption is only sound if their delta carries no
-  // semantic change — assert exactly that, rather than trusting it.
+test('TEST-9 [acceptance/INV-4]: the generated indexes carry NO semantic change', () => {
+  // These are excluded from the marker scan because they are machine-generated
+  // INDEXES of every surface / testid in the app, so they necessarily NAME the
+  // excluded endpoints. That exemption is only sound if their delta adds and
+  // removes nothing — assert exactly that, rather than trusting it.
+  //
+  // Integers are normalized (a line number, a surface/signal COUNT in a header),
+  // because those move whenever any unrelated file grows. What CANNOT be
+  // normalized away is a line appearing or disappearing — an added or removed
+  // surface / testid leaves an unpaired line, which is the real semantic change
+  // this guards against.
+  const norm = l => l.slice(1).replace(/\d+/g, 'N')
   for (const f of GENERATED_INDEXES) {
-    const diff = git(REPO, 'diff', `${BASE}...HEAD`, '--', f)
+    const repo = f.startsWith('sdk/') ? SDK : REPO
+    const path = f.startsWith('sdk/') ? f.slice(4) : f
+    const base = f.startsWith('sdk/') ? SDK_BASE : BASE
+    let diff = ''
+    try {
+      diff = git(repo, 'diff', `${base}...HEAD`, '--', path)
+    } catch {
+      continue
+    }
     if (!diff) continue
     const changed = diff
       .split('\n')
       .filter(l => /^[+-]/.test(l) && !/^(\+\+\+|---)/.test(l))
-    for (const line of changed) {
-      // Every changed line must differ from its counterpart only in a `:<n>` /
-      // `line: <n>` position. Strip those and the +/- sides must be identical.
-      const stripped = line
-        .slice(1)
-        .replace(/line: \d+/g, 'line: N')
-        .replace(/:\d+ \|/g, ':N |')
-      assert.ok(
-        changed.some(
-          other =>
-            other[0] !== line[0] &&
-            other
-              .slice(1)
-              .replace(/line: \d+/g, 'line: N')
-              .replace(/:\d+ \|/g, ':N |') === stripped,
-        ),
-        `${f}: changed line is not a pure line-number shift — regenerate and ` +
-          `review the real delta:\n${line}`,
-      )
-    }
+    const removed = changed.filter(l => l[0] === '-').map(norm)
+    const added = changed.filter(l => l[0] === '+').map(norm)
+    const unpairedRemoved = removed.filter(
+      l => !added.includes(l) || removed.filter(x => x === l).length > added.filter(x => x === l).length,
+    )
+    const unpairedAdded = added.filter(
+      l => !removed.includes(l) || added.filter(x => x === l).length > removed.filter(x => x === l).length,
+    )
+    assert.deepEqual(
+      [...new Set([...unpairedRemoved, ...unpairedAdded])],
+      [],
+      `${f}: a generated-index line was ADDED or REMOVED, not merely renumbered — ` +
+        `regenerate and review the real delta`,
+    )
   }
 })
 

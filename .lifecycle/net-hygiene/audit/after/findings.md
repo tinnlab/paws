@@ -1,6 +1,6 @@
 # Live UI Audit — findings
 
-Target: `http://127.0.0.1:1547` · driven as `admin` · 2026-07-26T21:47:04.775Z
+Target: `http://127.0.0.1:1547` · driven as `admin` · 2026-07-26T23:11:49.211Z
 
 Evidence-based, objective signals only. Deduped across viewports×themes (each row lists the cells it appeared in). No subjective UX commentary.
 
@@ -8,92 +8,85 @@ Evidence-based, objective signals only. Deduped across viewports×themes (each r
 
 | Severity | Count (deduped) |
 |---|---|
-| 🔴 HIGH | 8 |
-| 🟡 MEDIUM | 65 |
-| ⚪ LOW | 44 |
-| **Total** | **117** (148 raw) |
+| 🔴 HIGH | 1 |
+| 🟡 MEDIUM | 56 |
+| ⚪ LOW | 46 |
+| **Total** | **103** (105 raw) |
 
 ## By dimension
 
 | Dimension | Count |
 |---|---|
-| **network** | 51 |
-| **ui** | 51 |
-| **bug** | 8 |
+| **ui** | 52 |
+| **network** | 31 |
+| **a11y-name** | 13 |
 | **color-theme** | 6 |
-| **real-infra** | 1 |
+| **bug** | 1 |
 
 ## By category (raw signal)
 
 | Category | Count |
 |---|---|
-| `control-collision` | 38 |
-| `network/failure` | 25 |
-| `network/waterfall` | 13 |
+| `control-collision` | 39 |
+| `network/waterfall` | 14 |
+| `a11y-name` | 13 |
 | `network/irrelevant` | 13 |
 | `zero-size-control` | 13 |
-| `console-error` | 7 |
 | `palette-drift` | 6 |
-| `llm-infra` | 1 |
-| `stuck-loading` | 1 |
+| `network/failure` | 3 |
+| `console-error` | 1 |
+| `network/duplicate` | 1 |
 
 ## Counts per dimension per surface
 
 | Surface | bug | ui | responsive | color-theme | consistency | network | permission | real-infra | 🔴 | 🟡 | ⚪ | Total |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| `settings-user (flow-level)` | 4 |  |  |  |  | 3 |  |  | 4 | 3 |  | 7 |
-| `home (flow-level)` | 3 |  |  |  |  | 3 |  |  | 3 | 3 |  | 6 |
-| `(preflight) (flow-level)` |  |  |  |  |  |  |  | 1 | 1 |  |  | 1 |
-| `settings-general` |  | 4 |  | 6 |  | 4 |  |  |  | 5 | 9 | 14 |
-| `settings-profile` |  | 4 |  |  |  | 4 |  |  |  | 5 | 3 | 8 |
-| `settings-user-llm-providers` |  | 4 |  |  |  | 4 |  |  |  | 5 | 3 | 8 |
-| `settings-mcp-servers` |  | 4 |  |  |  | 4 |  |  |  | 5 | 3 | 8 |
-| `settings-memory` | 1 | 3 |  |  |  | 4 |  |  |  | 6 | 2 | 8 |
-| `settings-skills` |  | 4 |  |  |  | 4 |  |  |  | 5 | 3 | 8 |
-| `settings-workflows` |  | 4 |  |  |  | 4 |  |  |  | 5 | 3 | 8 |
-| `settings-citations` |  | 4 |  |  |  | 4 |  |  |  | 5 | 3 | 8 |
-| `settings-literature-keys` |  | 4 |  |  |  | 4 |  |  |  | 5 | 3 | 8 |
-| `settings-web-search-keys` |  | 4 |  |  |  | 4 |  |  |  | 5 | 3 | 8 |
-| `settings-assistants` |  | 4 |  |  |  | 3 |  |  |  | 4 | 3 | 7 |
-| `settings-root` |  | 4 |  |  |  | 2 |  |  |  | 3 | 3 | 6 |
-| `home` |  | 4 |  |  |  |  |  |  |  | 1 | 3 | 4 |
-
-## Systematically broken (surface × viewport/theme)
-
-| Surface @ cell | Breakage categories |
-|---|---|
-| `settings-memory @ desktop/light` | `stuck-loading` |
+| `settings-user (flow-level)` | 1 |  |  |  |  | 1 |  |  | 1 | 1 |  | 2 |
+| `settings-general` |  | 4 |  | 6 |  | 2 |  |  |  | 4 | 9 | 13 |
+| `settings-root` |  | 4 |  |  |  | 3 |  |  |  | 4 | 4 | 8 |
+| `settings-memory` |  | 4 |  |  |  | 3 |  |  |  | 5 | 3 | 8 |
+| `settings-citations` |  | 4 |  |  |  | 3 |  |  |  | 5 | 3 | 8 |
+| `settings-literature-keys` |  | 4 |  |  |  | 3 |  |  |  | 5 | 3 | 8 |
+| `settings-web-search-keys` |  | 4 |  |  |  | 3 |  |  |  | 5 | 3 | 8 |
+| `settings-profile` |  | 4 |  |  |  | 2 |  |  |  | 4 | 3 | 7 |
+| `settings-assistants` |  | 4 |  |  |  | 2 |  |  |  | 4 | 3 | 7 |
+| `settings-user-llm-providers` |  | 4 |  |  |  | 2 |  |  |  | 4 | 3 | 7 |
+| `settings-mcp-servers` |  | 4 |  |  |  | 2 |  |  |  | 4 | 3 | 7 |
+| `settings-skills` |  | 4 |  |  |  | 2 |  |  |  | 4 | 3 | 7 |
+| `settings-workflows` |  | 4 |  |  |  | 2 |  |  |  | 4 | 3 | 7 |
+| `home` |  | 4 |  |  |  |  |  |  |  | 2 | 3 | 5 |
+| `home (flow-level)` |  |  |  |  |  | 1 |  |  |  | 1 |  | 1 |
 
 ## Top 20 most-actionable
 
 | # | Sev | Dimension | Surface | Signal | Cells |
 |---|---|---|---|---|---|
-| 1 | 🔴 | bug | `home (flow-level)` | Failed to load resource: the server responded with a status of 429 (Too Many Requests) | 1 |
-| 2 | 🔴 | bug | `home (flow-level)` | Failed to load resource: the server responded with a status of 405 (Method Not Allowed) | 1 |
-| 3 | 🔴 | bug | `home (flow-level)` | Error calling endpoint POST /api/projects/by-conversations: Error: HTTP error! status: 405 at A (http://127.0.0.1:1547/assets/core-xxqtLybU.js:3:624) at async Object.fetchChunk (http://127.0 | 1 |
-| 4 | 🔴 | bug | `settings-user (flow-level)` | Failed to load resource: the server responded with a status of 429 (Too Many Requests) | 1 |
-| 5 | 🔴 | bug | `settings-user (flow-level)` | Failed to load resource: the server responded with a status of 405 (Method Not Allowed) | 1 |
-| 6 | 🔴 | bug | `settings-user (flow-level)` | Error calling endpoint POST /api/projects/by-conversations: Error: HTTP error! status: 405 at A (http://127.0.0.1:1547/assets/core-xxqtLybU.js:3:624) at async Object.fetchChunk (http://127.0 | 1 |
-| 7 | 🔴 | bug | `settings-user (flow-level)` | Error calling endpoint POST /api/projects/by-conversations: TypeError: Failed to fetch at A (http://127.0.0.1:1547/assets/core-xxqtLybU.js:2:711) at async Object.fetchChunk (http://127.0.0.1 | 1 |
-| 8 | 🔴 | real-infra | `(preflight) (flow-level)` | STREAMING UNAVAILABLE for the driving user "admin": /api/sync/subscribe → 429 before any audit load. Generative flows cannot receive a reply as this user; any chat surface audited in this ru | 1 |
-| 9 | 🟡 | bug | `settings-memory` | 1 loading indicator(s) still present after settle window | 1 |
-| 10 | 🟡 | ui | `home` | interactive control has near-zero size 1×1px | 1 |
-| 11 | 🟡 | ui | `settings-root` | interactive control has near-zero size 1×1px | 1 |
-| 12 | 🟡 | ui | `settings-general` | interactive control has near-zero size 1×1px | 1 |
-| 13 | 🟡 | ui | `settings-profile` | interactive control has near-zero size 1×1px | 1 |
-| 14 | 🟡 | ui | `settings-assistants` | interactive control has near-zero size 1×1px | 1 |
-| 15 | 🟡 | ui | `settings-user-llm-providers` | interactive control has near-zero size 1×1px | 1 |
-| 16 | 🟡 | ui | `settings-mcp-servers` | interactive control has near-zero size 1×1px | 1 |
-| 17 | 🟡 | ui | `settings-memory` | interactive control has near-zero size 1×1px | 1 |
-| 18 | 🟡 | ui | `settings-skills` | interactive control has near-zero size 1×1px | 1 |
-| 19 | 🟡 | ui | `settings-workflows` | interactive control has near-zero size 1×1px | 1 |
-| 20 | 🟡 | ui | `settings-citations` | interactive control has near-zero size 1×1px | 1 |
+| 1 | 🔴 | bug | `settings-user (flow-level)` | Failed to load resource: the server responded with a status of 429 (Too Many Requests) | 1 |
+| 2 | 🟡 | ui | `home` | interactive control has near-zero size 1×1px | 1 |
+| 3 | 🟡 | ui | `settings-root` | interactive control has near-zero size 1×1px | 1 |
+| 4 | 🟡 | ui | `settings-general` | interactive control has near-zero size 1×1px | 1 |
+| 5 | 🟡 | ui | `settings-profile` | interactive control has near-zero size 1×1px | 1 |
+| 6 | 🟡 | ui | `settings-assistants` | interactive control has near-zero size 1×1px | 1 |
+| 7 | 🟡 | ui | `settings-user-llm-providers` | interactive control has near-zero size 1×1px | 1 |
+| 8 | 🟡 | ui | `settings-mcp-servers` | interactive control has near-zero size 1×1px | 1 |
+| 9 | 🟡 | ui | `settings-memory` | interactive control has near-zero size 1×1px | 1 |
+| 10 | 🟡 | ui | `settings-skills` | interactive control has near-zero size 1×1px | 1 |
+| 11 | 🟡 | ui | `settings-workflows` | interactive control has near-zero size 1×1px | 1 |
+| 12 | 🟡 | ui | `settings-citations` | interactive control has near-zero size 1×1px | 1 |
+| 13 | 🟡 | ui | `settings-literature-keys` | interactive control has near-zero size 1×1px | 1 |
+| 14 | 🟡 | ui | `settings-web-search-keys` | interactive control has near-zero size 1×1px | 1 |
+| 15 | 🟡 | network | `home (flow-level)` | waterfall: 12 sequential dependent /api requests (485ms serial) that could be parallelized — /api/auth/me → /api/app/setup/status → /api/onboarding/progress → /api/notifications | 1 |
+| 16 | 🟡 | network | `settings-user (flow-level)` | waterfall: 8 sequential dependent /api requests (102ms serial) that could be parallelized — /api/chat/stream/subscription → /api/mcp/defaults → /api/user-llm-providers → /api/memory/admin-se | 1 |
+| 17 | 🟡 | network | `settings-root` | waterfall: 8 sequential dependent /api requests (999ms serial) that could be parallelized — /api/onboarding/progress → /api/server-update/status → /api/notifications → /api/llm-models/downlo | 1 |
+| 18 | 🟡 | network | `settings-root` | irrelevant fetch for this page: GET /api/conversations — "List conversations". Flow "settings-user" (step "settings-root") has no use for the `conversations` domain; likely eager over-fetch  | 1 |
+| 19 | 🟡 | network | `settings-general` | waterfall: 7 sequential dependent /api requests (439ms serial) that could be parallelized — /api/onboarding/progress → /api/server-update/status → /api/notifications → /api/llm-models/downlo | 1 |
+| 20 | 🟡 | network | `settings-general` | irrelevant fetch for this page: GET /api/conversations — "List conversations". Flow "settings-user" (step "settings-general") has no use for the `conversations` domain; likely eager over-fet | 1 |
 
 ## Full inventory — grouped by dimension, then surface
 
-# Dimension: bug (8)
+# Dimension: bug (1)
 
-## bug · `settings-user (flow-level)` (4)
+## bug · `settings-user (flow-level)` (1)
 
 ### 🔴 HIGH · `console-error`
 - **JTBD:** Configure user-scoped settings (persona: normal)
@@ -101,55 +94,7 @@ Evidence-based, objective signals only. Deduped across viewports×themes (each r
 - **Cells (viewport/theme):** desktop/light
 - **Repro:** login admin → flow `settings-user` → step `(console)` at desktop/light
 
-### 🔴 HIGH · `console-error`
-- **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** Failed to load resource: the server responded with a status of 405 (Method Not Allowed)
-- **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `settings-user` → step `(console)` at desktop/light
-
-### 🔴 HIGH · `console-error`
-- **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** Error calling endpoint POST /api/projects/by-conversations: Error: HTTP error! status: 405 at A (http://127.0.0.1:1547/assets/core-xxqtLybU.js:3:624) at async Object.fetchChunk (http://127.0.0.1:1547/assets/extension-BqTUQknR.js:1:2845) at async Promise.all (index 0)
-- **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `settings-user` → step `(console)` at desktop/light
-
-### 🔴 HIGH · `console-error`
-- **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** Error calling endpoint POST /api/projects/by-conversations: TypeError: Failed to fetch at A (http://127.0.0.1:1547/assets/core-xxqtLybU.js:2:711) at async Object.fetchChunk (http://127.0.0.1:1547/assets/extension-BqTUQknR.js:1:2845) at async Promise.all (index 0)
-- **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `settings-user` → step `(console)` at desktop/light
-
-## bug · `home (flow-level)` (3)
-
-### 🔴 HIGH · `console-error`
-- **JTBD:** Open app — land on new-chat home (persona: normal)
-- **Signal:** Failed to load resource: the server responded with a status of 429 (Too Many Requests)
-- **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `home` → step `(console)` at desktop/light
-
-### 🔴 HIGH · `console-error`
-- **JTBD:** Open app — land on new-chat home (persona: normal)
-- **Signal:** Failed to load resource: the server responded with a status of 405 (Method Not Allowed)
-- **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `home` → step `(console)` at desktop/light
-
-### 🔴 HIGH · `console-error`
-- **JTBD:** Open app — land on new-chat home (persona: normal)
-- **Signal:** Error calling endpoint POST /api/projects/by-conversations: Error: HTTP error! status: 405 at A (http://127.0.0.1:1547/assets/core-xxqtLybU.js:3:624) at async Object.fetchChunk (http://127.0.0.1:1547/assets/extension-BqTUQknR.js:1:2845) at async Promise.all (index 0)
-- **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `home` → step `(console)` at desktop/light
-
-## bug · `settings-memory` (1)
-
-### 🟡 MEDIUM · `stuck-loading`
-- **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** 1 loading indicator(s) still present after settle window
-- **Element:** `div>div:nth-of-type(3)>div>div>div:nth-of-type(2)>div>span>svg`
-- **Cells (viewport/theme):** desktop/light
-- **Screenshot:** `screenshots/settings-user__settings-memory__desktop__light.png`
-- **Repro:** login admin → flow `settings-user` → step `settings-memory` at desktop/light
-
-# Dimension: ui (51)
+# Dimension: ui (52)
 
 ## ui · `home` (4)
 
@@ -163,24 +108,24 @@ Evidence-based, objective signals only. Deduped across viewports×themes (each r
 
 ### ⚪ LOW · `control-collision`
 - **JTBD:** Open app — land on new-chat home (persona: normal)
-- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-5e2e6f63-b843-4fc8-b48e-0c0e3f297464"] ("Untitled Conversation") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(1)>button ("Hub")
-- **Element:** `[data-testid="chat-recent-conversations-menu-item-5e2e6f63-b843-4fc8-b48e-0c0e3f297464"]`
+- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-1177a2bf-4b37-4b16-83bd-39d01a98b953"] ("measurement conversation 14") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(1)>button ("Hub")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-1177a2bf-4b37-4b16-83bd-39d01a98b953"]`
 - **Cells (viewport/theme):** desktop/light
 - **Screenshot:** `screenshots/home__home__desktop__light.png`
 - **Repro:** login admin → flow `home` → step `home` at desktop/light
 
 ### ⚪ LOW · `control-collision`
 - **JTBD:** Open app — land on new-chat home (persona: normal)
-- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-ca451c7a-b61f-45af-a7f5-6c2995034823"] ("Untitled Conversation") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(2)>button ("Onboarding")
-- **Element:** `[data-testid="chat-recent-conversations-menu-item-ca451c7a-b61f-45af-a7f5-6c2995034823"]`
+- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-d647fb9e-3eac-4c01-8998-5056f79c7fa9"] ("measurement conversation 13") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(2)>button ("Onboarding")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-d647fb9e-3eac-4c01-8998-5056f79c7fa9"]`
 - **Cells (viewport/theme):** desktop/light
 - **Screenshot:** `screenshots/home__home__desktop__light.png`
 - **Repro:** login admin → flow `home` → step `home` at desktop/light
 
 ### ⚪ LOW · `control-collision`
 - **JTBD:** Open app — land on new-chat home (persona: normal)
-- **Signal:** two distinct interactive controls overlap 91% in-viewport — [data-testid="chat-recent-conversations-menu-item-0a1fccac-5e9a-42f5-a668-923685ac0785"] ("Untitled Conversation") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(3)>button ("Settings")
-- **Element:** `[data-testid="chat-recent-conversations-menu-item-0a1fccac-5e9a-42f5-a668-923685ac0785"]`
+- **Signal:** two distinct interactive controls overlap 91% in-viewport — [data-testid="chat-recent-conversations-menu-item-a0d5fef9-23ae-4c03-9ea1-098e008e911f"] ("measurement conversation 12") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(3)>button ("Settings")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-a0d5fef9-23ae-4c03-9ea1-098e008e911f"]`
 - **Cells (viewport/theme):** desktop/light
 - **Screenshot:** `screenshots/home__home__desktop__light.png`
 - **Repro:** login admin → flow `home` → step `home` at desktop/light
@@ -197,24 +142,24 @@ Evidence-based, objective signals only. Deduped across viewports×themes (each r
 
 ### ⚪ LOW · `control-collision`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-5e2e6f63-b843-4fc8-b48e-0c0e3f297464"] ("Untitled Conversation") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(1)>button ("Hub")
-- **Element:** `[data-testid="chat-recent-conversations-menu-item-5e2e6f63-b843-4fc8-b48e-0c0e3f297464"]`
+- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-1177a2bf-4b37-4b16-83bd-39d01a98b953"] ("measurement conversation 14") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(1)>button ("Hub")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-1177a2bf-4b37-4b16-83bd-39d01a98b953"]`
 - **Cells (viewport/theme):** desktop/light
 - **Screenshot:** `screenshots/settings-user__settings-root__desktop__light.png`
 - **Repro:** login admin → flow `settings-user` → step `settings-root` at desktop/light
 
 ### ⚪ LOW · `control-collision`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-ca451c7a-b61f-45af-a7f5-6c2995034823"] ("Untitled Conversation") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(2)>button ("Onboarding")
-- **Element:** `[data-testid="chat-recent-conversations-menu-item-ca451c7a-b61f-45af-a7f5-6c2995034823"]`
+- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-d647fb9e-3eac-4c01-8998-5056f79c7fa9"] ("measurement conversation 13") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(2)>button ("Onboarding")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-d647fb9e-3eac-4c01-8998-5056f79c7fa9"]`
 - **Cells (viewport/theme):** desktop/light
 - **Screenshot:** `screenshots/settings-user__settings-root__desktop__light.png`
 - **Repro:** login admin → flow `settings-user` → step `settings-root` at desktop/light
 
 ### ⚪ LOW · `control-collision`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** two distinct interactive controls overlap 91% in-viewport — [data-testid="chat-recent-conversations-menu-item-0a1fccac-5e9a-42f5-a668-923685ac0785"] ("Untitled Conversation") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(3)>button ("Settings")
-- **Element:** `[data-testid="chat-recent-conversations-menu-item-0a1fccac-5e9a-42f5-a668-923685ac0785"]`
+- **Signal:** two distinct interactive controls overlap 91% in-viewport — [data-testid="chat-recent-conversations-menu-item-a0d5fef9-23ae-4c03-9ea1-098e008e911f"] ("measurement conversation 12") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(3)>button ("Settings")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-a0d5fef9-23ae-4c03-9ea1-098e008e911f"]`
 - **Cells (viewport/theme):** desktop/light
 - **Screenshot:** `screenshots/settings-user__settings-root__desktop__light.png`
 - **Repro:** login admin → flow `settings-user` → step `settings-root` at desktop/light
@@ -231,24 +176,24 @@ Evidence-based, objective signals only. Deduped across viewports×themes (each r
 
 ### ⚪ LOW · `control-collision`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-5e2e6f63-b843-4fc8-b48e-0c0e3f297464"] ("Untitled Conversation") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(1)>button ("Hub")
-- **Element:** `[data-testid="chat-recent-conversations-menu-item-5e2e6f63-b843-4fc8-b48e-0c0e3f297464"]`
+- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-1177a2bf-4b37-4b16-83bd-39d01a98b953"] ("measurement conversation 14") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(1)>button ("Hub")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-1177a2bf-4b37-4b16-83bd-39d01a98b953"]`
 - **Cells (viewport/theme):** desktop/light
 - **Screenshot:** `screenshots/settings-user__settings-general__desktop__light.png`
 - **Repro:** login admin → flow `settings-user` → step `settings-general` at desktop/light
 
 ### ⚪ LOW · `control-collision`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-ca451c7a-b61f-45af-a7f5-6c2995034823"] ("Untitled Conversation") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(2)>button ("Onboarding")
-- **Element:** `[data-testid="chat-recent-conversations-menu-item-ca451c7a-b61f-45af-a7f5-6c2995034823"]`
+- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-d647fb9e-3eac-4c01-8998-5056f79c7fa9"] ("measurement conversation 13") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(2)>button ("Onboarding")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-d647fb9e-3eac-4c01-8998-5056f79c7fa9"]`
 - **Cells (viewport/theme):** desktop/light
 - **Screenshot:** `screenshots/settings-user__settings-general__desktop__light.png`
 - **Repro:** login admin → flow `settings-user` → step `settings-general` at desktop/light
 
 ### ⚪ LOW · `control-collision`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** two distinct interactive controls overlap 91% in-viewport — [data-testid="chat-recent-conversations-menu-item-0a1fccac-5e9a-42f5-a668-923685ac0785"] ("Untitled Conversation") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(3)>button ("Settings")
-- **Element:** `[data-testid="chat-recent-conversations-menu-item-0a1fccac-5e9a-42f5-a668-923685ac0785"]`
+- **Signal:** two distinct interactive controls overlap 91% in-viewport — [data-testid="chat-recent-conversations-menu-item-a0d5fef9-23ae-4c03-9ea1-098e008e911f"] ("measurement conversation 12") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(3)>button ("Settings")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-a0d5fef9-23ae-4c03-9ea1-098e008e911f"]`
 - **Cells (viewport/theme):** desktop/light
 - **Screenshot:** `screenshots/settings-user__settings-general__desktop__light.png`
 - **Repro:** login admin → flow `settings-user` → step `settings-general` at desktop/light
@@ -265,24 +210,24 @@ Evidence-based, objective signals only. Deduped across viewports×themes (each r
 
 ### ⚪ LOW · `control-collision`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-5e2e6f63-b843-4fc8-b48e-0c0e3f297464"] ("Untitled Conversation") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(1)>button ("Hub")
-- **Element:** `[data-testid="chat-recent-conversations-menu-item-5e2e6f63-b843-4fc8-b48e-0c0e3f297464"]`
+- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-1177a2bf-4b37-4b16-83bd-39d01a98b953"] ("measurement conversation 14") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(1)>button ("Hub")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-1177a2bf-4b37-4b16-83bd-39d01a98b953"]`
 - **Cells (viewport/theme):** desktop/light
 - **Screenshot:** `screenshots/settings-user__settings-profile__desktop__light.png`
 - **Repro:** login admin → flow `settings-user` → step `settings-profile` at desktop/light
 
 ### ⚪ LOW · `control-collision`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-ca451c7a-b61f-45af-a7f5-6c2995034823"] ("Untitled Conversation") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(2)>button ("Onboarding")
-- **Element:** `[data-testid="chat-recent-conversations-menu-item-ca451c7a-b61f-45af-a7f5-6c2995034823"]`
+- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-d647fb9e-3eac-4c01-8998-5056f79c7fa9"] ("measurement conversation 13") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(2)>button ("Onboarding")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-d647fb9e-3eac-4c01-8998-5056f79c7fa9"]`
 - **Cells (viewport/theme):** desktop/light
 - **Screenshot:** `screenshots/settings-user__settings-profile__desktop__light.png`
 - **Repro:** login admin → flow `settings-user` → step `settings-profile` at desktop/light
 
 ### ⚪ LOW · `control-collision`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** two distinct interactive controls overlap 91% in-viewport — [data-testid="chat-recent-conversations-menu-item-0a1fccac-5e9a-42f5-a668-923685ac0785"] ("Untitled Conversation") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(3)>button ("Settings")
-- **Element:** `[data-testid="chat-recent-conversations-menu-item-0a1fccac-5e9a-42f5-a668-923685ac0785"]`
+- **Signal:** two distinct interactive controls overlap 91% in-viewport — [data-testid="chat-recent-conversations-menu-item-a0d5fef9-23ae-4c03-9ea1-098e008e911f"] ("measurement conversation 12") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(3)>button ("Settings")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-a0d5fef9-23ae-4c03-9ea1-098e008e911f"]`
 - **Cells (viewport/theme):** desktop/light
 - **Screenshot:** `screenshots/settings-user__settings-profile__desktop__light.png`
 - **Repro:** login admin → flow `settings-user` → step `settings-profile` at desktop/light
@@ -299,24 +244,24 @@ Evidence-based, objective signals only. Deduped across viewports×themes (each r
 
 ### ⚪ LOW · `control-collision`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-5e2e6f63-b843-4fc8-b48e-0c0e3f297464"] ("Untitled Conversation") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(1)>button ("Hub")
-- **Element:** `[data-testid="chat-recent-conversations-menu-item-5e2e6f63-b843-4fc8-b48e-0c0e3f297464"]`
+- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-1177a2bf-4b37-4b16-83bd-39d01a98b953"] ("measurement conversation 14") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(1)>button ("Hub")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-1177a2bf-4b37-4b16-83bd-39d01a98b953"]`
 - **Cells (viewport/theme):** desktop/light
 - **Screenshot:** `screenshots/settings-user__settings-assistants__desktop__light.png`
 - **Repro:** login admin → flow `settings-user` → step `settings-assistants` at desktop/light
 
 ### ⚪ LOW · `control-collision`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-ca451c7a-b61f-45af-a7f5-6c2995034823"] ("Untitled Conversation") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(2)>button ("Onboarding")
-- **Element:** `[data-testid="chat-recent-conversations-menu-item-ca451c7a-b61f-45af-a7f5-6c2995034823"]`
+- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-d647fb9e-3eac-4c01-8998-5056f79c7fa9"] ("measurement conversation 13") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(2)>button ("Onboarding")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-d647fb9e-3eac-4c01-8998-5056f79c7fa9"]`
 - **Cells (viewport/theme):** desktop/light
 - **Screenshot:** `screenshots/settings-user__settings-assistants__desktop__light.png`
 - **Repro:** login admin → flow `settings-user` → step `settings-assistants` at desktop/light
 
 ### ⚪ LOW · `control-collision`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** two distinct interactive controls overlap 91% in-viewport — [data-testid="chat-recent-conversations-menu-item-0a1fccac-5e9a-42f5-a668-923685ac0785"] ("Untitled Conversation") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(3)>button ("Settings")
-- **Element:** `[data-testid="chat-recent-conversations-menu-item-0a1fccac-5e9a-42f5-a668-923685ac0785"]`
+- **Signal:** two distinct interactive controls overlap 91% in-viewport — [data-testid="chat-recent-conversations-menu-item-a0d5fef9-23ae-4c03-9ea1-098e008e911f"] ("measurement conversation 12") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(3)>button ("Settings")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-a0d5fef9-23ae-4c03-9ea1-098e008e911f"]`
 - **Cells (viewport/theme):** desktop/light
 - **Screenshot:** `screenshots/settings-user__settings-assistants__desktop__light.png`
 - **Repro:** login admin → flow `settings-user` → step `settings-assistants` at desktop/light
@@ -333,24 +278,24 @@ Evidence-based, objective signals only. Deduped across viewports×themes (each r
 
 ### ⚪ LOW · `control-collision`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-5e2e6f63-b843-4fc8-b48e-0c0e3f297464"] ("Untitled Conversation") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(1)>button ("Hub")
-- **Element:** `[data-testid="chat-recent-conversations-menu-item-5e2e6f63-b843-4fc8-b48e-0c0e3f297464"]`
+- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-1177a2bf-4b37-4b16-83bd-39d01a98b953"] ("measurement conversation 14") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(1)>button ("Hub")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-1177a2bf-4b37-4b16-83bd-39d01a98b953"]`
 - **Cells (viewport/theme):** desktop/light
 - **Screenshot:** `screenshots/settings-user__settings-user-llm-providers__desktop__light.png`
 - **Repro:** login admin → flow `settings-user` → step `settings-user-llm-providers` at desktop/light
 
 ### ⚪ LOW · `control-collision`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-ca451c7a-b61f-45af-a7f5-6c2995034823"] ("Untitled Conversation") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(2)>button ("Onboarding")
-- **Element:** `[data-testid="chat-recent-conversations-menu-item-ca451c7a-b61f-45af-a7f5-6c2995034823"]`
+- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-d647fb9e-3eac-4c01-8998-5056f79c7fa9"] ("measurement conversation 13") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(2)>button ("Onboarding")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-d647fb9e-3eac-4c01-8998-5056f79c7fa9"]`
 - **Cells (viewport/theme):** desktop/light
 - **Screenshot:** `screenshots/settings-user__settings-user-llm-providers__desktop__light.png`
 - **Repro:** login admin → flow `settings-user` → step `settings-user-llm-providers` at desktop/light
 
 ### ⚪ LOW · `control-collision`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** two distinct interactive controls overlap 91% in-viewport — [data-testid="chat-recent-conversations-menu-item-0a1fccac-5e9a-42f5-a668-923685ac0785"] ("Untitled Conversation") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(3)>button ("Settings")
-- **Element:** `[data-testid="chat-recent-conversations-menu-item-0a1fccac-5e9a-42f5-a668-923685ac0785"]`
+- **Signal:** two distinct interactive controls overlap 91% in-viewport — [data-testid="chat-recent-conversations-menu-item-a0d5fef9-23ae-4c03-9ea1-098e008e911f"] ("measurement conversation 12") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(3)>button ("Settings")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-a0d5fef9-23ae-4c03-9ea1-098e008e911f"]`
 - **Cells (viewport/theme):** desktop/light
 - **Screenshot:** `screenshots/settings-user__settings-user-llm-providers__desktop__light.png`
 - **Repro:** login admin → flow `settings-user` → step `settings-user-llm-providers` at desktop/light
@@ -367,27 +312,61 @@ Evidence-based, objective signals only. Deduped across viewports×themes (each r
 
 ### ⚪ LOW · `control-collision`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-5e2e6f63-b843-4fc8-b48e-0c0e3f297464"] ("Untitled Conversation") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(1)>button ("Hub")
-- **Element:** `[data-testid="chat-recent-conversations-menu-item-5e2e6f63-b843-4fc8-b48e-0c0e3f297464"]`
+- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-1177a2bf-4b37-4b16-83bd-39d01a98b953"] ("measurement conversation 14") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(1)>button ("Hub")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-1177a2bf-4b37-4b16-83bd-39d01a98b953"]`
 - **Cells (viewport/theme):** desktop/light
 - **Screenshot:** `screenshots/settings-user__settings-mcp-servers__desktop__light.png`
 - **Repro:** login admin → flow `settings-user` → step `settings-mcp-servers` at desktop/light
 
 ### ⚪ LOW · `control-collision`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-ca451c7a-b61f-45af-a7f5-6c2995034823"] ("Untitled Conversation") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(2)>button ("Onboarding")
-- **Element:** `[data-testid="chat-recent-conversations-menu-item-ca451c7a-b61f-45af-a7f5-6c2995034823"]`
+- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-d647fb9e-3eac-4c01-8998-5056f79c7fa9"] ("measurement conversation 13") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(2)>button ("Onboarding")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-d647fb9e-3eac-4c01-8998-5056f79c7fa9"]`
 - **Cells (viewport/theme):** desktop/light
 - **Screenshot:** `screenshots/settings-user__settings-mcp-servers__desktop__light.png`
 - **Repro:** login admin → flow `settings-user` → step `settings-mcp-servers` at desktop/light
 
 ### ⚪ LOW · `control-collision`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** two distinct interactive controls overlap 91% in-viewport — [data-testid="chat-recent-conversations-menu-item-0a1fccac-5e9a-42f5-a668-923685ac0785"] ("Untitled Conversation") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(3)>button ("Settings")
-- **Element:** `[data-testid="chat-recent-conversations-menu-item-0a1fccac-5e9a-42f5-a668-923685ac0785"]`
+- **Signal:** two distinct interactive controls overlap 91% in-viewport — [data-testid="chat-recent-conversations-menu-item-a0d5fef9-23ae-4c03-9ea1-098e008e911f"] ("measurement conversation 12") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(3)>button ("Settings")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-a0d5fef9-23ae-4c03-9ea1-098e008e911f"]`
 - **Cells (viewport/theme):** desktop/light
 - **Screenshot:** `screenshots/settings-user__settings-mcp-servers__desktop__light.png`
 - **Repro:** login admin → flow `settings-user` → step `settings-mcp-servers` at desktop/light
+
+## ui · `settings-memory` (4)
+
+### 🟡 MEDIUM · `zero-size-control`
+- **JTBD:** Configure user-scoped settings (persona: normal)
+- **Signal:** interactive control has near-zero size 1×1px
+- **Element:** `div#root>div>div>a`
+- **Cells (viewport/theme):** desktop/light
+- **Screenshot:** `screenshots/settings-user__settings-memory__desktop__light.png`
+- **Repro:** login admin → flow `settings-user` → step `settings-memory` at desktop/light
+
+### ⚪ LOW · `control-collision`
+- **JTBD:** Configure user-scoped settings (persona: normal)
+- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-1177a2bf-4b37-4b16-83bd-39d01a98b953"] ("measurement conversation 14") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(1)>button ("Hub")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-1177a2bf-4b37-4b16-83bd-39d01a98b953"]`
+- **Cells (viewport/theme):** desktop/light
+- **Screenshot:** `screenshots/settings-user__settings-memory__desktop__light.png`
+- **Repro:** login admin → flow `settings-user` → step `settings-memory` at desktop/light
+
+### ⚪ LOW · `control-collision`
+- **JTBD:** Configure user-scoped settings (persona: normal)
+- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-d647fb9e-3eac-4c01-8998-5056f79c7fa9"] ("measurement conversation 13") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(2)>button ("Onboarding")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-d647fb9e-3eac-4c01-8998-5056f79c7fa9"]`
+- **Cells (viewport/theme):** desktop/light
+- **Screenshot:** `screenshots/settings-user__settings-memory__desktop__light.png`
+- **Repro:** login admin → flow `settings-user` → step `settings-memory` at desktop/light
+
+### ⚪ LOW · `control-collision`
+- **JTBD:** Configure user-scoped settings (persona: normal)
+- **Signal:** two distinct interactive controls overlap 91% in-viewport — [data-testid="chat-recent-conversations-menu-item-a0d5fef9-23ae-4c03-9ea1-098e008e911f"] ("measurement conversation 12") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(3)>button ("Settings")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-a0d5fef9-23ae-4c03-9ea1-098e008e911f"]`
+- **Cells (viewport/theme):** desktop/light
+- **Screenshot:** `screenshots/settings-user__settings-memory__desktop__light.png`
+- **Repro:** login admin → flow `settings-user` → step `settings-memory` at desktop/light
 
 ## ui · `settings-skills` (4)
 
@@ -401,24 +380,24 @@ Evidence-based, objective signals only. Deduped across viewports×themes (each r
 
 ### ⚪ LOW · `control-collision`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-5e2e6f63-b843-4fc8-b48e-0c0e3f297464"] ("Untitled Conversation") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(1)>button ("Hub")
-- **Element:** `[data-testid="chat-recent-conversations-menu-item-5e2e6f63-b843-4fc8-b48e-0c0e3f297464"]`
+- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-1177a2bf-4b37-4b16-83bd-39d01a98b953"] ("measurement conversation 14") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(1)>button ("Hub")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-1177a2bf-4b37-4b16-83bd-39d01a98b953"]`
 - **Cells (viewport/theme):** desktop/light
 - **Screenshot:** `screenshots/settings-user__settings-skills__desktop__light.png`
 - **Repro:** login admin → flow `settings-user` → step `settings-skills` at desktop/light
 
 ### ⚪ LOW · `control-collision`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-ca451c7a-b61f-45af-a7f5-6c2995034823"] ("Untitled Conversation") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(2)>button ("Onboarding")
-- **Element:** `[data-testid="chat-recent-conversations-menu-item-ca451c7a-b61f-45af-a7f5-6c2995034823"]`
+- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-d647fb9e-3eac-4c01-8998-5056f79c7fa9"] ("measurement conversation 13") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(2)>button ("Onboarding")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-d647fb9e-3eac-4c01-8998-5056f79c7fa9"]`
 - **Cells (viewport/theme):** desktop/light
 - **Screenshot:** `screenshots/settings-user__settings-skills__desktop__light.png`
 - **Repro:** login admin → flow `settings-user` → step `settings-skills` at desktop/light
 
 ### ⚪ LOW · `control-collision`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** two distinct interactive controls overlap 91% in-viewport — [data-testid="chat-recent-conversations-menu-item-0a1fccac-5e9a-42f5-a668-923685ac0785"] ("Untitled Conversation") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(3)>button ("Settings")
-- **Element:** `[data-testid="chat-recent-conversations-menu-item-0a1fccac-5e9a-42f5-a668-923685ac0785"]`
+- **Signal:** two distinct interactive controls overlap 91% in-viewport — [data-testid="chat-recent-conversations-menu-item-a0d5fef9-23ae-4c03-9ea1-098e008e911f"] ("measurement conversation 12") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(3)>button ("Settings")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-a0d5fef9-23ae-4c03-9ea1-098e008e911f"]`
 - **Cells (viewport/theme):** desktop/light
 - **Screenshot:** `screenshots/settings-user__settings-skills__desktop__light.png`
 - **Repro:** login admin → flow `settings-user` → step `settings-skills` at desktop/light
@@ -435,24 +414,24 @@ Evidence-based, objective signals only. Deduped across viewports×themes (each r
 
 ### ⚪ LOW · `control-collision`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-5e2e6f63-b843-4fc8-b48e-0c0e3f297464"] ("Untitled Conversation") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(1)>button ("Hub")
-- **Element:** `[data-testid="chat-recent-conversations-menu-item-5e2e6f63-b843-4fc8-b48e-0c0e3f297464"]`
+- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-1177a2bf-4b37-4b16-83bd-39d01a98b953"] ("measurement conversation 14") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(1)>button ("Hub")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-1177a2bf-4b37-4b16-83bd-39d01a98b953"]`
 - **Cells (viewport/theme):** desktop/light
 - **Screenshot:** `screenshots/settings-user__settings-workflows__desktop__light.png`
 - **Repro:** login admin → flow `settings-user` → step `settings-workflows` at desktop/light
 
 ### ⚪ LOW · `control-collision`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-ca451c7a-b61f-45af-a7f5-6c2995034823"] ("Untitled Conversation") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(2)>button ("Onboarding")
-- **Element:** `[data-testid="chat-recent-conversations-menu-item-ca451c7a-b61f-45af-a7f5-6c2995034823"]`
+- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-d647fb9e-3eac-4c01-8998-5056f79c7fa9"] ("measurement conversation 13") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(2)>button ("Onboarding")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-d647fb9e-3eac-4c01-8998-5056f79c7fa9"]`
 - **Cells (viewport/theme):** desktop/light
 - **Screenshot:** `screenshots/settings-user__settings-workflows__desktop__light.png`
 - **Repro:** login admin → flow `settings-user` → step `settings-workflows` at desktop/light
 
 ### ⚪ LOW · `control-collision`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** two distinct interactive controls overlap 91% in-viewport — [data-testid="chat-recent-conversations-menu-item-0a1fccac-5e9a-42f5-a668-923685ac0785"] ("Untitled Conversation") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(3)>button ("Settings")
-- **Element:** `[data-testid="chat-recent-conversations-menu-item-0a1fccac-5e9a-42f5-a668-923685ac0785"]`
+- **Signal:** two distinct interactive controls overlap 91% in-viewport — [data-testid="chat-recent-conversations-menu-item-a0d5fef9-23ae-4c03-9ea1-098e008e911f"] ("measurement conversation 12") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(3)>button ("Settings")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-a0d5fef9-23ae-4c03-9ea1-098e008e911f"]`
 - **Cells (viewport/theme):** desktop/light
 - **Screenshot:** `screenshots/settings-user__settings-workflows__desktop__light.png`
 - **Repro:** login admin → flow `settings-user` → step `settings-workflows` at desktop/light
@@ -469,24 +448,24 @@ Evidence-based, objective signals only. Deduped across viewports×themes (each r
 
 ### ⚪ LOW · `control-collision`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-5e2e6f63-b843-4fc8-b48e-0c0e3f297464"] ("Untitled Conversation") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(1)>button ("Hub")
-- **Element:** `[data-testid="chat-recent-conversations-menu-item-5e2e6f63-b843-4fc8-b48e-0c0e3f297464"]`
+- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-1177a2bf-4b37-4b16-83bd-39d01a98b953"] ("measurement conversation 14") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(1)>button ("Hub")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-1177a2bf-4b37-4b16-83bd-39d01a98b953"]`
 - **Cells (viewport/theme):** desktop/light
 - **Screenshot:** `screenshots/settings-user__settings-citations__desktop__light.png`
 - **Repro:** login admin → flow `settings-user` → step `settings-citations` at desktop/light
 
 ### ⚪ LOW · `control-collision`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-ca451c7a-b61f-45af-a7f5-6c2995034823"] ("Untitled Conversation") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(2)>button ("Onboarding")
-- **Element:** `[data-testid="chat-recent-conversations-menu-item-ca451c7a-b61f-45af-a7f5-6c2995034823"]`
+- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-d647fb9e-3eac-4c01-8998-5056f79c7fa9"] ("measurement conversation 13") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(2)>button ("Onboarding")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-d647fb9e-3eac-4c01-8998-5056f79c7fa9"]`
 - **Cells (viewport/theme):** desktop/light
 - **Screenshot:** `screenshots/settings-user__settings-citations__desktop__light.png`
 - **Repro:** login admin → flow `settings-user` → step `settings-citations` at desktop/light
 
 ### ⚪ LOW · `control-collision`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** two distinct interactive controls overlap 91% in-viewport — [data-testid="chat-recent-conversations-menu-item-0a1fccac-5e9a-42f5-a668-923685ac0785"] ("Untitled Conversation") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(3)>button ("Settings")
-- **Element:** `[data-testid="chat-recent-conversations-menu-item-0a1fccac-5e9a-42f5-a668-923685ac0785"]`
+- **Signal:** two distinct interactive controls overlap 91% in-viewport — [data-testid="chat-recent-conversations-menu-item-a0d5fef9-23ae-4c03-9ea1-098e008e911f"] ("measurement conversation 12") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(3)>button ("Settings")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-a0d5fef9-23ae-4c03-9ea1-098e008e911f"]`
 - **Cells (viewport/theme):** desktop/light
 - **Screenshot:** `screenshots/settings-user__settings-citations__desktop__light.png`
 - **Repro:** login admin → flow `settings-user` → step `settings-citations` at desktop/light
@@ -503,24 +482,24 @@ Evidence-based, objective signals only. Deduped across viewports×themes (each r
 
 ### ⚪ LOW · `control-collision`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-5e2e6f63-b843-4fc8-b48e-0c0e3f297464"] ("Untitled Conversation") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(1)>button ("Hub")
-- **Element:** `[data-testid="chat-recent-conversations-menu-item-5e2e6f63-b843-4fc8-b48e-0c0e3f297464"]`
+- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-1177a2bf-4b37-4b16-83bd-39d01a98b953"] ("measurement conversation 14") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(1)>button ("Hub")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-1177a2bf-4b37-4b16-83bd-39d01a98b953"]`
 - **Cells (viewport/theme):** desktop/light
 - **Screenshot:** `screenshots/settings-user__settings-literature-keys__desktop__light.png`
 - **Repro:** login admin → flow `settings-user` → step `settings-literature-keys` at desktop/light
 
 ### ⚪ LOW · `control-collision`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-ca451c7a-b61f-45af-a7f5-6c2995034823"] ("Untitled Conversation") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(2)>button ("Onboarding")
-- **Element:** `[data-testid="chat-recent-conversations-menu-item-ca451c7a-b61f-45af-a7f5-6c2995034823"]`
+- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-d647fb9e-3eac-4c01-8998-5056f79c7fa9"] ("measurement conversation 13") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(2)>button ("Onboarding")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-d647fb9e-3eac-4c01-8998-5056f79c7fa9"]`
 - **Cells (viewport/theme):** desktop/light
 - **Screenshot:** `screenshots/settings-user__settings-literature-keys__desktop__light.png`
 - **Repro:** login admin → flow `settings-user` → step `settings-literature-keys` at desktop/light
 
 ### ⚪ LOW · `control-collision`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** two distinct interactive controls overlap 91% in-viewport — [data-testid="chat-recent-conversations-menu-item-0a1fccac-5e9a-42f5-a668-923685ac0785"] ("Untitled Conversation") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(3)>button ("Settings")
-- **Element:** `[data-testid="chat-recent-conversations-menu-item-0a1fccac-5e9a-42f5-a668-923685ac0785"]`
+- **Signal:** two distinct interactive controls overlap 91% in-viewport — [data-testid="chat-recent-conversations-menu-item-a0d5fef9-23ae-4c03-9ea1-098e008e911f"] ("measurement conversation 12") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(3)>button ("Settings")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-a0d5fef9-23ae-4c03-9ea1-098e008e911f"]`
 - **Cells (viewport/theme):** desktop/light
 - **Screenshot:** `screenshots/settings-user__settings-literature-keys__desktop__light.png`
 - **Repro:** login admin → flow `settings-user` → step `settings-literature-keys` at desktop/light
@@ -537,53 +516,27 @@ Evidence-based, objective signals only. Deduped across viewports×themes (each r
 
 ### ⚪ LOW · `control-collision`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-5e2e6f63-b843-4fc8-b48e-0c0e3f297464"] ("Untitled Conversation") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(1)>button ("Hub")
-- **Element:** `[data-testid="chat-recent-conversations-menu-item-5e2e6f63-b843-4fc8-b48e-0c0e3f297464"]`
+- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-1177a2bf-4b37-4b16-83bd-39d01a98b953"] ("measurement conversation 14") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(1)>button ("Hub")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-1177a2bf-4b37-4b16-83bd-39d01a98b953"]`
 - **Cells (viewport/theme):** desktop/light
 - **Screenshot:** `screenshots/settings-user__settings-web-search-keys__desktop__light.png`
 - **Repro:** login admin → flow `settings-user` → step `settings-web-search-keys` at desktop/light
 
 ### ⚪ LOW · `control-collision`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-ca451c7a-b61f-45af-a7f5-6c2995034823"] ("Untitled Conversation") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(2)>button ("Onboarding")
-- **Element:** `[data-testid="chat-recent-conversations-menu-item-ca451c7a-b61f-45af-a7f5-6c2995034823"]`
+- **Signal:** two distinct interactive controls overlap 97% in-viewport — [data-testid="chat-recent-conversations-menu-item-d647fb9e-3eac-4c01-8998-5056f79c7fa9"] ("measurement conversation 13") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(2)>button ("Onboarding")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-d647fb9e-3eac-4c01-8998-5056f79c7fa9"]`
 - **Cells (viewport/theme):** desktop/light
 - **Screenshot:** `screenshots/settings-user__settings-web-search-keys__desktop__light.png`
 - **Repro:** login admin → flow `settings-user` → step `settings-web-search-keys` at desktop/light
 
 ### ⚪ LOW · `control-collision`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** two distinct interactive controls overlap 91% in-viewport — [data-testid="chat-recent-conversations-menu-item-0a1fccac-5e9a-42f5-a668-923685ac0785"] ("Untitled Conversation") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(3)>button ("Settings")
-- **Element:** `[data-testid="chat-recent-conversations-menu-item-0a1fccac-5e9a-42f5-a668-923685ac0785"]`
+- **Signal:** two distinct interactive controls overlap 91% in-viewport — [data-testid="chat-recent-conversations-menu-item-a0d5fef9-23ae-4c03-9ea1-098e008e911f"] ("measurement conversation 12") ⨯ div>div:nth-of-type(4)>nav>ul>li>ul>li:nth-of-type(3)>button ("Settings")
+- **Element:** `[data-testid="chat-recent-conversations-menu-item-a0d5fef9-23ae-4c03-9ea1-098e008e911f"]`
 - **Cells (viewport/theme):** desktop/light
 - **Screenshot:** `screenshots/settings-user__settings-web-search-keys__desktop__light.png`
 - **Repro:** login admin → flow `settings-user` → step `settings-web-search-keys` at desktop/light
-
-## ui · `settings-memory` (3)
-
-### 🟡 MEDIUM · `zero-size-control`
-- **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** interactive control has near-zero size 1×1px
-- **Element:** `div#root>div>div>a`
-- **Cells (viewport/theme):** desktop/light
-- **Screenshot:** `screenshots/settings-user__settings-memory__desktop__light.png`
-- **Repro:** login admin → flow `settings-user` → step `settings-memory` at desktop/light
-
-### ⚪ LOW · `control-collision`
-- **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** two distinct interactive controls overlap 72% in-viewport — ype(1)>div:nth-of-type(1)>nav>ul>li:nth-of-type(13)>ul>li:nth-of-type(12)>button ("Web Search") ⨯ main-content>div>div:nth-of-type(2)>div:nth-of-type(1)>div:nth-of-type(2)>button ("Onboarding guide")
-- **Element:** `ype(1)>div:nth-of-type(1)>nav>ul>li:nth-of-type(13)>ul>li:nth-of-type(12)>button`
-- **Cells (viewport/theme):** desktop/light
-- **Screenshot:** `screenshots/settings-user__settings-memory__desktop__light.png`
-- **Repro:** login admin → flow `settings-user` → step `settings-memory` at desktop/light
-
-### ⚪ LOW · `control-collision`
-- **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** two distinct interactive controls overlap 60% in-viewport — ype(1)>div:nth-of-type(1)>nav>ul>li:nth-of-type(13)>ul>li:nth-of-type(13)>button ("System Workflows") ⨯ tion#main-content>div>div:nth-of-type(2)>div:nth-of-type(1)>div:nth-of-type(2)>a ("Help & documentation")
-- **Element:** `ype(1)>div:nth-of-type(1)>nav>ul>li:nth-of-type(13)>ul>li:nth-of-type(13)>button`
-- **Cells (viewport/theme):** desktop/light
-- **Screenshot:** `screenshots/settings-user__settings-memory__desktop__light.png`
-- **Repro:** login admin → flow `settings-user` → step `settings-memory` at desktop/light
 
 # Dimension: color-theme (6)
 
@@ -637,123 +590,33 @@ Evidence-based, objective signals only. Deduped across viewports×themes (each r
 - **Screenshot:** `screenshots/settings-user__settings-general__desktop__light.png`
 - **Repro:** login admin → flow `settings-user` → step `settings-general` at desktop/light
 
-# Dimension: network (51)
+# Dimension: network (31)
 
-## network · `settings-general` (4)
-
-### 🟡 MEDIUM · `network/failure`
-- **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** network failure: GET /api/sync/subscribe → 429 (91ms)
-- **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `settings-user` → step `settings-general` at desktop/light
-
-### 🟡 MEDIUM · `network/failure`
-- **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** network failure: POST /api/projects/by-conversations → 405 (1537ms)
-- **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `settings-user` → step `settings-general` at desktop/light
+## network · `settings-root` (3)
 
 ### 🟡 MEDIUM · `network/waterfall`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** waterfall: 6 sequential dependent /api requests (1943ms serial) that could be parallelized — /api/onboarding/progress → /api/server-update/status → /api/notifications → /api/llm-models/downloads
+- **Signal:** waterfall: 8 sequential dependent /api requests (999ms serial) that could be parallelized — /api/onboarding/progress → /api/server-update/status → /api/notifications → /api/llm-models/downloads
 - **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `settings-user` → step `settings-general` at desktop/light
+- **Repro:** login admin → flow `settings-user` → step `settings-root` at desktop/light
 
 ### 🟡 MEDIUM · `network/irrelevant`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** irrelevant fetch for this page: GET /api/conversations — "List conversations". Flow "settings-user" (step "settings-general") has no use for the `conversations` domain; likely eager over-fetch of unrelated data.
+- **Signal:** irrelevant fetch for this page: GET /api/conversations — "List conversations". Flow "settings-user" (step "settings-root") has no use for the `conversations` domain; likely eager over-fetch of unrelated data.
 - **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `settings-user` → step `settings-general` at desktop/light
+- **Repro:** login admin → flow `settings-user` → step `settings-root` at desktop/light
 
-## network · `settings-profile` (4)
-
-### 🟡 MEDIUM · `network/failure`
+### ⚪ LOW · `network/duplicate`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** network failure: GET /api/sync/subscribe → 429 (98ms)
+- **Signal:** duplicate request: GET /api/auth/me fired 2× within step "settings-root" (200,200)
 - **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `settings-user` → step `settings-profile` at desktop/light
+- **Repro:** login admin → flow `settings-user` → step `settings-root` at desktop/light
 
-### 🟡 MEDIUM · `network/failure`
-- **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** network failure: POST /api/projects/by-conversations → 405 (1523ms)
-- **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `settings-user` → step `settings-profile` at desktop/light
+## network · `settings-memory` (3)
 
 ### 🟡 MEDIUM · `network/waterfall`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** waterfall: 6 sequential dependent /api requests (1920ms serial) that could be parallelized — /api/onboarding/progress → /api/server-update/status → /api/notifications → /api/llm-models/downloads
-- **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `settings-user` → step `settings-profile` at desktop/light
-
-### 🟡 MEDIUM · `network/irrelevant`
-- **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** irrelevant fetch for this page: GET /api/conversations — "List conversations". Flow "settings-user" (step "settings-profile") has no use for the `conversations` domain; likely eager over-fetch of unrelated data.
-- **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `settings-user` → step `settings-profile` at desktop/light
-
-## network · `settings-user-llm-providers` (4)
-
-### 🟡 MEDIUM · `network/failure`
-- **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** network failure: GET /api/sync/subscribe → 429 (104ms)
-- **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `settings-user` → step `settings-user-llm-providers` at desktop/light
-
-### 🟡 MEDIUM · `network/failure`
-- **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** network failure: POST /api/projects/by-conversations → 405 (4ms)
-- **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `settings-user` → step `settings-user-llm-providers` at desktop/light
-
-### 🟡 MEDIUM · `network/waterfall`
-- **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** waterfall: 4 sequential dependent /api requests (1750ms serial) that could be parallelized — /api/user-llm-providers → /api/conversations → /api/projects/by-conversations → /api/projects
-- **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `settings-user` → step `settings-user-llm-providers` at desktop/light
-
-### 🟡 MEDIUM · `network/irrelevant`
-- **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** irrelevant fetch for this page: GET /api/conversations — "List conversations". Flow "settings-user" (step "settings-user-llm-providers") has no use for the `conversations` domain; likely eager over-fetch of unrelated data.
-- **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `settings-user` → step `settings-user-llm-providers` at desktop/light
-
-## network · `settings-mcp-servers` (4)
-
-### 🟡 MEDIUM · `network/failure`
-- **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** network failure: GET /api/sync/subscribe → 429 (90ms)
-- **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `settings-user` → step `settings-mcp-servers` at desktop/light
-
-### 🟡 MEDIUM · `network/failure`
-- **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** network failure: POST /api/projects/by-conversations → 405 (2ms)
-- **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `settings-user` → step `settings-mcp-servers` at desktop/light
-
-### 🟡 MEDIUM · `network/waterfall`
-- **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** waterfall: 10 sequential dependent /api requests (1778ms serial) that could be parallelized — /api/onboarding/progress → /api/server-update/status → /api/notifications → /api/llm-models/downloads
-- **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `settings-user` → step `settings-mcp-servers` at desktop/light
-
-### 🟡 MEDIUM · `network/irrelevant`
-- **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** irrelevant fetch for this page: GET /api/conversations — "List conversations". Flow "settings-user" (step "settings-mcp-servers") has no use for the `conversations` domain; likely eager over-fetch of unrelated data.
-- **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `settings-user` → step `settings-mcp-servers` at desktop/light
-
-## network · `settings-memory` (4)
-
-### 🟡 MEDIUM · `network/failure`
-- **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** network failure: GET /api/sync/subscribe → 429 (1839ms)
-- **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `settings-user` → step `settings-memory` at desktop/light
-
-### 🟡 MEDIUM · `network/waterfall`
-- **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** waterfall: 13 sequential dependent /api requests (3155ms serial) that could be parallelized — /api/onboarding/progress → /api/notifications → /api/server-update/status → /api/llm-models/downloads
+- **Signal:** waterfall: 5 sequential dependent /api requests (78ms serial) that could be parallelized — /api/onboarding/progress → /api/notifications → /api/server-update/status → /api/llm-models/downloads
 - **Cells (viewport/theme):** desktop/light
 - **Repro:** login admin → flow `settings-user` → step `settings-memory` at desktop/light
 
@@ -769,75 +632,17 @@ Evidence-based, objective signals only. Deduped across viewports×themes (each r
 - **Cells (viewport/theme):** desktop/light
 - **Repro:** login admin → flow `settings-user` → step `settings-memory` at desktop/light
 
-## network · `settings-skills` (4)
+## network · `settings-citations` (3)
 
 ### 🟡 MEDIUM · `network/failure`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** network failure: GET /api/sync/subscribe → 429 (102ms)
-- **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `settings-user` → step `settings-skills` at desktop/light
-
-### 🟡 MEDIUM · `network/failure`
-- **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** network failure: POST /api/projects/by-conversations → 405 (1670ms)
-- **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `settings-user` → step `settings-skills` at desktop/light
-
-### 🟡 MEDIUM · `network/waterfall`
-- **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** waterfall: 7 sequential dependent /api requests (2090ms serial) that could be parallelized — /api/onboarding/progress → /api/notifications → /api/server-update/status → /api/llm-models/downloads
-- **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `settings-user` → step `settings-skills` at desktop/light
-
-### 🟡 MEDIUM · `network/irrelevant`
-- **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** irrelevant fetch for this page: GET /api/conversations — "List conversations". Flow "settings-user" (step "settings-skills") has no use for the `conversations` domain; likely eager over-fetch of unrelated data.
-- **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `settings-user` → step `settings-skills` at desktop/light
-
-## network · `settings-workflows` (4)
-
-### 🟡 MEDIUM · `network/failure`
-- **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** network failure: GET /api/sync/subscribe → 429 (112ms)
-- **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `settings-user` → step `settings-workflows` at desktop/light
-
-### 🟡 MEDIUM · `network/failure`
-- **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** network failure: POST /api/projects/by-conversations → 405 (1655ms)
-- **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `settings-user` → step `settings-workflows` at desktop/light
-
-### 🟡 MEDIUM · `network/waterfall`
-- **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** waterfall: 4 sequential dependent /api requests (2014ms serial) that could be parallelized — /api/llm-models/downloads → /api/workflows → /api/conversations → /api/projects/by-conversations
-- **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `settings-user` → step `settings-workflows` at desktop/light
-
-### 🟡 MEDIUM · `network/irrelevant`
-- **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** irrelevant fetch for this page: GET /api/conversations — "List conversations". Flow "settings-user" (step "settings-workflows") has no use for the `conversations` domain; likely eager over-fetch of unrelated data.
-- **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `settings-user` → step `settings-workflows` at desktop/light
-
-## network · `settings-citations` (4)
-
-### 🟡 MEDIUM · `network/failure`
-- **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** network failure: GET /api/sync/subscribe → 429 (98ms)
-- **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `settings-user` → step `settings-citations` at desktop/light
-
-### 🟡 MEDIUM · `network/failure`
-- **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** network failure: POST /api/projects/by-conversations → 405 (3ms)
+- **Signal:** network failure: GET /api/sync/subscribe → 429 (94ms)
 - **Cells (viewport/theme):** desktop/light
 - **Repro:** login admin → flow `settings-user` → step `settings-citations` at desktop/light
 
 ### 🟡 MEDIUM · `network/waterfall`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** waterfall: 8 sequential dependent /api requests (1696ms serial) that could be parallelized — /api/onboarding/progress → /api/server-update/status → /api/notifications → /api/llm-models/downloads
+- **Signal:** waterfall: 11 sequential dependent /api requests (578ms serial) that could be parallelized — /api/auth/me → /api/app/setup/status → /api/sync/subscribe → /api/onboarding/progress
 - **Cells (viewport/theme):** desktop/light
 - **Repro:** login admin → flow `settings-user` → step `settings-citations` at desktop/light
 
@@ -847,23 +652,17 @@ Evidence-based, objective signals only. Deduped across viewports×themes (each r
 - **Cells (viewport/theme):** desktop/light
 - **Repro:** login admin → flow `settings-user` → step `settings-citations` at desktop/light
 
-## network · `settings-literature-keys` (4)
+## network · `settings-literature-keys` (3)
 
 ### 🟡 MEDIUM · `network/failure`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** network failure: GET /api/sync/subscribe → 429 (46ms)
-- **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `settings-user` → step `settings-literature-keys` at desktop/light
-
-### 🟡 MEDIUM · `network/failure`
-- **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** network failure: POST /api/projects/by-conversations → 405 (4ms)
+- **Signal:** network failure: GET /api/sync/subscribe → 429 (122ms)
 - **Cells (viewport/theme):** desktop/light
 - **Repro:** login admin → flow `settings-user` → step `settings-literature-keys` at desktop/light
 
 ### 🟡 MEDIUM · `network/waterfall`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** waterfall: 8 sequential dependent /api requests (2043ms serial) that could be parallelized — /api/onboarding/progress → /api/notifications → /api/llm-models/downloads → /api/server-update/status
+- **Signal:** waterfall: 5 sequential dependent /api requests (293ms serial) that could be parallelized — /api/server-update/status → /api/llm-models/downloads → /api/lit-search/user-keys → /api/conversations
 - **Cells (viewport/theme):** desktop/light
 - **Repro:** login admin → flow `settings-user` → step `settings-literature-keys` at desktop/light
 
@@ -873,23 +672,17 @@ Evidence-based, objective signals only. Deduped across viewports×themes (each r
 - **Cells (viewport/theme):** desktop/light
 - **Repro:** login admin → flow `settings-user` → step `settings-literature-keys` at desktop/light
 
-## network · `settings-web-search-keys` (4)
+## network · `settings-web-search-keys` (3)
 
 ### 🟡 MEDIUM · `network/failure`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** network failure: GET /api/sync/subscribe → 429 (105ms)
-- **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `settings-user` → step `settings-web-search-keys` at desktop/light
-
-### 🟡 MEDIUM · `network/failure`
-- **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** network failure: POST /api/projects/by-conversations → 405 (4ms)
+- **Signal:** network failure: GET /api/sync/subscribe → 429 (81ms)
 - **Cells (viewport/theme):** desktop/light
 - **Repro:** login admin → flow `settings-user` → step `settings-web-search-keys` at desktop/light
 
 ### 🟡 MEDIUM · `network/waterfall`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** waterfall: 4 sequential dependent /api requests (1989ms serial) that could be parallelized — /api/web-search/user-keys → /api/conversations → /api/projects/by-conversations → /api/projects
+- **Signal:** waterfall: 4 sequential dependent /api requests (416ms serial) that could be parallelized — /api/llm-models/downloads → /api/web-search/user-keys → /api/conversations → /api/projects/by-conversations
 - **Cells (viewport/theme):** desktop/light
 - **Repro:** login admin → flow `settings-user` → step `settings-web-search-keys` at desktop/light
 
@@ -899,57 +692,39 @@ Evidence-based, objective signals only. Deduped across viewports×themes (each r
 - **Cells (viewport/theme):** desktop/light
 - **Repro:** login admin → flow `settings-user` → step `settings-web-search-keys` at desktop/light
 
-## network · `home (flow-level)` (3)
-
-### 🟡 MEDIUM · `network/failure`
-- **JTBD:** Open app — land on new-chat home (persona: normal)
-- **Signal:** network failure: GET /api/sync/subscribe → 429 (86ms)
-- **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `home` → step `(load)` at desktop/light
-
-### 🟡 MEDIUM · `network/failure`
-- **JTBD:** Open app — land on new-chat home (persona: normal)
-- **Signal:** network failure: POST /api/projects/by-conversations → 405 (5ms)
-- **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `home` → step `(load)` at desktop/light
-
-### 🟡 MEDIUM · `network/waterfall`
-- **JTBD:** Open app — land on new-chat home (persona: normal)
-- **Signal:** waterfall: 11 sequential dependent /api requests (491ms serial) that could be parallelized — /api/onboarding/progress → /api/notifications → /api/server-update/status → /api/llm-models/downloads
-- **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `home` → step `(load)` at desktop/light
-
-## network · `settings-user (flow-level)` (3)
-
-### 🟡 MEDIUM · `network/failure`
-- **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** network failure: GET /api/sync/subscribe → 429 (1687ms)
-- **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `settings-user` → step `(load)` at desktop/light
-
-### 🟡 MEDIUM · `network/failure`
-- **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** network failure: POST /api/projects/by-conversations → 405 (28ms)
-- **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `settings-user` → step `(load)` at desktop/light
+## network · `settings-general` (2)
 
 ### 🟡 MEDIUM · `network/waterfall`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** waterfall: 4 sequential dependent /api requests (161ms serial) that could be parallelized — /api/summarization/settings → /api/user-llm-providers → /api/projects/by-conversations → /api/projects
+- **Signal:** waterfall: 7 sequential dependent /api requests (439ms serial) that could be parallelized — /api/onboarding/progress → /api/server-update/status → /api/notifications → /api/llm-models/downloads
 - **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `settings-user` → step `(load)` at desktop/light
+- **Repro:** login admin → flow `settings-user` → step `settings-general` at desktop/light
 
-## network · `settings-assistants` (3)
-
-### 🟡 MEDIUM · `network/failure`
+### 🟡 MEDIUM · `network/irrelevant`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** network failure: GET /api/sync/subscribe → 429 (96ms)
+- **Signal:** irrelevant fetch for this page: GET /api/conversations — "List conversations". Flow "settings-user" (step "settings-general") has no use for the `conversations` domain; likely eager over-fetch of unrelated data.
 - **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `settings-user` → step `settings-assistants` at desktop/light
+- **Repro:** login admin → flow `settings-user` → step `settings-general` at desktop/light
+
+## network · `settings-profile` (2)
 
 ### 🟡 MEDIUM · `network/waterfall`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** waterfall: 7 sequential dependent /api requests (1629ms serial) that could be parallelized — /api/onboarding/progress → /api/server-update/status → /api/notifications → /api/llm-models/downloads
+- **Signal:** waterfall: 6 sequential dependent /api requests (434ms serial) that could be parallelized — /api/onboarding/progress → /api/server-update/status → /api/notifications → /api/llm-models/downloads
+- **Cells (viewport/theme):** desktop/light
+- **Repro:** login admin → flow `settings-user` → step `settings-profile` at desktop/light
+
+### 🟡 MEDIUM · `network/irrelevant`
+- **JTBD:** Configure user-scoped settings (persona: normal)
+- **Signal:** irrelevant fetch for this page: GET /api/conversations — "List conversations". Flow "settings-user" (step "settings-profile") has no use for the `conversations` domain; likely eager over-fetch of unrelated data.
+- **Cells (viewport/theme):** desktop/light
+- **Repro:** login admin → flow `settings-user` → step `settings-profile` at desktop/light
+
+## network · `settings-assistants` (2)
+
+### 🟡 MEDIUM · `network/waterfall`
+- **JTBD:** Configure user-scoped settings (persona: normal)
+- **Signal:** waterfall: 8 sequential dependent /api requests (477ms serial) that could be parallelized — /api/onboarding/progress → /api/server-update/status → /api/notifications → /api/llm-models/downloads
 - **Cells (viewport/theme):** desktop/light
 - **Repro:** login admin → flow `settings-user` → step `settings-assistants` at desktop/light
 
@@ -959,27 +734,74 @@ Evidence-based, objective signals only. Deduped across viewports×themes (each r
 - **Cells (viewport/theme):** desktop/light
 - **Repro:** login admin → flow `settings-user` → step `settings-assistants` at desktop/light
 
-## network · `settings-root` (2)
+## network · `settings-user-llm-providers` (2)
 
-### 🟡 MEDIUM · `network/failure`
+### 🟡 MEDIUM · `network/waterfall`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** network failure: GET /api/sync/subscribe → 429 (76ms)
+- **Signal:** waterfall: 7 sequential dependent /api requests (228ms serial) that could be parallelized — /api/server-update/status → /api/llm-models/downloads → /api/conversations → /api/user-llm-providers/api-keys
 - **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `settings-user` → step `settings-root` at desktop/light
+- **Repro:** login admin → flow `settings-user` → step `settings-user-llm-providers` at desktop/light
 
 ### 🟡 MEDIUM · `network/irrelevant`
 - **JTBD:** Configure user-scoped settings (persona: normal)
-- **Signal:** irrelevant fetch for this page: GET /api/conversations — "List conversations". Flow "settings-user" (step "settings-root") has no use for the `conversations` domain; likely eager over-fetch of unrelated data.
+- **Signal:** irrelevant fetch for this page: GET /api/conversations — "List conversations". Flow "settings-user" (step "settings-user-llm-providers") has no use for the `conversations` domain; likely eager over-fetch of unrelated data.
 - **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `settings-user` → step `settings-root` at desktop/light
+- **Repro:** login admin → flow `settings-user` → step `settings-user-llm-providers` at desktop/light
 
-# Dimension: real-infra (1)
+## network · `settings-mcp-servers` (2)
 
-## real-infra · `(preflight) (flow-level)` (1)
-
-### 🔴 HIGH · `llm-infra`
-- **JTBD:** real-infra preflight (persona: admin)
-- **Signal:** STREAMING UNAVAILABLE for the driving user "admin": /api/sync/subscribe → 429 before any audit load. Generative flows cannot receive a reply as this user; any chat surface audited in this run is a PENDING state. (Per-user stream/connection slots are exhausted — verify with a freshly created user.)
-- **Element:** `/api/sync/subscribe`
+### 🟡 MEDIUM · `network/waterfall`
+- **JTBD:** Configure user-scoped settings (persona: normal)
+- **Signal:** waterfall: 5 sequential dependent /api requests (152ms serial) that could be parallelized — /api/onboarding/progress → /api/notifications → /api/server-update/status → /api/llm-models/downloads
 - **Cells (viewport/theme):** desktop/light
-- **Repro:** login admin → flow `(preflight)` → step `(preflight)` at desktop/light
+- **Repro:** login admin → flow `settings-user` → step `settings-mcp-servers` at desktop/light
+
+### 🟡 MEDIUM · `network/irrelevant`
+- **JTBD:** Configure user-scoped settings (persona: normal)
+- **Signal:** irrelevant fetch for this page: GET /api/conversations — "List conversations". Flow "settings-user" (step "settings-mcp-servers") has no use for the `conversations` domain; likely eager over-fetch of unrelated data.
+- **Cells (viewport/theme):** desktop/light
+- **Repro:** login admin → flow `settings-user` → step `settings-mcp-servers` at desktop/light
+
+## network · `settings-skills` (2)
+
+### 🟡 MEDIUM · `network/waterfall`
+- **JTBD:** Configure user-scoped settings (persona: normal)
+- **Signal:** waterfall: 6 sequential dependent /api requests (374ms serial) that could be parallelized — /api/notifications → /api/llm-models/downloads → /api/skills → /api/conversations
+- **Cells (viewport/theme):** desktop/light
+- **Repro:** login admin → flow `settings-user` → step `settings-skills` at desktop/light
+
+### 🟡 MEDIUM · `network/irrelevant`
+- **JTBD:** Configure user-scoped settings (persona: normal)
+- **Signal:** irrelevant fetch for this page: GET /api/conversations — "List conversations". Flow "settings-user" (step "settings-skills") has no use for the `conversations` domain; likely eager over-fetch of unrelated data.
+- **Cells (viewport/theme):** desktop/light
+- **Repro:** login admin → flow `settings-user` → step `settings-skills` at desktop/light
+
+## network · `settings-workflows` (2)
+
+### 🟡 MEDIUM · `network/waterfall`
+- **JTBD:** Configure user-scoped settings (persona: normal)
+- **Signal:** waterfall: 5 sequential dependent /api requests (480ms serial) that could be parallelized — /api/llm-models/downloads → /api/workflows → /api/conversations → /api/projects/by-conversations
+- **Cells (viewport/theme):** desktop/light
+- **Repro:** login admin → flow `settings-user` → step `settings-workflows` at desktop/light
+
+### 🟡 MEDIUM · `network/irrelevant`
+- **JTBD:** Configure user-scoped settings (persona: normal)
+- **Signal:** irrelevant fetch for this page: GET /api/conversations — "List conversations". Flow "settings-user" (step "settings-workflows") has no use for the `conversations` domain; likely eager over-fetch of unrelated data.
+- **Cells (viewport/theme):** desktop/light
+- **Repro:** login admin → flow `settings-user` → step `settings-workflows` at desktop/light
+
+## network · `home (flow-level)` (1)
+
+### 🟡 MEDIUM · `network/waterfall`
+- **JTBD:** Open app — land on new-chat home (persona: normal)
+- **Signal:** waterfall: 12 sequential dependent /api requests (485ms serial) that could be parallelized — /api/auth/me → /api/app/setup/status → /api/onboarding/progress → /api/notifications
+- **Cells (viewport/theme):** desktop/light
+- **Repro:** login admin → flow `home` → step `(load)` at desktop/light
+
+## network · `settings-user (flow-level)` (1)
+
+### 🟡 MEDIUM · `network/waterfall`
+- **JTBD:** Configure user-scoped settings (persona: normal)
+- **Signal:** waterfall: 8 sequential dependent /api requests (102ms serial) that could be parallelized — /api/chat/stream/subscription → /api/mcp/defaults → /api/user-llm-providers → /api/memory/admin-settings
+- **Cells (viewport/theme):** desktop/light
+- **Repro:** login admin → flow `settings-user` → step `(load)` at desktop/light
