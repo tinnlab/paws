@@ -23,3 +23,29 @@ Not defects — decisions the owner may want to overrule when they see it runnin
   detached/scheduled runs, that is a small additive change.
 - `/notifications/background` (the bell's target) is KEPT (DEC-2); only its
   sidebar entry is removed.
+
+## Added after the phase-6 blind audit
+
+The audit surfaced two things that are genuine PRODUCT decisions, not defects, and
+are therefore recorded here rather than silently taken:
+
+- **Detached tasks have no surface.** `workflow_runs.conversation_id` is
+  `ON DELETE SET NULL`, so deleting a conversation detaches its background tasks —
+  possibly while still running. With the global page gone they can no longer be
+  viewed, steered, or cancelled from any UI. The design's premise (that the
+  conversation-less bucket is scheduled-task work surfaced under Scheduled Tasks)
+  turned out to be false: the scheduler's history is a different table
+  (`scheduled_task_runs`) that this endpoint never returned. The endpoint's
+  unscoped read is exactly the query a "detached tasks" surface would use; nothing
+  consumes it today. **Owner decision:** add such a surface, cascade-delete the
+  tasks with the conversation, or accept the gap.
+- **`/notifications/background` is orphaned.** Removing its nav entry left it with
+  no in-app entry point — the bell's "View all" goes to `/notifications`. It is
+  kept (the brief scoped the change to the nav entry) but is now URL-only.
+  **Owner decision:** link it from the inbox, or delete the route + page.
+- **The endpoint's semantic change is unversioned and model-reachable.** An agent
+  asked via `control_mcp` to "list my background runs" now silently receives only
+  the detached ones, and an omitted optional `conversation_id` yields a DIFFERENT
+  scope rather than a wider one. A required `scope=conversation|detached|all`
+  discriminant would be unmissable — but that redesigns the contract the owner
+  approved, so it is surfaced, not taken.
