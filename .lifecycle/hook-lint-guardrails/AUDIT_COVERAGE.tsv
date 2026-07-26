@@ -6,7 +6,7 @@ src-app/desktop/ui/scripts/detector-acceptance.mjs	54	57	patterns-conformance,de
 src-app/desktop/ui/scripts/detector-acceptance.mjs	60	60	patterns-conformance,design-conformance,tests-quality,correctness,maintainability
 src-app/desktop/ui/scripts/detector-acceptance.mjs	75	78	patterns-conformance,design-conformance,tests-quality,correctness,maintainability
 src-app/desktop/ui/scripts/detector-acceptance.mjs	104	104	patterns-conformance,design-conformance,tests-quality,correctness,maintainability
-src-app/desktop/ui/scripts/lint-hooks.mjs	1	742	correctness,error-handling,tests-quality,state-management,security,design-conformance,patterns-conformance,api-friendliness,maintainability,extensibility,modularity,perf,concurrency,i18n-copy
+src-app/desktop/ui/scripts/lint-hooks.mjs	1	754	correctness,error-handling,tests-quality,state-management,security,design-conformance,patterns-conformance,api-friendliness,maintainability,extensibility,modularity,perf,concurrency,i18n-copy
 src-app/desktop/ui/src/dev/gallery/STATE_MATRIX.md	74	78	correctness,design-conformance,patterns-conformance,maintainability
 src-app/desktop/ui/src/dev/gallery/__detector_fixtures__/ConditionalHooks.tsx	1	70	correctness,tests-quality,design-conformance,patterns-conformance,security,i18n-copy
 src-app/desktop/ui/src/dev/gallery/__detector_fixtures__/ConditionalHooksClean.tsx	1	79	correctness,tests-quality,design-conformance,patterns-conformance,security,i18n-copy
@@ -27,7 +27,7 @@ src-app/ui/scripts/detector-acceptance.mjs	91	94	patterns-conformance,design-con
 src-app/ui/scripts/detector-acceptance.mjs	142	142	patterns-conformance,design-conformance,tests-quality,correctness,maintainability
 src-app/ui/scripts/detector-acceptance.mjs	150	153	patterns-conformance,design-conformance,tests-quality,correctness,maintainability
 src-app/ui/scripts/detector-acceptance.mjs	178	178	patterns-conformance,design-conformance,tests-quality,correctness,maintainability
-src-app/ui/scripts/lint-hooks.mjs	1	742	correctness,error-handling,tests-quality,state-management,security,design-conformance,patterns-conformance,api-friendliness,maintainability,extensibility,modularity,perf,concurrency,i18n-copy
+src-app/ui/scripts/lint-hooks.mjs	1	754	correctness,error-handling,tests-quality,state-management,security,design-conformance,patterns-conformance,api-friendliness,maintainability,extensibility,modularity,perf,concurrency,i18n-copy
 src-app/ui/scripts/lint-hooks.test.mjs	1	599	correctness,tests-quality,design-conformance,maintainability,patterns-conformance,api-contract
 src-app/ui/src/dev/gallery/DETECTOR_ACCEPTANCE.md	28	28	i18n-copy,design-conformance,maintainability,patterns-conformance
 src-app/ui/src/dev/gallery/DETECTOR_ACCEPTANCE.md	56	57	i18n-copy,design-conformance,maintainability,patterns-conformance
