@@ -13,6 +13,7 @@ import {
   type ChatExtension,
 } from '@/modules/chat/core/extensions'
 import { AddToProjectModal } from '@/modules/projects/components/AddToProjectModal'
+import { createBatchLoader } from '@/modules/projects/chat-extension/projectLookupBatch'
 import { SplitView } from '@/modules/chat/core/stores/splitView'
 import { Chat as ChatStore } from '@/modules/chat/core/stores/chatBridge'
 import { AssistantPicker } from '@/modules/assistant/stores/assistantPicker'
@@ -55,6 +56,32 @@ const conversationProjectCache = new Map<string, Project | null>()
 //      the same conversation simultaneously.
 const inflightProjectLookups = new Map<string, Promise<Project | null>>()
 
+// Request BATCHING. A conversation list mounts one membership badge per row, so
+// the per-id endpoint produced one request per conversation in a single burst
+// (the live-ui-audit `n+1` finding: 19-42 distinct
+// `GET /api/projects/by-conversation/{id}` in one step). Every id asked for
+// inside one short window is now answered by ONE
+// `POST /api/projects/by-conversations`. The cache + in-flight maps above are
+// unchanged — batching sits underneath them.
+const projectLookupBatch = createBatchLoader<Project>({
+  fetchChunk: async ids => {
+    const body = await ApiClient.Project.forConversations({
+      conversation_ids: ids,
+    })
+    // The response is de-duplicated: `links` carries {conversation_id,
+    // project_id} and each referenced project appears ONCE in `projects`.
+    // Re-join them here. Only ATTACHED conversations have a link; the rest are
+    // unfiled → the loader resolves them as null.
+    const byId = new Map(body.projects.map(p => [p.id, p]))
+    const out = new Map<string, Project>()
+    for (const link of body.links) {
+      const project = byId.get(link.project_id)
+      if (project) out.set(link.conversation_id, project)
+    }
+    return out
+  },
+})
+
 function getCached(id: string): Project | null | undefined {
   return conversationProjectCache.get(id)
 }
@@ -73,13 +100,13 @@ function loadProjectForConversation(
   conversationId: string,
   forceRefresh = false,
 ): Promise<Project | null> {
-  // `GET /api/projects/by-conversation/{id}` requires projects::read, which
-  // is granted to Administrators only (Chat Projects is opt-in per deployment,
-  // migration 54) — NOT the default Users group. This lookup runs on EVERY
-  // conversation load, so without this gate every non-projects chat user fired
-  // a 403 on each open (swallowed by the catch below, but still a failed
-  // request the runtime-health gate flags). A user without projects::read has
-  // no projects, so the answer is always "unfiled" → cache null, skip the call.
+  // The lookup requires projects::read, which is granted to Administrators
+  // only (Chat Projects is opt-in per deployment, migration 54) — NOT the
+  // default Users group. This lookup runs on EVERY conversation load, so
+  // without this gate every non-projects chat user fired a 403 on each open
+  // (swallowed, but still a failed request the runtime-health gate flags). A
+  // user without projects::read has no projects, so the answer is always
+  // "unfiled" → cache null, skip the call.
   if (!hasPermissionNow(Permissions.ProjectsRead)) {
     setCached(conversationId, null)
     return Promise.resolve(null)
@@ -95,24 +122,30 @@ function loadProjectForConversation(
     conversationProjectCache.delete(conversationId)
   }
 
-  const promise = ApiClient.Project.forConversation({
-    conversation_id: conversationId,
-  })
-    .then(project => {
-      // Backend returns Option<Project> — `null` means unfiled. Always
-      // a 200; no catch needed for the normal "no project" case.
-      const value = project ?? null
-      setCached(conversationId, value)
+  const promise = projectLookupBatch
+    .load(conversationId)
+    .then(({ value, failed }) => {
+      // Cache only a real ANSWER. `failed` means we never heard back: caching
+      // it would mislabel the conversation as unfiled permanently, and with
+      // batching one bad request would do that to a whole screenful of rows.
+      // The badge still degrades to "Add to project" for this render (the
+      // resolved value is null), but the next mount retries.
+      if (!failed) setCached(conversationId, value)
       return value
     })
     .catch(() => {
-      // Real network / auth errors only — treat as null so the trailing
-      // falls back to "Add to project" rather than spinning forever.
-      setCached(conversationId, null)
+      // Defence in depth: `load()` is documented never to reject, but a caller
+      // must never be handed a rejected promise — a rejected trailing lookup
+      // leaves the badge spinning and logs an unhandled rejection.
       return null
     })
     .finally(() => {
-      inflightProjectLookups.delete(conversationId)
+      // Only clear the slot if it is still OURS: a force-refresh may have
+      // replaced it, and evicting the newer entry would let a concurrent
+      // reader start a third lookup.
+      if (inflightProjectLookups.get(conversationId) === promise) {
+        inflightProjectLookups.delete(conversationId)
+      }
     })
 
   inflightProjectLookups.set(conversationId, promise)

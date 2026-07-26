@@ -51,8 +51,14 @@ export function ProjectFilesManagePanel() {
     uploadingFiles,
     selectedFileIds,
   } = ProjectFilesStore
+  // Both permission hooks must be called UNCONDITIONALLY every render —
+  // `canEdit && usePermission(B)` short-circuits the second hook whenever
+  // `canEdit` is false, so the hook COUNT varies with permission state and React
+  // throws "Rendered more hooks than during the previous render" when it flips
+  // (taxonomy O1; the same shape crashed 13 settings sections in 649ae7180).
   const canEdit = usePermission(Permissions.ProjectsEdit)
-  const canUpload = canEdit && usePermission(Permissions.FilesUpload)
+  const canUploadFiles = usePermission(Permissions.FilesUpload)
+  const canUpload = canEdit && canUploadFiles
 
   const projectId = project?.id
   const count = files.length

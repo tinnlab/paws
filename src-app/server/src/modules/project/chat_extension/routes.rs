@@ -29,4 +29,10 @@ pub fn project_conversation_routes() -> ApiRouter {
             "/projects/by-conversation/{conversation_id}",
             get_with(project_for_conversation, project_for_conversation_docs),
         )
+        // Batch reverse lookup — one request for a whole conversation LIST.
+        // A literal segment, so it never shadows `/projects/{id}`.
+        .api_route(
+            "/projects/by-conversations",
+            post_with(projects_for_conversations, projects_for_conversations_docs),
+        )
 }
