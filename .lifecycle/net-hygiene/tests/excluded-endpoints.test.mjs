@@ -123,3 +123,20 @@ test('TEST-9: the diff is non-empty (the check is actually looking at something)
     `no changed files against ${BASE} — wrong BASE, or nothing implemented`,
   )
 })
+
+test('TEST-9: the sdk SUBMODULE was actually scanned (no silent degraded mode)', () => {
+  // Most of this branch's diff lives in the submodule. If it were uninitialised,
+  // `collect` would skip it and all the assertions above would pass vacuously —
+  // so assert the scan reached it, rather than trusting the skip.
+  assert.ok(
+    existsSync(join(SDK, '.git')),
+    'the sdk submodule must be initialised for this check to mean anything ' +
+      '(`git submodule update --init`)',
+  )
+  const sdkFiles = changedFiles().filter(c => c.display.startsWith('sdk/'))
+  assert.ok(
+    sdkFiles.length > 0,
+    `expected changed files inside the sdk submodule against ${SDK_BASE}; got none ` +
+      `— either SDK_BASE is wrong or the submodule scan silently did nothing`,
+  )
+})

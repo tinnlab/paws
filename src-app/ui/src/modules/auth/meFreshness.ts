@@ -31,10 +31,29 @@ export const ME_BOOT_FRESH_MS = 3_000
 let lastMeAt = 0
 let lastMeEpoch = -1
 
-/** Record that a `/me` response just landed. */
-export function noteMeLoaded(now: number = Date.now()): void {
+/**
+ * The epoch to stamp a `/me` with — captured BEFORE the request is issued.
+ *
+ * Stamping at RESPONSE time would be a correctness bug with the same shape the
+ * coalescer avoids (`coalesce` captures `fetchEpoch` before calling `start()`):
+ * a `/me` already on the wire when a mutation completes would be recorded with
+ * the POST-mutation epoch and marked fresh, so the refresh that mutation
+ * triggers would be suppressed and the UI would keep pre-mutation data. Capture
+ * before, compare after.
+ *
+ *   const at = meRequestEpoch()
+ *   const res = await ApiClient.Auth.me(...)
+ *   noteMeLoaded(at)
+ */
+export function meRequestEpoch(): number {
+  return currentFetchEpoch()
+}
+
+/** Record that a `/me` response landed, stamped with the epoch captured at
+ *  REQUEST time (see `meRequestEpoch`). */
+export function noteMeLoaded(requestEpoch: number, now: number = Date.now()): void {
   lastMeAt = now
-  lastMeEpoch = currentFetchEpoch()
+  lastMeEpoch = requestEpoch
 }
 
 /** True when a `/me` re-fetch would return what we already have. */

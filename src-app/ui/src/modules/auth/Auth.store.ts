@@ -1,7 +1,7 @@
 import { defineStore , registerLazyStore } from '@ziee/framework/store-kit'
 import { ApiClient } from '@/api-client'
 import { setUnauthorizedHandler } from '@ziee/framework/api-client/core'
-import { isMeFresh, noteMeLoaded } from '@/modules/auth/meFreshness'
+import { isMeFresh, meRequestEpoch, noteMeLoaded } from '@/modules/auth/meFreshness'
 import type {
   CreateUserRequest,
   LinkAccountRequest,
@@ -141,6 +141,9 @@ let visibilityListener: (() => void) | null = null
 // post-save refresh + visibility refetch) collapse to a single in-flight
 // /me request instead of racing.
 let refreshInFlight: Promise<void> | null = null
+// The freshness epoch `refreshInFlight` was ISSUED in, so a caller arriving
+// after a mutation does not join a pre-mutation request (see refreshCurrentUser).
+let refreshInFlightEpoch = -1
 
 // ────────────────── Silent-refresh machinery (module-scope) ──────────────────
 //
@@ -703,6 +706,8 @@ const AuthDef = defineStore('Auth', {
             let lastError: unknown
             for (let attempt = 0; attempt < 3; attempt++) {
               try {
+                // Stamp the epoch BEFORE issuing — see meRequestEpoch().
+                const at = meRequestEpoch()
                 const response = await ApiClient.Auth.me(undefined, undefined)
                 set({
                   user: response.user,
@@ -714,7 +719,7 @@ const AuthDef = defineStore('Auth', {
                 })
                 // A page that mounts moments later (e.g. ProfileSettingsPage's
                 // `has_password` refresh) must not re-fetch what just landed.
-                noteMeLoaded()
+                noteMeLoaded(at)
                 return
               } catch (err) {
                 lastError = err
@@ -761,14 +766,29 @@ const AuthDef = defineStore('Auth', {
         },
 
         refreshCurrentUser: async () => {
-          // Collapse concurrent callers onto one in-flight /me request.
-          if (refreshInFlight) return refreshInFlight
+          // Collapse concurrent callers onto one in-flight /me request — but
+          // ONLY if that request was issued in the CURRENT freshness epoch. A
+          // caller arriving after a mutation must not join a /me that started
+          // before it and receive pre-mutation data (the same guard `coalesce`
+          // applies at the transport; without it INV-1 would be half-enforced
+          // in exactly the store that reads permissions).
+          if (refreshInFlight && refreshInFlightEpoch === meRequestEpoch()) {
+            return refreshInFlight
+          }
           // Near-miss collapse: a `/me` that landed moments ago (the boot
           // verification) already carries exactly what this refresh would
           // fetch. Only suppressed while NOTHING has changed since — a
           // completed mutation or an inbound sync frame moves the freshness
           // epoch, so the post-save refresh in `updateProfile` always runs.
+          //
+          // NOTE the contract: when suppressed this resolves IMMEDIATELY
+          // without a round-trip. That is safe precisely because the two
+          // conditions together mean the store already holds what the fetch
+          // would return, so an `await`ing caller reading `Auth.$.user` /
+          // `hasPassword` right after sees current data either way.
           if (isMeFresh()) return
+          const at = meRequestEpoch()
+          refreshInFlightEpoch = at
           refreshInFlight = (async () => {
             try {
               const response = await ApiClient.Auth.me(undefined, undefined)
@@ -777,7 +797,7 @@ const AuthDef = defineStore('Auth', {
                 permissions: response.permissions,
                 hasPassword: response.has_password,
               })
-              noteMeLoaded()
+              noteMeLoaded(at)
             } finally {
               refreshInFlight = null
             }

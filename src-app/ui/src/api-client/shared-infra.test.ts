@@ -3,12 +3,16 @@ import assert from 'node:assert/strict'
 import { createLazyDispatcher } from '../../../../sdk/packages/framework/src/lazy-dispatch.ts'
 
 /**
- * TEST-10 — the two shared-infra fixes.
+ * TEST-10 — the two shared-infra items.
  *
- * (a) ITEM-8: `notification-ui`'s `load` action was the only list action in the
- *     tree with NO in-flight guard, so each of its consumers (the bell widget,
- *     the toast listener, the inbox page) drove its own
- *     `GET /api/notifications` on the same boot.
+ * (a) ITEM-8: `notification-ui`'s `load` action must NOT carry a bare
+ *     `if (loading) return` guard. It reads `page`/`perPage`/`unreadOnly` from
+ *     state, and `setPage`/`setUnreadOnly` mutate those and then call it — so a
+ *     bare drop would discard a page change or filter toggle (leaving the UI on
+ *     the new selection with the old items) and would equally discard the
+ *     `sync:notification` / `sync:reconnect` reload, silently breaking
+ *     notify-and-refetch. The duplicate that motivated a guard is removed at the
+ *     transport instead, where only literally-identical concurrent GETs join.
  * (b) ITEM-10: `registerModule` built a SECOND `createStoreProxy` for a store
  *     that had already self-registered via `registerLazyStore`, giving it an
  *     independent `storeInitialized` flag + ref count — so its `init` (and every
@@ -16,17 +20,15 @@ import { createLazyDispatcher } from '../../../../sdk/packages/framework/src/laz
  *     that proxy as the SOLE owner of the lifecycle.
  */
 
-// ── (a) the notification load guard ─────────────────────────────────────────
-// Drives the REAL action factory. Only the external boundaries are faked: the
-// injected REST surface (via the store's own `setNotificationDeps` seam) and the
-// permission view (via the framework's `setAuthView` seam). The action body, its
-// guard, and the immer-style set/get are real.
+// ── (a) the notification load action ────────────────────────────────────────
+// Drives the REAL action factory. Only the external boundary is faked: the
+// injected REST surface (via the store's own `setNotificationDeps` seam).
 
 import loadNotifications from '../../../../sdk/packages/notification-ui/src/store/actions/load.ts'
 import { setNotificationDeps } from '../../../../sdk/packages/notification-ui/src/store/_deps.ts'
 import { useModuleSystemStore } from '../../../../sdk/packages/framework/src/module-system/store.ts'
 
-test('TEST-10a: two concurrent load() calls produce ONE list request', async () => {
+test('TEST-10a: a reload with DIFFERENT intent is never dropped', async () => {
   // The permission boundary is stubbed by the unit-test resolver (the barrel
   // re-exports JSX); the action body + its guard are the real thing.
   let listCalls = 0
@@ -34,10 +36,12 @@ test('TEST-10a: two concurrent load() calls produce ONE list request', async () 
   const done = new Promise<void>(r => {
     release = r
   })
+  const seenParams: { page: number }[] = []
   setNotificationDeps({
     api: {
-      list: async () => {
+      list: async (p: { page: number }) => {
         listCalls++
+        seenParams.push(p)
         await done
         return { items: [], total: 0, unread: 0 }
       },
@@ -60,14 +64,25 @@ test('TEST-10a: two concurrent load() calls produce ONE list request', async () 
 
   const load = loadNotifications(set as never, get as never)
   const a = load()
+  // A page change / filter toggle / sync-driven reload issued WHILE the first
+  // load is in flight must still reach the network — dropping it would leave the
+  // UI showing the new selection with the previous page's items, and would break
+  // notify-and-refetch for `sync:notification`.
+  state.page = 2
   const b = load()
   release()
   await Promise.all([a, b])
-  assert.equal(listCalls, 1, 'the second concurrent caller must be dropped by the guard')
-
-  // …and once settled, a later load DOES run (a guard, not a cache).
-  await load()
-  assert.equal(listCalls, 2)
+  assert.equal(
+    listCalls,
+    2,
+    'the action must NOT carry a bare in-flight guard — de-duplication of the ' +
+      'IDENTICAL concurrent case belongs at the transport, which can tell them apart',
+  )
+  assert.deepEqual(
+    seenParams.map(p => p.page),
+    [1, 2],
+    'each load must carry its own intent',
+  )
 })
 
 // ── (b) single-owner store proxy ────────────────────────────────────────────

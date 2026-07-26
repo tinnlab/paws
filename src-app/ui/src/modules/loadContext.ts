@@ -1,7 +1,6 @@
 import { Auth } from '@/modules/auth/Auth.store'
 import { App } from '@/modules/app/stores/app'
 import { evaluatePermission } from '@/core/permissions'
-import { hasLiveSession } from '@/modules/liveSession'
 import type { ModuleLoadContext } from '@ziee/framework/module-system'
 
 /**
@@ -22,7 +21,7 @@ export function buildLoadContext(pathname: string): ModuleLoadContext {
   const user = auth.user
   const permissions = auth.permissions ?? []
   return {
-    isAuthenticated: !!auth.isAuthenticated || hasLiveSession(auth),
+    isAuthenticated: !!auth.isAuthenticated,
     needsSetup: app.needsSetup === true,
     path: pathname,
     permissions,

@@ -28,7 +28,7 @@
 - **ITEM-3**: Never coalesce SSE streams, uploads (`FormData`), or non-GET methods; key on the auth token identity so a user switch cannot inherit the previous identity's in-flight response.
 - **ITEM-4**: Close store-kit's lazy-dispatch race — calls to the same lazy action made WHILE its chunk is still loading share one invocation, so the action's own `if (loading) return` guard is not bypassed. Steady-state (chunk already resolved) dispatch behaviour is unchanged.
 - **ITEM-5**: Issue the session verification (`GET /api/auth/me`) at module-initialize time so it overlaps `/api/app/setup/status` + `/api/onboarding/progress` instead of heading a serial chain — via a new `modules/auth/bootSessionVerify.ts` with a `.desktop.ts` NO-OP twin (desktop's auto-login owns the token; a persisted desktop token is stale by design). `AuthGuard` keeps its call as the mount-time backstop (`initAuth` is self-guarded).
-- **ITEM-6**: `buildLoadContext()` reports `isAuthenticated` from a LIVE persisted token (present and not past `expiresAt`) so auth-gated modules register in wave 1 in parallel with `/auth/me`, instead of strictly after it. Permissions stay non-persisted, so `ctx.can(...)`-gated modules are unaffected (INV-5).
+- **ITEM-6**: [DESCOPED] Deriving `isAuthenticated` in `buildLoadContext()` from a live persisted token so auth-gated modules register in wave 1. Cut after the blind audit: it widens the authenticated-tier trust boundary (a REVOKED-but-unexpired token would deliver and initialize every `ctx.isAuthenticated`-gated module, and `loader.ts` documents that modules are never unloaded), it contradicts this same branch's desktop reasoning (a persisted desktop token is stale by construction), and re-measuring with it removed showed NO change to any number it was supposed to move. See DEC-15.
 - **ITEM-7**: Stop `/settings/profile` refetching `/auth/me` ~380 ms after boot's: `Auth.refreshCurrentUser()` becomes a no-op when a `/me` response landed within a short freshness window (it already single-flights concurrent callers; this covers the near-miss).
 - **ITEM-8**: Give `notification-ui`'s `load` action the in-flight guard it lacks (every sibling store action has one).
 - **ITEM-9**: `SyncClient` backs off differently for a capacity refusal: a `429` reconnects on a longer jittered delay instead of the 1 s transient-drop floor, so the client stops hammering a rate-limited endpoint. Non-429 drops keep the fast 1 s recovery.
@@ -42,7 +42,9 @@
   store-kit so the dispatcher is unit-testable without the zustand/EventBus graph)
 - `sdk/packages/framework/src/sync/backoff.ts` (new — DRIFT-1.2: same, for the
   reconnect policy)
-- `sdk/packages/framework/src/__test-stubs__/permissions.ts` (new — DRIFT-1.5)
+- `src-app/ui/src/core/__test-stubs__/framework-permissions.ts` (new — DRIFT-1.5;
+  in the APP tree, NOT the shared package, so an always-allow permission stub is
+  not a resolvable public subpath of `@ziee/framework` — DRIFT-2.7)
 - `sdk/packages/framework/src/api-client/core.ts`
 - `sdk/packages/framework/src/sync/SyncClient.ts`
 - `sdk/packages/framework/src/store-kit.ts`
@@ -52,15 +54,11 @@
 - `src-app/ui/src/modules/auth/bootSessionVerify.desktop.ts` (new)
 - `src-app/ui/src/modules/auth/module.tsx`
 - `src-app/ui/src/modules/auth/Auth.store.ts`
-- `src-app/ui/src/modules/loadContext.ts`
-- `src-app/ui/src/modules/liveSession.ts` (new — DRIFT-1.3: the predicate, kept
-  dependency-free so it is testable without the Auth store graph)
 - `src-app/ui/scripts/node-test-hooks.mjs` (DRIFT-1.5, sdk-scoped)
 - `src-app/ui/src/dev/gallery/{stateMatrix.generated.ts,STATE_MATRIX.md}`
   (regenerated — DRIFT-1.7)
 - `src-app/ui/src/core/overrides/OVERRIDE_MANIFEST.md` (regenerated)
 - tests: `src-app/ui/src/api-client/inflight.test.ts`,
-  `src-app/ui/src/modules/liveSession.test.ts`,
   `src-app/ui/src/api-client/{lazy-dispatch,shared-infra}.test.ts`,
   `src-app/ui/src/modules/auth/{meFreshness,syncBackoff}.test.ts`,
   `src-app/ui/tests/e2e/perf/boot-parallelism.spec.ts`,

@@ -1,6 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { reconnectDelayMs } from '@ziee/framework/sync/backoff'
+import {
+  CAPACITY_BACKOFF_MS,
+  MAX_BACKOFF_MS,
+  reconnectDelayMs,
+} from '@ziee/framework/sync/backoff'
 
 /**
  * TEST-8 (ITEM-9) — the SSE reconnect backoff must distinguish a CAPACITY
@@ -12,13 +16,21 @@ import { reconnectDelayMs } from '@ziee/framework/sync/backoff'
  * duplicate subscribes per page. A transient drop must keep its fast recovery.
  */
 
-const MAX_BACKOFF_MS = 30_000
-
 test('TEST-8: a 429 backs off an order of magnitude beyond the transient floor', () => {
   // rand() = 0 → the pure floor, no jitter.
-  assert.equal(reconnectDelayMs(429, 1_000, () => 0), 10_000)
-  // A 429 must not be shortened by a small current backoff.
+  assert.equal(reconnectDelayMs(429, 1_000, () => 0), CAPACITY_BACKOFF_MS)
   assert.ok(reconnectDelayMs(429, 1_000, () => 0) > 1_000)
+})
+
+test('TEST-8: a 429 RAISES the floor — it never shortens an escalated backoff', () => {
+  // After several transient failures the loop's backoff has escalated. A 429 at
+  // that point must NOT drop the wait back to ~12s (which would mean retrying
+  // FASTER against an endpoint that just said "no room").
+  assert.equal(reconnectDelayMs(429, 30_000, () => 0), MAX_BACKOFF_MS)
+  assert.equal(reconnectDelayMs(429, 20_000, () => 0), 20_000)
+  // …and repeated 429s still escalate, because the loop's own backoff keeps
+  // doubling underneath: 10s → 16s → 30s as `currentBackoffMs` grows.
+  assert.ok(reconnectDelayMs(429, 16_000, () => 0) >= 16_000)
 })
 
 test('TEST-8: the 429 delay is jittered, so refused clients do not re-collide in lockstep', () => {

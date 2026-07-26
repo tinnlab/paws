@@ -101,25 +101,63 @@ function parseRequests(lines) {
     .filter(Boolean)
 }
 
+const med = xs => {
+  const s = [...xs].sort((a, b) => a - b)
+  return s.length % 2
+    ? s[(s.length - 1) / 2]
+    : Math.round((s[s.length / 2 - 1] + s[s.length / 2]) / 2)
+}
+
 function summarizeProbe(file) {
   if (!existsSync(file)) return null
   const doc = JSON.parse(readFileSync(file, 'utf8'))
-  const out = {}
+  // A probe JSON may hold several REPEATS per route; take the median of each
+  // metric so a single noisy cold load cannot drive the comparison.
+  const byRoute = new Map()
   for (const r of doc.perRoute) {
-    const reqs = parseRequests(r.requests)
-    const nonStream = reqs.filter(q => !STREAMING.test(q.url))
-    const scoped = nonStream.filter(q => !OWNED.test(q.url))
-    const dupes = {}
-    for (const q of reqs) dupes[q.url] = (dupes[q.url] || 0) + 1
-    out[r.route] = {
-      total: reqs.length,
-      totalScoped: scoped.length + reqs.filter(q => STREAMING.test(q.url)).length,
-      chainDepth: longestRun(nonStream),
-      chainDepthScoped: longestRun(scoped),
+    if (!byRoute.has(r.route)) byRoute.set(r.route, [])
+    byRoute.get(r.route).push(r)
+  }
+  const out = {}
+  for (const [route, runsForRoute] of byRoute) {
+    const per = runsForRoute.map(r => {
+      const reqs = parseRequests(r.requests)
+      const nonStream = reqs.filter(q => !STREAMING.test(q.url))
+      const scoped = nonStream.filter(q => !OWNED.test(q.url))
+      const dupes = {}
+      for (const q of reqs) dupes[q.url] = (dupes[q.url] || 0) + 1
+      const me = reqs.filter(q => q.url === '/api/auth/me').sort((a, b) => a.start - b.start)[0]
+      const setup = reqs
+        .filter(q => q.url === '/api/app/setup/status')
+        .sort((a, b) => a.start - b.start)[0]
+      return {
+        total: reqs.length,
+        totalScoped: scoped.length + reqs.filter(q => STREAMING.test(q.url)).length,
+        chainDepth: longestRun(nonStream),
+        chainDepthScoped: longestRun(scoped),
+        authMeStart: me ? me.start : 0,
+        bootOverlap:
+          me && setup ? Math.min(me.end, setup.end) - Math.max(me.start, setup.start) : 0,
+        duplicates: Object.fromEntries(
+          Object.entries(dupes)
+            .filter(([, n]) => n > 1)
+            .sort((a, b) => b[1] - a[1]),
+        ),
+      }
+    })
+    out[route] = {
+      runs: per.length,
+      total: med(per.map(p => p.total)),
+      totalScoped: med(per.map(p => p.totalScoped)),
+      chainDepth: med(per.map(p => p.chainDepth)),
+      chainDepthScoped: med(per.map(p => p.chainDepthScoped)),
+      authMeStart: med(per.map(p => p.authMeStart)),
+      bootOverlap: med(per.map(p => p.bootOverlap)),
       duplicates: Object.fromEntries(
-        Object.entries(dupes)
-          .filter(([, n]) => n > 1)
-          .sort((a, b) => b[1] - a[1]),
+        [...new Set(per.flatMap(p => Object.keys(p.duplicates)))].map(k => [
+          k,
+          med(per.map(p => p.duplicates[k] ?? 1)),
+        ]),
       ),
     }
   }
@@ -158,15 +196,15 @@ if (probeBefore && probeAfter) {
   const B = summarizeProbe(probeAfter)
   console.log('\n## boot-probe — per cold page load\n')
   console.log(
-    '| route | total (before→after) | total excl. owned | serial-chain depth | depth excl. owned |',
+    '| route | total | total excl. owned | serial-chain depth | depth excl. owned | /auth/me start (ms) | overlap with setup/status (ms) |',
   )
-  console.log('|---|---|---|---|---|')
+  console.log('|---|---|---|---|---|---|---|')
   for (const route of Object.keys(A)) {
     if (!B[route]) continue
     const a = A[route]
     const b = B[route]
     console.log(
-      `| \`${route}\` | ${a.total} → ${b.total} | ${a.totalScoped} → ${b.totalScoped} | ${a.chainDepth} → ${b.chainDepth} | ${a.chainDepthScoped} → ${b.chainDepthScoped} |`,
+      `| \`${route}\` | ${a.total} → ${b.total} | ${a.totalScoped} → ${b.totalScoped} | ${a.chainDepth} → ${b.chainDepth} | ${a.chainDepthScoped} → ${b.chainDepthScoped} | ${a.authMeStart} → ${b.authMeStart} | ${a.bootOverlap} → ${b.bootOverlap} |`,
     )
   }
   console.log('\n### duplicates per route\n')

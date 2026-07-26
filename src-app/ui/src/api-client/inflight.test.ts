@@ -6,6 +6,7 @@ import {
   coalesce,
   inflightKey,
   inflightSize,
+  MAX_JOIN_AGE_MS,
   // Relative + explicit `.ts` into the sdk source — the convention established
   // by `src/modules/smartLoader.test.ts` (the `@ziee/*` export map is
   // extensionless, which node's ESM resolver can't follow under `node --test`).
@@ -157,6 +158,61 @@ test('TEST-2: settling a superseded entry does not evict the newer one', async (
 })
 
 // ── TEST-3 — INV-1: notify-and-refetch survives the coalescer ────────────────
+
+test('TEST-1: a joiner gets its OWN copy — it never aliases the issuer\'s object', async () => {
+  __resetInflightForTests()
+  const k = inflightKey('GET', '/api/conversations', 'tok')
+  const payload = { conversations: [{ id: 'a' }, { id: 'b' }] }
+  let release!: (v: typeof payload) => void
+  const issuer = coalesce(k, () => new Promise<typeof payload>(r => (release = r)))
+  const joiner = coalesce(k, () => Promise.resolve(payload))
+  release(payload)
+
+  const a = await issuer
+  const b = await joiner
+  assert.deepEqual(a, b, 'same data')
+  assert.notEqual(a, b, 'but NOT the same object — a joiner must not alias')
+  assert.notEqual(a.conversations, b.conversations)
+
+  // The aliasing hazard this closes: one consumer normalizing in place.
+  b.conversations.sort((x, y) => (x.id < y.id ? 1 : -1))
+  assert.deepEqual(
+    a.conversations.map(c => c.id),
+    ['a', 'b'],
+    "a joiner's in-place mutation must not corrupt the issuer's copy",
+  )
+})
+
+test('TEST-2: a request older than MAX_JOIN_AGE_MS is no longer joinable', async () => {
+  __resetInflightForTests()
+  const k = inflightKey('GET', '/api/hangs', 'tok')
+  let hungCalls = 0
+  // A GET whose socket hangs: it never settles, so its entry never self-clears.
+  void coalesce(k, () => {
+    hungCalls++
+    return new Promise<string>(() => {})
+  })
+  assert.equal(hungCalls, 1)
+
+  // Same epoch, but far in the future.
+  const realNow = Date.now
+  try {
+    Date.now = () => realNow() + MAX_JOIN_AGE_MS + 1
+    let freshCalls = 0
+    const fresh = coalesce(k, () => {
+      freshCalls++
+      return Promise.resolve('recovered')
+    })
+    assert.equal(
+      freshCalls,
+      1,
+      'a hung request must not make its endpoint permanently unreadable',
+    )
+    assert.equal(await fresh, 'recovered')
+  } finally {
+    Date.now = realNow
+  }
+})
 
 test('TEST-3: a sync frame invalidates joinability so the refetch is real', async () => {
   __resetInflightForTests()

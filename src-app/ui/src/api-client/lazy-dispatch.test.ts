@@ -45,7 +45,7 @@ function makeGuardedAction() {
   }
 }
 
-test('TEST-4: two synchronous calls during the chunk-load window invoke the body ONCE', async () => {
+test('TEST-4: the CHUNK is fetched once no matter how many callers race it', async () => {
   const action = makeGuardedAction()
   let releaseChunk!: () => void
   const chunk = new Promise<void>(res => {
@@ -65,12 +65,14 @@ test('TEST-4: two synchronous calls during the chunk-load window invoke the body
 
   releaseChunk()
   action.releaseWork()
-  const results = await Promise.all([a, b, c])
+  await Promise.all([a, b, c])
 
-  assert.equal(loaderCalls, 1, 'the chunk is fetched once (unchanged behaviour)')
-  assert.equal(action.bodyCalls, 1, 'the three cold callers share ONE invocation')
-  assert.equal(action.pastGuard, 1, "the action's own in-flight guard is now reachable")
-  assert.deepEqual(results, ['loaded', 'loaded', 'loaded'])
+  assert.equal(loaderCalls, 1, 'the chunk is fetched exactly once')
+  // Every caller's body DOES run: the dispatcher deliberately does NOT merge
+  // cold-window calls (it cannot tell a read from a mutation, and merging would
+  // silently drop a duplicate create/delete). The duplicate NETWORK requests are
+  // removed one layer down, by the transport's GET coalescer.
+  assert.equal(action.bodyCalls, 3)
 })
 
 test('TEST-4: once the chunk has resolved, dispatch is unchanged (each call runs)', async () => {
@@ -90,46 +92,58 @@ test('TEST-4: once the chunk has resolved, dispatch is unchanged (each call runs
   )
 })
 
-test('TEST-4: cold calls with DIFFERENT arguments are not merged', async () => {
-  const seen: unknown[] = []
+test('TEST-4: EVERY cold-window call reaches the body — no silent merge', async () => {
+  // The load-bearing case: two calls carrying DIFFERENT callbacks. A key built
+  // with JSON.stringify would collapse both to "[null]" (JSON.stringify does not
+  // throw on a function) and the second callback would never fire.
+  const fired: string[] = []
   let releaseChunk!: () => void
   const chunk = new Promise<void>(res => {
     releaseChunk = res
   })
   const dispatch = createLazyDispatcher(async () => {
     await chunk
-    return async (n: unknown) => {
-      seen.push(n)
-    }
+    return async (cb: () => void) => cb()
   })
 
-  const a = dispatch(1)
-  const b = dispatch(2)
-  const c = dispatch(1)
-  releaseChunk()
-  await Promise.all([a, b, c])
-  assert.deepEqual(seen.sort(), [1, 2], 'same-arg merged, different-arg kept')
-})
-
-test('TEST-4: non-serializable args are never merged (equivalence unprovable)', async () => {
-  let calls = 0
-  let releaseChunk!: () => void
-  const chunk = new Promise<void>(res => {
-    releaseChunk = res
-  })
-  const dispatch = createLazyDispatcher(async () => {
-    await chunk
-    return async () => {
-      calls++
-    }
-  })
-  const cyclic: any = {}
-  cyclic.self = cyclic
-  const a = dispatch(cyclic)
-  const b = dispatch(cyclic)
+  const a = dispatch(() => fired.push('a'))
+  const b = dispatch(() => fired.push('b'))
   releaseChunk()
   await Promise.all([a, b])
-  assert.equal(calls, 2)
+  assert.deepEqual(fired.sort(), ['a', 'b'], 'both callbacks must be invoked')
+})
+
+test('TEST-4: two identical cold-window MUTATION dispatches both run', async () => {
+  // A double-clicked create/delete must not be silently swallowed by the
+  // dispatcher — that is a dropped user intent, not a saved request.
+  let creates = 0
+  let releaseChunk!: () => void
+  const chunk = new Promise<void>(res => {
+    releaseChunk = res
+  })
+  const dispatch = createLazyDispatcher(async () => {
+    await chunk
+    return async (_id: string) => {
+      creates++
+    }
+  })
+  const a = dispatch('same-id')
+  const b = dispatch('same-id')
+  releaseChunk()
+  await Promise.all([a, b])
+  assert.equal(creates, 2)
+})
+
+test('TEST-4: a FAILED chunk load is not memoized — the next call retries', async () => {
+  let attempts = 0
+  const dispatch = createLazyDispatcher(async () => {
+    attempts++
+    if (attempts === 1) throw new Error('chunk 404')
+    return async () => 'ok'
+  })
+  await assert.rejects(dispatch(), /chunk 404/)
+  assert.equal(await dispatch(), 'ok', 'a transient chunk failure must not brick the action')
+  assert.equal(attempts, 2)
 })
 
 test('TEST-4: preload warms the chunk without invoking the body', async () => {

@@ -131,23 +131,30 @@ test.describe('net-hygiene — boot parallelism + request de-duplication', () =>
     const original = (await displayName.inputValue()) || 'Admin'
     const renamed = `NetHygiene ${Date.now()}`
 
-    await displayName.fill(renamed)
-    await page.getByRole('button', { name: /save|update/i }).first().click()
+    try {
+      await displayName.fill(renamed)
+      await page.getByRole('button', { name: /save|update/i }).first().click()
 
-    // The save triggers `refreshCurrentUser()`. The transport's in-flight
-    // coalescer must NOT let that join a `/me` that was already on the wire
-    // before the PUT — the freshness epoch is bumped when the mutation
-    // completes. If it did, the UI would settle back to the OLD name.
-    await expect(displayName).toHaveValue(renamed, { timeout: 20000 })
-    await page.reload({ waitUntil: 'domcontentloaded' })
-    await expect(page.getByLabel(/display name/i).first()).toHaveValue(renamed, {
-      timeout: 30000,
-    })
-
-    // Restore so the shared fixture user is unchanged for other specs.
-    const restore = page.getByLabel(/display name/i).first()
-    await restore.fill(original)
-    await page.getByRole('button', { name: /save|update/i }).first().click()
-    await expect(restore).toHaveValue(original, { timeout: 20000 })
+      // The save triggers `refreshCurrentUser()`. Neither the transport's
+      // in-flight coalescer nor the `/me` freshness window may let that be
+      // served pre-mutation data — the freshness epoch is bumped when the
+      // mutation completes, which disqualifies both. If either leaked, the UI
+      // would settle back to the OLD name.
+      await expect(displayName).toHaveValue(renamed, { timeout: 20000 })
+      await page.reload({ waitUntil: 'domcontentloaded' })
+      await expect(page.getByLabel(/display name/i).first()).toHaveValue(renamed, {
+        timeout: 30000,
+      })
+    } finally {
+      // ALWAYS restore: this mutates the SHARED admin fixture user, so an
+      // earlier assertion failure must not leave every later spec in the run
+      // looking at a renamed admin.
+      await page.goto(`${baseURL}/settings/profile`, { waitUntil: 'domcontentloaded' })
+      const restore = page.getByLabel(/display name/i).first()
+      await restore.waitFor({ state: 'visible', timeout: 20000 })
+      await restore.fill(original)
+      await page.getByRole('button', { name: /save|update/i }).first().click()
+      await expect(restore).toHaveValue(original, { timeout: 20000 })
+    }
   })
 })

@@ -13,8 +13,7 @@ const STUBS = {
   // dies before a single assertion. Concrete `.ts` members
   // (`permissions/authView.ts`, `permissions/evaluatePermission.ts`) still
   // resolve normally.
-  '@ziee/framework/permissions':
-    SDK_SRC + 'framework/src/__test-stubs__/permissions.ts',
+  '@ziee/framework/permissions': SRC + 'core/__test-stubs__/framework-permissions.ts',
 }
 // `@ziee/<pkg>/<subpath>` → `sdk/packages/<pkg>/src/<subpath>`. The workspace
 // packages publish an EXTENSIONLESS export map (`"./*": "./src/*"`), which Vite
