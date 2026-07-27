@@ -678,18 +678,56 @@ async fn multi_word_query_finds_and_ranks_the_named_operation() {
         );
     }
 
-    // A term that matches nothing still yields nothing — the ALL-terms rule must
-    // not degrade into an OR.
+    // A SINGLE term that matches nothing still yields nothing — the matcher must
+    // never degrade into "return the whole catalog".
     let res = call_tool(
         &server,
         &admin.token,
         "list_capabilities",
-        json!({ "query": "project zzzznotathing" }),
+        json!({ "query": "zzzznotathing" }),
     )
     .await;
     assert_eq!(
         structured(&res)["total"].as_u64().unwrap(),
         0,
-        "every term must match; an unmatched term must empty the result"
+        "a single unmatched term must yield nothing"
+    );
+
+    // A SENTENCE with one out-of-vocabulary word must still be USEFUL rather
+    // than empty: strict ALL-terms matches nothing, so the best-effort fallback
+    // returns the closest candidates, ranked. This is the same failure class the
+    // whole fix exists to end — a model writes sentences, not keyword soup.
+    let res = call_tool(
+        &server,
+        &admin.token,
+        "list_capabilities",
+        json!({ "query": "please set up a project" }),
+    )
+    .await;
+    let ops = ops_for(&res);
+    assert!(
+        !ops.is_empty(),
+        "a natural sentence must not return zero operations"
+    );
+    assert!(
+        ops.iter().take(5).any(|id| id.starts_with("Project.")),
+        "the closest candidates must lead the fallback ranking; got {ops:?}"
+    );
+
+    // The fallback NEVER widens a query that already matched strictly: adding an
+    // unrelated matching term must still narrow, not blow the result open.
+    let strict = call_tool(
+        &server,
+        &admin.token,
+        "list_capabilities",
+        json!({ "query": "create project" }),
+    )
+    .await;
+    let broad =
+        call_tool(&server, &admin.token, "list_capabilities", json!({ "query": "project" })).await;
+    assert!(
+        structured(&strict)["total"].as_u64().unwrap()
+            < structured(&broad)["total"].as_u64().unwrap(),
+        "a strictly-matching multi-term query must be NARROWER than its single term"
     );
 }

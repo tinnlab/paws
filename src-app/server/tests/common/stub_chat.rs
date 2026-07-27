@@ -288,25 +288,24 @@ async fn chat_completions(State(s): State<StubState>, body: axum::body::Bytes) -
         .or_else(|| v.get("max_completion_tokens"))
         .and_then(|v| v.as_u64());
 
-    // Title calls seen BEFORE this one (the push below has not happened yet) —
-    // drives the `empty_once` transient-failure mode.
-    let prior_title_requests = s
-        .requests
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|r| r.is_title_request)
-        .count();
-
-    s.requests.lock().unwrap().push(RecordedRequest {
-        tool_names: tool_names.clone(),
-        had_tool_result,
-        has_manifest,
-        all_text,
-        roles,
-        max_tokens,
-        is_title_request,
-    });
+    // Title calls seen BEFORE this one — drives the `empty_once` / `budget_once`
+    // transient-failure modes. Counted and recorded under ONE lock acquisition:
+    // with two acquisitions, two concurrent title calls both observe `prior == 0`
+    // and both take the "first call fails" branch.
+    let prior_title_requests = {
+        let mut requests = s.requests.lock().unwrap();
+        let prior = requests.iter().filter(|r| r.is_title_request).count();
+        requests.push(RecordedRequest {
+            tool_names: tool_names.clone(),
+            had_tool_result,
+            has_manifest,
+            all_text,
+            roles,
+            max_tokens,
+            is_title_request,
+        });
+        prior
+    };
 
     // The title extension's call: answer with a beacon (or, when the test asked
     // for it, an EMPTY completion) instead of routing through the STUB_PLAN

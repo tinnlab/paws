@@ -1199,6 +1199,69 @@ pub async fn seed_text_message(
 // therefore: skip only when NO LLM is configured at all, never merely because
 // one particular vendor is absent.
 
+/// One vendor seam: which built-in provider row to configure, and the env vars
+/// that carry its key / bridge base-URL / model override.
+///
+/// A struct rather than a tuple + a parallel defaults array: adding a vendor is
+/// ONE row, and a mis-ordered field cannot compile silently into the wrong slot.
+struct VendorSeam {
+    provider_name: &'static str,
+    provider_type: &'static str,
+    key_env: &'static str,
+    base_url_env: &'static str,
+    model_env: &'static str,
+    default_model: &'static str,
+}
+
+/// The vendors a real-LLM tier can be pointed at — the SAME four the
+/// pre-existing `get_or_create_ai_provider` supports, so no box that could run a
+/// real-LLM test before is narrowed by this seam.
+const VENDOR_SEAMS: &[VendorSeam] = &[
+    VendorSeam {
+        provider_name: "OpenAI",
+        provider_type: "openai",
+        key_env: "OPENAI_API_KEY",
+        base_url_env: "OPENAI_BASE_URL",
+        model_env: "OPENAI_MODEL",
+        default_model: "gpt-4o-mini",
+    },
+    VendorSeam {
+        provider_name: "Anthropic",
+        provider_type: "anthropic",
+        key_env: "ANTHROPIC_API_KEY",
+        base_url_env: "ANTHROPIC_BASE_URL",
+        model_env: "ANTHROPIC_MODEL",
+        default_model: "claude-opus-4-1-20250805",
+    },
+    VendorSeam {
+        provider_name: "Google Gemini",
+        provider_type: "gemini",
+        key_env: "GEMINI_API_KEY",
+        base_url_env: "GEMINI_BASE_URL",
+        model_env: "GEMINI_MODEL",
+        default_model: "gemini-2.5-flash",
+    },
+    VendorSeam {
+        provider_name: "Groq",
+        provider_type: "groq",
+        key_env: "GROQ_API_KEY",
+        base_url_env: "GROQ_BASE_URL",
+        model_env: "GROQ_MODEL",
+        default_model: "llama-3.1-8b-instant",
+    },
+];
+
+/// Committed PLACEHOLDER key values. `tests/.env.test` ships `sk-xxx` so the
+/// suite has something to source; treating that as "an LLM is configured" would
+/// turn a clean self-skip into a 401 against a paid endpoint — the opposite of
+/// the honesty this seam exists for. A placeholder paired with a bridge
+/// `*_BASE_URL` IS usable (a local bridge ignores the key), so it only
+/// disqualifies the vendor when there is no base-URL override.
+fn is_placeholder_key(key: &str) -> bool {
+    let k = key.trim().to_ascii_lowercase();
+    k == "sk-xxx" || k == "xxx" || k.starts_with("sk-xxx") || k.starts_with("your-") || k == "changeme"
+}
+
 /// The LLM a real-LLM test tier should drive.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TestLlm {
@@ -1206,6 +1269,9 @@ pub struct TestLlm {
     pub provider_name: &'static str,
     /// Its `provider_type` discriminant.
     pub provider_type: &'static str,
+    /// The env var the key came from — carried so callers never re-derive it
+    /// (a `<TYPE>_API_KEY` guess breaks the moment a vendor names it otherwise).
+    pub key_env: &'static str,
     pub api_key: String,
     /// Base-URL override (a local bridge); `None` means the vendor's SaaS default.
     pub base_url: Option<String>,
@@ -1215,36 +1281,34 @@ pub struct TestLlm {
 /// Pure resolution over an env lookup, so the precedence is unit-testable
 /// without mutating process env (which would race across parallel tests).
 ///
-/// Precedence: the OpenAI seam, then the Anthropic seam, then a bare vendor key
-/// with no bridge. `None` only when nothing at all is configured.
+/// Walks [`VENDOR_SEAMS`] in order and takes the first vendor with a usable key.
+/// `None` only when nothing at all is configured.
+///
+/// NOTE the inner shadow narrows the caller's closure to "present and
+/// non-blank"; a blank env var is treated as unset throughout.
 pub fn resolve_test_llm(get: impl Fn(&str) -> Option<String>) -> Option<TestLlm> {
     let get = |k: &str| get(k).filter(|v| !v.trim().is_empty());
     let global_base = get("ZIEE_TEST_LLM_BASE_URL");
     let global_model = get("ZIEE_TEST_LLM_MODEL");
 
-    let candidates: [(&'static str, &'static str, &'static str, &'static str, &'static str); 2] = [
-        ("OpenAI", "openai", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL"),
-        (
-            "Anthropic",
-            "anthropic",
-            "ANTHROPIC_API_KEY",
-            "ANTHROPIC_BASE_URL",
-            "ANTHROPIC_MODEL",
-        ),
-    ];
-    let defaults = [("openai", "gpt-4o-mini"), ("anthropic", "claude-opus-4-1-20250805")];
-
-    for (provider_name, provider_type, key_env, base_env, model_env) in candidates {
-        let Some(api_key) = get(key_env) else { continue };
-        let base_url = get(base_env).or_else(|| global_base.clone());
-        let model_name = get(model_env).or_else(|| global_model.clone()).unwrap_or_else(|| {
-            defaults
-                .iter()
-                .find(|(t, _)| *t == provider_type)
-                .map(|(_, m)| (*m).to_string())
-                .unwrap_or_default()
+    for seam in VENDOR_SEAMS {
+        let Some(api_key) = get(seam.key_env) else { continue };
+        let base_url = get(seam.base_url_env).or_else(|| global_base.clone());
+        // A placeholder key with no bridge behind it is not a configured LLM.
+        if base_url.is_none() && is_placeholder_key(&api_key) {
+            continue;
+        }
+        let model_name = get(seam.model_env)
+            .or_else(|| global_model.clone())
+            .unwrap_or_else(|| seam.default_model.to_string());
+        return Some(TestLlm {
+            provider_name: seam.provider_name,
+            provider_type: seam.provider_type,
+            key_env: seam.key_env,
+            api_key,
+            base_url,
+            model_name,
         });
-        return Some(TestLlm { provider_name, provider_type, api_key, base_url, model_name });
     }
     None
 }
@@ -1277,6 +1341,7 @@ mod configured_test_llm_tests {
         ]))
         .expect("an OpenAI-seam bridge must resolve even with no Anthropic key");
         assert_eq!(llm.provider_type, "openai");
+        assert_eq!(llm.key_env, "OPENAI_API_KEY");
         assert_eq!(llm.base_url.as_deref(), Some("http://localhost:4000/v1"));
         assert_eq!(llm.model_name, "qwen3.6-35b-a3b");
     }
@@ -1290,6 +1355,18 @@ mod configured_test_llm_tests {
         .expect("the Anthropic seam must still resolve");
         assert_eq!(llm.provider_type, "anthropic");
         assert_eq!(llm.provider_name, "Anthropic");
+    }
+
+    /// Every vendor the pre-existing `get_or_create_ai_provider` supports must
+    /// resolve here too, or a Gemini/Groq box silently goes dark again.
+    #[test]
+    fn gemini_and_groq_seams_resolve_too() {
+        let gemini = resolve_test_llm(env(&[("GEMINI_API_KEY", "real-key")]))
+            .expect("a Gemini box is a configured box");
+        assert_eq!(gemini.provider_name, "Google Gemini");
+        let groq = resolve_test_llm(env(&[("GROQ_API_KEY", "real-key")]))
+            .expect("a Groq box is a configured box");
+        assert_eq!(groq.provider_name, "Groq");
     }
 
     #[test]
@@ -1310,6 +1387,32 @@ mod configured_test_llm_tests {
             .expect("a plain SaaS key is still a configured LLM");
         assert_eq!(llm.base_url, None);
         assert_eq!(llm.model_name, "claude-opus-4-1-20250805");
+    }
+
+    /// The committed `tests/.env.test` placeholder must not masquerade as a
+    /// configured LLM — otherwise a clean self-skip becomes a 401 against a paid
+    /// endpoint, and the placeholder OpenAI key SHADOWS a real Anthropic one.
+    #[test]
+    fn a_committed_placeholder_key_is_not_a_configured_llm() {
+        assert_eq!(resolve_test_llm(env(&[("OPENAI_API_KEY", "sk-xxx")])), None);
+        assert_eq!(
+            resolve_test_llm(env(&[("OPENAI_API_KEY", "sk-xxxxxxxx"), ("ANTHROPIC_API_KEY", "sk-xxx")])),
+            None
+        );
+        // A real key behind the placeholder still wins.
+        let llm = resolve_test_llm(env(&[
+            ("OPENAI_API_KEY", "sk-xxx"),
+            ("ANTHROPIC_API_KEY", "sk-ant-real"),
+        ]))
+        .expect("a real key must not be shadowed by a placeholder");
+        assert_eq!(llm.provider_type, "anthropic");
+        // …but a placeholder POINTED AT A BRIDGE is usable (the bridge ignores it).
+        let llm = resolve_test_llm(env(&[
+            ("OPENAI_API_KEY", "sk-xxx"),
+            ("OPENAI_BASE_URL", "http://localhost:4000/v1"),
+        ]))
+        .expect("a placeholder key with a bridge base-url IS usable");
+        assert_eq!(llm.provider_type, "openai");
     }
 
     #[test]

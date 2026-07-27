@@ -40,6 +40,32 @@ test.describe('control_mcp — real LLM end-to-end (discover → approve → mut
   test.describe.configure({ retries: 2 })
   test.slow()
 
+  /**
+   * Content-block types on the conversation's transcript, newest branch.
+   * Used to prove the tool RESULT came back into the chat, not just that a
+   * tool-call row was recorded server-side.
+   */
+  async function conversationBlockTypes(
+    page: Page,
+    apiURL: string,
+    token: string,
+    conversationId: string,
+  ): Promise<string[]> {
+    const res = await page.request.get(`${apiURL}/api/conversations/${conversationId}/messages`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (!res.ok()) {
+      throw new Error(`GET messages failed: ${res.status()} ${await res.text()}`)
+    }
+    const body = await res.json()
+    const messages = body.messages ?? body.data ?? body ?? []
+    const types: string[] = []
+    for (const m of messages as Array<{ contents?: Array<{ content_type?: string }> }>) {
+      for (const c of m.contents ?? []) if (c.content_type) types.push(c.content_type)
+    }
+    return types
+  }
+
   /** The Approve/Deny controls of a pending tool-approval card. */
   function approvalButtons(page: Page) {
     return {
@@ -72,7 +98,8 @@ test.describe('control_mcp — real LLM end-to-end (discover → approve → mut
     await sendChatMessage(page, `Create a new project called "${name}" for me.`, false)
 
     // INV-4 — a mutating control write must raise the approval card even though
-    // this fresh chat auto-approves ordinary tools.
+    // `setupControlChat` put this chat in AUTO-APPROVE (so an ordinary tool would
+    // have run silently, and this assertion can actually fail).
     const { approve } = approvalButtons(page)
     await expect(
       approve,
@@ -106,13 +133,18 @@ test.describe('control_mcp — real LLM end-to-end (discover → approve → mut
       )
       .toBeGreaterThan(before)
 
-    // TEST-18 — and the chat reflects it: the tool result came back into the
-    // conversation, so the mutating invoke is recorded on the transcript.
+    // TEST-18 — and the CHAT reflects it. Not "a tool-call row exists" (the
+    // project-count assertion above already implies that, so it would prove
+    // nothing extra): assert the tool RESULT was written back onto the
+    // conversation transcript as a `tool_result` block, which is what makes the
+    // write visible to the user and to the model's next turn.
     await expect
-      .poll(async () => recordedToolNames(page, apiURL, token, conversationId as string), {
-        timeout: 60000,
+      .poll(async () => conversationBlockTypes(page, apiURL, token, conversationId as string), {
+        timeout: 90000,
       })
-      .toContain('invoke_capability')
+      .toContain('tool_result')
+    const blocks = await conversationBlockTypes(page, apiURL, token, conversationId as string)
+    expect(blocks, 'the transcript must carry the invoke and its result').toContain('tool_use')
   })
 
   /**
@@ -237,6 +269,49 @@ test.describe('control_mcp — real LLM end-to-end (discover → approve → mut
       key: 'assistants',
     },
   ]
+
+  /**
+   * TEST-16 — the deny leg for the SETTINGS operation class, which a
+   * list-of-entities baseline cannot express: assert the singleton's value is
+   * byte-identical after the denial.
+   */
+  test('denying the control write leaves nothing changed — MemorySettings.update', async ({
+    page,
+    testInfra,
+  }) => {
+    const { baseURL, apiURL } = testInfra
+    const { token } = await setupControlChat(page, baseURL, apiURL)
+
+    const readSettings = async (): Promise<string> => {
+      const res = await page.request.get(`${apiURL}/api/memory/settings`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!res.ok()) throw new Error(`GET memory settings failed: ${res.status()}`)
+      const b = await res.json()
+      return JSON.stringify({
+        retrieval_enabled: b.retrieval_enabled,
+        extraction_enabled: b.extraction_enabled,
+        max_memories: b.max_memories,
+        retention_days: b.retention_days,
+      })
+    }
+
+    const before = await readSettings()
+    await sendChatMessage(
+      page,
+      'In my memory settings, turn memory retrieval OFF. Do it now, using the app-control tools; do not ask me first.',
+      false,
+    )
+
+    const { deny } = approvalButtons(page)
+    await expect(deny, 'a settings write must be forced through approval').toBeVisible({
+      timeout: 120000,
+    })
+    await deny.click()
+
+    await page.waitForTimeout(5000)
+    expect(await readSettings(), 'a denied settings write must change nothing').toBe(before)
+  })
 
   for (const row of denyRows) {
     test(`denying the control write leaves nothing created — ${row.op}`, async ({

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { readdirSync, readFileSync } from 'node:fs'
+import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -19,25 +19,35 @@ import { fileURLToPath } from 'node:url'
  *
  * It is deliberately environment-independent (no server, no LLM) so it ALWAYS
  * runs — a guard that can itself be skipped would be self-defeating.
+ *
+ * The checks below are deliberately WHOLE-FILE, not line-scoped. A line-scoped
+ * check (only inspecting lines containing `test.skip(`) is defeated by a
+ * prettier line-wrap or by hoisting the read into a `const` on the line above —
+ * exactly the shape the pre-fix spec used.
  */
 
 const CONTROL_DIR = dirname(fileURLToPath(import.meta.url))
-/** Vendor-specific env vars that must never appear in a skip gate. */
+const SELF = 'control-spec-gating.spec.ts'
+/** Vendor-specific env vars that must never decide whether a control spec runs. */
 const VENDOR_KEYS = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'GROQ_API_KEY']
 
-function controlSpecFiles(): string[] {
-  return readdirSync(CONTROL_DIR)
-    .filter((f) => f.endsWith('.spec.ts'))
-    .filter((f) => f !== 'control-spec-gating.spec.ts')
-    .map((f) => join(CONTROL_DIR, f))
+/** Every `*.spec.ts` under the control e2e tree, recursively (this file excluded). */
+function controlSpecFiles(dir: string = CONTROL_DIR): string[] {
+  const out: string[] = []
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry)
+    if (statSync(full).isDirectory()) {
+      out.push(...controlSpecFiles(full))
+    } else if (entry.endsWith('.spec.ts') && entry !== SELF) {
+      out.push(full)
+    }
+  }
+  return out
 }
 
-/** Lines that decide whether a spec runs. */
-function gateLines(source: string): string[] {
-  return source
-    .split('\n')
-    .filter((line) => /test\.skip\(|test\.describe\.skip\(|fixme\(/.test(line))
-    .filter((line) => !line.trimStart().startsWith('*') && !line.trimStart().startsWith('//'))
+/** Source with block/line comments stripped, so a doc comment can mention a key. */
+function code(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
 }
 
 test.describe('control_mcp spec gating', () => {
@@ -45,39 +55,57 @@ test.describe('control_mcp spec gating', () => {
     expect(controlSpecFiles().length).toBeGreaterThan(0)
   })
 
-  test('no control spec skips because one specific vendor key is absent', () => {
+  test('no control spec reads a vendor-specific API key at all', () => {
     for (const file of controlSpecFiles()) {
-      const source = readFileSync(file, 'utf8')
-
-      for (const line of gateLines(source)) {
-        for (const key of VENDOR_KEYS) {
-          expect(
-            line.includes(key),
-            `${file}: a skip gate must not depend on ${key}. Skip only when NO LLM is ` +
-              `configured — use the shared configuredTestLlm() seam.\n  ${line.trim()}`,
-          ).toBe(false)
-        }
+      const src = code(readFileSync(file, 'utf8'))
+      for (const key of VENDOR_KEYS) {
         expect(
-          line.includes('process.env'),
-          `${file}: a skip gate must not read process.env directly — route it through ` +
-            `configuredTestLlm() so every vendor seam is honoured.\n  ${line.trim()}`,
+          src.includes(key),
+          `${file}: must not reference ${key}. A control spec may skip only when NO LLM ` +
+            `is configured — route the decision through the shared configuredTestLlm() seam.`,
         ).toBe(false)
       }
     }
   })
 
-  test('every control spec gates through the shared configuredTestLlm seam', () => {
+  test('no control spec reads process.env directly', () => {
+    // Whole-file, so a multi-line or hoisted `const HAS_X = process.env.…` is
+    // caught just as well as an inline gate.
     for (const file of controlSpecFiles()) {
-      const source = readFileSync(file, 'utf8')
-      const gates = gateLines(source)
-      if (gates.length === 0) continue // an ungated spec always runs — also fine
+      const src = code(readFileSync(file, 'utf8'))
       expect(
-        source.includes('control-llm-helpers'),
+        src.includes('process.env'),
+        `${file}: must not read process.env — every environment decision belongs in ` +
+          `configuredTestLlm(), which honours ALL vendor seams rather than one.`,
+      ).toBe(false)
+    }
+  })
+
+  test('every control spec that can skip gates on the resolved LLM', () => {
+    for (const file of controlSpecFiles()) {
+      const src = code(readFileSync(file, 'utf8'))
+      const skips = [...src.matchAll(/test(?:\.describe)?\.skip\(/g)]
+      if (skips.length === 0) continue // an always-running spec is fine
+      expect(
+        src.includes('control-llm-helpers'),
         `${file}: a gated control spec must import the shared configuredTestLlm() seam`,
       ).toBe(true)
       expect(
-        gates.some((line) => line.includes('TEST_LLM')),
-        `${file}: the skip gate must be driven by TEST_LLM (the resolved LLM), not by a vendor key`,
+        src.includes('TEST_LLM'),
+        `${file}: the skip decision must come from TEST_LLM (the resolved LLM), not a vendor key`,
+      ).toBe(true)
+    }
+  })
+
+  test('the shared seam honours every vendor the harness supports', () => {
+    // A seam that resolves fewer vendors than `provider-helpers.ts` supports
+    // sends a Gemini/Groq box dark again — the same class of failure, narrower.
+    const seam = readFileSync(join(CONTROL_DIR, 'helpers', 'control-llm-helpers.ts'), 'utf8')
+    for (const key of VENDOR_KEYS) {
+      expect(
+        seam.includes(key),
+        `control-llm-helpers.ts must be able to resolve ${key}; otherwise a box configured ` +
+          `with only that vendor skips while claiming "no LLM configured at all"`,
       ).toBe(true)
     }
   })

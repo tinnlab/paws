@@ -122,9 +122,8 @@ async fn a_real_model_first_exchange_produces_a_title() {
         llm.base_url.as_deref().unwrap_or("<vendor default>")
     );
 
-    let key_env = format!("{}_API_KEY", llm.provider_type.to_uppercase());
     let server = TestServer::start_with_options(TestServerOptions {
-        extra_env: vec![(key_env, llm.api_key.clone())],
+        extra_env: vec![(llm.key_env.to_string(), llm.api_key.clone())],
         ..Default::default()
     })
     .await;

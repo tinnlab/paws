@@ -245,12 +245,31 @@ const SCORE_ID_SEGMENT: u32 = 8;
 const SCORE_ID_SUBSTRING: u32 = 6;
 const SCORE_TAG_EXACT: u32 = 4;
 const SCORE_SUMMARY_WORD: u32 = 3;
+/// Also the score for a TAG substring — the two weakest signals share a value.
 const SCORE_SUMMARY_SUBSTRING: u32 = 1;
 
-/// Lowercase whitespace-split search terms. Empty when the query is blank, which
-/// the caller treats as "no filter" (unchanged passthrough behavior).
+/// Cap on how many terms one query may contribute. A model-supplied query is
+/// untrusted input on a synchronous scoring path over the whole catalog, so it
+/// gets a bound rather than an unbounded product.
+const MAX_QUERY_TERMS: usize = 16;
+
+/// Lowercase, punctuation-stripped search terms.
+///
+/// The CORPUS is normalized (ids split on `.`/`_`/`-`/camelCase, summaries split
+/// on any non-alphanumeric), so the QUERY must be normalized the same way or a
+/// trailing comma turns a good term into one that matches nothing — and under the
+/// ALL-terms rule ONE dead term empties the whole result. `"create a project,
+/// please"` must behave like `"create a project please"`.
+///
+/// Empty when the query is blank, which the caller treats as "no filter"
+/// (unchanged passthrough behavior).
 fn query_terms(query: &str) -> Vec<String> {
-    query.split_whitespace().map(str::to_lowercase).collect()
+    query
+        .split(|c: char| c.is_whitespace() || (!c.is_alphanumeric() && c != '_' && c != '-'))
+        .filter(|t| !t.is_empty())
+        .map(str::to_lowercase)
+        .take(MAX_QUERY_TERMS)
+        .collect()
 }
 
 /// Lowercase segments of an operation id: `Project.updateMcpSettings` →
@@ -290,45 +309,117 @@ fn summary_words(summary: &str) -> Vec<String> {
         .collect()
 }
 
-/// Score ONE term against an operation. `0` means the term does not match at all.
-fn term_score(op: &Operation, term: &str) -> u32 {
-    if id_segments(&op.operation_id).iter().any(|s| s == term) {
-        return SCORE_ID_SEGMENT;
+/// An operation's searchable text, computed ONCE per operation rather than once
+/// per (operation × term) — the scoring loop runs over the whole catalog.
+struct OpIndex {
+    id_segments: Vec<String>,
+    id_lower: String,
+    summary_words: Vec<String>,
+    summary_lower: String,
+    tags_lower: Vec<String>,
+}
+
+impl OpIndex {
+    fn build(op: &Operation) -> Self {
+        Self {
+            id_segments: id_segments(&op.operation_id),
+            id_lower: op.operation_id.to_lowercase(),
+            summary_words: summary_words(&op.summary),
+            summary_lower: op.summary.to_lowercase(),
+            tags_lower: op.tags.iter().map(|t| t.to_lowercase()).collect(),
+        }
     }
-    if op.operation_id.to_lowercase().contains(term) {
-        return SCORE_ID_SUBSTRING;
+
+    /// Score ONE term. `0` means the term does not match this operation at all.
+    fn term_score(&self, term: &str) -> u32 {
+        if self.id_segments.iter().any(|s| s == term) {
+            return SCORE_ID_SEGMENT;
+        }
+        if self.id_lower.contains(term) {
+            return SCORE_ID_SUBSTRING;
+        }
+        if self.tags_lower.iter().any(|t| t == term) {
+            return SCORE_TAG_EXACT;
+        }
+        if self.summary_words.iter().any(|w| w == term) {
+            return SCORE_SUMMARY_WORD;
+        }
+        if self.summary_lower.contains(term) {
+            return SCORE_SUMMARY_SUBSTRING;
+        }
+        // A tag substring is the weakest signal but was matched by the old
+        // whole-phrase predicate, so keep it — "single-term behavior at least as
+        // good as today".
+        if self.tags_lower.iter().any(|t| t.contains(term)) {
+            return SCORE_SUMMARY_SUBSTRING;
+        }
+        0
     }
-    if op.tags.iter().any(|t| t.eq_ignore_ascii_case(term)) {
-        return SCORE_TAG_EXACT;
+}
+
+/// `(matched_terms, total_score)` for an operation.
+fn score_terms(op: &Operation, terms: &[String]) -> (usize, u32) {
+    let index = OpIndex::build(op);
+    let mut matched = 0usize;
+    let mut total = 0u32;
+    for term in terms {
+        let s = index.term_score(term);
+        if s > 0 {
+            matched += 1;
+            total = total.saturating_add(s);
+        }
     }
-    let summary_lower = op.summary.to_lowercase();
-    if summary_words(&op.summary).iter().any(|w| w == term) {
-        return SCORE_SUMMARY_WORD;
-    }
-    if summary_lower.contains(term) {
-        return SCORE_SUMMARY_SUBSTRING;
-    }
-    // A tag substring is the weakest signal but was matched by the old
-    // whole-phrase predicate, so keep it — "single-term behavior at least as
-    // good as today".
-    if op.tags.iter().any(|t| t.to_lowercase().contains(term)) {
-        return SCORE_SUMMARY_SUBSTRING;
-    }
-    0
+    (matched, total)
 }
 
 /// Relevance of an operation for ALL `terms`, or `None` when any term fails to
 /// match — i.e. the ALL-terms rule. An empty `terms` slice matches everything at
 /// score 0 (the no-query passthrough).
 fn op_match_score(op: &Operation, terms: &[String]) -> Option<u32> {
-    let mut total = 0u32;
-    for term in terms {
-        match term_score(op, term) {
-            0 => return None,
-            s => total = total.saturating_add(s),
-        }
+    let (matched, total) = score_terms(op, terms);
+    (matched == terms.len()).then_some(total)
+}
+
+/// Rank the permitted candidates for `terms` — THE production search pipeline.
+///
+/// Extracted (mirroring `needs_approval_decision`, extracted so the
+/// security-critical decision is unit-testable) so the unit tests exercise the
+/// REAL matching + ordering rather than a retyped copy of it.
+///
+/// Two stages:
+/// 1. **Strict** — every term must match (the ALL-terms rule), ranked by summed
+///    relevance, `operation_id` ASC as the deterministic tie-break. With no query,
+///    or when every candidate scores alike, that reproduces the previous
+///    alphabetical order exactly.
+/// 2. **Best-effort fallback** — ONLY when stage 1 matched nothing and the query
+///    had more than one term. A model writes sentences ("turn off memory
+///    retrieval", "please create a new project"), and one out-of-vocabulary word
+///    would otherwise empty the result and strand it exactly as the shipped
+///    matcher did. The fallback keeps operations matching at least one term and
+///    ranks by (terms matched, score), so the closest candidates come first. It
+///    can never change a query that already matched.
+fn rank_matching_ops<'a>(
+    candidates: impl Iterator<Item = &'a Operation>,
+    terms: &[String],
+) -> Vec<&'a Operation> {
+    let scored: Vec<(usize, u32, &Operation)> = candidates
+        .map(|op| {
+            let (matched, total) = score_terms(op, terms);
+            (matched, total, op)
+        })
+        .collect();
+
+    let all_terms = terms.len();
+    let mut kept: Vec<(usize, u32, &Operation)> =
+        scored.iter().copied().filter(|(m, _, _)| *m == all_terms).collect();
+    if kept.is_empty() && all_terms > 1 {
+        kept = scored.into_iter().filter(|(m, _, _)| *m > 0).collect();
     }
-    Some(total)
+
+    kept.sort_by(|(ma, sa, a), (mb, sb, b)| {
+        mb.cmp(ma).then_with(|| sb.cmp(sa)).then_with(|| a.operation_id.cmp(&b.operation_id))
+    });
+    kept.into_iter().map(|(_, _, op)| op).collect()
 }
 
 fn list_capabilities(
@@ -341,20 +432,16 @@ fn list_capabilities(
     let terms = args.query.as_deref().map(query_terms).unwrap_or_default();
     let tag = args.tag.as_deref();
 
-    let mut scored: Vec<(u32, &Operation)> = catalog
+    // The permission filter runs FIRST and is unconditional: ranking only ever
+    // reorders operations the caller is already allowed to run.
+    let permitted = catalog
         .iter()
         .filter(|op| op_available(user, groups, op))
         .filter(|op| match &tag {
             Some(t) => op.tags.iter().any(|opt| opt.eq_ignore_ascii_case(t)),
             None => true,
-        })
-        .filter_map(|op| op_match_score(op, &terms).map(|score| (score, op)))
-        .collect();
-
-    // Most relevant first; `operation_id` ASC breaks ties, so an unscored list
-    // (no query, or one relevance class) keeps the previous alphabetical order.
-    scored.sort_by(|(sa, a), (sb, b)| sb.cmp(sa).then_with(|| a.operation_id.cmp(&b.operation_id)));
-    let mut matched: Vec<&Operation> = scored.into_iter().map(|(_, op)| op).collect();
+        });
+    let mut matched: Vec<&Operation> = rank_matching_ops(permitted, &terms);
     let total = matched.len();
     let truncated = total > MAX_LIST_RESULTS;
     matched.truncate(MAX_LIST_RESULTS);
@@ -389,6 +476,18 @@ fn list_capabilities(
     );
     for op in &matched {
         text.push_str(&format!("- {} [{}] — {}\n", op.operation_id, op.method, op.summary));
+    }
+    // A bare "0 operation(s)" told the model nothing about WHY, and it flailed
+    // (a real session repeated the same call, then a `describe_capability` for an
+    // operation it had never been shown). Say how the match works so a retry is
+    // informed rather than random.
+    if total == 0 && !terms.is_empty() {
+        text.push_str(
+            "\nThe search matches each whitespace-separated term against the operation id, \
+             its tags and its summary. Retry with FEWER, more specific keywords \
+             (e.g. \"create project\", \"memory settings\") rather than a full sentence, \
+             or call list_capabilities with no query to browse.\n",
+        );
     }
     Ok(text_result(text, Some(structured)))
 }
@@ -905,16 +1004,25 @@ mod tests {
         }))
     }
 
-    /// Rank the fixture by `query`, returning the operation ids in result order.
+    /// Rank the fixture by `query` through the PRODUCTION pipeline
+    /// (`rank_matching_ops`) — never a retyped copy of it, so a change to the
+    /// real matcher or comparator turns these tests red.
     fn ranked(cat: &catalog::ControlCatalog, query: &str) -> Vec<String> {
         let terms = query_terms(query);
-        let mut scored: Vec<(u32, &Operation)> = cat
-            .iter()
-            .filter_map(|op| op_match_score(op, &terms).map(|s| (s, op)))
-            .collect();
-        scored
-            .sort_by(|(sa, a), (sb, b)| sb.cmp(sa).then_with(|| a.operation_id.cmp(&b.operation_id)));
-        scored.into_iter().map(|(_, op)| op.operation_id.clone()).collect()
+        rank_matching_ops(cat.iter(), &terms)
+            .into_iter()
+            .map(|op| op.operation_id.clone())
+            .collect()
+    }
+
+    /// STRICT (all-terms) ranking only — the fallback disabled, so a test can
+    /// assert the ALL-terms rule itself rather than its best-effort backstop.
+    fn ranked_strict(cat: &catalog::ControlCatalog, query: &str) -> Vec<String> {
+        let terms = query_terms(query);
+        let mut hits: Vec<&Operation> =
+            cat.iter().filter(|op| op_match_score(op, &terms).is_some()).collect();
+        hits.sort_by_key(|op| op.operation_id.clone());
+        hits.into_iter().map(|op| op.operation_id.clone()).collect()
     }
 
     /// The SHIPPED matcher, reproduced verbatim, so the regression it caused is
@@ -971,8 +1079,8 @@ mod tests {
         let hits = ranked(&cat, "assistants create");
         assert_eq!(hits, vec!["Assistant.create".to_string()], "got {hits:?}");
 
-        // A term that matches nothing kills the whole query.
-        assert!(ranked(&cat, "create zzzznotathing").is_empty());
+        // The ALL-terms rule itself: with one dead term the STRICT set is empty.
+        assert!(ranked_strict(&cat, "create zzzznotathing").is_empty());
     }
 
     /// TEST-3 — single-term behavior is at least as good as today, plus the
@@ -1007,6 +1115,64 @@ mod tests {
         sorted.sort();
         assert_eq!(all, sorted, "with no query the order must stay operation_id ASC");
         assert_eq!(ranked(&cat, "   ").len(), cat.len(), "whitespace-only is also no filter");
+    }
+
+    /// Punctuation and politeness must not empty a good query.
+    ///
+    /// The corpus is normalized (ids and summaries are split on punctuation), so
+    /// an un-normalized query term like `"project,"` would match NOTHING and —
+    /// under the ALL-terms rule — take the whole result set down with it. That is
+    /// the same class of failure the fix exists to end, just one keystroke away.
+    #[test]
+    fn punctuation_in_a_query_does_not_empty_the_result() {
+        let cat = search_fixture();
+        for q in ["create a project, please", "create project!", "  create   project  "] {
+            let hits = ranked(&cat, q);
+            assert_eq!(
+                hits.first().map(String::as_str),
+                Some("Project.create"),
+                "query {q:?} must still rank Project.create first; got {hits:?}"
+            );
+        }
+    }
+
+    /// A sentence with one out-of-vocabulary word must still be USEFUL.
+    ///
+    /// A model writes "turn off memory retrieval" / "please set up a project",
+    /// not keyword soup. Strict ALL-terms alone would return zero and strand it
+    /// exactly as the shipped whole-phrase matcher did, so an empty strict result
+    /// falls back to best-effort — ranked by how many terms matched, never
+    /// changing a query that already matched.
+    #[test]
+    fn a_sentence_with_an_unmatched_word_falls_back_instead_of_returning_zero() {
+        let cat = search_fixture();
+
+        // Strict really does match nothing here — the fallback is what saves it.
+        assert!(ranked_strict(&cat, "please set up a project").is_empty());
+        let hits = ranked(&cat, "please set up a project");
+        assert!(!hits.is_empty(), "a sentence must not return zero operations");
+        assert!(
+            hits.iter().take(3).any(|id| id.starts_with("Project.")),
+            "the closest candidates must lead; got {hits:?}"
+        );
+
+        // The fallback NEVER alters a query that already matched strictly.
+        assert_eq!(ranked(&cat, "create project"), ranked_strict_ranked(&cat, "create project"));
+
+        // A SINGLE term that matches nothing still yields nothing — the fallback
+        // is for multi-term sentences, not a licence to return the whole catalog.
+        assert!(ranked(&cat, "zzzznotathing").is_empty());
+    }
+
+    /// Strict matches, in the production ORDER (helper for the equality above).
+    fn ranked_strict_ranked(cat: &catalog::ControlCatalog, query: &str) -> Vec<String> {
+        let terms = query_terms(query);
+        let mut hits: Vec<(u32, &Operation)> = cat
+            .iter()
+            .filter_map(|op| op_match_score(op, &terms).map(|s| (s, op)))
+            .collect();
+        hits.sort_by(|(sa, a), (sb, b)| sb.cmp(sa).then_with(|| a.operation_id.cmp(&b.operation_id)));
+        hits.into_iter().map(|(_, op)| op.operation_id.clone()).collect()
     }
 
     /// Segmentation is what makes an exact word beat a mere substring.

@@ -105,9 +105,8 @@ async fn tool_capable_model(
 async fn setup(
     llm: &crate::chat::helpers::TestLlm,
 ) -> (TestServer, crate::common::test_helpers::TestUser, Uuid, Uuid, Uuid) {
-    let key_env = format!("{}_API_KEY", llm.provider_type.to_uppercase());
     let server = TestServer::start_with_options(TestServerOptions {
-        extra_env: vec![(key_env, llm.api_key.clone())],
+        extra_env: vec![(llm.key_env.to_string(), llm.api_key.clone())],
         ..Default::default()
     })
     .await;

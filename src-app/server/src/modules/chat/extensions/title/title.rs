@@ -266,13 +266,18 @@ fn build_title_request(model_name: &str, user_content: &str, max_tokens: u32) ->
         }],
         temperature: Some(0.7),
         max_tokens: Some(max_tokens),
-        // Naming a conversation needs no chain of thought, and reasoning tokens
-        // are billed against the SAME cap as the answer — which is exactly how
-        // this feature broke twice. Providers that can switch reasoning off
-        // (Anthropic / Gemini) do so here; for an OpenAI-compatible endpoint this
-        // is inert (it only suppresses a `reasoning_effort` we never set), which
-        // is why the budget + retry above carry the fix on their own.
-        thinking: Some(ai_providers::ThinkingConfig::disabled()),
+        // `thinking` is deliberately left UNSET (`None`).
+        //
+        // Naming a conversation needs no chain of thought, so an explicit
+        // `ThinkingConfig::disabled()` looks attractive — but it buys nothing and
+        // costs correctness: it is inert for OpenAI-compatible endpoints (which
+        // only read `thinking.effort`, never set here), a literal no-op for
+        // Anthropic (`ThinkingMode::Disabled => {}`), and ACTIVE for Gemini,
+        // whose adapter emits `thinkingConfig { thinkingBudget: 0 }` for ANY
+        // `Some(thinking)`. Models that cannot disable thinking reject that with
+        // a 400 — which this extension soft-swallows, leaving the conversation
+        // permanently untitled: the exact bug being fixed, reintroduced for a
+        // different provider. The budget + escalated retry carry the fix alone.
         ..Default::default()
     }
 }
@@ -303,28 +308,22 @@ impl TitleGenerationExtension {
         let (title, finish_reason) = self
             .attempt_title(provider, model_name, user_content, TITLE_MAX_TOKENS)
             .await?;
-        if let Some(title) = title {
-            return Ok(title);
+
+        if !should_retry_with_larger_budget(title.as_deref(), finish_reason.as_deref()) {
+            return title.ok_or_else(|| empty_title_error(TITLE_MAX_TOKENS, finish_reason.as_deref()));
         }
 
-        if should_retry_with_larger_budget(None, finish_reason.as_deref()) {
-            tracing::info!(
+        tracing::info!(
                 model = %model_name,
                 finish_reason = %finish_reason.as_deref().unwrap_or(""),
                 "title: the {}-token budget was exhausted with no answer text; retrying once at {}",
                 TITLE_MAX_TOKENS,
                 TITLE_RETRY_MAX_TOKENS,
-            );
-            let (retry_title, retry_finish) = self
-                .attempt_title(provider, model_name, user_content, TITLE_RETRY_MAX_TOKENS)
-                .await?;
-            if let Some(title) = retry_title {
-                return Ok(title);
-            }
-            return Err(empty_title_error(TITLE_RETRY_MAX_TOKENS, retry_finish.as_deref()));
-        }
-
-        Err(empty_title_error(TITLE_MAX_TOKENS, finish_reason.as_deref()))
+        );
+        let (retry_title, retry_finish) = self
+            .attempt_title(provider, model_name, user_content, TITLE_RETRY_MAX_TOKENS)
+            .await?;
+        retry_title.ok_or_else(|| empty_title_error(TITLE_RETRY_MAX_TOKENS, retry_finish.as_deref()))
     }
 
     /// ONE title call: stream it, collect the answer text, and report the
@@ -944,10 +943,12 @@ mod tests {
             "the escalated retry must actually escalate"
         );
         assert!(req.tools.is_empty(), "the title call must be tool-less");
-        assert_eq!(
-            req.thinking.map(|t| t.mode),
-            Some(ai_providers::ThinkingMode::Disabled),
-            "naming a conversation needs no chain of thought"
+        assert!(
+            req.thinking.is_none(),
+            "`thinking` must stay UNSET: `Some(Disabled)` is inert on OpenAI, a \
+             no-op on Anthropic, and makes Gemini emit thinkingBudget:0, which \
+             models that cannot disable thinking reject with a 400 — silently \
+             leaving every conversation untitled again"
         );
         // The budget is a parameter so the retry reissues the SAME request.
         assert_eq!(
