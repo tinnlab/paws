@@ -32,6 +32,7 @@ use crate::modules::user::models::{Group, User};
 use super::catalog::{self, ControlCatalog, Operation};
 use super::permissions::ControlUse;
 use super::policy;
+use super::schema_inline::{self, InlinedSchema, resolve_schema_ref};
 use super::tools;
 
 /// Cap on the response body we relay back to the model (mirrors the chat-path
@@ -611,6 +612,27 @@ fn describe_capability(
         .map_err(|e| AppError::bad_request("INVALID_PARAMS", format!("describe args: {e}")))?;
     let op = resolve_op(user, groups, catalog, &args.operation_id)?;
 
+    // The catalog holds the schema exactly as the OpenAPI document declares it,
+    // which for every named request type is a bare
+    // `{"$ref": "#/components/schemas/…"}`. That document is in-process only, so
+    // an un-inlined schema tells the model nothing about the fields it must
+    // send. Resolve it into a self-contained schema before handing it over.
+    let inlined: Option<InlinedSchema> = op
+        .request_schema
+        .as_ref()
+        .map(|s| schema_inline::inline_schema(s, catalog.components()));
+
+    // Parameter schemas carry `$ref`s too (an enum-valued query parameter is
+    // `{"$ref": "#/components/schemas/HubCategory"}`), and a query parameter is
+    // as much part of the input contract as the body — so they get the same
+    // treatment. Caught by the catalog-wide sweep, not by the hand-picked
+    // operation.
+    let parameters: Vec<Value> = op
+        .parameters
+        .iter()
+        .map(|p| inline_parameter_schema(p, catalog.components()))
+        .collect();
+
     let structured = json!({
         "operation_id": op.operation_id,
         "method": op.method,
@@ -619,12 +641,374 @@ fn describe_capability(
         "mutating": policy::is_mutating(&op.method),
         "requires_approval": policy::is_mutating(&op.method),
         "path_params": op.path_params,
-        "parameters": op.parameters,
-        "request_schema": op.request_schema,
+        "parameters": parameters,
+        "request_schema": inlined.as_ref().map(|i| i.schema.clone()),
+        // How the schema is expressed (`inline` — every reference expanded in
+        // place — or `defs`, where shared/recursive types live in a sibling
+        // `$defs`), and whether any type was genuinely elided for size. Both
+        // are `null` when the operation takes no JSON body.
+        "schema_form": inlined.as_ref().map(|i| i.form.as_str()),
+        "schema_truncated": inlined.as_ref().map(|i| i.truncated),
         "summary": op.summary,
     });
-    let text = serde_json::to_string_pretty(&structured).unwrap_or_default();
-    Ok(text_result(text, Some(structured)))
+    let parameters = structured["parameters"].as_array().cloned().unwrap_or_default();
+    Ok(text_result(
+        render_describe_digest(op, &parameters, inlined.as_ref()),
+        Some(structured),
+    ))
+}
+
+// ── describe_capability: the model-facing digest ─────────────────────────────
+
+/// How deep the digest walks nested objects. Beyond this the fields are still in
+/// the JSON Schema block below the digest — the digest is a reading aid, the
+/// schema is the contract.
+const DIGEST_MAX_DEPTH: usize = 4;
+/// Enum options listed inline before eliding the tail.
+const DIGEST_MAX_ENUM: usize = 12;
+/// Per-field description length in the digest (the full text is in the schema).
+const DIGEST_MAX_DESC: usize = 200;
+
+/// Inline the `$ref`s inside ONE OpenAPI parameter object's `schema`, leaving
+/// the rest of the parameter (`name` / `in` / `required` / `style`) untouched.
+fn inline_parameter_schema(param: &Value, components: &Value) -> Value {
+    let Some(obj) = param.as_object() else {
+        return param.clone();
+    };
+    let Some(schema) = obj.get("schema") else {
+        return param.clone();
+    };
+    let mut out = obj.clone();
+    out.insert(
+        "schema".to_string(),
+        schema_inline::inline_schema(schema, components).schema,
+    );
+    Value::Object(out)
+}
+
+/// Render `describe_capability`'s text channel.
+///
+/// Deliberately NOT `to_string_pretty(&structured)`. The repo convention for a
+/// built-in tool (the `web_search` retrofit) is a readable digest in the text
+/// channel with typed data in `structuredContent` — and here the digest earns
+/// its place twice over: the flattened field list, with each field's type,
+/// requiredness, default and enum options, is exactly the material an `ask_user`
+/// form is built from.
+///
+/// The exact JSON Schema is ALWAYS appended, never replaced by the digest:
+/// request bodies here nest (an object property that is itself an object, an
+/// array of objects, a nullable `anyOf` wrapper), and the digest abbreviates
+/// past [`DIGEST_MAX_DEPTH`], so the schema block is what keeps the contract
+/// complete.
+fn render_describe_digest(
+    op: &Operation,
+    parameters: &[Value],
+    inlined: Option<&InlinedSchema>,
+) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "{} — {} {}\n",
+        op.operation_id, op.method, op.path_template
+    ));
+    if !op.summary.is_empty() {
+        out.push_str(&format!("{}\n", op.summary));
+    }
+    out.push_str(&format!(
+        "Required permission: {}\n",
+        op.required_permission.as_deref().unwrap_or("(none declared)")
+    ));
+    let mutating = policy::is_mutating(&op.method);
+    out.push_str(&format!(
+        "Requires approval: {}\n",
+        if mutating {
+            "yes — state-changing, the user must approve before it runs"
+        } else {
+            "no — read-only"
+        }
+    ));
+
+    if op.path_params.is_empty() {
+        out.push_str("Path parameters: (none)\n");
+    } else {
+        out.push_str(&format!(
+            "Path parameters (all required): {}\n",
+            op.path_params.join(", ")
+        ));
+    }
+    let query = render_query_params(parameters);
+    out.push_str(&format!(
+        "Query parameters: {}\n",
+        if query.is_empty() { "(none)".to_string() } else { query }
+    ));
+
+    match inlined {
+        None => {
+            out.push_str("\nRequest body: (none — this operation takes no JSON body)\n");
+        }
+        Some(i) => {
+            let defs = i.schema.get("$defs").and_then(|d| d.as_object());
+            let mut fields = Vec::new();
+            collect_fields(&i.schema, "", 0, defs, &mut fields);
+            out.push_str("\nRequest body fields:\n");
+            if fields.is_empty() {
+                out.push_str("  (no named properties — see the JSON Schema below)\n");
+            } else {
+                for f in &fields {
+                    out.push_str(&f);
+                    out.push('\n');
+                }
+            }
+            if i.truncated {
+                out.push_str(
+                    "  NOTE: part of this schema was omitted for size; the omitted types are \
+                     named in `$defs` below.\n",
+                );
+            }
+            out.push_str("\nJSON Schema (exact — use this to build the body):\n");
+            out.push_str(&serde_json::to_string_pretty(&i.schema).unwrap_or_default());
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// `page (integer, in query)` lines for the operation's declared parameters,
+/// skipping the path ones already listed above.
+fn render_query_params(parameters: &[Value]) -> String {
+    let mut parts = Vec::new();
+    for p in parameters {
+        if p.get("in").and_then(|v| v.as_str()) != Some("query") {
+            continue;
+        }
+        let Some(name) = p.get("name").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let schema = p.get("schema").unwrap_or(&Value::Null);
+        let ty = schema_type_label(schema);
+        let req = if p.get("required").and_then(|v| v.as_bool()).unwrap_or(false) {
+            " REQUIRED"
+        } else {
+            ""
+        };
+        let opts = enum_options(schema)
+            .map(|o| format!(" one of: {o}"))
+            .unwrap_or_default();
+        parts.push(format!("{name} ({ty}){req}{opts}"));
+    }
+    parts.join(", ")
+}
+
+/// Walk the body schema and push one `- name (type) REQUIRED — description`
+/// line per field, RECURSING into nested objects (`parent.child`) and into
+/// arrays of objects (`items[].child`).
+///
+/// Nesting is part of the contract, not noise: an operation whose body carries
+/// an object-valued property is unusable if the model only ever sees the
+/// top-level key names.
+fn collect_fields(
+    schema: &Value,
+    prefix: &str,
+    depth: usize,
+    defs: Option<&serde_json::Map<String, Value>>,
+    out: &mut Vec<String>,
+) {
+    if depth > DIGEST_MAX_DEPTH {
+        return;
+    }
+    let resolved = follow_defs(schema, defs);
+    let Some(obj) = resolved.as_object() else {
+        return;
+    };
+    let required: Vec<&str> = obj
+        .get("required")
+        .and_then(|r| r.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_default();
+    let Some(props) = obj.get("properties").and_then(|p| p.as_object()) else {
+        return;
+    };
+
+    for (name, field) in props {
+        let field = follow_defs(field, defs);
+        let path = format!("{prefix}{name}");
+        let indent = "  ".repeat(depth + 1);
+        let mut line = format!(
+            "{indent}- {path} ({})",
+            schema_type_label(&field)
+        );
+        if required.contains(&name.as_str()) {
+            line.push_str(" REQUIRED");
+        }
+        if let Some(c) = constraint_label(&field) {
+            line.push_str(&format!(" {c}"));
+        }
+        if let Some(d) = field.get("default") {
+            line.push_str(&format!(" default={d}"));
+        }
+        if let Some(opts) = enum_options(&field) {
+            line.push_str(&format!(" one of: {opts}"));
+        }
+        if let Some(desc) = field
+            .get("description")
+            .and_then(|d| d.as_str())
+            .map(str::trim)
+            .filter(|d| !d.is_empty())
+        {
+            line.push_str(&format!(" — {}", truncate_desc(desc)));
+        }
+        out.push(line);
+
+        // Recurse: a nested object, or an array whose items are objects.
+        let inner = unwrap_nullable(&field, defs);
+        if inner.get("properties").is_some() {
+            collect_fields(&inner, &format!("{path}."), depth + 1, defs, out);
+        } else if let Some(items) = inner.get("items") {
+            let items = follow_defs(items, defs);
+            let items = unwrap_nullable(&items, defs);
+            if items.get("properties").is_some() {
+                collect_fields(&items, &format!("{path}[]."), depth + 1, defs, out);
+            }
+        }
+    }
+}
+
+/// Resolve a `#/$defs/Name` pointer inside the document we just emitted, so a
+/// field cut into `$defs` (a cycle, or a budget cut) still shows its fields in
+/// the digest rather than reading as an opaque pointer.
+fn follow_defs(schema: &Value, defs: Option<&serde_json::Map<String, Value>>) -> Value {
+    let Some(name) = schema
+        .get("$ref")
+        .and_then(|r| r.as_str())
+        .and_then(|r| r.strip_prefix("#/$defs/"))
+    else {
+        return schema.clone();
+    };
+    defs.and_then(|d| d.get(name))
+        .cloned()
+        .unwrap_or_else(|| schema.clone())
+}
+
+/// `anyOf: [{...}, {"type":"null"}]` is how an optional sub-object is modeled
+/// here; return the meaningful branch so its fields are still walked.
+fn unwrap_nullable(schema: &Value, defs: Option<&serde_json::Map<String, Value>>) -> Value {
+    for key in ["anyOf", "oneOf", "allOf"] {
+        if let Some(variants) = schema.get(key).and_then(|v| v.as_array()) {
+            for v in variants {
+                let v = follow_defs(v, defs);
+                if v.get("type").and_then(|t| t.as_str()) == Some("null") {
+                    continue;
+                }
+                if v.get("properties").is_some() || v.get("items").is_some() {
+                    return v;
+                }
+            }
+        }
+    }
+    schema.clone()
+}
+
+/// A short human label for a field's type: `string`, `integer`, `object`,
+/// `string[]`, `string|null`, or `enum` when only values are declared.
+fn schema_type_label(schema: &Value) -> String {
+    if let Some(t) = schema.get("type").and_then(|t| t.as_str()) {
+        if t == "array" {
+            let inner = schema
+                .get("items")
+                .map(schema_type_label)
+                .unwrap_or_else(|| "any".to_string());
+            return format!("{inner}[]");
+        }
+        return t.to_string();
+    }
+    if let Some(types) = schema.get("type").and_then(|t| t.as_array()) {
+        let parts: Vec<&str> = types.iter().filter_map(|t| t.as_str()).collect();
+        if !parts.is_empty() {
+            return parts.join("|");
+        }
+    }
+    for key in ["anyOf", "oneOf"] {
+        if let Some(variants) = schema.get(key).and_then(|v| v.as_array()) {
+            let parts: Vec<String> = variants.iter().map(schema_type_label).collect();
+            if !parts.is_empty() {
+                return parts.join("|");
+            }
+        }
+    }
+    if schema.get("enum").is_some() {
+        return "enum".to_string();
+    }
+    if schema.get("properties").is_some() {
+        return "object".to_string();
+    }
+    if schema.get("$ref").is_some() {
+        return "object".to_string();
+    }
+    "any".to_string()
+}
+
+/// Compact constraint hint: `len 1..255`, `1..100`, `format=uuid`.
+///
+/// This is not decoration. Several ziee request types declare no JSON-Schema
+/// `required` array (serde supplies a default) yet constrain the value —
+/// `CreateProjectRequest.name` has `default: ""` with `minLength: 1`, so it IS
+/// mandatory in practice. Without the constraint the model reads
+/// `name (string) default=""` and reasonably concludes it may omit it.
+fn constraint_label(schema: &Value) -> Option<String> {
+    let num = |k: &str| schema.get(k).and_then(|v| v.as_i64());
+    let mut parts = Vec::new();
+    match (num("minLength"), num("maxLength")) {
+        (Some(lo), Some(hi)) => parts.push(format!("len {lo}..{hi}")),
+        (Some(lo), None) => parts.push(format!("len {lo}..")),
+        (None, Some(hi)) => parts.push(format!("len ..{hi}")),
+        (None, None) => {}
+    }
+    match (num("minimum"), num("maximum")) {
+        (Some(lo), Some(hi)) => parts.push(format!("{lo}..{hi}")),
+        (Some(lo), None) => parts.push(format!(">={lo}")),
+        (None, Some(hi)) => parts.push(format!("<={hi}")),
+        (None, None) => {}
+    }
+    if let Some(f) = schema.get("format").and_then(|v| v.as_str()) {
+        parts.push(format!("format={f}"));
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(", "))
+    }
+}
+
+/// `"a", "b", "c" (+2 more)` for an `enum`, including the array-of-enum shape.
+fn enum_options(schema: &Value) -> Option<String> {
+    let values = schema
+        .get("enum")
+        .and_then(|e| e.as_array())
+        .or_else(|| schema.get("items").and_then(|i| i.get("enum")).and_then(|e| e.as_array()))?;
+    if values.is_empty() {
+        return None;
+    }
+    let shown: Vec<String> = values
+        .iter()
+        .take(DIGEST_MAX_ENUM)
+        .map(|v| match v {
+            Value::String(s) => s.clone(),
+            other => other.to_string(),
+        })
+        .collect();
+    let mut s = shown.join(", ");
+    if values.len() > DIGEST_MAX_ENUM {
+        s.push_str(&format!(" (+{} more)", values.len() - DIGEST_MAX_ENUM));
+    }
+    Some(s)
+}
+
+fn truncate_desc(desc: &str) -> String {
+    let one_line = desc.replace(['\n', '\r'], " ");
+    if one_line.chars().count() <= DIGEST_MAX_DESC {
+        return one_line;
+    }
+    let cut: String = one_line.chars().take(DIGEST_MAX_DESC).collect();
+    format!("{cut}…")
 }
 
 // ── invoke_capability ────────────────────────────────────────────────────────
@@ -840,22 +1224,6 @@ fn validate_body(schema: &Value, body: &Value, components: &Value) -> Result<(),
     Ok(())
 }
 
-/// Follow a single top-level `$ref: #/components/schemas/Name` into the shared
-/// components. Returns the input unchanged when it is not a `$ref`.
-fn resolve_schema_ref(schema: &Value, components: &Value) -> Value {
-    let Some(reference) = schema.get("$ref").and_then(|r| r.as_str()) else {
-        return schema.clone();
-    };
-    let Some(name) = reference.strip_prefix("#/components/schemas/") else {
-        return schema.clone();
-    };
-    components
-        .get("schemas")
-        .and_then(|s| s.get(name))
-        .cloned()
-        .unwrap_or_else(|| schema.clone())
-}
-
 fn text_result(text: impl Into<String>, structured: Option<Value>) -> Value {
     let mut obj = json!({ "content": [{ "type": "text", "text": text.into() }] });
     if let Some(s) = structured {
@@ -938,6 +1306,16 @@ mod tests {
             validate_body(&schema, &json!({"email": "x"}), &components)
                 .unwrap_err()
                 .contains("username")
+        );
+        // TEST-12 — the duplicate private resolver was deleted in favour of
+        // `schema_inline::resolve_schema_ref`; the pre-existing FAIL-OPEN
+        // behaviour on an unresolvable ref must be preserved, because
+        // `validate_body` relies on it to skip local validation and let the real
+        // route decide (rather than falsely rejecting a valid body).
+        let dangling = json!({ "$ref": "#/components/schemas/DoesNotExist" });
+        assert!(
+            validate_body(&dangling, &json!({ "anything": 1 }), &components).is_ok(),
+            "an unresolvable body schema must fail open, not reject"
         );
     }
 
@@ -1400,4 +1778,164 @@ mod tests {
             "hub"
         ]);
     }
+
+    // ── describe_capability digest (ITEM-4 / INV-6) ───────────────────────────
+
+    /// A body with a nested object, an array-of-objects, a nullable sub-object,
+    /// an enum and a default — the shapes a real ziee request body actually has.
+    fn nested_body_schema() -> Value {
+        json!({
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+                "name": { "type": "string", "description": "Project name" },
+                "visibility": { "type": "string", "enum": ["private", "team"], "default": "private" },
+                "settings": {
+                    "type": "object",
+                    "properties": {
+                        "loop_limit": { "type": "integer", "default": 10, "description": "Max loops" },
+                        "quiet": { "type": "boolean" }
+                    }
+                },
+                "members": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["user_id"],
+                        "properties": { "user_id": { "type": "string" }, "role": { "type": "string" } }
+                    }
+                },
+                "owner": {
+                    "anyOf": [
+                        { "type": "object", "properties": { "email": { "type": "string" } } },
+                        { "type": "null" }
+                    ]
+                }
+            }
+        })
+    }
+
+    fn describe_op(schema: Option<Value>) -> Operation {
+        Operation {
+            operation_id: "Project.create".into(),
+            method: "POST".into(),
+            path_template: "/api/projects".into(),
+            tags: vec!["Projects".into()],
+            summary: "Create a personal chat project".into(),
+            required_permission: Some("projects::create".into()),
+            path_params: vec![],
+            request_schema: schema,
+            json_body: true,
+            has_secret_field: false,
+            parameters: vec![json!({
+                "in": "query", "name": "per_page", "required": false,
+                "schema": { "type": "integer" }
+            })],
+        }
+    }
+
+    /// The operation's parameters as `describe_capability` passes them (already
+    /// ref-inlined; the fixture's are ref-free).
+    fn inlined_params() -> Vec<Value> {
+        describe_op(None)
+            .parameters
+            .iter()
+            .map(|p| inline_parameter_schema(p, &json!({})))
+            .collect()
+    }
+
+    fn digest_of(schema: Value) -> String {
+        let inlined = schema_inline::inline_schema(&schema, &json!({}));
+        render_describe_digest(&describe_op(Some(schema)), &inlined_params(), Some(&inlined))
+    }
+
+    /// TEST-15 — each top-level field is rendered with its type, requiredness,
+    /// default, enum options and description; the header carries the permission
+    /// and the approval requirement.
+    #[test]
+    fn digest_renders_field_type_required_default_enum_and_description() {
+        let d = digest_of(nested_body_schema());
+        assert!(d.contains("Project.create — POST /api/projects"), "{d}");
+        assert!(d.contains("Required permission: projects::create"), "{d}");
+        assert!(d.contains("Requires approval: yes"), "{d}");
+        assert!(d.contains("per_page (integer)"), "query params: {d}");
+        assert!(d.contains("- name (string) REQUIRED — Project name"), "{d}");
+        assert!(
+            d.contains("- visibility (string) default=\"private\" one of: private, team"),
+            "{d}"
+        );
+        // A non-required field carries no REQUIRED marker.
+        let visibility_line = d
+            .lines()
+            .find(|l| l.contains("- visibility "))
+            .expect("visibility line");
+        assert!(!visibility_line.contains("REQUIRED"), "{visibility_line}");
+    }
+
+    /// TEST-16 (acceptance, INV-6) — nesting is part of the contract. The digest
+    /// must name the INNER fields of a nested object, of an array's items, and of
+    /// a nullable `anyOf` sub-object — a top-level-keys-only digest fails here.
+    #[test]
+    fn acceptance_inv6_digest_names_nested_and_array_item_fields() {
+        let d = digest_of(nested_body_schema());
+        assert!(d.contains("settings.loop_limit"), "nested object field: {d}");
+        assert!(d.contains("settings.quiet"), "nested object field: {d}");
+        assert!(d.contains("members[].user_id"), "array item field: {d}");
+        assert!(d.contains("members[].role"), "array item field: {d}");
+        assert!(d.contains("owner.email"), "nullable sub-object field: {d}");
+        // Nested requiredness survives the walk.
+        assert!(d.contains("members[].user_id (string) REQUIRED"), "{d}");
+        // And the nested default is carried, since that is what pre-fills a form.
+        assert!(d.contains("settings.loop_limit (integer) default=10"), "{d}");
+    }
+
+    /// TEST-19 (acceptance, INV-6) — the digest never REPLACES the schema. The
+    /// exact JSON Schema block is always emitted, and round-tripping it out of
+    /// the text re-parses to exactly the schema in `structuredContent`.
+    #[test]
+    fn acceptance_inv6_exact_json_schema_is_always_emitted_alongside_the_digest() {
+        let schema = nested_body_schema();
+        let inlined = schema_inline::inline_schema(&schema, &json!({}));
+        let d = render_describe_digest(&describe_op(Some(schema)), &inlined_params(), Some(&inlined));
+
+        let marker = "JSON Schema (exact — use this to build the body):\n";
+        let idx = d.find(marker).expect(&format!("schema block must be present: {d}"));
+        let block = &d[idx + marker.len()..];
+        let parsed: Value = serde_json::from_str(block.trim())
+            .unwrap_or_else(|e| panic!("schema block must re-parse ({e}): {block}"));
+        assert_eq!(
+            parsed, inlined.schema,
+            "the emitted block must be the SAME schema structuredContent carries"
+        );
+        // The digest is above it, not instead of it.
+        assert!(d[..idx].contains("Request body fields:"), "{d}");
+    }
+
+    /// A `$ref` cut into `$defs` (a cycle, or a budget cut) still shows its
+    /// fields in the digest instead of reading as an opaque pointer.
+    #[test]
+    fn digest_follows_defs_pointers() {
+        let components = json!({ "schemas": {
+            "Node": { "type": "object", "properties": {
+                "label": { "type": "string" },
+                "child": { "$ref": "#/components/schemas/Node" }
+            }}
+        }});
+        let schema = json!({ "$ref": "#/components/schemas/Node" });
+        let inlined = schema_inline::inline_schema(&schema, &components);
+        let d = render_describe_digest(&describe_op(Some(schema)), &inlined_params(), Some(&inlined));
+        assert!(d.contains("- label (string)"), "{d}");
+        // The recursive edge resolves through $defs rather than dead-ending.
+        assert!(d.contains("child.label"), "$defs pointer must be followed: {d}");
+    }
+
+    /// An operation with no JSON body says so plainly rather than emitting an
+    /// empty field list or a `null` schema block.
+    #[test]
+    fn digest_states_when_there_is_no_request_body() {
+        let d = render_describe_digest(&describe_op(None), &inlined_params(), None);
+        assert!(d.contains("Request body: (none"), "{d}");
+        assert!(!d.contains("JSON Schema"), "{d}");
+    }
+
 }
