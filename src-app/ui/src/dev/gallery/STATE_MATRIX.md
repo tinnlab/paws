@@ -8,7 +8,7 @@
 ## Summary
 
 - **338** surfaces carry at least one renderable-state signal.
-- **2066** signals total: 1617 branch, 137 empty, 119 error, 93 loading, 96 overlay, 4 panel.
+- **2067** signals total: 1618 branch, 137 empty, 119 error, 93 loading, 96 overlay, 4 panel.
 - **4** right-panel renderers registered (each a right-panel-open state).
 - **35** slot registrations (sidebar / settings / chat mount points).
 
@@ -359,9 +359,9 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!convId` | 48 |
-| empty | `!convId \|\| !runs \|\| total === 0` | 60 |
-| branch | `runningLoaded > 0` | 94 |
+| branch | `!convId` | 49 |
+| empty | `!convId \|\| !runs \|\| total === 0` | 74 |
+| branch | `runningLoaded > 0` | 108 |
 
 ### `modules/background/components/BackgroundRunsPanel`
 
@@ -3773,13 +3773,13 @@ Required states: `delayed`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!conversation?.id` | 38 |
-| branch | `!conversation?.id` | 64 |
-| branch | `!conversation?.id` | 73 |
-| branch | `adminSettings?.enabled === false` | 83 |
-| branch | `!conversation?.id` | 93 |
-| loading | `loading` | 147 |
-| branch | `mode === 'off'` | 149 |
+| branch | `!conversation?.id` | 55 |
+| branch | `!next.conversationId` | 93 |
+| branch | `!conversation?.id` | 108 |
+| branch | `adminSettings?.enabled === false` | 118 |
+| branch | `!conversation?.id` | 128 |
+| loading | `loading` | 182 |
+| branch | `mode === 'off'` | 184 |
 
 ### `modules/summarization/chat-extension/components/SummaryBoundaryMarker`
 
@@ -3787,11 +3787,12 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!message` | 34 |
-| branch | `!current?.summary` | 35 |
-| branch | `current.summary.summarized_up_to_id !== message.id` | 36 |
-| branch | `expanded` | 69 |
-| branch | `expanded` | 76 |
+| branch | `!message` | 45 |
+| branch | `!current?.summary` | 46 |
+| branch | `!conversationId \|\| current.conversationId !== conversationId` | 49 |
+| branch | `current.summary.summarized_up_to_id !== message.id` | 50 |
+| branch | `expanded` | 83 |
+| branch | `expanded` | 90 |
 
 ### `modules/summarization/components/sections/SummarizationSettingsSection`
 

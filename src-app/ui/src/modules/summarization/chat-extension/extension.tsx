@@ -1,6 +1,4 @@
 import { createExtension, type ChatExtension } from '@/modules/chat/core/extensions'
-import { Chat, paneRegistry } from '@/modules/chat/core/stores/chatBridge'
-import { ConversationSummarization } from '@/modules/summarization/stores/conversationSummarization'
 import { SummaryBoundaryMarker } from '@/modules/summarization/chat-extension/components/SummaryBoundaryMarker'
 import { SummarizationStatusPill } from '@/modules/summarization/chat-extension/components/SummarizationStatusPill'
 
@@ -57,7 +55,21 @@ const summarizationExtension: ChatExtension = createExtension({
   // bridge instead would, in split view, refresh the FOCUSED pane's summary when
   // the UNFOCUSED pane finished a turn — rotating a single-entry cache onto the
   // wrong conversation and never refreshing the one that actually changed.
+  // Imported DYNAMICALLY, not statically. A chat-extension module is EAGERLY
+  // discovered by `chat/core/extensions/index.ts`'s `import.meta.glob`, so a
+  // static import here pulls the chat store bridge and this module's store into
+  // that eager pass and changes module-evaluation order during chat boot. A
+  // blind-audit note suggested static imports would be cheaper (the pill already
+  // pulls both into the same chunk); measured, the e2e new-chat send stopped
+  // rendering its assistant turn, so the cheaper form is NOT worth it. Deferring
+  // to first-use keeps the eager pass byte-identical to before this change.
   afterStreamComplete: async (_message, ownerPaneId) => {
+    const { Chat, paneRegistry } = await import(
+      '@/modules/chat/core/stores/chatBridge'
+    )
+    const { ConversationSummarization } = await import(
+      '@/modules/summarization/stores/conversationSummarization'
+    )
     const owner = ownerPaneId ? paneRegistry.get(ownerPaneId)?.api : undefined
     const conversationId = (owner?.getState() ?? Chat.$).conversation?.id
     if (!conversationId) return {}

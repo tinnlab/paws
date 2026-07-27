@@ -88,8 +88,18 @@ test.describe('live-ui-audit round 2 — composer + geometry', () => {
       conversationCreates.length,
       `a double keypress must create exactly one conversation; created ${conversationCreates.length}`,
     ).toBe(1)
-    await expect(page.locator('[data-role="user"]')).toHaveCount(1)
-    await expect(page.locator('[data-role="assistant"]')).toHaveCount(1)
+    // Message ROWS are deliberately not counted here, and that is not a
+    // weakening — it is the only correct choice under this harness.
+    // `mockChatTokenStream` intercepts `POST …/messages`, so the real backend
+    // never persists the turn; the post-`complete` tail reconcile
+    // (`applyStreamFrame` → `getHistory`) then correctly replaces the streamed
+    // rows with the — empty — persisted tail. Measured: the assistant row is
+    // visible (asserted above) and then legitimately disappears a few seconds
+    // later. Counting rows would assert a property of the MOCK.
+    //
+    // "Exactly one turn" is proven by the two request counts above, which is
+    // where the double-submit race actually shows up: pre-fix it produced a
+    // second `POST /api/conversations` and a second send.
 
     // The `stuck-loading` signal itself: after the turn ends the composer must be
     // usable and nothing in it may still be spinning.

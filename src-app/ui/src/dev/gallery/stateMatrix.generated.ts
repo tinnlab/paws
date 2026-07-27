@@ -4,7 +4,7 @@
 // renders + overlay triggers + panel/slot registrations) that the reconciliation
 // gate (scripts/reconcile-state-matrix.mjs) checks the gallery entries against.
 //
-// 338 surfaces carry renderable-state signals; 2066 signals total.
+// 338 surfaces carry renderable-state signals; 2067 signals total.
 
 /** A signal is one mechanically-detected render fork (a state the surface can be in). */
 export interface StateSignal {
@@ -293,9 +293,9 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/background/components/BackgroundRunsFooter",
     requiredStates: ["empty"],
     signals: [
-      { kind: "branch", condition: "!convId", line: 48 },
-      { kind: "empty", condition: "!convId || !runs || total === 0", line: 60 },
-      { kind: "branch", condition: "runningLoaded > 0", line: 94 },
+      { kind: "branch", condition: "!convId", line: 49 },
+      { kind: "empty", condition: "!convId || !runs || total === 0", line: 74 },
+      { kind: "branch", condition: "runningLoaded > 0", line: 108 },
     ],
   },
   "modules/background/components/BackgroundRunsPanel": {
@@ -3448,24 +3448,25 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/summarization/chat-extension/components/SummarizationStatusPill",
     requiredStates: ["delayed"],
     signals: [
-      { kind: "branch", condition: "!conversation?.id", line: 38 },
-      { kind: "branch", condition: "!conversation?.id", line: 64 },
-      { kind: "branch", condition: "!conversation?.id", line: 73 },
-      { kind: "branch", condition: "adminSettings?.enabled === false", line: 83 },
-      { kind: "branch", condition: "!conversation?.id", line: 93 },
-      { kind: "loading", condition: "loading", line: 147 },
-      { kind: "branch", condition: "mode === 'off'", line: 149 },
+      { kind: "branch", condition: "!conversation?.id", line: 55 },
+      { kind: "branch", condition: "!next.conversationId", line: 93 },
+      { kind: "branch", condition: "!conversation?.id", line: 108 },
+      { kind: "branch", condition: "adminSettings?.enabled === false", line: 118 },
+      { kind: "branch", condition: "!conversation?.id", line: 128 },
+      { kind: "loading", condition: "loading", line: 182 },
+      { kind: "branch", condition: "mode === 'off'", line: 184 },
     ],
   },
   "modules/summarization/chat-extension/components/SummaryBoundaryMarker": {
     surface: "modules/summarization/chat-extension/components/SummaryBoundaryMarker",
     requiredStates: [],
     signals: [
-      { kind: "branch", condition: "!message", line: 34 },
-      { kind: "branch", condition: "!current?.summary", line: 35 },
-      { kind: "branch", condition: "current.summary.summarized_up_to_id !== message.id", line: 36 },
-      { kind: "branch", condition: "expanded", line: 69 },
-      { kind: "branch", condition: "expanded", line: 76 },
+      { kind: "branch", condition: "!message", line: 45 },
+      { kind: "branch", condition: "!current?.summary", line: 46 },
+      { kind: "branch", condition: "!conversationId || current.conversationId !== conversationId", line: 49 },
+      { kind: "branch", condition: "current.summary.summarized_up_to_id !== message.id", line: 50 },
+      { kind: "branch", condition: "expanded", line: 83 },
+      { kind: "branch", condition: "expanded", line: 90 },
     ],
   },
   "modules/summarization/components/sections/SummarizationSettingsSection": {
