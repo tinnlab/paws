@@ -45,7 +45,7 @@ fix-round-2 spec changes (1.4m), and again after re-baselining onto `a02c09a04`
 - `npm run check (ui): PASS` — tsc + biome guardrails + lint:colors + settings-field + adjacent-inline + icon-action + **lint:hooks** + logical-direction + tooltip-placement + kit-manifest + testid-registry + design-spec + gallery-coverage + gallery-crawl + gallery-fixtures + state-matrix + overlay-registry + override-registry + gallery-seed-registry + store-actions. `lint:hooks` (added to the chain by `d22d22941`, landed in the new base) reports `0 violations across 2454 file(s)`.
 - `npm run check (desktop/ui): PASS` — same chain for the desktop workspace, exit 0.
 - `gate:ui (desktop/ui): PASS` — 53/53 surfaces runtime-clean; tsc + lint + runtime-health + coverage all PASS.
-- `gate:ui (ui): PASS` — see the classification immediately below.
+- `gate:ui (ui)`: **FAIL (runtime-health) — Category A, environment.** Classified below with a baseline control; NOT claimed as a pass.
 - Layer-B pixel regression was not run: the diff adds no rendered element (no component, no style, no new conditional render state — `check:state-matrix` confirms the only state-matrix delta is a line-number shift), so there is no baseline for it to move.
 
 ### `gate:ui (ui)` runtime-health — classified, not claimed
@@ -62,19 +62,32 @@ could be classified rather than asserted:
 | baseline `a02c09a04` | PASS | PASS | **FAIL** | `overlay-reset-password-drawer`, `overlay-edit-user-drawer`, `overlay-create-user-drawer`, `background-tasks`, `notifications-background` |
 | this branch | PASS | PASS | **FAIL** | `auth`, `overlay-knowledge-base-form-drawer`, `overlay-runtime-download-drawer`, `overlay-llm-provider-drawer` |
 
-**Category A — environmental, verified from the log signature.** 2830 of the 2834
-HIGH findings are `net::ERR_NETWORK_CHANGED` on the Vite dev server's own module
-requests (kit/shadcn sources, store action chunks) — a host network event, not an
-app defect. The remaining 2 are a gallery fixture's deliberate error state
-(`s3-grp-err`). The BASELINE fails the same gate, on a DIFFERENT arbitrary set of
-surfaces — which is the proof it tracks whichever surface was mid-load when the
-storm hit, not the diff. The desktop workspace's identical gate passed 53/53 in
-the same window.
+**Category A — environmental, verified from the log signature, three times.**
 
-This is recorded as a Category-A environment block, NOT as a pass and NOT as a
-regression: the numbers, the signature, and the baseline control are all stated
-so the claim is checkable. A clean serial re-run on a quiet box is the outstanding
-item; the A7 canary that DID complete cleanly is the desktop one.
+| run | conditions | HIGH signature | failing surfaces |
+|---|---|---|---|
+| baseline `a02c09a04` | concurrent | — | `overlay-reset-password-drawer`, `overlay-edit-user-drawer`, `overlay-create-user-drawer`, `background-tasks`, `notifications-background` |
+| this branch | concurrent | 2830 / 2834 = `net::ERR_NETWORK_CHANGED` | `auth`, `overlay-knowledge-base-form-drawer`, `overlay-runtime-download-drawer`, `overlay-llm-provider-drawer` |
+| this branch | **quiet box, serial** | **984 / 988 = `net::ERR_NETWORK_CHANGED`** | `seeded-hardware-monitor-error`, `seeded-literature-loading` |
+
+`net::ERR_NETWORK_CHANGED` on the Vite dev server's OWN module requests
+(kit/shadcn sources, store action chunks) is a host network event, not an app
+defect. The 4 non-network HIGHs are a gallery fixture's DELIBERATE forced error
+(`s3-grp-err` → `Gallery forced error`), present on the baseline too.
+
+Three independent reasons this is not diff-attributable:
+1. the BASELINE fails the same gate;
+2. the failing surface set is DIFFERENT in every run — it tracks whichever
+   surface was mid-load when the storm hit, not the code;
+3. the desktop workspace's identical gate passed **53/53 surfaces clean** in the
+   same window, on the same sdk.
+
+Recorded as a Category-A environment block per the repo's classify-before-claiming
+rule: not a pass, not a regression, with the numbers, the signature, the baseline
+control and the quiet-box re-run all stated so the claim is checkable. The A7
+canary that DID complete clean is `gate:ui (desktop/ui)`. `tsc`, `lint` (incl. the
+new `lint:hooks`) and the Layer-A/axe `visual` leg PASS in every one of the three
+`ui` runs.
 
 ## Backend
 
