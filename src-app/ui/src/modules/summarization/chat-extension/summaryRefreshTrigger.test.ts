@@ -1,7 +1,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  isSummaryHeld,
   shouldLoadSummaryOnOpen,
+  type SummaryStoreSnapshot,
   type SummaryTriggerState,
 } from './summaryRefreshTrigger.ts'
 
@@ -22,18 +24,34 @@ const A = 'aaaaaaaa-0000-0000-0000-000000000001'
 const B = 'bbbbbbbb-0000-0000-0000-000000000002'
 
 /**
- * Replay a state sequence, modelling the store: a read makes that conversation
- * the one the store holds (or is fetching). Every entry is treated as a fresh
- * component instance, because the `/` → `/chat/{id}` navigation genuinely
- * re-mounts the composer and the predicate must be idempotent across that.
+ * Replay a state sequence through BOTH halves of the real decision — the store
+ * snapshot is fed through the production `isSummaryHeld`, not a hand-rolled
+ * model of it, so a bug in the "held" derivation shows up here too. A read is
+ * modelled the way the store behaves: `loading` + `requestedConversationId` are
+ * set immediately, then `current` settles.
+ *
+ * Every entry is treated as a fresh component instance, because the `/` →
+ * `/chat/{id}` navigation genuinely re-mounts the composer and the decision must
+ * be idempotent across that.
  */
 function readsFor(seq: SummaryTriggerState[]): number {
-  let held: string | null = null
+  const snap: SummaryStoreSnapshot = {
+    current: null,
+    loading: false,
+    requestedConversationId: null,
+  }
   let n = 0
   for (const state of seq) {
-    if (shouldLoadSummaryOnOpen(state, held)) {
+    const held = state.conversationId
+      ? isSummaryHeld(snap, state.conversationId)
+      : false
+    if (shouldLoadSummaryOnOpen(state, held ? state.conversationId : null)) {
       n += 1
-      held = state.conversationId
+      snap.loading = true
+      snap.requestedConversationId = state.conversationId
+      // ...and it settles before the next state is observed.
+      snap.loading = false
+      snap.current = { conversationId: state.conversationId! }
     }
   }
   return n
@@ -100,6 +118,28 @@ test('re-mounting the composer on an already-held conversation does NOT re-read'
 
 test('an in-flight read counts as held, so two mounts in one request window fire once', () => {
   assert.equal(shouldLoadSummaryOnOpen({ conversationId: A, streaming: false, createdInThisSession: false }, A), false)
+})
+
+test('isSummaryHeld: settled cache, in-flight read, wrong id, and the FAILED read', () => {
+  const settled = { current: { conversationId: A }, loading: false, requestedConversationId: A }
+  assert.equal(isSummaryHeld(settled, A), true)
+  // The store holds someone ELSE's summary (single-entry rotation).
+  assert.equal(isSummaryHeld(settled, B), false)
+
+  const inFlight = { current: null, loading: true, requestedConversationId: A }
+  assert.equal(isSummaryHeld(inFlight, A), true)
+  assert.equal(isSummaryHeld(inFlight, B), false)
+
+  // A FAILED read must NOT read as held, or the surface would never retry:
+  // `loadForConversation` leaves `current` null and `loading` false on error
+  // while `requestedConversationId` still points at the conversation.
+  const failed = { current: null, loading: false, requestedConversationId: A }
+  assert.equal(isSummaryHeld(failed, A), false)
+
+  // A read for a DIFFERENT conversation is in flight — not held.
+  const otherInFlight = { current: { conversationId: A }, loading: true, requestedConversationId: B }
+  assert.equal(isSummaryHeld(otherInFlight, B), true)
+  assert.equal(isSummaryHeld(otherInFlight, A), true)
 })
 
 test('switching conversations reads once per switch', () => {

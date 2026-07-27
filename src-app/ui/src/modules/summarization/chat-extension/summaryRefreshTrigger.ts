@@ -90,3 +90,33 @@ export function shouldLoadSummaryOnOpen(
   if (state.createdInThisSession) return false
   return loadedConversationId !== state.conversationId
 }
+
+/** The slice of `ConversationSummarization` state this decision reads. */
+export interface SummaryStoreSnapshot {
+  current: { conversationId: string } | null
+  loading: boolean
+  requestedConversationId: string | null
+}
+
+/**
+ * Is `conversationId`'s summary already SETTLED in, or currently ON THE WIRE
+ * for, the store? That is what `shouldLoadSummaryOnOpen`'s
+ * `loadedConversationId` means, and deriving it is the part with real edge
+ * cases — hence a named, tested function rather than an inline expression at the
+ * one call site:
+ *
+ *  - the settled case (`current`) is what makes a component RE-MOUNT idempotent;
+ *  - the in-flight case (`loading` + `requestedConversationId`) is what stops two
+ *    mounts in the same commit from both issuing a read, since the store action
+ *    is dispatched asynchronously and its `loading` flag is not set synchronously
+ *    with the caller;
+ *  - a FAILED read leaves `current` null and `loading` false, so it correctly
+ *    reports "not held" and the next mount retries.
+ */
+export function isSummaryHeld(
+  snapshot: SummaryStoreSnapshot,
+  conversationId: string,
+): boolean {
+  if (snapshot.current?.conversationId === conversationId) return true
+  return snapshot.loading && snapshot.requestedConversationId === conversationId
+}

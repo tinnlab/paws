@@ -1,7 +1,5 @@
-import { EventBus } from '@ziee/framework/stores'
-
 /**
- * Conversations THIS tab created during THIS session.
+ * Conversations THIS tab created whose FIRST turn has not completed yet.
  *
  * ── Why this exists ─────────────────────────────────────────────────────────
  * Several surfaces ask the server a question whose answer is already knowable
@@ -15,12 +13,26 @@ import { EventBus } from '@ziee/framework/stores'
  *    the composer re-mounted on the `/` → `/chat/{id}` navigation, which for a
  *    brand-new conversation can only ever answer "no summary".
  *
- * Anything that appears LATER still reaches those surfaces: background runs
- * arrive on `sync:workflow_run` (the footer retains its scope on mount), and the
- * summary is re-read by the summarization extension's `afterStreamComplete` hook
- * at the end of each turn. Only the provably-empty question is skipped; a
- * conversation loaded FROM the server always asks, which is what lets a reload
- * surface state this tab never saw created.
+ * ── The window is NARROW, and that is load-bearing ──────────────────────────
+ * "Provably empty" is true only until the conversation's FIRST TURN COMPLETES —
+ * after that the server may have written a summary, and a sub-agent run may
+ * exist. So the mark is REMOVED at the end of every turn
+ * (`chat/.../applyStreamFrame.ts`, where `finalizingTurn` is set), and from then
+ * on both surfaces ask normally.
+ *
+ * Without that expiry the elision is a real defect rather than an optimisation:
+ * `BackgroundRuns.releaseConversationScope` DELETES a conversation's cached
+ * slice on unmount, so a permanently-marked conversation would, after one
+ * navigate-away-and-back, show no footer and no route to its Tasks panel for the
+ * rest of the session; and the single-entry summary cache rotates on any
+ * conversation switch, so its boundary marker would go blank just as
+ * permanently. (Both were found by the blind audit — see LEDGER L-1/L-2.)
+ *
+ * Anything that appears INSIDE the window still reaches those surfaces:
+ * background runs arrive on `sync:workflow_run` (the footer retains its scope on
+ * mount even when it skips the probe), and the summary is read by the
+ * summarization extension's `afterStreamComplete` hook — which fires at the same
+ * moment the mark is removed.
  *
  * ── Why a module-level Set and not store state ──────────────────────────────
  * Nothing renders it; it is a request-elision guard. This mirrors
@@ -57,7 +69,20 @@ export function noteSessionCreatedConversation(conversationId: string): void {
   created.add(conversationId)
 }
 
-/** True when this tab created `conversationId` during this session. */
+/**
+ * Drop the mark. Called at the END OF EVERY TURN: from that moment the
+ * conversation can have server-side state, so the surfaces must ask again.
+ * Idempotent, and a no-op for an id that was never marked.
+ */
+export function forgetSessionCreatedConversation(conversationId: string): void {
+  created.delete(conversationId)
+}
+
+/**
+ * True while `conversationId` is one this tab created AND no turn has completed
+ * in it yet — i.e. while it is provably free of server-side per-conversation
+ * state. False for everything else, which is the safe default (ask the server).
+ */
 export function isSessionCreatedConversation(conversationId: string): boolean {
   return created.has(conversationId)
 }
@@ -67,26 +92,13 @@ export function __resetSessionCreatedForTests(): void {
   created.clear()
 }
 
-let subscribed = false
-
-/**
- * Start recording `conversation.created` into the set. Idempotent — every
- * consumer may call it, and exactly one subscription is ever registered.
- *
- * Called from the `background` module's `initialize()`, which is the earliest
- * point that reliably precedes any send: `sendMessage` emits
- * `conversation.created` and only THEN awaits the chat-extension lifecycle, and
- * a lazily-instantiated store is later still. `background` is a core module (no
- * `shouldLoad`), so it is registered in the first wave for every user — which is
- * what makes this tracking unconditional even though the surfaces that read it
- * live in other modules.
- */
-export function ensureSessionCreatedTracking(): void {
-  if (subscribed) return
-  subscribed = true
-  EventBus.on(
-    'conversation.created',
-    event => noteSessionCreatedConversation(event.data.conversation.id),
-    'session-created-conversations',
-  )
-}
+// NO EventBus subscription here, deliberately. An earlier revision registered a
+// `conversation.created` listener from the background module's `initialize()`;
+// the blind audit showed it was provably INERT (LEDGER L-6): the store's
+// `createConversation` is the sole creation path, it marks the id synchronously
+// before `set({ conversation })`, and BOTH `conversation.created` emitters run
+// strictly after that — so the listener could never mark anything the direct
+// call had missed. It also made this module's behaviour depend on an unrelated
+// feature module being in the load wave. Marking stays where the fact is
+// produced (`chat/.../createConversation.ts`) and un-marking where it expires
+// (`chat/.../applyStreamFrame.ts`).

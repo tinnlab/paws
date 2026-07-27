@@ -89,11 +89,15 @@ test.describe('live-ui-audit round 2 — network hygiene regression guards', () 
     await expect(byTestId(page, 'chat-input-send-btn')).toBeEnabled({ timeout: 30000 })
     await page.waitForTimeout(3000)
 
-    // TEST-2 — the audit measured 3–4 here.
+    // TEST-2 — the audit measured 3–4 here. Asserted as EXACTLY one, not
+    // "at most one": a regression that stops the turn-end read altogether
+    // (a dropped `afterStreamComplete`, a wrong-pane read) would leave the
+    // in-thread summary marker permanently stale, and `<= 1` would call that a
+    // pass.
     expect(
       summaryReads.length,
-      `one send must read the summary at most once; got ${summaryReads.length}:\n${summaryReads.join('\n')}`,
-    ).toBeLessThanOrEqual(1)
+      `one send must read the summary exactly once; got ${summaryReads.length}:\n${summaryReads.join('\n')}`,
+    ).toBe(1)
 
     // ...and the pill that DRIVES that read is still on screen, so a "fix" that
     // simply stopped rendering the read-model would not pass.
@@ -123,9 +127,9 @@ test.describe('live-ui-audit round 2 — network hygiene regression guards', () 
       () => JSON.parse(localStorage.getItem('auth-storage')!).state.token,
     )
 
-    // Seed a conversation WITH a message out-of-band, so it is a genuine
-    // server-loaded conversation (the footer's slot only renders once the
-    // message list has messages) that this tab never created.
+    // Seed a conversation out-of-band, so it is a genuine server-loaded
+    // conversation this tab never created. Its first turn is sent below, in-app,
+    // because the footer's slot only renders once the message list has messages.
     const convRes = await fetch(`${apiURL}/api/conversations`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -172,9 +176,21 @@ test.describe('live-ui-audit round 2 — network hygiene regression guards', () 
       () => JSON.parse(localStorage.getItem('auth-storage')!).state.token,
     )
 
-    await page.goto(`${baseURL}/memories`)
+    await page.goto(`${baseURL}/settings/memory`)
     await expect(page.getByRole('main')).toBeVisible({ timeout: 20000 })
     await page.waitForTimeout(2000)
+
+    // A CONTROL first: prove the page can render a memory at all, so the
+    // no-reload assertion below cannot pass vacuously by never rendering any.
+    const control = `round2-control-${Date.now()}`
+    const seed = await fetch(`${apiURL}/api/memories`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ content: control }),
+    })
+    expect(seed.ok, `creating the control memory failed: ${seed.status}`).toBeTruthy()
+    await page.reload()
+    await expect(page.getByText(control)).toBeVisible({ timeout: 25000 })
 
     const marker = `round2-sync-proof-${Date.now()}`
     const res = await fetch(`${apiURL}/api/memories`, {

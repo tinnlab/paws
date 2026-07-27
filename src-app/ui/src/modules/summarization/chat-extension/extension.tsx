@@ -1,4 +1,6 @@
 import { createExtension, type ChatExtension } from '@/modules/chat/core/extensions'
+import { Chat, paneRegistry } from '@/modules/chat/core/stores/chatBridge'
+import { ConversationSummarization } from '@/modules/summarization/stores/conversationSummarization'
 import { SummaryBoundaryMarker } from '@/modules/summarization/chat-extension/components/SummaryBoundaryMarker'
 import { SummarizationStatusPill } from '@/modules/summarization/chat-extension/components/SummarizationStatusPill'
 
@@ -47,14 +49,24 @@ const summarizationExtension: ChatExtension = createExtension({
   // The pill previously re-read on every `messages.size` change, which is what
   // the live-UI audit measured as 3–4 `GET …/summary` per step
   // (`network/duplicate` + `network/excess`). See `summaryRefreshTrigger.ts`.
-  afterStreamComplete: async () => {
-    const { Chat } = await import('@/modules/chat/core/stores/chatBridge')
-    const conversationId = Chat.$.conversation?.id
+  // PANE-CORRECT: read the OWNING pane's conversation from `ownerPaneId`, never
+  // the focused-pane bridge. `applyStreamFrame` threads this id precisely
+  // because focus is unreliable at this async boundary (see the hook's doc in
+  // `chat/core/extensions/types.ts`), and both sibling implementations
+  // (`chat/extensions/text`, `file/chat-extension`) do the same. Reading the
+  // bridge instead would, in split view, refresh the FOCUSED pane's summary when
+  // the UNFOCUSED pane finished a turn — rotating a single-entry cache onto the
+  // wrong conversation and never refreshing the one that actually changed.
+  afterStreamComplete: async (_message, ownerPaneId) => {
+    const owner = ownerPaneId ? paneRegistry.get(ownerPaneId)?.api : undefined
+    const conversationId = (owner?.getState() ?? Chat.$).conversation?.id
     if (!conversationId) return {}
-    const { ConversationSummarization } = await import(
-      '@/modules/summarization/stores/conversationSummarization'
-    )
-    void ConversationSummarization.loadForConversation(conversationId)
+    // `force`: an open read issued moments earlier (before the server wrote) may
+    // still be on the wire; adopting its answer would leave the pre-turn summary
+    // on screen with no later trigger to correct it.
+    void ConversationSummarization.loadForConversation(conversationId, {
+      force: true,
+    })
     return {}
   },
 })

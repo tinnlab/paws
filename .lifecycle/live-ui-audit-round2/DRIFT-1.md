@@ -55,7 +55,34 @@ from the plan's first draft.
   `GET /api/memories` during a turn, which is a stronger assertion anyway (it
   measures the request, not the shape of the object). TESTS.md amended.
 
-- **DRIFT-1.6** — verdict: none — ITEM-4, ITEM-6, ITEM-7 landed exactly as
-  planned.
+- **DRIFT-1.6** — verdict: none — ITEM-4 and ITEM-7 landed exactly as planned.
+
+- **DRIFT-1.7** — verdict: impl-wins — while this branch was in phase 6,
+  `origin/feat/agent-core` advanced from `24ce5dcca` to `bf1b0e9dd`
+  ("fix(e2e/chat/a11y): stale specs, **double-send latch**, …"), landing an
+  equivalent synchronous latch in the SAME function from a concurrent agent.
+  Discovered by accident, which is the honest account: the red-proof probe for
+  ITEM-6 restored `sendMessage.ts` from `origin/feat/agent-core` expecting the
+  unguarded version and got a guarded one. The branch was rebased onto
+  `bf1b0e9dd` and this branch's duplicate latch was **dropped** — `sendMessage.ts`
+  is now byte-identical to upstream and is no longer in the diff. Keeping two
+  latches, or preferring this branch's throw-for-programmatic-callers variant
+  over a landed fix, would have been a gratuitous conflict. TEST-9 stays: a
+  regression guard for the behaviour is still worth having, and it now guards
+  SOMEONE ELSE's fix, which is strictly better. PLAN ITEM-6 + BASE.md amended.
+  *Lesson recorded for the report: `--base origin/feat/agent-core` is a MOVING
+  ref in a shared clone; re-check it before trusting a "red proof".*
+
+- **DRIFT-1.8** — verdict: impl-wins — the reproduction for ITEM-6 also
+  re-classified its finding. Driving the audit's literal step
+  (`.lifecycle/live-ui-audit-round2/double-submit-probe.mjs`, fill → Enter →
+  Enter) and sampling at 4/6/8/12/20/30 s: at **+4000 ms** (the audit's fixed
+  wait) there are 3 spinners and the assistant text is still streaming; at
+  **+6000 ms** there are 0 spinners, exactly 1 user + 1 assistant message, 1
+  `POST /api/conversations` and 1 `POST …/messages`. So the `stuck-loading` row
+  is a MEASUREMENT-WINDOW artifact (a fixed 4 s wait against a ~5–7 s real-LLM
+  turn), not a stuck spinner. The double-send race it was conflated with is real
+  and is fixed (by the upstream latch, per DRIFT-1.7). PLAN ITEM-6 amended to say
+  so instead of claiming the signal as a fix.
 
 **Unresolved drifts:** 0

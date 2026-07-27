@@ -106,14 +106,20 @@ are satisfied history. Nothing in `live-ui-audit-fixes/` is modified or deleted.
   there provably are none, and any run spawned afterwards arrives on
   `sync:workflow_run` — so skip the probe for session-created conversations while
   keeping it for conversations loaded from the server (INV-2).
-- **ITEM-6**: Fix the rapid-double-submit wedge. `ChatInput.handleSend` guards on
+- **ITEM-6**: Fix the rapid-double-submit defect. `ChatInput.handleSend` guards on
   the RENDERED `sending`/`isStreaming`, but `Chat.sendMessage` performs several
   awaits (extension hooks, `composeRequestFields`, `POST /conversations`) BEFORE
   it sets `sending: true`, so a second keypress inside that window passes the
-  guard and starts a concurrent send — leaving a permanently spinning send button
-  and an orphan empty assistant bubble. Add a synchronous re-entrancy latch
-  inside the `sendMessage` action closure (taken before the first await, released
-  in a `finally`).
+  guard and starts a concurrent send.
+  **AMENDED (DRIFT-1.7): the production fix landed UPSTREAM mid-flight.** A
+  synchronous latch was implemented here, and then `origin/feat/agent-core`
+  advanced to `bf1b0e9dd` ("double-send latch") carrying an equivalent one from
+  a concurrent agent. This branch rebased onto it and **dropped its duplicate**;
+  what ITEM-6 ships is the reproduction + the regression guard (TEST-9), not a
+  second latch. The audit's `stuck-loading` signal is separately re-classified —
+  see ITEM-8's sibling note in TEST_RESULTS.md: measured on the rig, the
+  `rapid-double-submit` step samples at a fixed 4000 ms while a real Qwen turn
+  takes ~5–7 s, so the spinner it sees is a mid-stream render, not a stuck one.
 - **ITEM-7**: Root-cause and dispose the `zero-size-control` finding
   (`div#root>div>div>a`, 1×1 px, `home`@390, 8 rows/run). Identify the element,
   verify its real behaviour by RUNNING it, and either give it a compliant tap
@@ -154,7 +160,9 @@ are satisfied history. Nothing in `live-ui-audit-fixes/` is modified or deleted.
 - `src-app/ui/src/modules/memory/chat-extension/extension.tsx` (ITEM-4)
 - `src-app/ui/src/modules/background/components/BackgroundRunsFooter.tsx`,
   `src-app/ui/src/modules/background/module.tsx` (ITEM-5)
-- `src-app/ui/src/modules/chat/core/stores/chat/actions/sendMessage.ts` (ITEM-6)
+- `src-app/ui/src/modules/chat/core/stores/chat/actions/sendMessage.ts` — ITEM-6;
+  **NOT modified in the end** (the upstream `bf1b0e9dd` latch is used as-is; see
+  DRIFT-1.7)
 - `sdk/packages/shell/src/layouts/AppLayout.tsx` (ITEM-7 — only if a real fix is needed)
 - new unit tests co-located with the touched modules (ITEM-1/3/5/6)
 - new e2e spec `src-app/ui/tests/e2e/perf/live-audit-round2.spec.ts` (ITEM-1/4/5/6)

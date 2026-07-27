@@ -65,9 +65,17 @@ test.describe('live-ui-audit round 2 — composer + geometry', () => {
     // The audit's LITERAL repro (`adversarial-compose` → `rapid-double-submit`):
     // fill, Enter, Enter — with no wait in between, so the second keypress lands
     // inside the window the first send spends in its pre-`sending:true` awaits.
+    //
+    // ...plus an immediate Send-BUTTON click. The two entry points are guarded
+    // by DIFFERENT code: the Enter path has `TextInput`'s own synchronous
+    // `inFlightRef`, while the button path (`ChatInput.handleSend`) reads the
+    // RENDERED `sending`/`isStreaming` and is therefore the path that only the
+    // store-level latch in `sendMessage` can stop. Exercising Enter alone would
+    // pass without that latch and prove nothing about it.
     await composer.fill('rapid test 🚀 <script>x</script> "quoted" \\n')
     await composer.press('Enter')
     await composer.press('Enter')
+    await byTestId(page, 'chat-input-send-btn').click({ force: true, timeout: 2000 }).catch(() => {})
 
     await expect(page.locator('[data-role="assistant"]').last()).toBeVisible({ timeout: 30000 })
     await page.waitForTimeout(4000)
@@ -80,8 +88,8 @@ test.describe('live-ui-audit round 2 — composer + geometry', () => {
       conversationCreates.length,
       `a double keypress must create exactly one conversation; created ${conversationCreates.length}`,
     ).toBe(1)
-    await expect(page.locator('[data-testid="chat-message"][data-role="user"]')).toHaveCount(1)
-    await expect(page.locator('[data-testid="chat-message"][data-role="assistant"]')).toHaveCount(1)
+    await expect(page.locator('[data-role="user"]')).toHaveCount(1)
+    await expect(page.locator('[data-role="assistant"]')).toHaveCount(1)
 
     // The `stuck-loading` signal itself: after the turn ends the composer must be
     // usable and nothing in it may still be spinning.
@@ -101,31 +109,51 @@ test.describe('live-ui-audit round 2 — composer + geometry', () => {
     await expect(page.getByRole('main')).toBeVisible({ timeout: 20000 })
 
     const skip = page.getByRole('link', { name: /skip to content/i })
-
-    // At rest it is visually hidden — which is EXACTLY why the audit's geometry
-    // pass measures it at 1×1 px. That is the `sr-only` contract, not a defect.
     await expect(skip).toHaveCount(1)
-    const atRest = await skip.boundingBox()
-    expect(atRest, 'the skip link must exist in the DOM at rest').not.toBeNull()
-    expect(atRest!.width).toBeLessThanOrEqual(2)
-    expect(atRest!.height).toBeLessThanOrEqual(2)
 
-    // Keyboard-focused, it becomes a REAL, reachable target. If it did not — if
-    // the `focus:not-sr-only` escape were broken — the finding would be a genuine
-    // defect and this assertion is what says so.
-    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
-    await page.keyboard.press('Tab')
-    await expect(skip).toBeFocused()
+    // At rest it may legitimately be either visible (some designs show it) or
+    // visually hidden. The `sr-only` case is the one the audit's geometry pass
+    // measures at 1×1 px — that is the visually-hidden contract, not a defect —
+    // so this test does NOT require the tiny box, it only records which case is
+    // live. Requiring it would make a permanently-visible skip link (a strictly
+    // better WCAG 2.4.1 outcome) fail.
+    const atRest = await skip.boundingBox()
+    expect(atRest, 'the skip link must be in the layout at rest').not.toBeNull()
+    const hiddenAtRest = atRest!.width <= 2 && atRest!.height <= 2
+
+    // The load-bearing half: FOCUSED, it must become a REAL, usable target.
+    // This is the assertion that was RED before this branch: none of the link's
+    // `focus:not-sr-only focus:absolute focus:z-50 …` utilities were emitted
+    // into the CSS at all (the sdk shell package was outside Tailwind's content
+    // scan), so a focused skip link still computed to `width:1px;
+    // clip-path:inset(50%)` — a WCAG 2.4.1 bypass link that a sighted keyboard
+    // user could never see.
+    //
+    // Focus is set programmatically rather than by pressing Tab: tab ORDER is
+    // not what is under test here, and a browser resumes tabbing from the last
+    // focused element, which makes a blur-then-Tab sequence order-dependent and
+    // flaky. `.focus()` triggers `:focus` identically.
+    await skip.focus()
+    await expect(skip).toBeFocused({ timeout: 5000 })
     const focused = await skip.boundingBox()
     expect(focused, 'a focused skip link must be laid out').not.toBeNull()
+    // 24 px is the repo's own minimum comfortable target, not a citation: WCAG
+    // 2.5.8 governs POINTER targets, and at rest this control has no pointer
+    // affordance at all. The point here is that focusing it produces something a
+    // sighted keyboard user can actually see and hit.
     expect(
       focused!.width,
-      'a focused bypass link needs a real tap target (WCAG 2.5.8 minimum 24px)',
+      `a focused bypass link needs a usable target (hiddenAtRest=${hiddenAtRest})`,
     ).toBeGreaterThanOrEqual(24)
     expect(focused!.height).toBeGreaterThanOrEqual(24)
 
-    // ...and it does its job: activating it targets the main-content landmark.
+    // ...and it does its job: activating it moves FOCUS into the main content
+    // region, not merely the scroll position. A bypass link whose target is not
+    // focusable is the classic broken implementation, and only this assertion
+    // catches it.
     await expect(skip).toHaveAttribute('href', '#main-content')
     await expect(page.locator('#main-content')).toHaveCount(1)
+    await page.keyboard.press('Enter')
+    await expect(page.locator('#main-content')).toBeFocused({ timeout: 5000 })
   })
 })

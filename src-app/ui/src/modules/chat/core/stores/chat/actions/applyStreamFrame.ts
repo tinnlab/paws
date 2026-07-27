@@ -5,6 +5,7 @@ import type { MessageContent, MessageWithContent } from '@/api-client/types'
 import type { SSEEvent } from '@/modules/chat/core/extensions/types'
 import { MESSAGE_PAGE_SIZE } from '@/modules/chat/core/stores/chat'
 import type { ChatSet, ChatInitialState, ChatState } from '@/modules/chat/core/stores/chat'
+import { forgetSessionCreatedConversation } from '@/core/sessionCreatedConversations'
 
 export default (set: ChatSet, getRaw: () => ChatInitialState) => {
   const get = getRaw as unknown as () => ChatState
@@ -341,12 +342,32 @@ export default (set: ChatSet, getRaw: () => ChatInitialState) => {
           lastTurnInterrupted: cancelled,
         })
 
+
         // Per-pane (ITEM v2): the completion runs in the OWNING pane's own store,
         // so thread this pane's id to the extension hooks (the async-hook focus-race
         // fix). The switched-away/background case already returned via the early bail
         // above (`!isOnOriginalConversation`), so no extra guard is needed here.
         if (streamingMessage) {
           await chatExtensionRegistry.afterStreamComplete(streamingMessage, get().paneId)
+        }
+
+        // A turn has now COMPLETED in this conversation, so the server can have
+        // written per-conversation state for it (a summary, a background run).
+        // Until this moment a conversation created in this tab was provably
+        // empty and surfaces skipped asking about it; from here on they ask
+        // normally. Owned by the chat lifecycle that produces the fact rather
+        // than by any one feature. See `core/sessionCreatedConversations`.
+        //
+        // ORDER IS LOAD-BEARING: un-mark AFTER the extension hooks, not before.
+        // The hooks are what issue the end-of-turn reads, and the `set` above
+        // has already scheduled a React re-render of every composer pill. If the
+        // mark were dropped first, that re-render could observe an unmarked,
+        // idle, not-yet-loaded conversation and issue its OWN read — which is
+        // exactly the duplicate this round exists to remove, and it was measured
+        // coming back when the un-mark sat above the hooks.
+        {
+          const finishedId = get().conversation?.id
+          if (finishedId) forgetSessionCreatedConversation(finishedId)
         }
         const conversation = get().conversation
 

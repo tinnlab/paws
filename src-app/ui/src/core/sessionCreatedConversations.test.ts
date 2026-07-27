@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   SESSION_CREATED_CAP,
   __resetSessionCreatedForTests,
+  forgetSessionCreatedConversation,
   isSessionCreatedConversation,
   noteSessionCreatedConversation,
 } from './sessionCreatedConversations.ts'
@@ -20,6 +21,30 @@ test('an id created in this session is remembered; an unrelated id is not', () =
   // The load-bearing negative: a conversation this tab did NOT create must
   // still probe, or a reload would never surface pre-existing runs.
   assert.equal(isSessionCreatedConversation('conv-b'), false)
+})
+
+test('the mark EXPIRES at the end of the first turn — it is not a session-long suppression', () => {
+  // This is the load-bearing property. Without expiry, a conversation this tab
+  // created keeps skipping both probes forever: `BackgroundRuns` DELETES its
+  // cached slice on unmount, so after one navigate-away-and-back the Tasks
+  // footer would be permanently empty (and it is the only route to the Tasks
+  // panel); and the single-entry summary cache rotates on any switch, so the
+  // boundary marker would be permanently blank. Both were real defects found by
+  // the blind audit.
+  __resetSessionCreatedForTests()
+  noteSessionCreatedConversation('conv-a')
+  assert.equal(isSessionCreatedConversation('conv-a'), true)
+  forgetSessionCreatedConversation('conv-a')
+  assert.equal(isSessionCreatedConversation('conv-a'), false)
+})
+
+test('forgetting is idempotent and safe for an id that was never marked', () => {
+  __resetSessionCreatedForTests()
+  forgetSessionCreatedConversation('never-marked')
+  noteSessionCreatedConversation('conv-a')
+  forgetSessionCreatedConversation('conv-a')
+  forgetSessionCreatedConversation('conv-a')
+  assert.equal(isSessionCreatedConversation('conv-a'), false)
 })
 
 test('marking is idempotent', () => {

@@ -7,6 +7,7 @@ import { SummarizationAdmin as SummarizationAdminStore } from '@/modules/summari
 import { Chat } from '@/modules/chat/core/stores/chatBridge'
 import { isSessionCreatedConversation } from '@/core/sessionCreatedConversations'
 import {
+  isSummaryHeld,
   shouldLoadSummaryOnOpen,
   type SummaryTriggerState,
 } from '@/modules/summarization/chat-extension/summaryRefreshTrigger'
@@ -19,11 +20,22 @@ type Mode = 'inherit' | 'on' | 'off'
  * `MemoryStatusPill` (memory's per-conversation pill).
  *
  * Also acts as the **read-model driver** for the in-thread summary
- * marker: subscribes to `messages.size` + `conversation.id` and calls
- * `ConversationSummarizationStore.loadForConversation(id)`
- * on change. This load-bearing pattern rides cross-device freshness
- * transitively on `sync:conversation` — DO NOT move the trigger
- * elsewhere (audit lesson from the crashed-session redo).
+ * marker (`SummaryBoundaryMarker`) — it calls
+ * `ConversationSummarizationStore.loadForConversation(id)` when a
+ * conversation is opened or switched to.
+ *
+ * SUPERSEDED NOTE (kept because it was load-bearing): this used to
+ * subscribe to `messages.size` as well, and the header carried a
+ * "DO NOT move the trigger elsewhere" warning from an earlier audit.
+ * The message-count trigger fired 3–4 network reads per send for ONE
+ * server-side write and the live-UI audit reported it as a duplicate
+ * request storm; it is gone. The trigger did NOT move out of this
+ * extension — the turn-end half now lives in the same extension's
+ * `afterStreamComplete` hook (`../extension.tsx`), which is the one
+ * signal that fires exactly once per completed turn, in the OWNING
+ * pane. `summaryRefreshTrigger.ts` carries the full rationale,
+ * including why the transport-level in-flight coalescer cannot cover
+ * this and why `Chat.isStreaming` is NOT the trigger.
  */
 export function SummarizationStatusPill() {
   // Read every Stores.X.field at the TOP, before any conditional.
@@ -83,13 +95,11 @@ export function SummarizationStatusPill() {
       return
     }
     // Non-reactive snapshot read: this runs in an effect, and subscribing to the
-    // store here would re-render the pill on its own load. "Held" covers both
-    // the settled cache AND an in-flight read for the same id, so two mounts
-    // inside one request window do not both fire.
-    const snap = ConversationSummarizationStore.$
-    const held =
-      snap.current?.conversationId === next.conversationId ||
-      (snap.loading && snap.requestedConversationId === next.conversationId)
+    // store here would re-render the pill on its own load.
+    const held = isSummaryHeld(
+      ConversationSummarizationStore.$,
+      next.conversationId,
+    )
     if (shouldLoadSummaryOnOpen(next, held ? next.conversationId : null)) {
       void ConversationSummarizationStore.loadForConversation(next.conversationId)
     }
