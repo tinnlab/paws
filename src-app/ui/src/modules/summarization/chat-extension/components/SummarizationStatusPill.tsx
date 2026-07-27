@@ -5,6 +5,11 @@ import { ApiClient } from '@/api-client'
 import { ConversationSummarization as ConversationSummarizationStore } from '@/modules/summarization/stores/conversationSummarization'
 import { SummarizationAdmin as SummarizationAdminStore } from '@/modules/summarization/stores/summarizationAdmin'
 import { Chat } from '@/modules/chat/core/stores/chatBridge'
+import { isSessionCreatedConversation } from '@/core/sessionCreatedConversations'
+import {
+  shouldLoadSummaryOnOpen,
+  type SummaryTriggerState,
+} from '@/modules/summarization/chat-extension/summaryRefreshTrigger'
 
 type Mode = 'inherit' | 'on' | 'off'
 
@@ -26,7 +31,7 @@ export function SummarizationStatusPill() {
   // a guard triggers "Rendered more hooks than during the previous
   // render."
   const conversation = Chat.conversation
-  const messages = Chat.messages
+  const isStreaming = Chat.isStreaming
   const adminSettings = SummarizationAdminStore.settings
   const [mode, setMode] = useState<Mode>('inherit')
   const [loading, setLoading] = useState(false)
@@ -55,20 +60,40 @@ export function SummarizationStatusPill() {
     }
   }, [conversation?.id])
 
-  // Drive the summary read-model: re-fetch when the conversation
-  // changes OR when message count changes (a new turn just landed,
-  // and the summary might have been updated by the after_llm_call
-  // hook on the server). The single-entry cache in
-  // ConversationSummarization rotates on conversation switch.
+  // Drive the summary read-model for the OPEN / SWITCH case only — NOT per
+  // message, which fired 3–4× per send for the ONE server-side write the
+  // `after_llm_call` hook performs. The TURN-END read is owned by this
+  // extension's `afterStreamComplete` hook (see `../extension.tsx`), which the
+  // stream handler invokes exactly once per completed turn. The rationale for
+  // both halves — and for why the transport-level in-flight coalescer cannot
+  // cover this — is in `summaryRefreshTrigger.ts`.
+  //
+  // The trigger STAYS in this component (the audit lesson recorded in this
+  // file's header): the pill is the read-model driver for
+  // `SummaryBoundaryMarker`, and the turn-end hook lives in the same extension.
   useEffect(() => {
-    if (!conversation?.id) {
+    const id = conversation?.id ?? null
+    const next: SummaryTriggerState = {
+      conversationId: id,
+      streaming: isStreaming,
+      createdInThisSession: id ? isSessionCreatedConversation(id) : false,
+    }
+    if (!next.conversationId) {
       ConversationSummarizationStore.clear()
       return
     }
-    void ConversationSummarizationStore.loadForConversation(
-      conversation.id,
-    )
-  }, [conversation?.id, messages.size])
+    // Non-reactive snapshot read: this runs in an effect, and subscribing to the
+    // store here would re-render the pill on its own load. "Held" covers both
+    // the settled cache AND an in-flight read for the same id, so two mounts
+    // inside one request window do not both fire.
+    const snap = ConversationSummarizationStore.$
+    const held =
+      snap.current?.conversationId === next.conversationId ||
+      (snap.loading && snap.requestedConversationId === next.conversationId)
+    if (shouldLoadSummaryOnOpen(next, held ? next.conversationId : null)) {
+      void ConversationSummarizationStore.loadForConversation(next.conversationId)
+    }
+  }, [conversation?.id, isStreaming])
 
   if (!conversation?.id) return null
   // Known cross-cutting limitation (mirrors MemoryStatusPill): for

@@ -1,6 +1,7 @@
 import { createModule } from '@ziee/framework'
 
 import { useBackgroundRunsStore } from './stores/BackgroundRuns.store'
+import { ensureSessionCreatedTracking } from '@/core/sessionCreatedConversations'
 import '@/modules/background/types' // register Stores.BackgroundRuns (declaration merge)
 
 /**
@@ -45,4 +46,23 @@ export default createModule({
       'Background sub-agent runs — surfaced in-conversation (right-panel Tasks tab + footer); no global page.',
   },
   stores: [{ name: 'BackgroundRuns', store: useBackgroundRunsStore }],
+
+  // Start recording which conversations THIS tab created, so
+  // `BackgroundRunsFooter` can skip its `GET /api/background/runs` probe for
+  // them (they provably have no pre-existing runs; anything spawned later
+  // arrives on `sync:workflow_run` via the scope the footer retains).
+  // `core/sessionCreatedConversations` is shared — the summarization pill uses
+  // the same signal for the same reason — and `ensureSessionCreatedTracking` is
+  // idempotent.
+  //
+  // WHY here and not in the store's `init` or a chat-extension's `initialize`:
+  // both run LATER than the event. `sendMessage` emits `conversation.created`
+  // and only then awaits the extension lifecycle, and the store is lazy — first
+  // instantiated by the footer, which mounts after the conversation exists. A
+  // module `initialize()` runs in the load wave, well before any send, and this
+  // module is core (no `shouldLoad`) so it is always in the first wave. Cost:
+  // one EventBus subscription, no request.
+  initialize: () => {
+    ensureSessionCreatedTracking()
+  },
 })

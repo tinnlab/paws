@@ -31,6 +31,32 @@ const summarizationExtension: ChatExtension = createExtension({
     toolbar_status: { component: SummarizationStatusPill, order: 40 },
     message_footer: { component: SummaryBoundaryMarker, order: 10 },
   },
+
+  // The TURN-END half of the summary read-model trigger (the pill owns the
+  // open/switch half). The server rewrites the summary in its `after_llm_call`
+  // hook, and this hook is the client-side moment that corresponds to it: the
+  // stream handler invokes it exactly ONCE per completed turn, in the OWNING
+  // pane.
+  //
+  // WHY NOT watch `Chat.isStreaming` fall to false: measured on the live rig,
+  // that flag produces TWO falling edges per send, because navigating from `/`
+  // to `/chat/{id}` mid-send runs `loadConversation`, which sets
+  // `isStreaming:false` transiently before the stream's own frames set it true
+  // again. The audit still reported a duplicate summary read with that trigger.
+  //
+  // The pill previously re-read on every `messages.size` change, which is what
+  // the live-UI audit measured as 3–4 `GET …/summary` per step
+  // (`network/duplicate` + `network/excess`). See `summaryRefreshTrigger.ts`.
+  afterStreamComplete: async () => {
+    const { Chat } = await import('@/modules/chat/core/stores/chatBridge')
+    const conversationId = Chat.$.conversation?.id
+    if (!conversationId) return {}
+    const { ConversationSummarization } = await import(
+      '@/modules/summarization/stores/conversationSummarization'
+    )
+    void ConversationSummarization.loadForConversation(conversationId)
+    return {}
+  },
 })
 
 export default summarizationExtension

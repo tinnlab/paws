@@ -5,6 +5,7 @@ import { Button } from '@ziee/kit'
 import { useChatPaneOrNull } from '@/modules/chat/core/pane/ChatPaneContext'
 import { Chat } from '@/modules/chat/core/stores/chatBridge'
 import { BackgroundRuns, isTerminalRunStatus } from '../stores/BackgroundRuns.store'
+import { isSessionCreatedConversation } from '@/core/sessionCreatedConversations'
 
 /**
  * End-of-conversation affordance for THIS conversation's background tasks —
@@ -46,8 +47,21 @@ export function BackgroundRunsFooter() {
   // visited.
   useEffect(() => {
     if (!convId) return
+    // Retain FIRST and unconditionally: the refcount is what makes the store's
+    // `sync:workflow_run` handler refresh this scope, so it must be held even
+    // when the initial probe below is skipped — otherwise a run spawned in a
+    // just-created conversation would never reach this footer.
     BackgroundRuns.retainConversationScope(convId)
-    void BackgroundRuns.loadConversationRuns(convId, 1)
+    // Skip the "does this conversation have runs?" probe for a conversation
+    // THIS tab created: it cannot have pre-existing runs, so the answer is
+    // known without a round-trip, and anything spawned afterwards arrives on
+    // `sync:workflow_run` via the scope retained above. A conversation loaded
+    // FROM the server still probes — that is what lets a reload surface runs
+    // this tab never saw created. (The live-UI audit measured this probe as an
+    // `irrelevant` fetch on the compose-send flow.)
+    if (!isSessionCreatedConversation(convId)) {
+      void BackgroundRuns.loadConversationRuns(convId, 1)
+    }
     return () => BackgroundRuns.releaseConversationScope(convId)
   }, [convId])
 

@@ -23,8 +23,10 @@ import { ConversationSummarization } from '@/modules/summarization/stores/conver
  * condensed turn, which reads naturally.
  *
  * The summary itself lives in `ConversationSummarization.current`
- * — loaded by `SummarizationStatusPill` on every conversation switch
- * and on every `messages.size` change.
+ * — loaded by `SummarizationStatusPill` on a conversation switch and
+ * at the end of each turn (the streaming true→false edge, which is
+ * when the server's `after_llm_call` hook has written). It is NOT
+ * reloaded per message any more; see `summaryRefreshTrigger.ts`.
  */
 export function SummaryBoundaryMarker() {
   const message = useMessageContext()
