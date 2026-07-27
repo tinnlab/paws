@@ -19,7 +19,12 @@ import { createBridgeToolModel, HAS_BRIDGE, BRIDGE_SKIP } from './helpers/agent-
  * auto-approve (the security posture). We prompt the model to spawn a trivial
  * background sub-agent → the approval card surfaces → approve → the fire-and-forget
  * run is launched WITHOUT blocking the foreground chat (composer immediately
- * usable) → its status surfaces as a Sub-agent run card on `/background-tasks`.
+ * usable) → its status surfaces as a Sub-agent run card in THIS conversation's
+ * right-panel "Tasks" tab, reached from the end-of-conversation footer.
+ *
+ * RETARGETED from the deleted global `/background-tasks` page. This is a stronger
+ * assertion than the original: the status now has to appear live, in place, via
+ * the `sync:workflow_run` refetch — the spec never navigates away or reloads.
  *
  * Requires the agent-core chat path (ZIEE_CHAT_AGENT_CORE=1) + a real LLM bridge.
  * Skips cleanly when the bridge env is unset.
@@ -65,10 +70,14 @@ test.describe('background sub-agent — non-blocking status (real LLM, agent-cor
     await expect(textarea).toHaveValue('Meanwhile, what is 2 + 2?')
     await textarea.fill('')
 
-    // The launched run's status surfaces on the background-tasks page as a
-    // Sub-agent run card (fetched from the real GET /api/background/runs).
-    await page.goto(`${baseURL}/background-tasks`)
-    await expect(byTestId(page, 'background-tasks-page')).toBeVisible({ timeout: 30_000 })
+    // The launched run's status surfaces WITHOUT leaving the conversation: the
+    // end-of-conversation footer appears (driven by the live `sync:workflow_run`
+    // refetch — we never reload), and opening it shows the Sub-agent run card
+    // fetched from the real `GET /api/background/runs?conversation_id=…`.
+    const footer = byTestId(page, 'background-footer-open')
+    await expect(footer).toBeVisible({ timeout: 60_000 })
+    await footer.click()
+    await expect(byTestId(page, 'background-panel-list')).toBeVisible({ timeout: 15_000 })
     const card = page.locator('[data-testid^="background-run-card-"]').first()
     await expect(card).toBeVisible({ timeout: 30_000 })
     await expect(

@@ -11,16 +11,23 @@ import { byTestId } from '../testid'
  * The no-LLM half proven here (the task's core ask): the `/notifications/background`
  * AgentInboxPage — a focused VIEW over the shared notification inbox, narrowed to
  * the agent/background kinds (`AGENT_INBOX_KINDS`) — LISTS a real agent
- * notification, its nav entry is present + gated by `notifications::read`, and it
- * renders at a 390px mobile width. Notifications are server-emitted (no create
- * API), so the row is seeded directly into the per-test DB via `sql()` — the
- * page's mount-time `load()` then fetches it through the real REST endpoint.
+ * notification and renders at a 390px mobile width. Notifications are
+ * server-emitted (no create API), so the row is seeded directly into the per-test
+ * DB via `sql()` — the page's mount-time `load()` then fetches it through the real
+ * REST endpoint.
+ *
+ * UPDATED: there is no longer a "Background results" sidebar nav entry — the
+ * BELL is the single central surface for background/agent results and the
+ * `/notifications/background` route is its deep-link target. This spec therefore
+ * asserts the bell-based route into the inbox (and the absence of the old nav
+ * entry) instead of a nav click. Permission gating for both is asserted by
+ * `15-background/background-negative-perm.spec.ts`.
  *
  * ("needs_input bubbled top w/ reply" is a live `waiting` background-run state and
  * is reported separately; the inbox here proves the listing + gating + responsive.)
  */
 test.describe('Agent/background inbox — lists agent notifications (ITEM-26)', () => {
-  test('lists a seeded agent notification, nav entry gated by NotificationsRead, renders at 390px', async ({
+  test('lists a seeded agent notification reached from the bell, renders at 390px', async ({
     page,
     testInfra,
   }) => {
@@ -29,11 +36,10 @@ test.describe('Agent/background inbox — lists agent notifications (ITEM-26)', 
 
     await loginAsAdmin(page, baseURL)
 
-    // The admin (holds `*`, therefore `notifications::read`) sees the discoverable
-    // "Background results" nav entry (id `agent-inbox`, gated NotificationsRead).
-    await expect(
-      byTestId(page, 'layout-sidebar-nav-menu-item-agent-inbox'),
-    ).toBeVisible({ timeout: 30000 })
+    // The "Background results" nav entry is GONE by design; the bell replaces it.
+    // The admin holds `*`, so this absence is the design, not a permission filter.
+    await expect(byTestId(page, 'layout-sidebar-nav-menu-item-agent-inbox')).toHaveCount(0)
+    await expect(byTestId(page, 'notification-bell-badge')).toBeVisible({ timeout: 30000 })
 
     // Seed a real agent-kind notification for the admin (kind ∈ AGENT_INBOX_KINDS).
     const adminId = (
@@ -48,6 +54,15 @@ test.describe('Agent/background inbox — lists agent notifications (ITEM-26)', 
       [adminId, title, body],
     )
     const notifId = inserted.rows[0].id as string
+
+    // The BELL is the route in: open it and use its "View all" affordance, which
+    // is how a user reaches background results now that the nav entry is gone.
+    await page.reload()
+    await byTestId(page, 'notification-bell-badge').click()
+    const viewAll = byTestId(page, 'notification-bell-view-all')
+    await expect(viewAll).toBeVisible({ timeout: 15000 })
+    await viewAll.click()
+    await expect(page).toHaveURL(/\/notifications/, { timeout: 15000 })
 
     // The AgentInboxPage loads the inbox on entry and narrows to agent kinds.
     await page.goto(`${baseURL}/notifications/background`)

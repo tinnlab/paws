@@ -66,6 +66,14 @@ pub struct ListBackgroundRunsQuery {
     /// Filter to a single background job kind (`subagent` / `sandbox_exec`).
     #[serde(default)]
     pub kind: Option<String>,
+    /// Scope to ONE conversation's background runs — used by the in-chat "Tasks"
+    /// panel + the end-of-conversation affordance.
+    ///
+    /// **Disjoint**, not additive: omitting it returns ONLY the conversation-LESS
+    /// runs (detached work, e.g. a scheduled task's), never every run. A run
+    /// therefore appears in exactly one surface.
+    #[serde(default)]
+    pub conversation_id: Option<Uuid>,
 }
 
 #[debug_handler]
@@ -82,6 +90,7 @@ pub async fn list_background_runs(
         per_page,
         params.status.as_deref(),
         params.kind.as_deref(),
+        params.conversation_id,
     )
     .await?;
     let total_pages = if per_page > 0 {
@@ -111,7 +120,12 @@ pub fn list_background_runs_docs(op: TransformOperation) -> TransformOperation {
              (detached sub-agent / sandbox-exec runs — never classic workflow runs). \
              Optional `status` / `kind` filters; `page`/`per_page` clamped (default 50, \
              cap 500). Compact summaries only — the full result is fetched separately \
-             via `collect_result`.",
+             via `collect_result`.\n\n\
+             `conversation_id` is a DISJOINT scope: omit it and you get ONLY the \
+             conversation-less runs (detached work such as a scheduled task's); pass one \
+             and you get ONLY that conversation's runs. A background run is therefore \
+             surfaced in exactly one place — its conversation's in-chat Tasks panel, or \
+             the scheduler's run history — never both.",
         )
         .response::<200, Json<BackgroundRunListResponse>>()
         .response_with::<401, (), _>(|r| r.description("Unauthorized"))
@@ -233,4 +247,156 @@ pub fn cancel_background_run_docs(op: TransformOperation) -> TransformOperation 
         .response_with::<401, (), _>(|r| r.description("Unauthorized"))
         .response_with::<404, (), _>(|r| r.description("Run not found / not owned"))
         .response_with::<409, (), _>(|r| r.description("Run already finished"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::extract::Query;
+    use axum::http::Uri;
+
+    fn parse(qs: &str) -> Result<ListBackgroundRunsQuery, String> {
+        let uri: Uri = format!("/background/runs?{qs}").parse().unwrap();
+        Query::<ListBackgroundRunsQuery>::try_from_uri(&uri)
+            .map(|Query(q)| q)
+            .map_err(|e| e.to_string())
+    }
+
+    /// TEST-1 — the disjoint `conversation_id` scope must survive deserialization
+    /// exactly as sent. A filter that silently vanishes here would WIDEN the
+    /// scope (the panel would fall back to the conversation-less listing), which
+    /// is precisely the failure this param exists to prevent.
+    #[test]
+    fn conversation_id_is_parsed_when_present() {
+        let id = Uuid::new_v4();
+        let q = parse(&format!("conversation_id={id}")).expect("valid query");
+        assert_eq!(q.conversation_id, Some(id));
+        // The other filters keep their documented defaults.
+        assert_eq!(q.page, 1);
+        assert_eq!(q.per_page, 50);
+        assert!(q.status.is_none());
+        assert!(q.kind.is_none());
+    }
+
+    #[test]
+    fn conversation_id_is_none_when_absent() {
+        let q = parse("page=2&per_page=20").expect("valid query");
+        assert!(
+            q.conversation_id.is_none(),
+            "absent conversation_id must stay None — the repository reads None as \
+             'conversation-less runs only', so any other value silently rescopes"
+        );
+        assert_eq!(q.page, 2);
+        assert_eq!(q.per_page, 20);
+    }
+
+    #[test]
+    fn conversation_id_composes_with_the_other_filters() {
+        let id = Uuid::new_v4();
+        let q = parse(&format!("status=running&kind=subagent&conversation_id={id}"))
+            .expect("valid query");
+        assert_eq!(q.conversation_id, Some(id));
+        assert_eq!(q.status.as_deref(), Some("running"));
+        assert_eq!(q.kind.as_deref(), Some("subagent"));
+    }
+
+    #[test]
+    fn malformed_conversation_id_is_rejected_not_dropped() {
+        let err = parse("conversation_id=not-a-uuid")
+            .expect_err("a malformed uuid must be a 4xx, never a silently-dropped filter");
+        // Name the FIELD. A bare `!err.is_empty()` fallback would make this
+        // assertion true for any rejection at all, so it could not distinguish
+        // "rejected because conversation_id is malformed" from any other 4xx.
+        assert!(
+            err.to_lowercase().contains("conversation_id"),
+            "the rejection must name the offending field, got: {err}"
+        );
+    }
+}
+
+/// Cancel every still-in-flight background run bound to `conversation_id` before
+/// that conversation is DELETED.
+///
+/// **Why this exists.** `workflow_runs_conversation_id_fkey` is
+/// `ON DELETE SET NULL`, so deleting a conversation would otherwise DETACH its
+/// background runs: the rows survive with `conversation_id = NULL` and — worse —
+/// the spawned tasks keep executing headlessly, while the only surface that could
+/// view, steer, or cancel them (that conversation's in-chat "Tasks" panel) is gone.
+/// There is deliberately no global background page, so a detached run would be
+/// unreachable forever. Closing the hole AT THE SOURCE keeps the design intact:
+/// nothing survives detached because nothing survives non-terminal.
+///
+/// **What it does per run**, reusing the single-run cancel path verbatim (see
+/// `cancel_background_run`) rather than reinventing it:
+///   1. `cancel_cas` — the status-guarded terminal write (`pending`/`running`/
+///      `waiting`/`resumable` → `cancelled`). First terminal writer wins, so this
+///      is idempotent against a run finishing concurrently.
+///   2. `registry::cancel` — wakes the run's in-memory `RunHandle`, which the
+///      sub-agent driver bridges into the agent-core `CancelToken`, so the DETACHED
+///      TASK actually stops at its next await point instead of running on
+///      headlessly. This is the half that matters most here: cancelling only the
+///      row would leave the work executing.
+///
+/// An ALREADY-TERMINAL run is left completely alone — the query excludes it and the
+/// CAS would refuse it anyway. Its row keeps its result and simply becomes
+/// conversation-less, which is fine: a terminal run has nothing to steer or stop.
+///
+/// Owner-scoped: `user_id` is threaded into the query, so a caller who does not own
+/// the conversation cancels nothing.
+///
+/// Best-effort by design — a DB error here is logged and the delete proceeds. The
+/// alternative (aborting the user's delete because a cancel failed) is worse: the
+/// startup orphan sweep already reconciles rows left non-terminal by a crash.
+/// Returns the ids it cancelled, for the caller's sync fan-out + tests.
+pub async fn cancel_conversation_background_runs(
+    conversation_id: Uuid,
+    user_id: Uuid,
+) -> Vec<Uuid> {
+    let ids = match wf_repo::list_cancellable_background_runs_for_conversation(
+        Repos.pool(),
+        conversation_id,
+        user_id,
+    )
+    .await
+    {
+        Ok(ids) => ids,
+        Err(e) => {
+            tracing::warn!(
+                %conversation_id,
+                error = %e,
+                "background: could not list in-flight runs for a conversation being deleted; \
+                 they may be left non-terminal for the startup orphan sweep"
+            );
+            return Vec::new();
+        }
+    };
+    if ids.is_empty() {
+        return ids;
+    }
+
+    let mut cancelled = Vec::with_capacity(ids.len());
+    for run_id in ids {
+        // DB authority first (survives a crashed/absent runner), then the
+        // in-memory signal so the detached task stops executing.
+        match wf_repo::cancel_cas(Repos.pool(), run_id).await {
+            Ok(Some(_)) => {
+                let _ = registry::cancel(run_id);
+                cancelled.push(run_id);
+            }
+            // Raced to terminal between the list and the CAS — nothing to do.
+            Ok(None) => {}
+            Err(e) => tracing::warn!(
+                %run_id, %conversation_id, error = %e,
+                "background: cancel-on-conversation-delete failed for this run"
+            ),
+        }
+    }
+    if !cancelled.is_empty() {
+        tracing::info!(
+            %conversation_id,
+            count = cancelled.len(),
+            "background: cancelled in-flight runs for a deleted conversation"
+        );
+    }
+    cancelled
 }

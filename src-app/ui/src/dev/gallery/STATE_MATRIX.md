@@ -7,20 +7,20 @@
 
 ## Summary
 
-- **336** surfaces carry at least one renderable-state signal.
-- **2059** signals total: 1613 branch, 136 empty, 117 error, 94 loading, 96 overlay, 3 panel.
-- **3** right-panel renderers registered (each a right-panel-open state).
+- **338** surfaces carry at least one renderable-state signal.
+- **2066** signals total: 1617 branch, 137 empty, 119 error, 93 loading, 96 overlay, 4 panel.
+- **4** right-panel renderers registered (each a right-panel-open state).
 - **35** slot registrations (sidebar / settings / chat mount points).
 
 ### Surfaces demanding each gallery state
 
 | state | surfaces |
 |---|---|
-| `delayed` | 84 |
-| `empty` | 111 |
+| `delayed` | 83 |
+| `empty` | 112 |
 | `error` | 93 |
 | `open` | 82 |
-| `panel-open` | 3 |
+| `panel-open` | 4 |
 
 ## Right-panel renderers (`registerPanelRenderer`)
 
@@ -30,6 +30,7 @@ conversation page.
 
 | panel type | registered in |
 |---|---|
+| `background` | `modules/background/chat-extension/extension`:31 |
 | `file` | `modules/file/chat-extension/extension`:156 |
 | `kb_source` | `modules/knowledge-base/chat-extension/extension`:52 |
 | `literature` | `modules/literature/chat-extension/extension`:27 |
@@ -42,7 +43,7 @@ conversation page.
 | `settingsAdminPages` | `modules/agent/module`:46 |
 | `settingsAdminPages` | `modules/assistant/module`:59 |
 | `settingsAdminPages` | `modules/auth-providers/module`:40 |
-| `settingsAdminPages` | `modules/auth/module`:70 |
+| `settingsAdminPages` | `modules/auth/module`:75 |
 | `settingsAdminPages` | `modules/code-sandbox/module`:50 |
 | `settingsAdminPages` | `modules/file-rag/module`:32 |
 | `settingsAdminPages` | `modules/hardware/module`:42 |
@@ -309,25 +310,32 @@ Required states: `delayed`, `error`
 | error | `error && !settings` | 81 |
 | branch | `!canManage` | 113 |
 
+### `modules/background/chat-extension/extension`
+
+Required states: `panel-open`
+
+| kind | condition | line |
+|---|---|---|
+| panel | `registerPanelRenderer('background')` | 31 |
+
 ### `modules/background/components/BackgroundRunCard`
 
 Required states: `error`, `open`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!text` | 109 |
-| branch | `run.has_result` | 147 |
-| error | `run.status === 'failed' && run.error_message` | 159 |
-| branch | `run.conversation_id` | 171 |
-| branch | `terminal` | 181 |
-| branch | `!terminal` | 194 |
-| branch | `!terminal` | 205 |
-| overlay | `<Confirm open>` | 216 |
-| branch | `!terminal && steerOpen` | 242 |
-| branch | `pendingNotes.length > 0` | 247 |
-| branch | `terminal && resultOpen` | 287 |
-| branch | `detailError` | 293 |
-| branch | `detail` | 300 |
+| branch | `!text` | 113 |
+| branch | `run.has_result` | 151 |
+| error | `run.status === 'failed' && run.error_message` | 163 |
+| branch | `terminal` | 175 |
+| branch | `!terminal` | 188 |
+| branch | `!terminal` | 199 |
+| overlay | `<Confirm open>` | 210 |
+| branch | `!terminal && steerOpen` | 236 |
+| branch | `pendingNotes.length > 0` | 241 |
+| branch | `terminal && resultOpen` | 281 |
+| branch | `detailError` | 287 |
+| branch | `detail` | 294 |
 
 ### `modules/background/components/BackgroundRunResult`
 
@@ -345,15 +353,29 @@ Required states: _(branch-only — proven via dynamic coverage)_
 | branch | `(stderr \|\| stderrTruncated)` | 148 |
 | branch | `text` | 178 |
 
-### `modules/background/pages/BackgroundTasksPage`
+### `modules/background/components/BackgroundRunsFooter`
 
-Required states: `delayed`, `empty`, `error`
+Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| loading | `loading && runs.length === 0` | 87 |
-| error | `error && runs.length === 0` | 91 |
-| empty | `runs.length === 0` | 99 |
+| branch | `!convId` | 48 |
+| empty | `!convId \|\| !runs \|\| total === 0` | 60 |
+| branch | `runningLoaded > 0` | 94 |
+
+### `modules/background/components/BackgroundRunsPanel`
+
+Required states: `empty`, `error`
+
+| kind | condition | line |
+|---|---|---|
+| branch | `!conversationId` | 42 |
+| branch | `!conversationId` | 52 |
+| error | `runs === undefined && error === null` | 76 |
+| error | `error && loaded.length === 0` | 84 |
+| empty | `loaded.length === 0` | 98 |
+| error | `error` | 134 |
+| branch | `hasMore` | 148 |
 
 ### `modules/chat/components/BranchNavigator`
 

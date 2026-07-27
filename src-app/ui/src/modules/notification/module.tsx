@@ -1,5 +1,3 @@
-import { Inbox } from 'lucide-react'
-
 import { Permissions } from '@/api-client/permissions'
 import { createModule } from '@ziee/framework'
 import { lazyWithPreload } from '@/utils/lazyWithPreload'
@@ -66,25 +64,18 @@ export default createModule({
     },
   ],
   slots: {
-    sidebarNavigation: [
-      {
-        // Discoverable entry point to the agent/background inbox (ITEM-26).
-        // Mirrors the scheduler's `sidebarNavigation` entry exactly (id/icon/
-        // label/path/order/permission) — a top-level nav destination for the
-        // "Background results" page at `/notifications/background`.
-        id: 'agent-inbox',
-        icon: <Inbox />,
-        label: 'Background results',
-        path: '/notifications/background',
-        // Sits just after "Scheduled Tasks" (order 22) — background/agent work
-        // grouped together in the nav.
-        order: 24,
-        // Gate: SAME read perm as the `/notifications/background` route + the
-        // bell/inbox data (`notifications::read`). A user without the grant
-        // never sees the entry (and the page self-gates its fetch → no 403).
-        permission: Permissions.NotificationsRead,
-      },
-    ],
+    // There is deliberately NO "Background results" sidebarNavigation entry.
+    // The BELL below (`sidebarBottom`) is the single central surface for
+    // agent / background / scheduled results, and it already navigates each
+    // result to the conversation it landed in (`/chat/{conversationId}`); its
+    // "View all" goes to `/notifications` (`Notifications.store.ts` `inboxPath`).
+    // A second top-level nav destination for the same data was redundant chrome.
+    //
+    // NOTE the `/notifications/background` route below (AgentInboxPage, a view
+    // over the same inbox filtered to agent kinds) therefore has NO in-app entry
+    // point any more — it is a URL/bookmark target only. It is kept rather than
+    // deleted because the brief scoped this change to the nav entry; whether to
+    // link it from the inbox or remove it is a tracked follow-up for the owner.
     sidebarBottom: [
       {
         id: 'notification-bell',

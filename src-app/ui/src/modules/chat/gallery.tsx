@@ -20,6 +20,7 @@ import {
   whenTrue,
 } from '@/dev/gallery/support'
 import { chatCassette } from '@/dev/gallery/fixtures/chat'
+import { GALLERY_EMPTY_TASKS_CONVERSATION_ID } from '@/modules/background/gallery'
 import { LONG_TOOL_DESCRIPTION } from '@/dev/gallery/fixtures/longToolDescription'
 import { useChatStore } from '@/modules/chat/core/stores/chat'
 import { useFileStore } from '@/modules/file/stores/file'
@@ -597,6 +598,79 @@ export const gallery: ModuleGallery = {
           steps: async d => {
             await d.focus('chat-message-copy-btn')
             await d.wait(300)
+          },
+        },
+      ],
+    },
+    {
+      // The in-conversation background surfaces (there is no global
+      // /background-tasks page any more). POPULATED on purpose — the background
+      // cassette seeds five runs spanning running / completed sub-agent /
+      // completed sandbox / failed / cancelled, so the design-critic pass reviews
+      // real card data (status badges, token counts, error text, action rows)
+      // rather than an empty panel.
+      slug: 'deep-chat-right-panel-background',
+      title: 'Conversation — right panel open (background Tasks)',
+      conversationId: SHOWCASE_CONVERSATION_ID,
+      note: 'the in-chat "Tasks" tab (registerPanelRenderer("background")) populated with five runs + the "Showing N of M" footer',
+      setup: async () => {
+        await whenLoaded(SHOWCASE_CONVERSATION_ID)
+        chat().displayInRightPanel({
+          id: `background-${SHOWCASE_CONVERSATION_ID}`,
+          title: 'Tasks',
+          type: 'background',
+          data: { conversationId: SHOWCASE_CONVERSATION_ID },
+        })
+      },
+    },
+    {
+      // The panel's EMPTY branch, driven for real: the background cassette answers
+      // GALLERY_EMPTY_TASKS_CONVERSATION_ID with a zero-run page, so opening the
+      // tab on that id renders the genuine empty state (not a seeded fake).
+      slug: 'deep-chat-background-empty',
+      title: 'Conversation — right panel, background Tasks (empty)',
+      conversationId: SHOWCASE_CONVERSATION_ID,
+      note: 'the Tasks tab for a conversation with no background runs — the real empty branch',
+      setup: async () => {
+        await whenLoaded(SHOWCASE_CONVERSATION_ID)
+        chat().displayInRightPanel({
+          id: `background-${GALLERY_EMPTY_TASKS_CONVERSATION_ID}`,
+          title: 'Tasks',
+          type: 'background',
+          data: { conversationId: GALLERY_EMPTY_TASKS_CONVERSATION_ID },
+        })
+      },
+    },
+    {
+      // The `message_list_footer` affordance, pinned after the last turn. Renders
+      // only once the conversation HAS runs, so this state is what proves it is
+      // reachable at all — plus its click target for the interaction pass.
+      slug: 'deep-chat-background-footer',
+      title: 'Conversation — end-of-conversation background affordance',
+      conversationId: SHOWCASE_CONVERSATION_ID,
+      note: 'the message_list_footer row summarising this conversation’s running sub-agents; clicking it opens the Tasks tab',
+      setup: async () => {
+        await whenLoaded(SHOWCASE_CONVERSATION_ID)
+        // The footer mounts inside MessageList and fetches its own slice. Wait on
+        // the STORE reaching the loaded state rather than a fixed sleep — a slow
+        // run would otherwise capture the pre-fetch frame, where the footer
+        // renders null, and silently blank the screenshot.
+        const { BackgroundRuns } = await import(
+          '@/modules/background/stores/BackgroundRuns.store'
+        )
+        await whenTrue(
+          () =>
+            (BackgroundRuns.$.totalByConversation[SHOWCASE_CONVERSATION_ID] ?? 0) > 0,
+        )
+      },
+      interactions: [
+        {
+          name: 'open-tasks',
+          note: 'click the footer affordance → the right-panel Tasks tab opens on THIS conversation',
+          steps: async d => {
+            await d.click('background-footer-open')
+            await d.waitFor('background-panel-list', 3000)
+            await d.wait(200)
           },
         },
       ],

@@ -67,4 +67,27 @@ describe('resolveOverridePath', () => {
   test('an `@/` specifier with no matching file returns null', () => {
     expect(resolveOverridePath('@/does/not/exist', opts())).toBeNull()
   })
+
+  // Against the REAL trees, not the synthetic fixture above: the desktop bundle
+  // must bind the NO-OP `bootSessionVerify.desktop.ts`, never core's body. Core's
+  // body calls `Auth.initAuth()`, which on desktop would verify a token that is
+  // stale by construction (the desktop server regenerates its JWT secret per
+  // launch), `endSession()`, and fight the auto-login loop that owns the session
+  // — the same hazard `AuthGuard.desktop.tsx` (reason 3) exists to avoid.
+  test('REAL tree: bootSessionVerify binds the desktop no-op, not core', () => {
+    const realOpts = {
+      localSrc: path.resolve(__dirname, '..'),
+      fallbackSrc: path.resolve(__dirname, '../../../../ui/src'),
+      aliasPrefix: '@/',
+    }
+    expect(resolveOverridePath('@/modules/auth/bootSessionVerify', realOpts)).toBe(
+      path.join(realOpts.fallbackSrc, 'modules/auth/bootSessionVerify.desktop.ts'),
+    )
+    // Control: a sibling in the same module with no `.desktop` twin still binds
+    // core — so the assertion above is about THIS file's twin, not about the
+    // resolver preferring the core tree in general.
+    expect(resolveOverridePath('@/modules/auth/meFreshness', realOpts)).toBe(
+      path.join(realOpts.fallbackSrc, 'modules/auth/meFreshness.ts'),
+    )
+  })
 })
