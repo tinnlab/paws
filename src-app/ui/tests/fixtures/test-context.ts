@@ -8,6 +8,7 @@ import { fileURLToPath } from 'url'
 import {
   findAvailablePorts,
   releasePortLock,
+  resolveConfigDir,
   updatePortLockHeartbeat,
 } from './port-manager'
 import {
@@ -214,9 +215,10 @@ export const test = base.extend<TestFixtures & TestOptions>({
     if (!runId) {
       throw new Error('TEST_RUN_ID not set - global-setup may have failed')
     }
+    // Namespaced by the same key as the lock dir (port-manager CONFIG_NS).
     const postgresConfigPath = resolve(
-      __dirname,
-      `../.test-configs/postgres-${runId}.json`,
+      resolveConfigDir(resolve(__dirname, '..')),
+      `postgres-${runId}.json`,
     )
     const postgresConfig = JSON.parse(readFileSync(postgresConfigPath, 'utf-8'))
     const postgresPort = postgresConfig.port
@@ -291,7 +293,7 @@ export const test = base.extend<TestFixtures & TestOptions>({
     // }
 
     // 3. Create backend config file
-    const configDir = resolve(__dirname, '../.test-configs')
+    const configDir = resolveConfigDir(resolve(__dirname, '..'))
     if (!existsSync(configDir)) {
       mkdirSync(configDir, { recursive: true })
     }

@@ -2,7 +2,7 @@ import { execSync } from 'child_process'
 import { resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { readFileSync, rmSync, existsSync } from 'fs'
-import { releasePostgresPortLock } from './fixtures/port-manager'
+import { releasePostgresPortLock, resolveConfigDir } from './fixtures/port-manager'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -17,7 +17,8 @@ export default async function globalTeardown() {
   }
 
   // Read config file
-  const configDir = resolve(__dirname, '.test-configs')
+  // Namespaced by the same key as the lock dir (see port-manager CONFIG_NS).
+  const configDir = resolveConfigDir(__dirname)
   const configPath = resolve(configDir, `postgres-${runId}.json`)
 
   if (!existsSync(configPath)) {

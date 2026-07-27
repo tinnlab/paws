@@ -86,6 +86,15 @@ test.describe('Inline file previews — per-viewer rendering', () => {
     await expect(previews).toHaveCount(cases.length, { timeout: 10000 })
     for (let i = 0; i < cases.length; i++) {
       const uri = `/api/files/img-multi-${i}/download`
+      // Preview bodies are VIEWPORT-GATED (InlineFilePreview's `view.seen`
+      // IntersectionObserver, ITEM-2/ITEM-5): an off-screen card renders a
+      // fixed-height `inline-file-preview-skeleton` and mounts NO viewer body,
+      // so the third 400px-tall card here has no <img> until it is scrolled
+      // to. `seen` is sticky, so the earlier ones stay mounted.
+      await previews.nth(i).scrollIntoViewIfNeeded()
+      await expect(
+        previews.nth(i).getByTestId('inline-file-preview-body'),
+      ).toBeVisible({ timeout: 10000 })
       await expect(previews.nth(i).locator('img')).toHaveAttribute('src', uri)
     }
   })

@@ -42,6 +42,35 @@ function isPortBindable(port: number): Promise<boolean> {
 // (handled inside resolveE2eDefaults). `tmpdir()` retained via the key-path only
 // when the derived default is used. Pairs with the key-derived port bases below.
 const LOCK_DIR = E2E_DEFAULTS.lockDir || resolve(tmpdir(), 'ziee-test-locks')
+
+/**
+ * Namespace for the per-session `.test-configs/` sub-directory, derived from the
+ * SAME key as the lock dir.
+ *
+ * Why: `cleanupStaleConfigFiles` decides "is this config file still owned by a
+ * live session?" from `collectLiveRunIds()`, which reads LOCK_DIR. The config dir
+ * used to be a single un-namespaced `tests/.test-configs`. So two sessions in the
+ * SAME worktree that isolate themselves the documented way (a private
+ * `ZIEE_E2E_LOCK_DIR`) share the config dir but can NOT see each other's locks —
+ * every one of the sibling's live `postgres-<runId>.json` /
+ * `docker-compose-<runId>.yaml` / `test-<testId>.yaml` / `vite-<testId>.ts` files
+ * looks like an unowned orphan and is deleted once it ages past CONFIG_STALE_MS,
+ * ENOENT-ing the victim run mid-flight.
+ *
+ * Keying the config dir by the lock dir makes the guard's world-view and the
+ * files it can reach the same set: a session only ever sweeps configs whose
+ * owning locks it can actually read.
+ */
+export const CONFIG_NS = LOCK_DIR.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+/, '')
+
+/**
+ * The per-session config dir under a tests/ root (`tests/.test-configs/<ns>`).
+ * Single source of truth for global-setup, global-teardown and test-context so
+ * the three can never drift.
+ */
+export function resolveConfigDir(testsDir: string): string {
+  return resolve(testsDir, '.test-configs', CONFIG_NS)
+}
 const LOCK_TIMEOUT_MS = 1800000 // 30 minutes - covers a full dir run; postgres locks are not heartbeat-refreshed
 // @ts-ignore - Reserved for future use
 const _HEARTBEAT_INTERVAL_MS = 5000 // 5 seconds - heartbeat update frequency (reserved for future use)

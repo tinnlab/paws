@@ -131,8 +131,26 @@ pub async fn subscribe_hardware_usage(
     // Start monitoring if not already active
     start_hardware_monitoring().await;
 
+    // Deregister on ANY stream termination. A trailing `remove_client(...)`
+    // AFTER the recv loop only runs when the SENDER side closes; the common
+    // case — the browser goes away — DROPS the stream future mid-await, so
+    // that statement was unreachable and the registry entry leaked until the
+    // next broadcast happened to notice the dead channel. A guard MOVED into
+    // the generator lives in the future's state and drops with it, polled or
+    // not. (Mirrors sync's `ConnGuard`.)
+    struct ClientGuard(Uuid);
+    impl Drop for ClientGuard {
+        fn drop(&mut self) {
+            tracing::debug!("Hardware monitoring client disconnected: {}", self.0);
+            remove_client(self.0);
+        }
+    }
+    let guard = ClientGuard(client_id);
+
     // Create the SSE stream with proper cleanup
     let stream = async_stream::stream! {
+        let _guard = guard;
+
         // Send initial connected event
         let connected_event = SSEHardwareUsageEvent::Connected(SSEHardwareUsageConnectedData {
             message: "Hardware monitoring connected".to_string(),
@@ -144,13 +162,16 @@ pub async fn subscribe_hardware_usage(
         while let Some(event) = rx.recv().await {
             yield event;
         }
-
-        // Stream ended, remove client
-        tracing::debug!("Hardware monitoring client disconnected: {}", client_id);
-        remove_client(client_id);
     };
 
-    Ok((axum::http::StatusCode::OK, Sse::new(stream)))
+    // `keep_alive` matches every other SSE endpoint in the tree (chat, sync,
+    // workflow, voice, downloads): it keeps intermediaries (the e2e vite
+    // proxy, prod reverse proxies) from reaping an idle stream between the
+    // 2s usage ticks.
+    Ok((
+        axum::http::StatusCode::OK,
+        Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default()),
+    ))
 }
 
 /// Documentation for subscribe_hardware_usage endpoint

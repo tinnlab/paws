@@ -55,6 +55,23 @@ test.describe('Inline file previews — accessibility', () => {
     })
     const view = page.locator('[data-testid="tool-result-files"]').first()
     await expect(view).toBeVisible({ timeout: 10000 })
+
+    // Each preview body is VIEWPORT-GATED (InlineFilePreview's `view.seen`
+    // IntersectionObserver, ITEM-2/ITEM-5): until a card scrolls into view it
+    // renders a fixed-height `inline-file-preview-skeleton` instead of the
+    // viewer body. Three stacked 400px cards do not fit at once, so the last
+    // one (markdown) would never mount and its `h1` would never exist. Scroll
+    // each card into view to mount it; `seen` is sticky in the message-view
+    // store, so the earlier bodies stay mounted for the axe scan below.
+    const cards = view.locator('[data-testid="inline-file-preview"]')
+    await expect(cards).toHaveCount(3, { timeout: 10000 })
+    for (let i = 0; i < 3; i++) {
+      await cards.nth(i).scrollIntoViewIfNeeded()
+      await expect(
+        cards.nth(i).getByTestId('inline-file-preview-body'),
+      ).toBeVisible({ timeout: 10000 })
+    }
+
     // Wait for bodies to render so axe sees the final DOM.
     await expect(view.locator('img').first()).toBeVisible()
     await expect(view.locator('table').first()).toBeVisible()

@@ -141,10 +141,28 @@ async function clickDownloadOnFirstCard(page: Page) {
     ) || ''
   await firstCard.getByTestId(`hub-model-download-btn-${name}`).click()
 
-  // A "Select Quantization" dialog appears only for models with >1 option.
-  const quantDialog = page.getByTestId('hub-model-download-quant-dialog')
-  if (await quantDialog.isVisible({ timeout: 1500 }).catch(() => false)) {
-    await page.getByTestId('hub-model-download-quant-dialog-ok-btn').click()
+  // A "Select Quantization" dialog appears only for models with >1 option,
+  // and only AFTER the async pre-download gates settle (`runGates` awaits
+  // `loadLlmRepositories` + the repo connection probe). `locator.isVisible()`
+  // does NOT wait — its `timeout` option is inert — so sampling it right
+  // after the click ALWAYS missed the dialog, left it open, and blocked the
+  // rest of the flow (neither the provider dialog nor the "Download started"
+  // toast could ever appear). Wait for a real signal instead: the quant
+  // dialog, or the "no local provider" error toast that short-circuits
+  // before it.
+  const quantOk = page.getByTestId('hub-model-download-quant-dialog-ok-btn')
+  const errorToast = page
+    .locator('[data-sonner-toast][data-type="error"]')
+    .first()
+  await Promise.race([
+    quantOk.waitFor({ state: 'visible', timeout: 8000 }).catch(() => {}),
+    errorToast.waitFor({ state: 'visible', timeout: 8000 }).catch(() => {}),
+  ])
+  if (await quantOk.isVisible()) {
+    await quantOk.click()
+    await expect(
+      page.getByTestId('hub-model-download-quant-dialog'),
+    ).toHaveCount(0, { timeout: 5000 })
   }
 }
 

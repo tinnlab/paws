@@ -7,7 +7,7 @@ import { tmpdir } from 'os'
 import crypto from 'crypto'
 import pg from 'pg'
 import dotenv from 'dotenv'
-import { cleanupStaleLocks, cleanupStaleConfigFiles, allocatePostgresPort } from './fixtures/port-manager'
+import { cleanupStaleLocks, cleanupStaleConfigFiles, allocatePostgresPort, resolveConfigDir } from './fixtures/port-manager'
 import {
   findFreePort,
   serverBinaryPath,
@@ -62,7 +62,13 @@ export default async function globalSetup(_config: FullConfig) {
   cleanupStaleLocks()
 
   // Clean up stale config files from previous crashed/killed test runs
-  const configDir = resolve(__dirname, '.test-configs')
+  // Namespaced by the SAME key as the lock dir (port-manager CONFIG_NS). The
+  // stale-config sweep judges liveness from `collectLiveRunIds()` (which reads
+  // LOCK_DIR); with an un-namespaced config dir, a session that isolates itself
+  // via ZIEE_E2E_LOCK_DIR could not see a same-worktree sibling's locks and
+  // therefore deleted the sibling's LIVE postgres-<runId>.json / test-*.yaml
+  // once they aged past the TTL (observed as spurious ENOENT storms).
+  const configDir = resolveConfigDir(__dirname)
   cleanupStaleConfigFiles(configDir)
 
   // Per-session container namespace. Concurrent e2e sessions (separate git
