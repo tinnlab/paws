@@ -1641,11 +1641,41 @@ pub async fn list_runs_for_user(
 /// `final_output_json` exists, read fully via `collect_result`). Owner-scoped
 /// (`user_id = $1`; a foreign run is simply absent — never leaked).
 ///
-/// Index-friendly: the existing `(user_id, created_at DESC)` index
-/// (`idx_workflow_runs_user_created`) serves the scan + ordering; `job_kind` and
-/// `status` (both separately indexed) are residual filters. Returns
-/// `(rows, total)` for the paginated response. Pushes every filter to SQL (§4 —
-/// no in-memory filtering / N+1).
+/// `conversation_id` is a **DISJOINT** scope, not an ordinary residual filter:
+/// `None` returns ONLY conversation-LESS runs, and `Some(id)` returns ONLY that
+/// conversation's runs, so a run is surfaced by exactly one UI surface rather than
+/// two. This is deliberately NOT the `($n IS NULL OR col = $n)` shape used by
+/// `status`/`kind` just below: that shape would make an unfiltered call return
+/// every run, re-introducing the global listing this scoping exists to remove.
+///
+/// **Who produces a conversation-LESS background run.** Both spawners require a
+/// conversation (`background_mcp::tools` errors `BACKGROUND_NO_MODEL` /
+/// `BACKGROUND_NO_CONVERSATION` without one), and the scheduler's own run history
+/// is a DIFFERENT table (`scheduled_task_runs`) — it never appeared here. So in
+/// practice the `None` bucket is filled only when a conversation is DELETED:
+/// `workflow_runs_conversation_id_fkey` is `ON DELETE SET NULL`, which detaches
+/// that conversation's runs. Those runs currently have no UI surface (see the
+/// tracked follow-up in the feature's lifecycle notes); the `None` branch is the
+/// endpoint's honest default and the query a future detached-runs surface will use.
+///
+/// Ordering carries an `id DESC` tiebreaker: `created_at` is NOT unique (a fan-out
+/// of sub-agents is spawned in the same instant), and without a tiebreaker
+/// `LIMIT/OFFSET` paging can repeat or skip rows between two page queries — which
+/// the client's APPEND-based Load-more would turn into duplicate rows.
+///
+/// Indexes: `(user_id, created_at DESC)` (`idx_workflow_runs_user_created`) serves
+/// the scan + ordering. `conversation_id` is a residual predicate — note the
+/// partial `idx_workflow_runs_conv (conversation_id) WHERE conversation_id IS NOT
+/// NULL` cannot serve the `IS NULL` branch, and an OR-shaped parameterised
+/// predicate is generally not index-selectable, so the scoped read is an
+/// index-ordered scan filtered on the way out rather than an index seek. Acceptable
+/// at current cardinality (bounded by `user_id`); a composite
+/// `(user_id, conversation_id, created_at DESC)` is the escalation if it matters.
+///
+/// Returns `(rows, total)`. The same predicate is applied to the COUNT so `total`
+/// cannot disagree with the page's FILTER — though the two statements run outside a
+/// transaction, so a concurrent insert between them can still shift the count.
+/// Pushes every filter to SQL (§4 — no in-memory filtering / N+1).
 pub async fn list_background_runs_for_user(
     pool: &PgPool,
     user_id: Uuid,
@@ -1653,6 +1683,7 @@ pub async fn list_background_runs_for_user(
     per_page: i64,
     status: Option<&str>,
     kind: Option<&str>,
+    conversation_id: Option<Uuid>,
 ) -> Result<(Vec<BackgroundRunSummary>, i64), AppError> {
     let per_page = per_page.clamp(1, 500);
     let offset = (page - 1).max(0) * per_page;
@@ -1677,7 +1708,13 @@ pub async fn list_background_runs_for_user(
           AND job_kind <> 'workflow'
           AND ($2::text IS NULL OR status = $2)
           AND ($3::text IS NULL OR job_kind = $3)
-        ORDER BY created_at DESC
+          -- DISJOINT conversation scope (see the doc comment): no param → the
+          -- conversation-LESS runs only; a param → that conversation's runs only.
+          AND (($6::uuid IS NULL AND conversation_id IS NULL)
+               OR conversation_id = $6)
+        -- `id DESC` is a TIEBREAKER, not cosmetic: created_at is not unique, and
+        -- OFFSET paging over a non-deterministic order repeats/skips rows.
+        ORDER BY created_at DESC, id DESC
         LIMIT $4 OFFSET $5
         "#,
         user_id,
@@ -1685,6 +1722,7 @@ pub async fn list_background_runs_for_user(
         kind,
         per_page,
         offset,
+        conversation_id,
     )
     .fetch_all(pool)
     .await
@@ -1698,10 +1736,16 @@ pub async fn list_background_runs_for_user(
           AND job_kind <> 'workflow'
           AND ($2::text IS NULL OR status = $2)
           AND ($3::text IS NULL OR job_kind = $3)
+          -- Same disjoint scope as the list query above — applied here too so
+          -- `total` (and therefore the page count) can never disagree with the
+          -- rows actually returned.
+          AND (($4::uuid IS NULL AND conversation_id IS NULL)
+               OR conversation_id = $4)
         "#,
         user_id,
         status,
         kind,
+        conversation_id,
     )
     .fetch_one(pool)
     .await
@@ -1709,6 +1753,44 @@ pub async fn list_background_runs_for_user(
     .count;
 
     Ok((rows, total))
+}
+
+/// Every NON-TERMINAL background run bound to `conversation_id` and owned by
+/// `user_id`, newest-first. Backs the conversation-delete teardown: a conversation
+/// is about to be deleted, and `workflow_runs_conversation_id_fkey` is
+/// `ON DELETE SET NULL`, so anything still in flight would otherwise be DETACHED —
+/// still executing, with no surface left to view, steer, or cancel it (there is no
+/// global background page by design). The caller cancels each id before the delete.
+///
+/// The non-terminal set is spelled out to match `cancel_cas`'s CAS guard exactly
+/// (`WorkflowRunStatus::is_terminal` is its Rust twin); a run that is already
+/// terminal is deliberately excluded — it has nothing left to stop.
+///
+/// Owner-scoped (`user_id = $2`) and background-only (`job_kind <> 'workflow'`), so
+/// a foreign conversation yields an empty list and a classic workflow run is never
+/// touched by a chat delete.
+pub async fn list_cancellable_background_runs_for_conversation(
+    pool: &PgPool,
+    conversation_id: Uuid,
+    user_id: Uuid,
+) -> Result<Vec<Uuid>, AppError> {
+    let ids = sqlx::query_scalar!(
+        r#"
+        SELECT id
+        FROM workflow_runs
+        WHERE conversation_id = $1
+          AND user_id = $2
+          AND job_kind <> 'workflow'
+          AND status IN ('pending', 'running', 'waiting', 'resumable')
+        ORDER BY created_at DESC
+        "#,
+        conversation_id,
+        user_id,
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(AppError::database_error)?;
+    Ok(ids)
 }
 
 /// Owner-scoped detail fetch for one BACKGROUND run (ITEM-8 follow-up) — the

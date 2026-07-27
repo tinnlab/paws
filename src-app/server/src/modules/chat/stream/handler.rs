@@ -57,6 +57,36 @@ pub async fn subscribe_chat_stream(
     let exp_unix = claims.as_ref().map(|c| c.exp);
     let token_ver = claims.as_ref().and_then(|c| c.ver);
 
+    let sse = open_chat_stream(user_id, exp_unix, token_ver).map_err(|e| e.to_api_error())?;
+    Ok((StatusCode::OK, sse))
+}
+
+/// Register a chat-token connection and build its SSE stream.
+///
+/// Extracted from `subscribe_chat_stream` so the slot-lifecycle contract is
+/// TESTABLE: this fn needs no `RequirePermissions` extractor, no HTTP request and
+/// no database, so a unit test can call it, drop the returned `Sse` **without
+/// ever polling it**, and assert the connection's slot was released. That is the
+/// termination the previous guard placement could not see.
+///
+/// It is emphatically NOT a hypothetical path. axum routes `HEAD` to the `GET`
+/// handler (`method_routing.rs`, `call!(req, HEAD, get)`) and then REPLACES the
+/// response body with `Body::empty()` inside `RouteFuture::poll`
+/// (`routing/route.rs`) — synchronously, before the response ever reaches hyper.
+/// The SSE body is therefore dropped WITHOUT EVER BEING POLLED, so any `HEAD
+/// /api/chat/stream` (uptime monitor, reverse proxy, link previewer, scanner)
+/// used to consume a per-user slot permanently.
+///
+/// `head_requests_do_not_leak_chat_stream_slots` covers that end-to-end, but
+/// note it does not ISOLATE the guard placement: with the guard reverted and the
+/// sweep kept, the (cap+1)th HEAD would reclaim the leaked entries and the test
+/// would still pass. The test below is what isolates it — it asserts the slot
+/// count after EVERY drop, staying below the cap so the sweep never runs.
+fn open_chat_stream(
+    user_id: Uuid,
+    exp_unix: Option<i64>,
+    token_ver: Option<i32>,
+) -> Result<Sse<impl Stream<Item = Result<Event, axum::Error>>>, AppError> {
     let conn_id = Uuid::new_v4();
     let (tx, mut rx) =
         tokio::sync::mpsc::channel::<Result<Event, axum::Error>>(CHAT_STREAM_CHANNEL_CAPACITY);
@@ -69,8 +99,22 @@ pub async fn subscribe_chat_stream(
                 active_conversation: None,
                 sender: tx.clone(),
             },
-        )
-        .map_err(|e| e.to_api_error())?;
+        )?;
+
+    // The slot is now OWNED by this guard — constructed eagerly the instant
+    // registration succeeds (and only on success: the 429 path inserted
+    // nothing, so nothing may claim ownership). It is moved into the stream
+    // below.
+    //
+    // It CANNOT be declared inside the `stream!` body: that body is a generator
+    // that does not run until the stream's FIRST poll, so a client that goes
+    // away before the response body is ever polled would leave a registration
+    // whose guard was never constructed — the slot would be held for the life
+    // of the process, and every reconnect would burn another until the account
+    // is permanently 429'd. Captured by the `async move` generator instead, the
+    // guard lives in the future's state and is dropped when the future is
+    // dropped, polled or not.
+    let guard = ConnGuard(conn_id);
 
     // Handshake: hand the client its connection id to echo on the subscription PUT.
     let _ = tx.try_send(Ok(connected_event(conn_id)));
@@ -81,8 +125,10 @@ pub async fn subscribe_chat_stream(
     let deadline = tokio::time::Instant::now() + Duration::from_secs(secs_remaining);
 
     let stream = async_stream::stream! {
-        // Unregister on ANY termination — disconnect, exp, or deactivation.
-        let _guard = ConnGuard(conn_id);
+        // Unregister on ANY termination — disconnect, exp, or deactivation,
+        // INCLUDING a stream dropped before it was ever polled (the guard was
+        // constructed at registration and is merely MOVED in here).
+        let _guard = guard;
 
         let mut recheck = tokio::time::interval_at(
             tokio::time::Instant::now() + RECHECK_INTERVAL,
@@ -130,10 +176,7 @@ pub async fn subscribe_chat_stream(
         }
     };
 
-    Ok((
-        StatusCode::OK,
-        Sse::new(stream).keep_alive(KeepAlive::default()),
-    ))
+    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }
 
 /// Unregisters its connection on drop, covering every way a stream can end.
@@ -230,4 +273,89 @@ pub fn chat_stream_router() -> ApiRouter {
             "/chat/stream/subscription",
             put_with(set_chat_stream_subscription, set_chat_stream_subscription_docs),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::registry::ChatStreamLimits;
+    use uuid::Uuid;
+
+    /// BEHAVIOURAL proof of the slot-lifecycle contract on THIS handler: a
+    /// stream dropped **before it is ever polled** must still release its
+    /// connection slot.
+    ///
+    /// This is the one termination path the old guard placement could not see.
+    /// `ConnGuard` used to be a local of the `async_stream::stream!` generator
+    /// body, and that body does not run until the stream's first poll — so a
+    /// response abandoned before that poll left a registration whose guard was
+    /// never constructed, holding its slot for the life of the process. Every
+    /// reconnect burned another until the account was permanently 429'd.
+    ///
+    /// An abandoned GET does NOT reach this path (measured: 400 concurrent
+    /// abandoned raw sockets leak 0 slots, because hyper polls the body while
+    /// writing it) — but a `HEAD` does, because axum swaps the body for
+    /// `Body::empty()` before it is ever polled.
+    ///
+    /// **This test is the one that ISOLATES the guard placement.** It stays
+    /// BELOW the per-user cap between assertions, so `register`'s sweep never
+    /// runs and cannot mask a reverted guard: the count must be 0 after every
+    /// single drop. (The end-to-end `head_requests_do_not_leak_chat_stream_slots`
+    /// is satisfied by the sweep alone, so it proves the user is not locked out
+    /// — not where the release came from.) Driven through the
+    /// `open_chat_stream` seam: no extractor, no HTTP, no DB — the only DB
+    /// access is in the periodic re-check arm, which lives inside the generator
+    /// and never runs here.
+    #[tokio::test]
+    async fn an_unpolled_stream_still_releases_its_slot() {
+        let uid = Uuid::new_v4();
+        let exp = chrono::Utc::now().timestamp() + 3600;
+        let reg = registry();
+
+        // More than the default per-user cap, so the leak's downstream effect
+        // (registrations start being refused) would also show up. NOTE the
+        // assertion that actually discriminates is the per-iteration slot count
+        // below: `register` sweeps closed channels at the cap, and dropping an
+        // unpolled stream closes its channel, so a guard-only regression is
+        // caught by the count long before any 429.
+        let n = ChatStreamLimits::default().per_user_max_connections + 8;
+        for i in 0..n {
+            let sse = open_chat_stream(uid, Some(exp), None)
+                .unwrap_or_else(|e| panic!("subscribe #{i} must register: {e:?}"));
+            // The client vanished: drop the stream WITHOUT ever polling it.
+            drop(sse);
+            assert_eq!(
+                reg.connection_count_for_user(uid),
+                0,
+                "stream #{i} was dropped unpolled and MUST have released its slot"
+            );
+        }
+        assert_eq!(reg.connection_count_for_user(uid), 0);
+    }
+
+    /// The complementary direction, so the contract is not satisfied by "always
+    /// release": an OPEN stream holds exactly one slot for as long as it is
+    /// held, and gives it back on drop. (The post-first-poll and exp-deadline
+    /// exits are covered on the structurally identical sync handler by
+    /// `ziee-framework`'s `every_stream_exit_path_releases_its_slot`; this pair
+    /// covers the registration/​release edges on THIS handler.)
+    #[tokio::test]
+    async fn a_live_stream_keeps_its_slot_until_dropped() {
+        let uid = Uuid::new_v4();
+        let exp = chrono::Utc::now().timestamp() + 3600;
+        let reg = registry();
+
+        let sse = open_chat_stream(uid, Some(exp), None).expect("registers");
+        assert_eq!(
+            reg.connection_count_for_user(uid),
+            1,
+            "an open stream holds exactly one slot"
+        );
+        drop(sse);
+        assert_eq!(
+            reg.connection_count_for_user(uid),
+            0,
+            "dropping the stream releases it"
+        );
+    }
 }

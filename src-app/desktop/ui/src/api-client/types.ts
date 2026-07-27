@@ -2992,6 +2992,15 @@ export interface ListAuditLogQuery {
 
 /** Query params for `GET /api/background/runs`. */
 export interface ListBackgroundRunsQuery {
+  /**
+   * Scope to ONE conversation's background runs — used by the in-chat "Tasks"
+   *  panel + the end-of-conversation affordance.
+   *
+   *  **Disjoint**, not additive: omitting it returns ONLY the conversation-LESS
+   *  runs (detached work, e.g. a scheduled task's), never every run. A run
+   *  therefore appears in exactly one surface.
+   */
+  conversation_id?: string
   /** Filter to a single background job kind (`subagent` / `sandbox_exec`). */
   kind?: string
   page?: number
@@ -8109,7 +8118,7 @@ export type ApiEndpointParameters = {
   'Background.cancelRun': { run_id: string }
   'Background.getRun': { run_id: string }
   'Background.listRunNotes': { run_id: string }
-  'Background.listRuns': { kind?: string; page?: number; per_page?: number; status?: string }
+  'Background.listRuns': { conversation_id?: string; kind?: string; page?: number; per_page?: number; status?: string }
   'Background.postRunNote': { run_id: string } & CreateRunNote
   'Branch.activate': { id: string; branch_id: string }
   'Branch.create': { id: string } & CreateBranchRequest

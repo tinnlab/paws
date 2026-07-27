@@ -237,10 +237,38 @@ pub async fn delete_conversation(
     origin: SyncOrigin,
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
+    // Cascade teardown, BEFORE the delete — order is load-bearing.
+    // `workflow_runs.conversation_id` is `ON DELETE SET NULL`, so once the row is
+    // gone the conversation's background runs can no longer be FOUND, and they
+    // would survive detached: rows with a NULL conversation and, worse, spawned
+    // tasks still executing headlessly with no surface left to view, steer, or
+    // cancel them (a conversation's in-chat "Tasks" panel is that surface, and
+    // there is deliberately no global background page). So cancel them here, while
+    // the link still exists. Owner-scoped inside, so a foreign/missing
+    // conversation cancels nothing and the `!deleted` 404 below is unaffected.
+    let cancelled_runs =
+        crate::modules::background_mcp::runs::cancel_conversation_background_runs(
+            id,
+            auth.user.id,
+        )
+        .await;
+
     let deleted = Repos.chat.core.delete_conversation( id, auth.user.id).await?;
 
     if !deleted {
         return Err(AppError::not_found("Conversation").into());
+    }
+
+    // Each cancelled run is now terminal — tell the user's other devices so a list
+    // showing it (e.g. another window's Tasks panel) refreshes rather than keeping
+    // a stale `running` badge. Mirrors `cancel_background_run`'s emit.
+    for run_id in cancelled_runs {
+        crate::modules::workflow::events::emit_workflow_run(
+            SyncAction::Update,
+            run_id,
+            auth.user.id,
+            origin.0,
+        );
     }
 
     // Cascade fs cleanup: drop the conversation's lit-search `/lit` view dir so

@@ -1,6 +1,7 @@
 import { test, expect } from '../../fixtures/test-context'
 import { loginAsAdmin, getCurrentUserToken } from '../../common/auth-helpers'
 import { byTestId } from '../testid'
+import { openTasksPanel } from '../15-background/helpers/background-helpers'
 import {
   seedBridgeConversation,
   spawnBackgroundSubagent,
@@ -15,11 +16,15 @@ import {
  * A real background run is launched through the production `spawn_background`
  * path — the built-in `background_mcp` JSON-RPC endpoint that the chat model calls
  * — so a real bridge sub-agent turn actually executes on the `workflow_runs`
- * backbone. The `/background-tasks` page fetches the owner's runs through the real
- * `GET /api/background/runs` endpoint on mount, so the run's card survives a full
- * page reload: the durable `workflow_runs` row is the source of truth, not
- * transient in-memory state. We assert the run card is present, reload, and assert
- * it is STILL present (same run id) — the rehydrate.
+ * backbone. The conversation's right-panel "Tasks" tab fetches that conversation's
+ * runs through the real `GET /api/background/runs?conversation_id=…` endpoint on
+ * mount, so the run's card survives a full page reload: the durable
+ * `workflow_runs` row is the source of truth, not transient in-memory state. We
+ * assert the run card is present, reload, and assert it is STILL present (same run
+ * id) — the rehydrate.
+ *
+ * RETARGETED from the deleted global `/background-tasks` page: a run spawned by a
+ * conversation now lives in that conversation's Tasks tab.
  *
  * Requires the agent-core chat path + a real LLM bridge. Skips cleanly when unset.
  */
@@ -51,20 +56,21 @@ test.describe('background run — persists across reload (real sub-agent, agent-
       'Reply with the single word DONE and nothing else.',
     )
 
-    // The run surfaces on the background-tasks page (fetched from the real REST
-    // endpoint on mount).
-    await page.goto(`${baseURL}/background-tasks`)
-    await expect(byTestId(page, 'background-tasks-page')).toBeVisible({ timeout: 30_000 })
+    // The run surfaces INSIDE the conversation that spawned it — the right-panel
+    // "Tasks" tab, opened from the end-of-conversation footer affordance (fetched
+    // from the real `GET /api/background/runs?conversation_id=…` on mount).
+    await openTasksPanel(page, baseURL, conversationId)
     const card = byTestId(page, `background-run-card-${runId}`)
     await expect(card).toBeVisible({ timeout: 30_000 })
     await expect(byTestId(page, `background-run-kind-${runId}`)).toHaveText('Sub-agent')
 
-    // Reload → the durable run row rehydrates through the same REST fetch; the
-    // background task is NOT lost across the reload.
+    // Reload → the durable run row rehydrates through the same REST fetch (and the
+    // persisted panel snapshot restores the Tasks tab); the background task is NOT
+    // lost across the reload.
     await page.reload()
-    await expect(byTestId(page, 'background-tasks-page')).toBeVisible({ timeout: 30_000 })
+    await expect(byTestId(page, 'background-panel-list')).toBeVisible({ timeout: 30_000 })
     await expect(byTestId(page, `background-run-card-${runId}`)).toBeVisible({ timeout: 30_000 })
     // The empty state is (still) gone — a real run persists.
-    await expect(byTestId(page, 'background-tasks-empty')).toHaveCount(0)
+    await expect(byTestId(page, 'background-panel-empty')).toHaveCount(0)
   })
 })

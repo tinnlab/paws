@@ -501,3 +501,468 @@ async fn detail_of_own_workflow_run_is_404() {
         "reading one's OWN workflow run via the background detail endpoint must be 404"
     );
 }
+
+// ── conversation scope (disjoint) ──────────────────────────────────────────
+//
+// `conversation_id` is NOT an ordinary residual filter: omitting it returns ONLY
+// the conversation-LESS runs, so a background run surfaces in exactly one place
+// (its conversation's in-chat Tasks panel, or the scheduler's run history). The
+// tests below pin both directions of that disjunction.
+
+/// Insert a real `conversations` row (+ its root branch, mirroring the
+/// production create path) owned by `user_id` — `workflow_runs.conversation_id`
+/// is FK-constrained to `conversations(id)`, so a synthetic uuid will not do.
+async fn insert_conversation(server: &TestServer, user_id: &str, title: &str) -> Uuid {
+    let pool = sqlx::PgPool::connect(&server.database_url).await.unwrap();
+    let owner = Uuid::parse_str(user_id).unwrap();
+    let conv_id = Uuid::new_v4();
+    let mut tx = pool.begin().await.expect("begin conversation tx");
+    sqlx::query(
+        "INSERT INTO conversations (id, user_id, title, created_at, updated_at) \
+         VALUES ($1, $2, $3, NOW(), NOW())",
+    )
+    .bind(conv_id)
+    .bind(owner)
+    .bind(title)
+    .execute(&mut *tx)
+    .await
+    .expect("insert conversation");
+    let branch_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO branches (conversation_id, parent_branch_id, created_from_message_id) \
+         VALUES ($1, NULL, NULL) RETURNING id",
+    )
+    .bind(conv_id)
+    .fetch_one(&mut *tx)
+    .await
+    .expect("insert root branch");
+    sqlx::query("UPDATE conversations SET active_branch_id = $1 WHERE id = $2")
+        .bind(branch_id)
+        .bind(conv_id)
+        .execute(&mut *tx)
+        .await
+        .expect("set active branch");
+    tx.commit().await.expect("commit conversation tx");
+    conv_id
+}
+
+/// Like `insert_bg_run` but binds the run to `conversation_id`.
+async fn insert_bg_run_in_conversation(
+    server: &TestServer,
+    user_id: &str,
+    conversation_id: Uuid,
+    kind: &str,
+    status: &str,
+    task: &str,
+) -> Uuid {
+    let pool = sqlx::PgPool::connect(&server.database_url).await.unwrap();
+    let owner = Uuid::parse_str(user_id).unwrap();
+    sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO workflow_runs (job_kind, user_id, status, inputs_json, conversation_id) \
+         VALUES ($1, $2, $3, $4, $5) RETURNING id",
+    )
+    .bind(kind)
+    .bind(owner)
+    .bind(status)
+    .bind(json!({ "task": task }))
+    .bind(conversation_id)
+    .fetch_one(&pool)
+    .await
+    .expect("insert conversation-bound background run")
+}
+
+async fn list_json(server: &TestServer, token: &str, query: &str) -> serde_json::Value {
+    let url = if query.is_empty() {
+        list_url(server)
+    } else {
+        format!("{}?{}", list_url(server), query)
+    };
+    reqwest::Client::new()
+        .get(url)
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap()
+}
+
+fn run_ids(body: &serde_json::Value) -> Vec<String> {
+    body["runs"]
+        .as_array()
+        .expect("runs array")
+        .iter()
+        .map(|r| r["id"].as_str().expect("run id").to_string())
+        .collect()
+}
+
+/// TEST-3 [acceptance / INV-3] — the DISJOINT conversation scope, both directions.
+///
+/// Three runs for ONE owner: one in conversation A, one in conversation B, one
+/// with no conversation at all.
+///   - no `conversation_id`  ⇒ ONLY the conversation-less run.
+///   - `conversation_id=A`   ⇒ ONLY A's run.
+///
+/// This fails if the predicate degrades into the ordinary residual shape
+/// `($n IS NULL OR conversation_id = $n)` — under which the unfiltered call would
+/// return all three — which is exactly how this invariant would get silently
+/// reframed back into a global listing.
+#[tokio::test]
+async fn list_conversation_scope_is_disjoint() {
+    let server = TestServer::start().await;
+    let owner = bg_user(&server, "bg_runs_conv_disjoint").await;
+
+    let conv_a = insert_conversation(&server, &owner.user_id, "conv A").await;
+    let conv_b = insert_conversation(&server, &owner.user_id, "conv B").await;
+
+    let run_a =
+        insert_bg_run_in_conversation(&server, &owner.user_id, conv_a, "subagent", "running", "in A")
+            .await;
+    let run_b =
+        insert_bg_run_in_conversation(&server, &owner.user_id, conv_b, "subagent", "running", "in B")
+            .await;
+    let run_detached =
+        insert_bg_run(&server, &owner.user_id, "subagent", "running", "detached", false).await;
+
+    // ── direction 1: NO param ⇒ conversation-LESS runs only ────────────────
+    let global = list_json(&server, &owner.token, "").await;
+    let global_ids = run_ids(&global);
+    assert_eq!(
+        global_ids,
+        vec![run_detached.to_string()],
+        "an unfiltered list must return ONLY the conversation-less run — a \
+         conversation's sub-agents belong to that conversation, never to a global \
+         listing (got {global_ids:?})"
+    );
+    assert_eq!(global["total"], 1, "total must match the disjoint page");
+
+    // ── direction 2: with a param ⇒ that conversation's runs only ──────────
+    let scoped_a = list_json(&server, &owner.token, &format!("conversation_id={conv_a}")).await;
+    let scoped_a_ids = run_ids(&scoped_a);
+    assert_eq!(
+        scoped_a_ids,
+        vec![run_a.to_string()],
+        "conversation A's scope must contain exactly A's run — never B's, never \
+         the detached one (got {scoped_a_ids:?})"
+    );
+    assert_eq!(scoped_a["total"], 1);
+
+    let scoped_b = list_json(&server, &owner.token, &format!("conversation_id={conv_b}")).await;
+    assert_eq!(run_ids(&scoped_b), vec![run_b.to_string()]);
+
+    // A conversation the owner has, but with no runs, is empty (not "all runs").
+    let conv_empty = insert_conversation(&server, &owner.user_id, "conv empty").await;
+    let scoped_empty =
+        list_json(&server, &owner.token, &format!("conversation_id={conv_empty}")).await;
+    assert!(
+        run_ids(&scoped_empty).is_empty(),
+        "an empty conversation scope must be empty, never a fallback to everything"
+    );
+    assert_eq!(scoped_empty["total"], 0);
+}
+
+/// TEST-2 — the disjoint predicate is applied to the COUNT query too, so `total`
+/// / `total_pages` cannot disagree with the rows actually returned. A predicate
+/// added only to the list query is the classic bug in this shape: the page would
+/// look right while the pager reported the unscoped count.
+#[tokio::test]
+async fn list_conversation_scope_paginates_consistently() {
+    let server = TestServer::start().await;
+    let owner = bg_user(&server, "bg_runs_conv_paging").await;
+
+    let conv = insert_conversation(&server, &owner.user_id, "paging conv").await;
+    let other = insert_conversation(&server, &owner.user_id, "other conv").await;
+
+    // 3 runs in `conv`, plus noise that must NOT be counted.
+    for i in 0..3 {
+        insert_bg_run_in_conversation(
+            &server,
+            &owner.user_id,
+            conv,
+            "subagent",
+            "running",
+            &format!("scoped {i}"),
+        )
+        .await;
+    }
+    insert_bg_run_in_conversation(&server, &owner.user_id, other, "subagent", "running", "other")
+        .await;
+    insert_bg_run(&server, &owner.user_id, "subagent", "running", "detached", false).await;
+
+    let p1 = list_json(
+        &server,
+        &owner.token,
+        &format!("conversation_id={conv}&page=1&per_page=2"),
+    )
+    .await;
+    assert_eq!(p1["total"], 3, "total must be the SCOPED count, not the global one");
+    assert_eq!(p1["total_pages"], 2);
+    assert_eq!(run_ids(&p1).len(), 2);
+
+    let p2 = list_json(
+        &server,
+        &owner.token,
+        &format!("conversation_id={conv}&page=2&per_page=2"),
+    )
+    .await;
+    assert_eq!(p2["total"], 3);
+    assert_eq!(run_ids(&p2).len(), 1, "page 2 holds the remaining scoped run");
+
+    // The two pages together are exactly the conversation's three runs, no repeats.
+    let mut all = run_ids(&p1);
+    all.extend(run_ids(&p2));
+    all.sort();
+    all.dedup();
+    assert_eq!(all.len(), 3, "pages must partition the scope without overlap");
+}
+
+/// TEST-4 — the conversation scope composes with the pre-existing `status`/`kind`
+/// filters and does NOT weaken owner-scoping: another user's run carrying the
+/// SAME conversation id is never returned.
+#[tokio::test]
+async fn list_conversation_scope_composes_and_stays_owner_scoped() {
+    let server = TestServer::start().await;
+    let owner = bg_user(&server, "bg_runs_conv_compose").await;
+    let intruder = bg_user(&server, "bg_runs_conv_intruder").await;
+
+    let conv = insert_conversation(&server, &owner.user_id, "shared-id conv").await;
+
+    let running_subagent = insert_bg_run_in_conversation(
+        &server,
+        &owner.user_id,
+        conv,
+        "subagent",
+        "running",
+        "running subagent",
+    )
+    .await;
+    insert_bg_run_in_conversation(
+        &server,
+        &owner.user_id,
+        conv,
+        "subagent",
+        "completed",
+        "completed subagent",
+    )
+    .await;
+    insert_bg_run_in_conversation(
+        &server,
+        &owner.user_id,
+        conv,
+        "sandbox_exec",
+        "running",
+        "running sandbox",
+    )
+    .await;
+    // Someone else's run pointing at the SAME conversation id.
+    insert_bg_run_in_conversation(
+        &server,
+        &intruder.user_id,
+        conv,
+        "subagent",
+        "running",
+        "intruder run",
+    )
+    .await;
+
+    // conversation + status + kind all compose.
+    let composed = list_json(
+        &server,
+        &owner.token,
+        &format!("conversation_id={conv}&status=running&kind=subagent"),
+    )
+    .await;
+    assert_eq!(
+        run_ids(&composed),
+        vec![running_subagent.to_string()],
+        "conversation_id must AND with status/kind, not replace them"
+    );
+    assert_eq!(composed["total"], 1);
+
+    // Owner scoping still wins: the owner's conversation scope holds 3 runs, and
+    // the intruder's identically-scoped run is absent from it.
+    let owner_scope = list_json(&server, &owner.token, &format!("conversation_id={conv}")).await;
+    assert_eq!(
+        owner_scope["total"], 3,
+        "the owner sees only their OWN three runs in this conversation"
+    );
+    let owner_ids = run_ids(&owner_scope);
+
+    // ...and the intruder sees only their own one, never the owner's three.
+    let intruder_scope =
+        list_json(&server, &intruder.token, &format!("conversation_id={conv}")).await;
+    assert_eq!(intruder_scope["total"], 1);
+    let intruder_ids = run_ids(&intruder_scope);
+    assert!(
+        intruder_ids.iter().all(|id| !owner_ids.contains(id)),
+        "a conversation_id must never widen the owner scope (owner={owner_ids:?}, \
+         intruder={intruder_ids:?})"
+    );
+}
+
+// ── cancel-on-conversation-delete ──────────────────────────────────────────
+//
+// `workflow_runs_conversation_id_fkey` is ON DELETE SET NULL, so deleting a
+// conversation would DETACH its background runs — rows with a NULL conversation
+// and tasks still executing, with no surface left to reach them (there is no
+// global background page by design). The delete path therefore cancels them
+// first. These tests pin that nothing survives non-terminal.
+
+/// Delete a conversation through the REAL `DELETE /api/conversations/{id}`.
+async fn delete_conversation_http(
+    server: &TestServer,
+    token: &str,
+    conversation_id: Uuid,
+) -> reqwest::StatusCode {
+    reqwest::Client::new()
+        .delete(server.api_url(&format!("/conversations/{conversation_id}")))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .unwrap()
+        .status()
+}
+
+async fn statuses_for_conversation_runs(server: &TestServer, ids: &[Uuid]) -> Vec<String> {
+    let pool = sqlx::PgPool::connect(&server.database_url).await.unwrap();
+    let mut out = Vec::new();
+    for id in ids {
+        out.push(
+            sqlx::query_scalar::<_, String>("SELECT status FROM workflow_runs WHERE id = $1")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .expect("read run status"),
+        );
+    }
+    out
+}
+
+/// TEST-24 — deleting a conversation leaves NO non-terminal background run for it,
+/// and does not touch another conversation's runs.
+///
+/// The four non-terminal statuses the cancel CAS guards (`pending` / `running` /
+/// `waiting` / `resumable`) are all seeded, so a regression that only handled
+/// `running` fails here. An ALREADY-TERMINAL run is seeded too and must keep its
+/// own status — the teardown must not rewrite a completed run's outcome.
+#[tokio::test]
+async fn deleting_a_conversation_cancels_its_in_flight_background_runs() {
+    let server = TestServer::start().await;
+    let owner = bg_user(&server, "bg_conv_delete_cancel").await;
+
+    let doomed = insert_conversation(&server, &owner.user_id, "about to be deleted").await;
+    let survivor = insert_conversation(&server, &owner.user_id, "untouched").await;
+
+    // Every non-terminal status, so the teardown cannot pass by handling only one.
+    let mut doomed_runs = Vec::new();
+    for status in ["pending", "running", "waiting", "resumable"] {
+        doomed_runs.push(
+            insert_bg_run_in_conversation(
+                &server,
+                &owner.user_id,
+                doomed,
+                "subagent",
+                status,
+                &format!("doomed {status}"),
+            )
+            .await,
+        );
+    }
+    // A terminal run in the SAME conversation — must keep its outcome.
+    let doomed_completed = insert_bg_run_in_conversation(
+        &server,
+        &owner.user_id,
+        doomed,
+        "subagent",
+        "completed",
+        "already finished",
+    )
+    .await;
+
+    // A non-terminal run in ANOTHER conversation — must be left running.
+    let survivor_run = insert_bg_run_in_conversation(
+        &server,
+        &owner.user_id,
+        survivor,
+        "subagent",
+        "running",
+        "unrelated work",
+    )
+    .await;
+
+    let status = delete_conversation_http(&server, &owner.token, doomed).await;
+    assert_eq!(status, 204, "owner delete of their own conversation must be 204");
+
+    // ── the invariant: NOTHING non-terminal survives for the deleted conversation
+    let after = statuses_for_conversation_runs(&server, &doomed_runs).await;
+    for (run_id, st) in doomed_runs.iter().zip(after.iter()) {
+        assert_eq!(
+            st, "cancelled",
+            "run {run_id} was still non-terminal after its conversation was deleted — it \
+             would be detached (conversation_id NULL) with no surface able to stop it"
+        );
+    }
+
+    // The terminal run keeps its own outcome (the teardown must not rewrite it).
+    assert_eq!(
+        statuses_for_conversation_runs(&server, &[doomed_completed]).await,
+        vec!["completed".to_string()],
+        "an already-terminal run must be left exactly as it was"
+    );
+
+    // The other conversation is untouched.
+    assert_eq!(
+        statuses_for_conversation_runs(&server, &[survivor_run]).await,
+        vec!["running".to_string()],
+        "another conversation's in-flight run must NOT be cancelled by this delete"
+    );
+
+    // Belt-and-braces on the actual hole: after the FK nulled the link, there is no
+    // detached non-terminal background row left for this owner at all.
+    let pool = sqlx::PgPool::connect(&server.database_url).await.unwrap();
+    let detached_non_terminal: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM workflow_runs \
+         WHERE user_id = $1 AND conversation_id IS NULL AND job_kind <> 'workflow' \
+           AND status IN ('pending','running','waiting','resumable')",
+    )
+    .bind(Uuid::parse_str(&owner.user_id).unwrap())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        detached_non_terminal, 0,
+        "a conversation delete must not leave a DETACHED, still-running background run"
+    );
+}
+
+/// TEST-25 — the teardown is owner-scoped: a delete attempt by a NON-owner is a 404
+/// and must not cancel anything. (The cancel runs before the delete, so a missing
+/// owner check there would have cancelled another user's work on a bogus request.)
+#[tokio::test]
+async fn a_foreign_conversation_delete_cancels_nothing() {
+    let server = TestServer::start().await;
+    let owner = bg_user(&server, "bg_conv_delete_owner").await;
+    let intruder = bg_user(&server, "bg_conv_delete_intruder").await;
+
+    let conv = insert_conversation(&server, &owner.user_id, "owner's conversation").await;
+    let run = insert_bg_run_in_conversation(
+        &server,
+        &owner.user_id,
+        conv,
+        "subagent",
+        "running",
+        "owner's work",
+    )
+    .await;
+
+    // `conversations::delete_conversation` is scoped `id = $1 AND user_id = $2`, so
+    // the intruder's delete affects no row → the handler 404s.
+    let status = delete_conversation_http(&server, &intruder.token, conv).await;
+    assert_eq!(status, 404, "deleting someone else's conversation must 404");
+
+    assert_eq!(
+        statuses_for_conversation_runs(&server, &[run]).await,
+        vec!["running".to_string()],
+        "a foreign delete attempt must not cancel the owner's in-flight run"
+    );
+}

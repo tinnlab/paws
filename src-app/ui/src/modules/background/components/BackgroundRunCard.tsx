@@ -1,6 +1,5 @@
-import { ExternalLink, FileText, MessageSquare, XCircle } from 'lucide-react'
+import { FileText, MessageSquare, XCircle } from 'lucide-react'
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 
 import type { BackgroundRunSummary } from '@/api-client/types'
 import {
@@ -59,14 +58,19 @@ const notifyError = (e: unknown, fallback: string): void => {
 /**
  * One background-run row (ITEM-8 / ITEM-25). Shows the run's status badge, label,
  * kind, relative start time and a "result ready" indicator; lets the user cancel
- * a non-terminal run (confirmed), queue a steering note to it, and jump to the
- * conversation the result landed in.
+ * a non-terminal run (confirmed) and queue a steering note to it.
  *
  * Cancel + steer are gated on `!isTerminalRunStatus(run.status)` — the exact
  * boundary the backend enforces (both endpoints 409 on a terminal run).
+ *
+ * There is deliberately NO "Open conversation" affordance: the card's only render
+ * site is the in-conversation Tasks panel, and the endpoint's disjoint scope
+ * guarantees every run it lists belongs to the conversation the user is already
+ * reading — so the button was a no-op that, inside a split pane, would have
+ * navigated the whole window. (It existed for the deleted global page, which
+ * listed runs from many conversations at once.)
  */
 export function BackgroundRunCard({ run }: { run: BackgroundRunSummary }) {
-  const navigate = useNavigate()
   const [cancelOpen, setCancelOpen] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   const [steerOpen, setSteerOpen] = useState(false)
@@ -168,16 +172,6 @@ export function BackgroundRunCard({ run }: { run: BackgroundRunSummary }) {
 
         {/* Actions */}
         <Flex className="flex-wrap items-center gap-2">
-          {run.conversation_id && (
-            <Button
-              variant="link"
-              icon={<ExternalLink />}
-              data-testid={`background-run-open-${run.id}`}
-              onClick={() => navigate(`/chat/${run.conversation_id}`)}
-            >
-              Open conversation
-            </Button>
-          )}
           {terminal && (
             <Button
               variant="ghost"
