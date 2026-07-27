@@ -50,6 +50,7 @@ mod sync_emit_test;
 // leave the title unset, never the raw first user message) + the non-reasoning
 // cross-model guard.
 mod title_test;
+mod title_real_llm_test;
 mod title_audience_test;
 mod title_approval_test;
 mod ownership_test;

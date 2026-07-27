@@ -618,3 +618,78 @@ async fn kill_switch_removes_surface() {
         .unwrap();
     assert_eq!(res.status(), 404);
 }
+
+/// TEST-4 — the live-session regression, through the REAL JSON-RPC surface
+/// against the REAL catalog (300+ operations built from the finished OpenAPI
+/// document), not a fixture.
+///
+/// A user asked "create a new project please"; the model sent
+/// `list_capabilities{query:"create project"}` and the shipped whole-phrase
+/// matcher returned **0 operations**, after which it flailed. The multi-word
+/// query must match, and the operation the phrase names must come FIRST.
+#[tokio::test]
+async fn multi_word_query_finds_and_ranks_the_named_operation() {
+    let server = TestServer::start().await;
+    let admin = create_user_with_permissions(&server, "ctl_search", &["*"]).await;
+
+    let ops_for = |res: &Value| -> Vec<String> {
+        structured(res)["operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|o| o["operation_id"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    let res =
+        call_tool(&server, &admin.token, "list_capabilities", json!({ "query": "create project" }))
+            .await;
+    let total = structured(&res)["total"].as_u64().unwrap();
+    let ops = ops_for(&res);
+    assert!(total > 0, "'create project' must match at least one operation (got {total})");
+    assert_eq!(
+        ops.first().map(String::as_str),
+        Some("Project.create"),
+        "'create project' must rank Project.create first; got {ops:?}"
+    );
+
+    // The same phrasing a model reaches for, for a different entity.
+    let res = call_tool(
+        &server,
+        &admin.token,
+        "list_capabilities",
+        json!({ "query": "create assistant" }),
+    )
+    .await;
+    let ops = ops_for(&res);
+    assert_eq!(
+        ops.first().map(String::as_str),
+        Some("Assistant.create"),
+        "'create assistant' must rank Assistant.create first; got {ops:?}"
+    );
+
+    // Single-term behavior is unchanged (the counts the live session saw).
+    for term in ["project", "create"] {
+        let res =
+            call_tool(&server, &admin.token, "list_capabilities", json!({ "query": term })).await;
+        assert!(
+            structured(&res)["total"].as_u64().unwrap() > 0,
+            "single-term '{term}' must still match"
+        );
+    }
+
+    // A term that matches nothing still yields nothing — the ALL-terms rule must
+    // not degrade into an OR.
+    let res = call_tool(
+        &server,
+        &admin.token,
+        "list_capabilities",
+        json!({ "query": "project zzzznotathing" }),
+    )
+    .await;
+    assert_eq!(
+        structured(&res)["total"].as_u64().unwrap(),
+        0,
+        "every term must match; an unmatched term must empty the result"
+    );
+}

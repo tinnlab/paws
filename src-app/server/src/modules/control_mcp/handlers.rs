@@ -222,6 +222,115 @@ struct ListArgs {
     tag: Option<String>,
 }
 
+// ── search (tokenized, all-terms, relevance-ranked) ──────────────────────────
+//
+// The shipped matcher lowercased the WHOLE query and did one `.contains(q)` per
+// field, so a natural two-word request — the one a model actually sends —
+// matched NOTHING: no `operation_id` or `tag` ever contains a space, and no
+// summary contains the literal phrase `"create project"`. Live evidence: a real
+// session's `list_capabilities{query:"create project"}` returned 0 while
+// `"project"` returned 24 and `"create"` returned 21, and the model then flailed.
+//
+// So: split the query on whitespace and require EVERY term to match at least one
+// field (each term may match a different field), then order by relevance so the
+// operation the phrase actually describes comes first. Single-term queries are
+// unaffected in membership (one term ⇒ the same predicate) and, when every
+// candidate scores alike, the `operation_id` tie-break reproduces the old
+// alphabetical order exactly.
+
+/// Per-term score for the best field it hits. Higher = more precise signal.
+/// `operation_id` is "the stable key the model addresses", so it outranks the
+/// noisier prose of `summary`.
+const SCORE_ID_SEGMENT: u32 = 8;
+const SCORE_ID_SUBSTRING: u32 = 6;
+const SCORE_TAG_EXACT: u32 = 4;
+const SCORE_SUMMARY_WORD: u32 = 3;
+const SCORE_SUMMARY_SUBSTRING: u32 = 1;
+
+/// Lowercase whitespace-split search terms. Empty when the query is blank, which
+/// the caller treats as "no filter" (unchanged passthrough behavior).
+fn query_terms(query: &str) -> Vec<String> {
+    query.split_whitespace().map(str::to_lowercase).collect()
+}
+
+/// Lowercase segments of an operation id: `Project.updateMcpSettings` →
+/// `["project", "update", "mcp", "settings"]`. Splits on `.`/`_`/`-` and on
+/// camelCase boundaries, so a term like `create` matches the `create` segment of
+/// `Project.create` exactly rather than merely as a substring.
+fn id_segments(operation_id: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut prev_lower = false;
+    for ch in operation_id.chars() {
+        if ch == '.' || ch == '_' || ch == '-' {
+            if !cur.is_empty() {
+                out.push(std::mem::take(&mut cur));
+            }
+            prev_lower = false;
+            continue;
+        }
+        if ch.is_uppercase() && prev_lower && !cur.is_empty() {
+            out.push(std::mem::take(&mut cur));
+        }
+        prev_lower = ch.is_lowercase() || ch.is_numeric();
+        cur.extend(ch.to_lowercase());
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+/// Words of a summary, lowercased, split on anything non-alphanumeric.
+fn summary_words(summary: &str) -> Vec<String> {
+    summary
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_lowercase)
+        .collect()
+}
+
+/// Score ONE term against an operation. `0` means the term does not match at all.
+fn term_score(op: &Operation, term: &str) -> u32 {
+    if id_segments(&op.operation_id).iter().any(|s| s == term) {
+        return SCORE_ID_SEGMENT;
+    }
+    if op.operation_id.to_lowercase().contains(term) {
+        return SCORE_ID_SUBSTRING;
+    }
+    if op.tags.iter().any(|t| t.eq_ignore_ascii_case(term)) {
+        return SCORE_TAG_EXACT;
+    }
+    let summary_lower = op.summary.to_lowercase();
+    if summary_words(&op.summary).iter().any(|w| w == term) {
+        return SCORE_SUMMARY_WORD;
+    }
+    if summary_lower.contains(term) {
+        return SCORE_SUMMARY_SUBSTRING;
+    }
+    // A tag substring is the weakest signal but was matched by the old
+    // whole-phrase predicate, so keep it — "single-term behavior at least as
+    // good as today".
+    if op.tags.iter().any(|t| t.to_lowercase().contains(term)) {
+        return SCORE_SUMMARY_SUBSTRING;
+    }
+    0
+}
+
+/// Relevance of an operation for ALL `terms`, or `None` when any term fails to
+/// match — i.e. the ALL-terms rule. An empty `terms` slice matches everything at
+/// score 0 (the no-query passthrough).
+fn op_match_score(op: &Operation, terms: &[String]) -> Option<u32> {
+    let mut total = 0u32;
+    for term in terms {
+        match term_score(op, term) {
+            0 => return None,
+            s => total = total.saturating_add(s),
+        }
+    }
+    Some(total)
+}
+
 fn list_capabilities(
     user: &User,
     groups: &[Group],
@@ -229,28 +338,23 @@ fn list_capabilities(
     args: &Value,
 ) -> Result<Value, AppError> {
     let args: ListArgs = serde_json::from_value(args.clone()).unwrap_or_default();
-    let query = args.query.as_deref().map(str::to_lowercase);
+    let terms = args.query.as_deref().map(query_terms).unwrap_or_default();
     let tag = args.tag.as_deref();
 
-    let mut matched: Vec<&Operation> = catalog
+    let mut scored: Vec<(u32, &Operation)> = catalog
         .iter()
         .filter(|op| op_available(user, groups, op))
         .filter(|op| match &tag {
             Some(t) => op.tags.iter().any(|opt| opt.eq_ignore_ascii_case(t)),
             None => true,
         })
-        .filter(|op| match &query {
-            Some(q) => {
-                op.operation_id.to_lowercase().contains(q)
-                    || op.summary.to_lowercase().contains(q)
-                    || op.tags.iter().any(|t| t.to_lowercase().contains(q))
-            }
-            None => true,
-        })
+        .filter_map(|op| op_match_score(op, &terms).map(|score| (score, op)))
         .collect();
 
-    // Stable, useful ordering: by operation_id.
-    matched.sort_by(|a, b| a.operation_id.cmp(&b.operation_id));
+    // Most relevant first; `operation_id` ASC breaks ties, so an unscored list
+    // (no query, or one relevance class) keeps the previous alphabetical order.
+    scored.sort_by(|(sa, a), (sb, b)| sb.cmp(sa).then_with(|| a.operation_id.cmp(&b.operation_id)));
+    let mut matched: Vec<&Operation> = scored.into_iter().map(|(_, op)| op).collect();
     let total = matched.len();
     let truncated = total > MAX_LIST_RESULTS;
     matched.truncate(MAX_LIST_RESULTS);
@@ -735,5 +839,190 @@ mod tests {
         ));
         // Unknown tool.
         assert!(needs_approval_decision("mystery", &json!({}), Some(&cat)));
+    }
+
+    // ── search matcher (TEST-1 / TEST-2 / TEST-3) ────────────────────────────
+
+    /// A slice of the REAL catalog shape — operation ids, summaries and tags
+    /// copied from the committed `openapi.json` — so the ranking assertions are
+    /// about real data, not about a fixture tuned to pass.
+    fn search_fixture() -> catalog::ControlCatalog {
+        catalog::build_catalog(&json!({
+            "paths": {
+                "/api/projects": {
+                    "post": {
+                        "operationId": "Project.create",
+                        "summary": "Create a new chat project",
+                        "tags": ["Projects"]
+                    },
+                    "get": {
+                        "operationId": "Project.list",
+                        "summary": "List the caller's projects",
+                        "tags": ["Projects"]
+                    }
+                },
+                "/api/projects/{id}": {
+                    "put": {
+                        "operationId": "Project.update",
+                        "summary": "Update project",
+                        "tags": ["Projects"]
+                    },
+                    "delete": {
+                        "operationId": "Project.delete",
+                        "summary": "Delete project",
+                        "tags": ["Projects"]
+                    }
+                },
+                "/api/projects/{id}/duplicate": {
+                    "post": {
+                        "operationId": "Project.duplicate",
+                        "summary": "Duplicate a project",
+                        "tags": ["Projects"]
+                    }
+                },
+                "/api/projects/{id}/mcp-settings": {
+                    "put": {
+                        "operationId": "Project.updateMcpSettings",
+                        "summary": "Update project MCP defaults",
+                        "tags": ["Projects"]
+                    }
+                },
+                "/api/assistants": {
+                    "post": {
+                        "operationId": "Assistant.create",
+                        "summary": "Create a new user assistant",
+                        "tags": ["Assistants"]
+                    }
+                },
+                "/api/workflows": {
+                    "post": {
+                        "operationId": "Workflow.create",
+                        "summary": "Create a user-scope workflow from a WorkflowDef",
+                        "tags": ["Workflows"]
+                    }
+                }
+            }
+        }))
+    }
+
+    /// Rank the fixture by `query`, returning the operation ids in result order.
+    fn ranked(cat: &catalog::ControlCatalog, query: &str) -> Vec<String> {
+        let terms = query_terms(query);
+        let mut scored: Vec<(u32, &Operation)> = cat
+            .iter()
+            .filter_map(|op| op_match_score(op, &terms).map(|s| (s, op)))
+            .collect();
+        scored
+            .sort_by(|(sa, a), (sb, b)| sb.cmp(sa).then_with(|| a.operation_id.cmp(&b.operation_id)));
+        scored.into_iter().map(|(_, op)| op.operation_id.clone()).collect()
+    }
+
+    /// The SHIPPED matcher, reproduced verbatim, so the regression it caused is
+    /// encoded in the suite rather than described in a comment.
+    fn legacy_whole_phrase_match(op: &Operation, query: &str) -> bool {
+        let q = query.to_lowercase();
+        op.operation_id.to_lowercase().contains(&q)
+            || op.summary.to_lowercase().contains(&q)
+            || op.tags.iter().any(|t| t.to_lowercase().contains(&q))
+    }
+
+    /// TEST-1 — the EXACT live-session query.
+    ///
+    /// A real user asked "create a new project please"; the model sent
+    /// `list_capabilities{query:"create project"}` and got **0 results**. The
+    /// multi-word query must now match, and `Project.create` must rank FIRST.
+    #[test]
+    fn create_project_query_matches_and_ranks_project_create_first() {
+        let cat = search_fixture();
+
+        // The bug, encoded: the shipped whole-phrase matcher finds NOTHING.
+        assert_eq!(
+            cat.iter().filter(|op| legacy_whole_phrase_match(op, "create project")).count(),
+            0,
+            "precondition: the shipped whole-phrase matcher is what returned 0 results"
+        );
+
+        let hits = ranked(&cat, "create project");
+        assert!(!hits.is_empty(), "'create project' must match at least one operation");
+        assert_eq!(
+            hits.first().map(String::as_str),
+            Some("Project.create"),
+            "'create project' must rank Project.create first, got {hits:?}"
+        );
+    }
+
+    /// TEST-2 — ALL terms must match, and terms may match DIFFERENT fields.
+    #[test]
+    fn all_terms_must_match_possibly_via_different_fields() {
+        let cat = search_fixture();
+
+        let hits = ranked(&cat, "create project");
+        assert!(
+            !hits.iter().any(|id| id == "Project.list"),
+            "Project.list matches only 'project', so it must be excluded: {hits:?}"
+        );
+        assert!(
+            !hits.iter().any(|id| id == "Assistant.create"),
+            "Assistant.create matches only 'create', so it must be excluded: {hits:?}"
+        );
+
+        // 'assistants' hits only the TAG, 'create' hits only the id segment —
+        // one term per field, and the op still matches.
+        let hits = ranked(&cat, "assistants create");
+        assert_eq!(hits, vec!["Assistant.create".to_string()], "got {hits:?}");
+
+        // A term that matches nothing kills the whole query.
+        assert!(ranked(&cat, "create zzzznotathing").is_empty());
+    }
+
+    /// TEST-3 — single-term behavior is at least as good as today, plus the
+    /// empty-query passthrough.
+    #[test]
+    fn single_term_parity_case_insensitivity_and_empty_query() {
+        let cat = search_fixture();
+
+        for term in ["project", "create", "PROJECT", "Create", "workflow"] {
+            let legacy: std::collections::BTreeSet<String> = cat
+                .iter()
+                .filter(|op| legacy_whole_phrase_match(op, term))
+                .map(|op| op.operation_id.clone())
+                .collect();
+            let now: std::collections::BTreeSet<String> = ranked(&cat, term).into_iter().collect();
+            assert!(
+                legacy.is_subset(&now),
+                "single-term '{term}' regressed: legacy matched {legacy:?}, now {now:?}"
+            );
+        }
+
+        // Case-insensitive on the multi-word path too.
+        assert_eq!(
+            ranked(&cat, "CREATE Project").first().map(String::as_str),
+            Some("Project.create")
+        );
+
+        // Blank query ⇒ no filter (every op), in the previous alphabetical order.
+        let all: Vec<String> = ranked(&cat, "");
+        assert_eq!(all.len(), cat.len(), "an empty query must not filter anything");
+        let mut sorted = all.clone();
+        sorted.sort();
+        assert_eq!(all, sorted, "with no query the order must stay operation_id ASC");
+        assert_eq!(ranked(&cat, "   ").len(), cat.len(), "whitespace-only is also no filter");
+    }
+
+    /// Segmentation is what makes an exact word beat a mere substring.
+    #[test]
+    fn id_segments_splits_on_punctuation_and_camel_case() {
+        assert_eq!(id_segments("Project.create"), vec!["project", "create"]);
+        assert_eq!(
+            id_segments("Project.updateMcpSettings"),
+            vec!["project", "update", "mcp", "settings"]
+        );
+        assert_eq!(id_segments("Hub.createWorkflowFromHub"), vec![
+            "hub",
+            "create",
+            "workflow",
+            "from",
+            "hub"
+        ]);
     }
 }

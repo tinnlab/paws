@@ -1189,3 +1189,138 @@ pub async fn seed_text_message(
     pool.close().await;
     message_id
 }
+
+// ── the configured test LLM (one resolution, shared by every real-LLM tier) ──
+//
+// Real-LLM coverage used to be gated per-vendor (`ANTHROPIC_API_KEY` set? no →
+// skip). On a box configured with a LOCAL bridge and no Anthropic key, that
+// reports SKIPPED — so a whole surface can be "covered" by tests that never
+// execute, which is exactly how the control-MCP search bug shipped. The rule is
+// therefore: skip only when NO LLM is configured at all, never merely because
+// one particular vendor is absent.
+
+/// The LLM a real-LLM test tier should drive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TestLlm {
+    /// The built-in `llm_providers` row to configure, by name.
+    pub provider_name: &'static str,
+    /// Its `provider_type` discriminant.
+    pub provider_type: &'static str,
+    pub api_key: String,
+    /// Base-URL override (a local bridge); `None` means the vendor's SaaS default.
+    pub base_url: Option<String>,
+    pub model_name: String,
+}
+
+/// Pure resolution over an env lookup, so the precedence is unit-testable
+/// without mutating process env (which would race across parallel tests).
+///
+/// Precedence: the OpenAI seam, then the Anthropic seam, then a bare vendor key
+/// with no bridge. `None` only when nothing at all is configured.
+pub fn resolve_test_llm(get: impl Fn(&str) -> Option<String>) -> Option<TestLlm> {
+    let get = |k: &str| get(k).filter(|v| !v.trim().is_empty());
+    let global_base = get("ZIEE_TEST_LLM_BASE_URL");
+    let global_model = get("ZIEE_TEST_LLM_MODEL");
+
+    let candidates: [(&'static str, &'static str, &'static str, &'static str, &'static str); 2] = [
+        ("OpenAI", "openai", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL"),
+        (
+            "Anthropic",
+            "anthropic",
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_BASE_URL",
+            "ANTHROPIC_MODEL",
+        ),
+    ];
+    let defaults = [("openai", "gpt-4o-mini"), ("anthropic", "claude-opus-4-1-20250805")];
+
+    for (provider_name, provider_type, key_env, base_env, model_env) in candidates {
+        let Some(api_key) = get(key_env) else { continue };
+        let base_url = get(base_env).or_else(|| global_base.clone());
+        let model_name = get(model_env).or_else(|| global_model.clone()).unwrap_or_else(|| {
+            defaults
+                .iter()
+                .find(|(t, _)| *t == provider_type)
+                .map(|(_, m)| (*m).to_string())
+                .unwrap_or_default()
+        });
+        return Some(TestLlm { provider_name, provider_type, api_key, base_url, model_name });
+    }
+    None
+}
+
+/// The configured test LLM, read from the process environment.
+///
+/// `None` ⇒ genuinely nothing is configured ⇒ a real-LLM tier may skip.
+pub fn configured_test_llm() -> Option<TestLlm> {
+    resolve_test_llm(|k| std::env::var(k).ok())
+}
+
+#[cfg(test)]
+mod configured_test_llm_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> + use<> {
+        let map: HashMap<String, String> =
+            pairs.iter().map(|(k, v)| ((*k).to_string(), (*v).to_string())).collect();
+        move |k: &str| map.get(k).cloned()
+    }
+
+    /// TEST-10 — the whole point: Anthropic being absent must NOT mean "skip".
+    #[test]
+    fn openai_bridge_resolves_without_any_anthropic_key() {
+        let llm = resolve_test_llm(env(&[
+            ("OPENAI_API_KEY", "sk-local"),
+            ("OPENAI_BASE_URL", "http://localhost:4000/v1"),
+            ("ZIEE_TEST_LLM_MODEL", "qwen3.6-35b-a3b"),
+        ]))
+        .expect("an OpenAI-seam bridge must resolve even with no Anthropic key");
+        assert_eq!(llm.provider_type, "openai");
+        assert_eq!(llm.base_url.as_deref(), Some("http://localhost:4000/v1"));
+        assert_eq!(llm.model_name, "qwen3.6-35b-a3b");
+    }
+
+    #[test]
+    fn anthropic_seam_resolves_when_openai_is_absent() {
+        let llm = resolve_test_llm(env(&[
+            ("ANTHROPIC_API_KEY", "sk-local"),
+            ("ANTHROPIC_BASE_URL", "http://localhost:4000/v1"),
+        ]))
+        .expect("the Anthropic seam must still resolve");
+        assert_eq!(llm.provider_type, "anthropic");
+        assert_eq!(llm.provider_name, "Anthropic");
+    }
+
+    #[test]
+    fn global_base_url_fallback_applies_to_whichever_vendor_has_a_key() {
+        let llm = resolve_test_llm(env(&[
+            ("ANTHROPIC_API_KEY", "sk-local"),
+            ("ZIEE_TEST_LLM_BASE_URL", "http://localhost:4000/v1"),
+            ("ZIEE_TEST_LLM_MODEL", "qwen3.6-35b-a3b"),
+        ]))
+        .expect("the global fallback must resolve");
+        assert_eq!(llm.base_url.as_deref(), Some("http://localhost:4000/v1"));
+        assert_eq!(llm.model_name, "qwen3.6-35b-a3b");
+    }
+
+    #[test]
+    fn a_bare_saas_key_resolves_with_no_base_url_override() {
+        let llm = resolve_test_llm(env(&[("ANTHROPIC_API_KEY", "sk-ant-real")]))
+            .expect("a plain SaaS key is still a configured LLM");
+        assert_eq!(llm.base_url, None);
+        assert_eq!(llm.model_name, "claude-opus-4-1-20250805");
+    }
+
+    #[test]
+    fn nothing_configured_is_the_only_none() {
+        assert_eq!(resolve_test_llm(env(&[])), None);
+        // Blank values do not count as configured.
+        assert_eq!(resolve_test_llm(env(&[("OPENAI_API_KEY", "  ")])), None);
+        // A base URL with no key is not usable on its own.
+        assert_eq!(
+            resolve_test_llm(env(&[("ZIEE_TEST_LLM_BASE_URL", "http://localhost:4000/v1")])),
+            None
+        );
+    }
+}

@@ -71,6 +71,16 @@ pub const STUB_TITLE_EMPTY: &str = "STUB_TITLE=empty";
 /// on the retry.
 pub const STUB_TITLE_EMPTY_ONCE: &str = "STUB_TITLE=empty_once";
 
+/// Like [`STUB_TITLE_EMPTY_ONCE`], but the FIRST title call comes back with no
+/// text AND `finish_reason: "length"` — i.e. the model burned the whole output
+/// budget on hidden reasoning.
+///
+/// This is the shape of the production bug a stub could not previously express:
+/// [`STUB_TITLE_EMPTY`] ends `stop` (a model with nothing to say), which must
+/// NOT be retried, whereas a budget-exhausted attempt must be retried once at a
+/// larger budget. The two modes are what keep those paths distinguishable.
+pub const STUB_TITLE_BUDGET_ONCE: &str = "STUB_TITLE=budget_once";
+
 impl RecordedRequest {
 
     pub fn has_tool(&self, name: &str) -> bool {
@@ -314,12 +324,19 @@ async fn chat_completions(State(s): State<StubState>, body: axum::body::Bytes) -
         let text = match mode.as_str() {
             "empty" => None,
             "empty_once" if prior_title_requests == 0 => None,
+            "budget_once" if prior_title_requests == 0 => None,
             _ => Some(STUB_TITLE.to_string()),
         };
+        // `budget_once` ends the FIRST attempt budget-exhausted rather than
+        // `stop`, so the extension's escalated retry is actually exercised.
+        let finish_override = match mode.as_str() {
+            "budget_once" if prior_title_requests == 0 => Some("length"),
+            _ => None,
+        };
         return if streaming {
-            stream_response(&model, text, None)
+            stream_response_with_finish(&model, text, None, finish_override)
         } else {
-            json_response(&model, text, None)
+            json_response_with_finish(&model, text, None, finish_override)
         };
     }
 
@@ -758,6 +775,17 @@ fn next_tool_call_id() -> String {
 }
 
 fn stream_response(model: &str, text: Option<String>, tool_call: Option<(String, Value)>) -> Response {
+    stream_response_with_finish(model, text, tool_call, None)
+}
+
+/// As [`stream_response`], but lets the caller force the terminal
+/// `finish_reason` (e.g. `"length"` for a budget-exhausted title attempt).
+fn stream_response_with_finish(
+    model: &str,
+    text: Option<String>,
+    tool_call: Option<(String, Value)>,
+    finish_override: Option<&str>,
+) -> Response {
     let mut events: Vec<Event> = Vec::new();
     events.push(sse_chunk(model, json!({"role": "assistant"}), None));
 
@@ -782,6 +810,7 @@ fn stream_response(model: &str, text: Option<String>, tool_call: Option<(String,
     } else {
         "stop"
     };
+    let finish = finish_override.unwrap_or(finish);
     events.push(sse_chunk(model, json!({}), Some(finish)));
 
     let stream = futures::stream::iter(
@@ -794,6 +823,16 @@ fn stream_response(model: &str, text: Option<String>, tool_call: Option<(String,
 }
 
 fn json_response(model: &str, text: Option<String>, tool_call: Option<(String, Value)>) -> Response {
+    json_response_with_finish(model, text, tool_call, None)
+}
+
+/// As [`json_response`], but lets the caller force the `finish_reason`.
+fn json_response_with_finish(
+    model: &str,
+    text: Option<String>,
+    tool_call: Option<(String, Value)>,
+    finish_override: Option<&str>,
+) -> Response {
     let mut message = json!({ "role": "assistant", "content": text });
     let finish = if let Some((name, args)) = &tool_call {
         message["tool_calls"] = json!([{
@@ -805,6 +844,7 @@ fn json_response(model: &str, text: Option<String>, tool_call: Option<(String, V
     } else {
         "stop"
     };
+    let finish = finish_override.unwrap_or(finish);
     Json(json!({
         "id": "chatcmpl-stub",
         "object": "chat.completion",
