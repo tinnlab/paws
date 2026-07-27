@@ -163,7 +163,7 @@ test.describe('untitled conversation display label', () => {
       firstMessage: 'an unrelated question about protein folding',
     })
 
-    await page.goto(`${baseURL}/chats/${other}`)
+    await page.goto(`${baseURL}/chat/${other}`)
     await page.getByTestId('chat-split-btn').click()
     await expect(page.getByTestId('pane-manager-drawer')).toBeVisible()
 
@@ -191,7 +191,7 @@ test.describe('untitled conversation display label', () => {
     const modelId = await seedModel(apiURL, token)
     const id = await seedConversation(apiURL, token, modelId, { firstMessage: PREVIEW })
 
-    await page.goto(`${baseURL}/chats/${id}`)
+    await page.goto(`${baseURL}/chat/${id}`)
 
     // The header is the EDIT affordance, so it deliberately shows the honest
     // placeholder rather than a derived label that would imply a title exists.
