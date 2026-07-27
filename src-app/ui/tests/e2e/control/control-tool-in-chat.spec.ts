@@ -297,9 +297,17 @@ test.describe('control_mcp — real LLM end-to-end (discover → approve → mut
     }
 
     const before = await readSettings()
+    // Ask for the OPPOSITE of the current value. Asking to turn OFF something
+    // that is already off is a legitimate no-op: the model correctly answers
+    // "it already is" and calls nothing, so the approval card never appears and
+    // the test fails for a reason that has nothing to do with denial. (Memory
+    // retrieval is off by default, which is exactly how this bit the first run.)
+    const currentlyOn = JSON.parse(before).retrieval_enabled === true
     await sendChatMessage(
       page,
-      'In my memory settings, turn memory retrieval OFF. Do it now, using the app-control tools; do not ask me first.',
+      currentlyOn
+        ? 'In my memory settings, turn memory retrieval OFF. Do it now, using the app-control tools; do not ask me first.'
+        : 'In my memory settings, turn memory retrieval ON. Do it now, using the app-control tools; do not ask me first.',
       false,
     )
 

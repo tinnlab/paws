@@ -417,16 +417,47 @@ impl OpIndex {
 /// match — the ALL-terms rule. An empty `terms` slice matches everything at
 /// score 0 (the no-query passthrough).
 ///
-/// This is THE matching predicate, and [`rank_matching_ops`] is its only caller,
-/// so a test driven through that function can never pass against a copy of the
-/// rule.
+/// The single-operation form of [`score_indexed`], kept for the tests that pin
+/// the predicate directly; `rank_matching_ops` uses the indexed form so the
+/// searchable text is built once per operation per call rather than twice.
+#[cfg(test)]
 fn op_match_score(op: &Operation, terms: &[String]) -> Option<u32> {
     if terms.is_empty() {
-        // The no-query browse path must not pay to build an index it never reads.
         return Some(0);
     }
-    let index = OpIndex::build(op);
-    let allow_short = terms.len() == 1;
+    score_indexed(&OpIndex::build(op), terms, terms.len() == 1)
+}
+
+/// Drop terms that match NOTHING anywhere in the candidate set.
+///
+/// The ALL-terms rule is right for terms that are part of the vocabulary; it is
+/// useless for one that is not. A model writes `create a new project called
+/// "Foo"` — `called` and `foo` appear in no operation id, tag or summary, so
+/// under a naive conjunction they would empty a query that otherwise names its
+/// operation exactly. Dropping a term with zero catalog-wide matches carries no
+/// information loss (nothing could ever have matched it) and cannot degenerate:
+/// every term that IS in the vocabulary must still match.
+///
+/// If EVERY term is absent the query is left as-is, so the caller still reports 0
+/// with the retry guidance rather than silently listing the whole catalog.
+///
+/// Single-term queries are exempt: there is no conjunction to rescue, and
+/// dropping the only term would turn "no match" into "everything".
+fn retain_known_terms(indexes: &[OpIndex], terms: &[String]) -> Vec<String> {
+    if terms.len() < 2 {
+        return terms.to_vec();
+    }
+    let kept: Vec<String> = terms
+        .iter()
+        .filter(|t| indexes.iter().any(|ix| ix.term_score(t, false) > 0))
+        .cloned()
+        .collect();
+    if kept.is_empty() { terms.to_vec() } else { kept }
+}
+
+/// Relevance of an operation for ALL `terms` given its prebuilt index, or `None`
+/// when any term fails to match — the ALL-terms rule.
+fn score_indexed(index: &OpIndex, terms: &[String], allow_short: bool) -> Option<u32> {
     let mut total = 0u32;
     for term in terms {
         match index.term_score(term, allow_short) {
@@ -437,41 +468,13 @@ fn op_match_score(op: &Operation, terms: &[String]) -> Option<u32> {
     Some(total)
 }
 
-/// Drop terms that match NOTHING anywhere in the catalog.
-///
-/// The ALL-terms rule is right for terms that are part of the vocabulary; it is
-/// useless for one that is not. A model writes `create a new project called
-/// "Foo"` — `called` and `foo` appear in no operation id, tag or summary, so
-/// under a naive conjunction they would empty a query that otherwise names its
-/// operation exactly. Dropping a term with zero catalog-wide matches carries no
-/// information loss (nothing could ever have matched it) and cannot degenerate:
-/// every term that IS in the vocabulary must still match.
-///
-/// If EVERY term is absent the query stays as-is, so the caller still reports 0
-/// with the retry guidance rather than silently listing the whole catalog.
-fn retain_known_terms<'a>(
-    candidates: &[&'a Operation],
-    terms: &[String],
-) -> Vec<String> {
-    if terms.len() < 2 {
-        return terms.to_vec();
-    }
-    let indexes: Vec<OpIndex> = candidates.iter().map(|op| OpIndex::build(op)).collect();
-    let kept: Vec<String> = terms
-        .iter()
-        .filter(|t| indexes.iter().any(|ix| ix.term_score(t, false) > 0))
-        .cloned()
-        .collect();
-    if kept.is_empty() { terms.to_vec() } else { kept }
-}
-
 /// Rank the permitted candidates for `terms` — THE production search pipeline.
 ///
 /// Extracted (mirroring `needs_approval_decision`, extracted so the
 /// security-critical decision is unit-testable) so the unit tests exercise the
 /// REAL matching + ordering rather than a retyped copy of it.
 ///
-/// 1. Terms absent from the catalog's whole vocabulary are dropped
+/// 1. Terms absent from the candidates' whole vocabulary are dropped
 ///    ([`retain_known_terms`]) — a filler noun cannot veto a query.
 /// 2. Every REMAINING term must match (the ALL-terms rule).
 /// 3. Order: relevance DESC, then FEWEST unmatched id segments (specificity —
@@ -486,25 +489,31 @@ fn retain_known_terms<'a>(
 /// with one filler word degenerated into "return 200 arbitrary operations",
 /// which is worse for the model than an empty result plus the retry guidance
 /// `list_capabilities` now emits.
+///
+/// Each candidate's searchable text is indexed ONCE per call and reused by both
+/// passes; the no-query browse path skips indexing entirely.
 fn rank_matching_ops<'a>(
     candidates: impl Iterator<Item = &'a Operation>,
     terms: &[String],
 ) -> Vec<&'a Operation> {
     let candidates: Vec<&Operation> = candidates.collect();
-    let terms = retain_known_terms(&candidates, terms);
+    if terms.is_empty() {
+        // No query: no index needed, and the previous alphabetical order stands.
+        let mut all = candidates;
+        all.sort_by(|a, b| a.operation_id.cmp(&b.operation_id));
+        return all;
+    }
+
+    let indexes: Vec<OpIndex> = candidates.iter().map(|op| OpIndex::build(op)).collect();
+    let terms = retain_known_terms(&indexes, terms);
     let allow_short = terms.len() == 1;
 
     let mut scored: Vec<(u32, usize, &Operation)> = candidates
-        .into_iter()
-        .filter_map(|op| {
-            op_match_score(op, &terms).map(|score| {
-                let unmatched = if terms.is_empty() {
-                    0
-                } else {
-                    OpIndex::build(op).unmatched_segments(&terms, allow_short)
-                };
-                (score, unmatched, op)
-            })
+        .iter()
+        .zip(indexes.iter())
+        .filter_map(|(op, index)| {
+            score_indexed(index, &terms, allow_short)
+                .map(|score| (score, index.unmatched_segments(&terms, allow_short), *op))
         })
         .collect();
     scored.sort_by(|(sa, ua, a), (sb, ub, b)| {
