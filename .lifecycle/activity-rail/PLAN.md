@@ -4,6 +4,31 @@ Replace the per-tool card stack in the chat transcript with a **contribution-bas
 core owns a registry and a row primitive; **each extension contributes its own step descriptor and
 detail body**. The rail never imports, names, or special-cases any extension.
 
+## Design source
+
+Realizes `.lifecycle/activity-rail/DESIGN.md` — **§ Shape** and **§ Non-negotiables** — the
+owner-approved Direction C, chosen over Directions A and B in a three-direction comparison. The
+rendered design of record is the Direction C specification mockup
+(https://claude.ai/code/artifact/2204f1f0-58b3-4ebb-b93a-2776ce4990f2): step anatomy, the
+streaming/collapsed lifecycle, inline and panel detail, the artifact strip, the approval breakout,
+and 390px behaviour. This plan does not invent its own intent; where it and the design disagree, the
+design wins and the plan is amended.
+
+## Invariants
+
+Lifted verbatim from `DESIGN.md` § Non-negotiables. Each gets a fidelity verdict in phase 2 and an
+executable `[acceptance]` test in phase 3.
+
+- **INV-1**: The rail never imports, names, or special-cases any extension; each extension contributes its own step descriptor and detail body.
+- **INV-2**: Every detail reachable today must remain reachable, ideally better.
+- **INV-3**: Anything that needs the user breaks out of the rail: a request for input is never collapsed into a rail row.
+- **INV-4**: The rail is open while the turn is working and collapsed once the answer exists.
+- **INV-5**: A failed or timed-out step forces the rail open; a failure is never hidden inside a collapsed summary.
+- **INV-6**: The rail removes machinery boxes only. Content boxes — code, tables, alerts — stay, because they are the answer.
+- **INV-7**: The rail's expanded state survives scrolling: it is keyed by message, not held in component state.
+- **INV-8**: At 390px the step label truncates and never wraps.
+- **INV-9**: There is exactly one status vocabulary; the rail reuses the existing one rather than defining a second.
+
 Grounded in three sweeps of the real tree @ `b29adbad5`: a 36-surface card inventory, a per-message
 grouping simulation over the whole database, and a per-module contribution audit.
 
@@ -210,17 +235,24 @@ plus **new** contribution modules for `web-search`, `code-sandbox`, `citations`,
 - **Platform** — no `__TAURI__`-specific affordance; the deep-link producer (ITEM-15) must yield a URL
   valid in both web and desktop.
 
-## Open — needs owner approval before phase 3 (candidate descopes)
+- **ITEM-28**: `bio_mcp` contribution via a **live sidecar probe**. Tool names are not determinable
+  in-tree — the module is a pure reverse proxy (`bio_mcp/handlers.rs:58,125`) and names arrive from
+  the external sidecar at runtime. Boot the sidecar, enumerate `tools/list`, and derive real step
+  labels from the observed names; ITEM-6's name-only degradation remains the fallback for any tool
+  the probe does not see.
 
-These are the honest scope edges. Each is either IN (and needs a test) or must be `[DESCOPED]` with a
-recorded `[approved: …]` disposition — the gate forbids silent cuts.
+## Scope decisions (owner, 2026-07-27)
 
-1. **ITEM-16** (non-admin built-in call history) — a permission-surface change, arguably its own feature.
-2. **ITEM-17** (redaction canonicalisation) — the denylist is **exact-key only**, so `Bearer-Token`,
-   `openai_api_key`, `x_auth_token`, `cookie`, `credentials` are NOT redacted even on the "redacted"
-   path. That is a security fix that stands alone, independent of the rail.
-3. **ITEM-14** (SSE timing + OpenAPI regen) — the only backend/wire change; droppable if we accept
-   "no duration until reload".
-4. **`bio_mcp` contribution** — **not determinable in-tree**: the module is a pure reverse proxy with
-   no tool names in the repo (names come from the external sidecar at runtime). Needs a live probe or
-   a name-only degradation (ITEM-6 covers the fallback).
+**Nothing is descoped.** All four scope edges were explicitly chosen IN, delivered as **one
+lifecycle** rather than split:
+
+| Edge | Decision |
+|---|---|
+| ITEM-14 — per-step duration on the SSE frame (+ OpenAPI regen, both binaries) | **IN** |
+| ITEM-16 — non-admin access to built-in tool-call history | **IN** |
+| ITEM-17 — redaction canonicalisation + the exact-key denylist gap | **IN**, inside this lifecycle |
+| ITEM-28 — `bio_mcp` live sidecar probe | **IN** |
+
+Consequences accepted with that choice: the diff touches the three hottest files on the branch, the
+blind audit at phase 6 must cover all 28 items, and the security fix (ITEM-17) ships when the rail
+ships rather than ahead of it.
