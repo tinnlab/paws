@@ -24,37 +24,35 @@ Full e2e run (`e2e7`): **5 passed, 0 failed, exit 0**
   `SummaryBoundaryMarker` adds a required-state key); regenerated with
   `npm run gen:state-matrix` and committed.
 - `npm run check (desktop/ui): PASS` — exit 0 (`/data/pbya/ziee/tmp/liveaudit-rig/check-desktop.log`).
-- `gate:ui (ui): PASS` for `tsc` + `lint` + `visual`; **`runtime-health` FAILED in
-  both runs, and the failure is environmental — see below.** This is recorded as
-  a measured fact, not waved away.
+- `gate:ui (ui): PASS` — exit 0, all four criteria green
+  (`/data/pbya/ziee/tmp/liveaudit-rig/gate-ui3.log`).
+- `gate:ui (desktop/ui): PASS` — exit 0, all four criteria green
+  (`/data/pbya/ziee/tmp/liveaudit-rig/gate-desktop.log`).
 
-### `gate:ui` runtime-health — why it is not a verdict on this diff
+### `gate:ui` runtime-health took three attempts — the two failures were the box
 
-Both runs' HIGH findings are overwhelmingly one thing:
+The first two `gate:ui (ui)` runs failed `runtime-health`, and the failures are
+recorded here rather than hidden because they are the same host-level event that
+shows up elsewhere in this round's measurements. Their HIGH findings were
+overwhelmingly one thing:
 
-| detail | count (run 2) |
+| detail | count (attempt 2) |
 |---|---|
 | `Failed to load resource: net::ERR_NETWORK_CHANGED` | 4085 |
-| `GET http://localhost/@fs/…/sdk/packages/… — net::ERR_NETWORK_CHANGED` | 1353 |
-| `GET http://localhost/@fs/…/src-app/ui/no… — net::ERR_NETWORK_CHANGED` | 622 |
+| `GET http://localhost/@fs/.../sdk/packages/... - net::ERR_NETWORK_CHANGED` | 1353 |
+| `GET http://localhost/@fs/.../src-app/ui/no... - net::ERR_NETWORK_CHANGED` | 622 |
 
-Every remaining HIGH (`[loader] failed to load module "…"`, the 5 `crash` rows)
-is a downstream `Failed to fetch dynamically imported module` from the same
-cause: the Vite **dev server's own module graph** failing to load, on `localhost`.
-Nothing in this diff can produce a Chromium network-stack error fetching
-`@fs/…/sdk/packages/framework/src/module.ts` from a local dev server.
+Every remaining HIGH (`[loader] failed to load module "..."`, 5 `crash` rows) was a
+downstream `Failed to fetch dynamically imported module` from the same cause: the
+Vite **dev server's own module graph** failing to load over `localhost`. Nothing
+in this diff can produce a Chromium network-stack error fetching
+`@fs/.../sdk/packages/framework/src/module.ts` from a local dev server.
 
-The same signature appeared, at the same time, in three INDEPENDENT harnesses on
-this box — the rig's node static server (one audit cell per run, 3 of 5 runs), the
-Playwright e2e dev server, and the gallery dev server — which is what identifies
-it as a host-level network event rather than an app defect. The corroborating
-control is the audit itself: two full 6-cell live runs on the same build
-(`confirm`, `final2`) completed with **HIGH = 0**, exercising the same surfaces
-against a real backend and a real model.
-
-**Honest status: `gate:ui` runtime-health is RED on this box and was not made
-green.** It should be re-run on a quiet host before merge; the evidence above is
-the reason it is not treated as a finding against this branch.
+The same signature appeared at the same time in three INDEPENDENT harnesses on
+this box — the rig's node static server (one audit cell per run, 3 of 5 runs),
+the Playwright e2e dev server, and the gallery dev server — which is what
+identifies it as a host event rather than an app defect. The third attempt of
+each gate, run after it subsided, passed clean with no code change in between.
 
 ## Backend
 
