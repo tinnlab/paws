@@ -30,6 +30,11 @@ import { Chat as ChatStore } from '@/modules/chat/core/stores/chatBridge'
 // extension's ownerPaneId threading).
 const capturedDraftKeys = new PaneDraftKeys()
 
+/** Per-pane capture of the text this send SUBMITTED, recorded synchronously in
+ * `beforeSendMessage` and consumed by the async `onMessageSent`. Same
+ * clobber-safe per-pane shape as `capturedDraftKeys` (a plain string slot). */
+const submittedTexts = new PaneDraftKeys()
+
 /** The OWNING pane's Chat state (its own TextStore), not the focused-pane bridge.
  * `TextStore` is declaration-merged onto the `ChatStore` proxy, not the raw
  * store's `getState()` return, so we narrow to the fields this extension uses. */
@@ -196,6 +201,14 @@ const textExtension: ChatExtension = createExtension({
       SplitView.$.focusedPaneId,
       makeDraftKey(Auth.$.user?.id, ChatStore.$.conversation?.id),
     )
+    // Also capture WHAT was submitted, keyed the same way. `onMessageSent` runs
+    // asynchronously (it awaits two dynamic `import()`s inside `ownerChatState`,
+    // which under code-splitting are real network fetches on first call), so it
+    // can land HUNDREDS of ms after the send. By then the user may already have
+    // typed their next message into the composer — and an unconditional
+    // `clearText()` silently destroys it. Recording the submitted text lets
+    // `onMessageSent` clear only if the composer still holds what was sent.
+    submittedTexts.set(SplitView.$.focusedPaneId, content)
 
     return { cancel: false }
   },
@@ -211,12 +224,28 @@ const textExtension: ChatExtension = createExtension({
     const state = await ownerChatState(ownerPaneId)
     const textStore = state.TextStore
 
-    // Backup text before clearing
+    // What this send actually submitted (captured synchronously in
+    // `beforeSendMessage`). The composer may have moved on since.
+    const submittedText = submittedTexts.take(ownerPaneId)
     const currentText = textStore.getText()
-    textStore.setBackupMessage(currentText)
 
-    // Clear the visible composer text.
-    textStore.clearText()
+    // Back up the SUBMITTED text, not whatever happens to be in the composer
+    // now — `onStreamError` restores this, and restoring the user's *next*
+    // half-typed message in place of the failed one would be wrong.
+    textStore.setBackupMessage(submittedText ?? currentText)
+
+    // Clear the visible composer text — but ONLY if it still holds what was
+    // sent. This hook is async (see the `submittedTexts` note in
+    // `beforeSendMessage`); by the time it runs the user may have started
+    // typing their next message, and clearing unconditionally erases it. That
+    // is a real data-loss bug for a fast typist, and it also breaks any
+    // send-then-immediately-send-again flow: the second submit reads an empty
+    // composer and is cancelled as "Message cannot be empty".
+    const composerMovedOn =
+      submittedText != null && currentText !== '' && currentText !== submittedText
+    if (!composerMovedOn) {
+      textStore.clearText()
+    }
 
     // A normal send's composer text IS the draft → clear the persisted draft
     // (the captured pre-creation key). An edit/regen submit instead OVERWROTE
@@ -230,8 +259,10 @@ const textExtension: ChatExtension = createExtension({
     const capturedDraftKey = capturedDraftKeys.take(ownerPaneId)
     if (capturedDraftKey) {
       if (isBranchSend) {
+        // Same guard as the clear above: never overwrite text the user typed
+        // after the send with the restored pre-edit draft.
         const draft = getDraft(capturedDraftKey)
-        if (draft) textStore.setText(draft)
+        if (draft && !composerMovedOn) textStore.setText(draft)
       } else {
         clearDraft(capturedDraftKey)
       }

@@ -19,8 +19,30 @@ const { Pool } = pg
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
 export default async function globalSetup(_config: FullConfig) {
-  // Load environment variables from .env.test
+  // Load environment variables from .env.test.
+  //
+  // TWO paths, in precedence order. `ui/tests/.env.test` wins (dotenv never
+  // overwrites an already-set var), then `server/tests/.env.test` fills the
+  // gaps. Both files are gitignored, so a fresh clone / new worktree has
+  // NEITHER — and until now only the ui-side path was read. Every doc, spec
+  // comment and runbook in this repo says "source server/tests/.env.test", and
+  // that is the file people actually create; the ui-side one is routinely
+  // absent. The result was a silent, total env miss ("injected env (0)") that
+  // does NOT fail the run — it degrades it:
+  //   • HUGGINGFACE_API_KEY unset  → llm repository/download specs throw outright
+  //   • OPENAI_BASE_URL unset      → `createProviderViaAPI` points the provider at
+  //                                  the real https://api.openai.com/v1 with the
+  //                                  placeholder key `sk-test-placeholder`, so every
+  //                                  real-LLM chat spec gets a 401, no assistant
+  //                                  message ever renders, and the whole
+  //                                  chat/split-chat cluster times out looking like
+  //                                  a product failure
+  //   • ZIEE_TEST_LLM_MODEL unset  → specs that POST a model with `name: MODEL`
+  //                                  send `name: undefined` → 422 "missing field `name`"
+  // Reading the server-side file as a fallback makes the documented setup step
+  // actually take effect for e2e.
   dotenv.config({ path: resolve(__dirname, '.env.test') })
+  dotenv.config({ path: resolve(__dirname, '../../server/tests/.env.test') })
 
   console.log('\n🚀 Starting Playwright E2E Test Infrastructure...\n')
 
