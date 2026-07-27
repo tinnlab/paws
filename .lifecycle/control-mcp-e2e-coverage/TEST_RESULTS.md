@@ -48,7 +48,7 @@ ZIEE_E2E_BASE_PG_PORT=62000`, `--workers=1`.
 | `control-admin-toggle.spec.ts` (2, pre-existing) | 2 passed | control-e2e-final.log |
 | `control-tool-in-chat.spec.ts` — discovery + 2 approve rows + settings approve | 4 passed | control-e2e-main.log |
 | `control-tool-in-chat.spec.ts` — deny legs `Project.create` + `Assistant.create` | 2 passed (1 needed retry #1) | control-e2e-deny.log |
-| `control-tool-in-chat.spec.ts` — deny leg `MemorySettings.update` | see below | control-e2e-deny2.log |
+| `control-tool-in-chat.spec.ts` — deny leg `MemorySettings.update` | passed | control-e2e-deny2.log |
 
 **The deny legs are the honest part of this record — two real defects, found by
 running, in what round 2 called a "strengthening".**
@@ -63,8 +63,14 @@ running, in what round 2 called a "strengthening".**
 2. That same re-run showed the `MemorySettings.update` deny leg failing 3/3 for a
    different reason: it asked to turn memory retrieval OFF, which is the DEFAULT,
    so the model correctly did nothing and no approval card ever appeared. It now
-   asks for the OPPOSITE of the current value, exactly like the approve leg. The
-   verifying run is `control-e2e-deny2.log`.
+   asks for the OPPOSITE of the current value, exactly like the approve leg.
+   Re-run (`control-e2e-deny2.log`): **PASS**.
+
+All three deny legs are therefore green — but across two runs
+(`control-e2e-deny.log` for the two entity rows, `control-e2e-deny2.log` for the
+settings row), because each fix was verified as it landed. They have not yet been
+observed green together in ONE invocation; that is the single outstanding
+verification on this branch.
 
 ## Per-TEST results
 
@@ -83,7 +89,7 @@ running, in what round 2 called a "strengthening".**
 - **TEST-13**: PASS — the natural-language discovery journey.
 - **TEST-14**: PASS — approval forced in an auto-approve chat, for the discovery journey and both approve rows and the settings row.
 - **TEST-15**: PASS — approve → the entity exists via REST for `Project.create`, `Assistant.create`, `MemorySettings.update`.
-- **TEST-16**: see `control-e2e-deny.log` — the three deny legs after the round-3 fix.
+- **TEST-16**: PASS — all three deny legs, across two runs: `Project.create` + `Assistant.create` in `control-e2e-deny.log` (one needed retry #1), `MemorySettings.update` in `control-e2e-deny2.log`. Not yet observed green together in a single invocation.
 - **TEST-17**: PASS — all three parts (`not offered` incl. the admin positive control, the deterministic JSON-RPC refusal, and the UI journey).
 - **TEST-18**: PASS — the tool RESULT lands on the conversation transcript.
 
