@@ -234,7 +234,18 @@ fn is_budget_exhausted(finish_reason: &str) -> bool {
 /// nothing and would break the deliberate "an empty generation leaves the title
 /// UNSET (and retries on a LATER turn)" contract.
 fn should_retry_with_larger_budget(title: Option<&str>, finish_reason: Option<&str>) -> bool {
-    title.is_none() && finish_reason.is_some_and(is_budget_exhausted)
+    if title.is_some() {
+        return false;
+    }
+    match finish_reason {
+        Some(reason) => is_budget_exhausted(reason),
+        // No finish reason at all: some OpenAI-compatible bridges omit it on the
+        // terminal chunk. An empty answer with no stated reason is
+        // indistinguishable from the budget-starvation case, and the cost of
+        // being wrong is ONE extra call — versus silently reverting to "this
+        // deployment is permanently untitled" for that provider family.
+        None => true,
+    }
 }
 
 /// The soft-failure error for an attempt that produced no usable title, naming
@@ -1003,7 +1014,11 @@ mod tests {
         // test asserts exactly ONE title call there.
         assert!(!should_retry_with_larger_budget(None, Some("stop")));
         assert!(!should_retry_with_larger_budget(None, Some("tool_calls")));
-        assert!(!should_retry_with_larger_budget(None, None));
+
+        // A bridge that omits finish_reason entirely is indistinguishable from
+        // budget starvation, so it gets the one retry rather than silently
+        // reverting to "permanently untitled" for that provider family.
+        assert!(should_retry_with_larger_budget(None, None));
 
         // Text was produced → nothing to retry, whatever the finish reason.
         assert!(!should_retry_with_larger_budget(Some("A Title"), Some("length")));

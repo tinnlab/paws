@@ -678,17 +678,44 @@ async fn multi_word_query_finds_and_ranks_the_named_operation() {
         );
     }
 
-    // One dead term still empties the result — the ALL-terms rule is intact and
-    // there is no "match any term" fallback papering over it.
-    for q in ["zzzznotathing", "project zzzznotathing"] {
+    // A query in which NOTHING is known still returns nothing — dropping
+    // vocabulary-absent terms must never degenerate into "list the catalog".
+    for q in ["zzzznotathing", "zzzznotathing qqqnope"] {
         let res =
             call_tool(&server, &admin.token, "list_capabilities", json!({ "query": q })).await;
         assert_eq!(
             structured(&res)["total"].as_u64().unwrap(),
             0,
-            "an unmatched term must empty the result for query {q:?}"
+            "a query with no known terms must return nothing, got {q:?}"
         );
     }
+
+    // …but a filler noun the catalog has never heard of must not VETO a query
+    // that otherwise names its operation exactly (the e2e prompts say
+    // 'called "Foo"' / 'named "Bar"').
+    for q in ["create a new project called Foo", "create a project named Zaphod"] {
+        let res =
+            call_tool(&server, &admin.token, "list_capabilities", json!({ "query": q })).await;
+        let ops = ops_for(&res);
+        assert_eq!(
+            ops.first().map(String::as_str),
+            Some("Project.create"),
+            "query {q:?} must still rank Project.create first; got {ops:?}"
+        );
+    }
+
+    // The operation the phrase NAMES must beat an alphabetically-luckier
+    // near-miss: a pure operation_id tie-break put LitSearch.deleteUserKey above
+    // User.delete for "delete user", offering the model a destructive near-miss.
+    let res =
+        call_tool(&server, &admin.token, "list_capabilities", json!({ "query": "delete user" }))
+            .await;
+    let ops = ops_for(&res);
+    assert_eq!(
+        ops.first().map(String::as_str),
+        Some("User.delete"),
+        "'delete user' must rank User.delete first; got {ops:?}"
+    );
 
     // …and the model is TOLD why, so a retry is informed rather than random.
     let res = call_tool(

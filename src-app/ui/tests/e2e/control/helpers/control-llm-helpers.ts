@@ -221,46 +221,6 @@ export async function recordedToolNames(
   return rows.map((r: { tool_name?: string }) => r.tool_name ?? '')
 }
 
-/**
- * `operation_id`s the model actually drove through `invoke_capability` in
- * `conversationId`, read off the recorded call ARGUMENTS.
- *
- * Asserting merely that "an invoke_capability call happened" is too weak: a turn
- * in which the model invoked some OTHER operation would satisfy it, so a deny /
- * refusal assertion could pass without the intended operation ever being reached.
- */
-export async function recordedInvokedOperations(
-  page: Page,
-  apiURL: string,
-  token: string,
-  conversationId: string,
-): Promise<string[]> {
-  const res = await page.request.get(
-    `${apiURL}/api/mcp/tool-calls?per_page=100&conversation_id=${conversationId}`,
-    { headers: { Authorization: `Bearer ${token}` } },
-  )
-  if (!res.ok()) return []
-  const body = await res.json()
-  const rows = (body.calls ?? []) as Array<{ tool_name?: string; arguments_json?: unknown }>
-  return rows
-    .filter((r) => r.tool_name === 'invoke_capability')
-    .map((r) => {
-      const args = (typeof r.arguments_json === 'string'
-        ? safeParse(r.arguments_json)
-        : r.arguments_json) as { operation_id?: string } | null
-      return args?.operation_id ?? ''
-    })
-    .filter(Boolean)
-}
-
-function safeParse(raw: string): unknown {
-  try {
-    return JSON.parse(raw)
-  } catch {
-    return null
-  }
-}
-
 /** The conversation id of the chat currently open in `page` (from the URL). */
 export function currentConversationId(page: Page): string | null {
   const m = page.url().match(/\/chat\/([0-9a-f-]{36})/i)

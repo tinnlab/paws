@@ -21,9 +21,9 @@ import { fileURLToPath } from 'node:url'
  * runs — a guard that can itself be skipped would be self-defeating.
  *
  * The checks below are deliberately WHOLE-FILE, not line-scoped. A line-scoped
- * check (only inspecting lines containing `test.skip(`) is defeated by a
- * prettier line-wrap or by hoisting the read into a `const` on the line above —
- * exactly the shape the pre-fix spec used.
+ * check — one that only inspects the lines carrying a skip expression — is
+ * defeated by a prettier line-wrap, or by hoisting the env read into a `const`
+ * on the line above, which is exactly the shape the pre-fix spec used.
  */
 
 const CONTROL_DIR = dirname(fileURLToPath(import.meta.url))

@@ -272,7 +272,7 @@ test.describe('control_mcp — a user lacking the permission cannot drive the op
    * loopback dispatch: the route's own `projects::create` check refuses, and no
    * project is created even if the human approves.
    */
-  test('an offered-but-unpermitted write creates NOTHING even after the user approves', async ({
+  test('the restricted user drives the control tools in a real chat and still ends with nothing created', async ({
     page,
     testInfra,
   }) => {

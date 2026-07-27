@@ -164,9 +164,13 @@ async fn a_real_model_first_exchange_produces_a_title() {
 
     // `call_after_llm_call` (and therefore the title write) is awaited before the
     // terminal `complete` frame, but the agent-core host can persist it just
-    // after; poll briefly rather than racing.
+    // after; poll rather than racing. The window must cover the WORST case this
+    // test exists for: a reasoning model burning its first budget and taking the
+    // escalated retry, each bounded by TITLE_ATTEMPT_TIMEOUT (60s). A short
+    // window would fail with the "this is the production bug" panic for a reason
+    // that is merely slowness — a misleading red.
     let mut title: Option<String> = None;
-    for _ in 0..40 {
+    for _ in 0..280 {
         let conv = helpers::get_conversation(&server, &user.token, conversation_id).await;
         title = conv["title"].as_str().map(|s| s.to_string()).filter(|s| !s.trim().is_empty());
         if title.is_some() {

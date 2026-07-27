@@ -6,7 +6,6 @@ import {
   NO_LLM_SKIP,
   setupControlChat,
   recordedToolNames,
-  recordedInvokedOperations,
   currentConversationId,
   listJson,
 } from './helpers/control-llm-helpers'
@@ -308,6 +307,10 @@ test.describe('control_mcp — real LLM end-to-end (discover → approve → mut
     await expect(deny, 'a settings write must be forced through approval').toBeVisible({
       timeout: 120000,
     })
+    await expect(
+      page.locator('[data-testid="approval-tool-args"]').first(),
+      'the pending approval must be for MemorySettings.update',
+    ).toContainText('MemorySettings.update', { timeout: 15000 })
     await deny.click()
 
     await page.waitForTimeout(5000)
@@ -332,19 +335,16 @@ test.describe('control_mcp — real LLM end-to-end (discover → approve → mut
         deny,
         `${row.op}: approval must be forced before a deny is possible`,
       ).toBeVisible({ timeout: 120000 })
-      await deny.click()
 
-      // The INTENDED operation must be the one that was denied. Asserting only
-      // "the count did not change" would pass on a turn where the model invoked
-      // something else entirely, or nothing at all.
-      const conversationId = currentConversationId(page)
-      expect(conversationId, 'the chat must have created a conversation').toBeTruthy()
-      await expect
-        .poll(
-          async () => recordedInvokedOperations(page, apiURL, token, conversationId as string),
-          { timeout: 60000 },
-        )
-        .toContain(row.op)
+      // The INTENDED operation must be the one being denied — read off the
+      // approval CARD, which is the only place it exists at this moment: a
+      // denied tool is never executed, so no `mcp_tool_calls` row is ever
+      // written for it. (Asserting only "the count did not change" would pass on
+      // a turn where the model proposed something else, or nothing at all.)
+      await expect(
+        page.locator('[data-testid="approval-tool-args"]').first(),
+        `${row.op}: the pending approval must be for the intended operation`,
+      ).toContainText(row.op, { timeout: 15000 })
 
       // Give the turn a moment to settle; nothing may have been created.
       await page.waitForTimeout(5000)

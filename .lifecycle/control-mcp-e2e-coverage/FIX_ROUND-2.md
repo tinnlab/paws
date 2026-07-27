@@ -99,6 +99,8 @@ was not a formality.
   `ManualApprove` on this branch) and its read-back matches the real response
   shape.
 
-**New confirmed findings:** 0
+**New confirmed findings:** 9
 
-(Count from the THIRD blind round, run on the diff after these fixes.)
+(Count from the THIRD blind round, run on the diff after these fixes — including a
+round-2 "strengthening" that made two tests unsatisfiable. Fixed in
+`FIX_ROUND-3.md`.)
