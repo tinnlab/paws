@@ -47,16 +47,24 @@ ZIEE_E2E_BASE_PG_PORT=62000`, `--workers=1`.
 | `control-negative-perm.spec.ts` (3) | 3 passed | control-e2e-final.log |
 | `control-admin-toggle.spec.ts` (2, pre-existing) | 2 passed | control-e2e-final.log |
 | `control-tool-in-chat.spec.ts` — discovery + 2 approve rows + settings approve | 4 passed | control-e2e-main.log |
-| `control-tool-in-chat.spec.ts` — the 3 deny legs | see below | control-e2e-deny.log |
+| `control-tool-in-chat.spec.ts` — deny legs `Project.create` + `Assistant.create` | 2 passed (1 needed retry #1) | control-e2e-deny.log |
+| `control-tool-in-chat.spec.ts` — deny leg `MemorySettings.update` | see below | control-e2e-deny2.log |
 
-**The deny legs are the honest part of this record.** Round 2 added an assertion
-that the recorded `invoke_capability` arguments named the intended operation. A
-DENIED tool is never executed, so that row never exists — the tests failed 3/3
-(`control-e2e-main.log`, `control-tool-in-chat.spec.ts:318` and `:279`). The blind
-convergence round found the same defect by reading the code. The assertion now
-reads the operation identity off the approval CARD, which is where it exists at
-deny time. Result of the re-run: **see `control-e2e-deny.log`** — recorded there
-verbatim, pass or fail; this file is not marked green ahead of it.
+**The deny legs are the honest part of this record — two real defects, found by
+running, in what round 2 called a "strengthening".**
+
+1. Round 2 asserted that the recorded `invoke_capability` arguments named the
+   intended operation. A DENIED tool is never executed, so that row never exists:
+   the tests failed **3/3** (`control-e2e-main.log`, `:318`/`:279`). The blind
+   convergence round independently found the same defect by reading the code. The
+   assertion now reads the operation identity off the approval CARD. Re-run
+   (`control-e2e-deny.log`): the `Project.create` and `Assistant.create` deny legs
+   **PASS** (one needed retry #1).
+2. That same re-run showed the `MemorySettings.update` deny leg failing 3/3 for a
+   different reason: it asked to turn memory retrieval OFF, which is the DEFAULT,
+   so the model correctly did nothing and no approval card ever appeared. It now
+   asks for the OPPOSITE of the current value, exactly like the approve leg. The
+   verifying run is `control-e2e-deny2.log`.
 
 ## Per-TEST results
 
