@@ -18,9 +18,17 @@ import {
  * if either nav entry were still registered, the admin would see it.
  *
  * TEST-13 [negative-perm] — the surfaces that DO remain are still gated. The
- * subject is created by `loginWithPerms(..., [])`, which strips the default
- * `users` group (see `permissions/fixtures.ts`) so it lacks `background::use`
- * AND `notifications::read`, leaving only profile perms.
+ * subject is created by `loginWithPerms`, which strips the default `users`
+ * group (see `permissions/fixtures.ts`) and grants ONLY the listed perms. It is
+ * given full CHAT perms — so it can own a real conversation with a real turn,
+ * and the ConversationPage genuinely renders for it — but NOT `background::use`
+ * and NOT `notifications::read`. That makes `background::use` the single
+ * isolating variable behind every absence asserted below.
+ *
+ * (Previously this passed `[]`, which also stripped `conversations::create`;
+ * the fixture then tried to seed the subject's own conversation AS the subject
+ * and got a 403, so the test could never run. Granting the chat perms restores
+ * the intended — and strictly stronger, because non-vacuous — negative.)
  */
 test.describe('Background surfaces — design absence + permission gating', () => {
   // Left-sidebar nav items derive `<menu-testid>-item-<id>` from the kit Menu
@@ -101,8 +109,30 @@ test.describe('Background surfaces — design absence + permission gating', () =
     await page.goto(`${baseURL}/chat/${adminConv}`)
     await expect(byTestId(page, 'background-footer-open')).toBeVisible({ timeout: 30000 })
 
-    // ── Negative subject: no group perms, only profile::{read,edit}.
-    await loginWithPerms(page, baseURL, apiURL, [], 'bg-noperm')
+    // ── Negative subject: the default `users` group is stripped, and the ONLY
+    // perms granted are the chat ones (plus profile::{read,edit}, which the
+    // fixture always adds). Crucially NOT `background::use` and NOT
+    // `notifications::read` — those are what the assertions below probe.
+    // The chat perms are required, not incidental: without
+    // `conversations::create` the subject cannot own the conversation this test
+    // has to open, and without `conversations::read`/`messages::read` the
+    // ConversationPage would not render at all — which would make every
+    // absence below vacuous.
+    await loginWithPerms(
+      page,
+      baseURL,
+      apiURL,
+      [
+        'chat::read',
+        'chat::create',
+        'conversations::create',
+        'conversations::read',
+        'conversations::edit',
+        'messages::create',
+        'messages::read',
+      ],
+      'bg-noperm',
+    )
     await expect(appShell(page)).toBeVisible({ timeout: 45000 })
 
     // Layer 1 (slot): the removed nav entries are absent for them too...

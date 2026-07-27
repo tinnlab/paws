@@ -405,7 +405,7 @@ Required states: `open`
 |---|---|---|
 | branch | `!extensionsReady` | 29 |
 | branch | `sending \|\| isStreaming \|\| disabled \|\| isBlockedByExtension` | 76 |
-| overlay | `<Popover open>` | 149 |
+| overlay | `<Popover open>` | 153 |
 
 ### `modules/chat/components/ChatMessage`
 
@@ -3838,8 +3838,8 @@ Required states: `error`
 | branch | `!value` | 91 |
 | branch | `model` | 97 |
 | error | `error && providers.length === 0` | 118 |
-| branch | `opt` | 174 |
-| branch | `pendingProviderForKey` | 194 |
+| branch | `opt` | 181 |
+| branch | `pendingProviderForKey` | 201 |
 
 ### `modules/user-llm-providers/chat-extension/components/ProviderApiKeyModal`
 

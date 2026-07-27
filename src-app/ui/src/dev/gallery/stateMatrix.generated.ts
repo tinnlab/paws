@@ -335,7 +335,7 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     signals: [
       { kind: "branch", condition: "!extensionsReady", line: 29 },
       { kind: "branch", condition: "sending || isStreaming || disabled || isBlockedByExtension", line: 76 },
-      { kind: "overlay", condition: "<Popover open>", line: 149 },
+      { kind: "overlay", condition: "<Popover open>", line: 153 },
     ],
   },
   "modules/chat/components/ChatMessage": {
@@ -3509,8 +3509,8 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
       { kind: "branch", condition: "!value", line: 91 },
       { kind: "branch", condition: "model", line: 97 },
       { kind: "error", condition: "error && providers.length === 0", line: 118 },
-      { kind: "branch", condition: "opt", line: 174 },
-      { kind: "branch", condition: "pendingProviderForKey", line: 194 },
+      { kind: "branch", condition: "opt", line: 181 },
+      { kind: "branch", condition: "pendingProviderForKey", line: 201 },
     ],
   },
   "modules/user-llm-providers/chat-extension/components/ProviderApiKeyModal": {

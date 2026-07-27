@@ -67,11 +67,13 @@ test.describe('Voice — admin empty state (TEST-36)', () => {
     })
 
     // ── Unprovisioned posture. ──
+    // NOTE: the single ModelCard (`voice-model-card` + its missing/present
+    // tags) was removed by the model-library rework; the surface is now the
+    // Available + Installed model cards. `voice-settings-admin.spec.ts` asserts
+    // `voice-model-card` has count 0 — this spec mirrors that reality.
     await expect(byTestId(page, 'voice-not-ready-banner')).toBeVisible()
     await expect(byTestId(page, 'voice-installed-empty')).toBeVisible()
-    await expect(
-      byTestId(byTestId(page, 'voice-model-card'), 'voice-model-missing-tag'),
-    ).toBeVisible()
+    await expect(byTestId(page, 'voice-installed-models-empty')).toBeVisible()
     await expect(
       byTestId(byTestId(page, 'voice-instance-card'), 'voice-instance-state-tag'),
     ).toContainText('stopped')
@@ -83,11 +85,12 @@ test.describe('Voice — admin empty state (TEST-36)', () => {
     })
     await expect(byTestId(page, 'voice-installed-empty')).toHaveCount(0)
 
-    // ── Download the model. ──
-    await byTestId(page, 'voice-model-download-btn').click()
+    // ── Install the `base` model from the catalog (matches settings.model). ──
+    await byTestId(page, 'voice-available-model-install-base').click()
     await expect(
-      byTestId(byTestId(page, 'voice-model-card'), 'voice-model-present-tag'),
-    ).toBeVisible({ timeout: 10000 })
+      byTestId(page, 'voice-available-model-installed-tag-base'),
+    ).toBeVisible({ timeout: 15000 })
+    await expect(byTestId(page, 'voice-installed-models-empty')).toHaveCount(0)
 
     // ── Banner clears once both runtime + model are present. ──
     await expect(byTestId(page, 'voice-not-ready-banner')).toHaveCount(0, {

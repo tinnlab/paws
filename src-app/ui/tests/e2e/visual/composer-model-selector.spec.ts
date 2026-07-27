@@ -84,6 +84,8 @@ interface Measurement {
    * right edge against the trigger's left edge is what catches that.
    */
   plusRight: number
+  /** Right edge of the left toolbar group's last rendered (non-zero-width) content. */
+  leftContentRight: number
   triggerLeft: number
   /** Composer width — the space the toolbar row actually has to divide up. */
   composerW: number
@@ -168,6 +170,43 @@ async function measure(page: Page): Promise<Measurement> {
       },
       composerRight: +composer.getBoundingClientRect().right.toFixed(2),
       plusRight: +plus.getBoundingClientRect().right.toFixed(2),
+      // The right edge of the left toolbar group's LAST rendered content — the
+      // honest boundary of "space the left group is actually using". The "+" is
+      // only the FIRST of its buttons; extensions contribute more (mic /
+      // schedule / compact), so `plusRight` alone under-reports the used space
+      // by ~80px and would call legitimately-occupied pixels a stranded gutter.
+      // Zero-width children (the keyboard tips collapse to `w-0` under
+      // pressure) are excluded — they occupy nothing.
+      leftContentRight: +Math.max(
+        // `closest('div.flex')` from the "+" button resolves to the left
+        // toolbar GROUP (button → its `inline-flex` span wrapper → the group).
+        ...Array.from(
+          plus.closest('div.flex')?.querySelectorAll<HTMLElement>('*') ?? [],
+        )
+          .filter(el => el.getBoundingClientRect().width > 0)
+          // VISIBLE right edge. `getBoundingClientRect` reports an element's
+          // full layout width even when an ancestor clips it — the keyboard
+          // tips' inner text span is `w-0 truncate`, so its rect runs ~320px
+          // past the toolbar while the user sees nothing there. Clamp to the
+          // nearest clipping ancestor so only painted pixels count. Overflow
+          // that is NOT clipped (the crushed-buttons bug) stays unclamped, which
+          // is exactly what must still be caught.
+          .map(el => {
+            const r = el.getBoundingClientRect()
+            let right = r.right
+            for (
+              let a = el.parentElement;
+              a && a !== document.body;
+              a = a.parentElement
+            ) {
+              const ox = getComputedStyle(a).overflowX
+              if (ox !== 'visible') {
+                right = Math.min(right, a.getBoundingClientRect().right)
+              }
+            }
+            return right
+          }),
+      ).toFixed(2),
       triggerLeft: +tr.left.toFixed(2),
       composerW: +composer.getBoundingClientRect().width.toFixed(2),
     }
@@ -294,29 +333,41 @@ test.describe('composer model selector — long name', () => {
       ['wide', wide],
       ['narrow', narrow],
     ] as const) {
+      // `leftContentRight`, not `plusRight`: EVERY left-group control must stay
+      // clear of the selector, not just the first one. The mic / schedule /
+      // compact buttons sit after "+", and when the group was floored at a flat
+      // `min-w-10` they overflowed it and the selector painted straight over
+      // them — clicks on the mic were intercepted by the model label.
       expect(
-        m.plusRight,
-        `[${label}] the "+" button overlaps the model selector by ` +
-          `${(m.plusRight - m.triggerLeft).toFixed(1)}px — the model name grew ` +
-          `until it starved the left toolbar group`,
+        m.leftContentRight,
+        `[${label}] the left toolbar group overlaps the model selector by ` +
+          `${(m.leftContentRight - m.triggerLeft).toFixed(1)}px — its controls are ` +
+          `underneath the model name and cannot be clicked`,
       ).toBeLessThanOrEqual(m.triggerLeft + 1)
     }
 
     // ...and it must not yield TOO MUCH either. Protecting the left group with a
-    // `max-w` CEILING on the right group instead of a min-width FLOOR on the left
-    // one reserves space unconditionally: the left group is `flex-1` with a zero
-    // basis, so it grows into whatever the ceiling leaves spare even when it holds
-    // nothing but the "+" button (38px — a `size-4` icon + `px-2.5` + the kit
-    // Button's 1px transparent border; the floor is `min-w-10`). Measured at
-    // 390px under a 60% ceiling, that stranded ~64px of empty gutter between "+"
-    // and the model name while the name itself was ellipsized — truncating far
-    // earlier than the row required. So when the name IS under pressure, the
-    // space between them must stay of the order of the toolbar's own gaps.
-    const gutter = narrow.triggerLeft - narrow.plusRight
+    // `max-w` CEILING on the right group instead of a content-derived minimum on
+    // the left one reserves space unconditionally: the left group is `flex-1`
+    // with a zero basis, so it grows into whatever the ceiling leaves spare.
+    // Measured at 390px under a 60% ceiling, that stranded ~64px of EMPTY gutter
+    // while the name itself was ellipsized — truncating far earlier than the row
+    // required. So when the name IS under pressure, the space between the left
+    // group's content and the name must stay of the order of the toolbar's gaps.
+    //
+    // Measured from `leftContentRight`, NOT `plusRight`: "+" is only the first of
+    // the left group's buttons. Extensions add more (mic / schedule / compact),
+    // and those are real content, not gutter. Measuring from "+" conflated the
+    // two and, worse, only passed while those buttons were being CRUSHED — the
+    // group was floored at `min-w-10` (40px), so everything after "+" overflowed
+    // and was painted over by the model selector, which is precisely how the mic
+    // became unclickable in a narrow/split pane.
+    const gutter = narrow.triggerLeft - narrow.leftContentRight
     expect(
       gutter,
-      `${gutter.toFixed(1)}px of empty space sits between the "+" button and an ` +
-        `ELLIPSIZED model name — the name is yielding space that nothing is using`,
+      `${gutter.toFixed(1)}px of empty space sits between the left toolbar ` +
+        `group's last control and an ELLIPSIZED model name — the name is ` +
+        `yielding space that nothing is using`,
     ).toBeLessThanOrEqual(24)
   })
 

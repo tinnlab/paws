@@ -1,6 +1,7 @@
 import { test, beforeEach, afterEach, expect } from 'vitest'
 import makeSendMessage from './actions/sendMessage'
 import { chatExtensionRegistry } from '@/modules/chat/core/extensions'
+import { ApiClient } from '@/api-client'
 
 /**
  * TEST-2 (acceptance, INV-4) + TEST-3 — the REAL `sendMessage` action driven
@@ -235,4 +236,156 @@ test('a throwing onStreamError hook is LOGGED and the state reset still runs', a
   expect(state.error).toBe('primary failure')
   // The secondary error must be logged, not discarded (CODING_GUIDELINES §6).
   expect(logged.some(l => l.includes('hook exploded'))).toBe(true)
+})
+
+// ── ITEM: the SYNCHRONOUS in-flight latch (double-send) ─────────────────────
+//
+// `sending` is only set AFTER `await beforeSendMessage()`, so it can never be
+// the re-entrancy guard: two submits ~10ms apart both observe `sending === false`
+// and both send, producing two user bubbles. `sendMessage` therefore carries a
+// latch set SYNCHRONOUSLY before its first await.
+//
+// The risk of a latch is the mirror image of the bug — a missed release wedges
+// the composer forever — so every exit path is asserted below by calling the
+// SAME action instance a second time and requiring that it still sends.
+
+/** Stub `ApiClient.Message.send`, counting calls; returns a restore fn. */
+function stubSend(impl?: () => Promise<unknown>) {
+  const ns = (ApiClient as unknown as Record<string, Record<string, unknown>>).Message
+  const original = ns.send
+  const calls = { n: 0 }
+  ns.send = async () => {
+    calls.n += 1
+    if (impl) return await impl()
+    return { user_message_id: 'user-1', assistant_message_id: 'asst-1' }
+  }
+  return { calls, restore: () => { ns.send = original } }
+}
+
+test('two SYNCHRONOUS calls send exactly ONCE (the double-send guard)', async () => {
+  stubRegistry()
+  const { set, get } = makeStore()
+  const sendMessage = makeSendMessage(set as never, get as never)
+  const { calls, restore } = stubSend()
+  try {
+    // Both invoked before either can yield — exactly the double-Enter shape.
+    await Promise.all([sendMessage(), sendMessage()])
+    expect(calls.n).toBe(1)
+  } finally {
+    restore()
+  }
+})
+
+test('the latch is RELEASED after a successful send (composer not wedged)', async () => {
+  stubRegistry()
+  const { set, get } = makeStore()
+  const sendMessage = makeSendMessage(set as never, get as never)
+  const { calls, restore } = stubSend()
+  try {
+    await sendMessage()
+    expect(calls.n).toBe(1)
+    // A LATER send on the same action instance must go through.
+    await sendMessage()
+    expect(calls.n).toBe(2)
+  } finally {
+    restore()
+  }
+})
+
+test('the latch is RELEASED after a silent extension cancel', async () => {
+  stubRegistry({
+    beforeSendMessage: async () => ({
+      cancel: true,
+      silent: true,
+      errorMessage: 'Message cannot be empty',
+    }),
+  })
+  const { set, get } = makeStore()
+  const sendMessage = makeSendMessage(set as never, get as never)
+  const { calls, restore } = stubSend()
+  try {
+    await sendMessage({ allowSilentCancel: true }) // quiet `return` path
+    expect(calls.n).toBe(0)
+    // Cancel cleared → the next send must not be blocked by a stuck latch.
+    stubRegistry()
+    await sendMessage()
+    expect(calls.n).toBe(1)
+  } finally {
+    restore()
+  }
+})
+
+test('the latch is RELEASED after a LOUD extension cancel (the throw path)', async () => {
+  stubRegistry({
+    beforeSendMessage: async () => ({ cancel: true, errorMessage: 'still uploading' }),
+  })
+  const { set, get } = makeStore()
+  const sendMessage = makeSendMessage(set as never, get as never)
+  const { calls, restore } = stubSend()
+  try {
+    await expect(sendMessage()).rejects.toThrow(/still uploading/)
+    stubRegistry()
+    await sendMessage()
+    expect(calls.n).toBe(1)
+  } finally {
+    restore()
+  }
+})
+
+test('the latch is RELEASED after a thrown error inside the send', async () => {
+  // Caught-and-recovered failure (the inner catch's return path).
+  stubRegistry({
+    provideUserContent: async () => {
+      throw new Error('content extension exploded')
+    },
+  })
+  const { set, get, state } = makeStore()
+  const sendMessage = makeSendMessage(set as never, get as never)
+  const { calls, restore } = stubSend()
+  try {
+    await sendMessage()
+    expect(state.error).toBe('content extension exploded')
+    stubRegistry()
+    await sendMessage()
+    expect(calls.n).toBe(1)
+  } finally {
+    restore()
+  }
+})
+
+test('the latch is RELEASED after a PRE-FLIGHT throw (outside the inner try)', async () => {
+  // `composeRequestFields` runs BEFORE the streaming flags + the inner try, so
+  // its throw escapes `sendMessage` entirely. Only the outer `finally` can
+  // release the latch on this path.
+  stubRegistry({
+    composeRequestFields: async () => {
+      throw new Error('compose exploded')
+    },
+  })
+  const { set, get } = makeStore()
+  const sendMessage = makeSendMessage(set as never, get as never)
+  const { calls, restore } = stubSend()
+  try {
+    await expect(sendMessage()).rejects.toThrow(/compose exploded/)
+    stubRegistry()
+    await sendMessage()
+    expect(calls.n).toBe(1)
+  } finally {
+    restore()
+  }
+})
+
+test('two SEPARATE store instances (split panes) are NOT serialized by one latch', async () => {
+  stubRegistry()
+  const a = makeStore()
+  const b = makeStore()
+  const sendA = makeSendMessage(a.set as never, a.get as never)
+  const sendB = makeSendMessage(b.set as never, b.get as never)
+  const { calls, restore } = stubSend()
+  try {
+    await Promise.all([sendA(), sendB()])
+    expect(calls.n).toBe(2)
+  } finally {
+    restore()
+  }
 })

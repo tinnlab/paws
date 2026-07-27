@@ -203,6 +203,12 @@ export const Drawer: React.FC<DrawerProps> = ({
     maskClosableProp ?? (typeof mask === 'object' ? mask.closable !== false : mask !== false)
   const showOverlay = mask !== false
 
+  // Mirrors @ziee/shell's Drawer: Radix renders role="dialog" + data-state but
+  // deliberately emits NO `aria-modal` (it isolates the background with
+  // aria-hidden instead). A masked drawer IS a modal dialog, so declare it —
+  // `undefined` keeps the attribute off the non-modal (`mask={false}`) variant.
+  const isModal = showOverlay || undefined
+
   // A drawer must NOT dismiss (Escape / click-outside) while another drawer or
   // dialog is stacked ABOVE it — e.g. a file preview opened from inside this
   // drawer. Radix fires this lower layer's dismiss handlers too; guard them so
@@ -279,6 +285,9 @@ export const Drawer: React.FC<DrawerProps> = ({
         )}
         <DialogPrimitive.Content
           ref={drawerDivRef}
+          // See `isModal` above: Radix never emits aria-modal, so a masked
+          // (modal) drawer declares it here.
+          aria-modal={isModal}
           // Stable marker for "an app Drawer is open" + the target the stacking
           // guard's querySelector looks for. NOT the data-testid (a caller can
           // override that, which would silently break the guard).

@@ -19,14 +19,22 @@ import { mockChatStream, startedEvent } from '../helpers/sse-mock-helpers'
  *
  * `chat-right-panel.spec.ts` exercises the panel exclusively at the default
  * (desktop) viewport, where it renders as the resizable side panel keyed by
- * `data-panel-open`. The mobile branch of `ChatRightPanel` (ChatRightPanel.tsx
- * :156-175) is structurally different and was never exercised: when
- * `useWindowMinSize().sm` is true (viewport ≤ 640px) the panel instead renders
- * a FULL-SCREEN fixed overlay — `<div class="fixed inset-0 z-[1000]" role="dialog"
- * aria-modal="true" aria-label="Chat panel">` — and is dismissed via
- * `closeMobileDrawer`, NOT the side-panel collapse. This drives that branch at a
- * 480px viewport: opening a file card must surface the modal drawer overlay (not
- * the side panel), and the close button must tear it down.
+ * `data-panel-open`. The NARROW branch of `ChatRightPanel` is structurally
+ * different and was never exercised: instead of the inline side panel it renders
+ * a MODAL DRAWER (the shared `@ziee/shell` Drawer — a Radix Dialog portalled to
+ * <body>, full-bleed at an xs viewport) and is dismissed via `closeMobileDrawer`,
+ * NOT the side-panel collapse. This drives that branch at a 480px viewport:
+ * opening a file card must surface the modal drawer (not the side panel), and
+ * the close button must tear it down.
+ *
+ * NOTE on the assertions below: the drawer's "covers the page" property is
+ * asserted GEOMETRICALLY, not by class string. The original spec asserted
+ * `fixed`+`inset-0`, matching a hand-rolled `<div class="fixed inset-0 z-[1000]">`
+ * overlay that has since been replaced by the shell Drawer (`fixed inset-y-0
+ * right-0` + a full-bleed `max-w-[100vw]`/100% width at xs). The class strings
+ * differ; the user-visible property — a fixed layer covering the viewport — does
+ * not. Measuring it keeps this test true across any equivalent re-implementation
+ * (the same policy the visual specs follow).
  */
 
 async function setupProviderAndModel(apiURL: string, adminToken: string) {
@@ -94,9 +102,26 @@ test.describe('Chat - Right Panel mobile drawer', () => {
     const panel = page.locator('[data-testid="chat-right-panel"]')
     await expect(panel).toHaveAttribute('role', 'dialog')
     await expect(panel).toHaveAttribute('aria-modal', 'true')
-    // Full-screen fixed overlay class contract (covers the page incl. header).
-    await expect(panel).toHaveClass(/fixed/)
-    await expect(panel).toHaveClass(/inset-0/)
+    // Full-screen fixed overlay contract, measured (covers the page incl. the
+    // header) rather than asserted as a class string — see the note in the
+    // docblock.
+    const geom = await panel.evaluate(el => {
+      const r = el.getBoundingClientRect()
+      return {
+        position: getComputedStyle(el).position,
+        x: r.x,
+        y: r.y,
+        w: r.width,
+        h: r.height,
+        vw: window.innerWidth,
+        vh: window.innerHeight,
+      }
+    })
+    expect(geom.position, 'the drawer must be a fixed layer over the page').toBe('fixed')
+    expect(geom.w, 'the drawer must span the full viewport width').toBeCloseTo(geom.vw, 0)
+    expect(geom.h, 'the drawer must span the full viewport height').toBeCloseTo(geom.vh, 0)
+    expect(Math.abs(geom.x), 'the drawer must start at the viewport left edge').toBeLessThanOrEqual(1)
+    expect(Math.abs(geom.y), 'the drawer must start at the viewport top edge').toBeLessThanOrEqual(1)
     // The desktop side-panel marker must be absent in mobile mode.
     await expect(panel).not.toHaveAttribute('data-panel-open', 'true')
     // The opened tab's content surfaced inside the drawer (tab labelled by the
@@ -108,8 +133,15 @@ test.describe('Chat - Right Panel mobile drawer', () => {
     ).toBeVisible()
 
     // Close the drawer via its close button → `closeMobileDrawer` flips
-    // `mobileDrawerOpen` false and the mobile branch returns null (overlay gone).
-    await page.locator('[data-testid="chat-right-panel-close"]').click()
+    // `mobileDrawerOpen` false and the narrow branch returns null (drawer gone).
+    //
+    // The affordance here is the DRAWER's own close control, not the side
+    // panel's `chat-right-panel-close` ×: in the drawer branch `PanelTabs` is
+    // rendered `asTitle`, which deliberately emits the tab strip ALONE ("the
+    // Drawer supplies the left back button + chrome" — ChatRightPanel.tsx), so
+    // the panel's own × does not exist in this branch. Clicking what the user
+    // actually taps is also the stronger assertion.
+    await page.locator('[data-testid="layout-drawer-close-button"]').click()
     await expect(drawer).toHaveCount(0, { timeout: 5000 })
   })
 })

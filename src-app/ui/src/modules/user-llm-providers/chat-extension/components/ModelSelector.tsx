@@ -145,7 +145,14 @@ export function ModelSelector() {
   }
 
   return (
-    <div data-testid="model-selector">
+    // `min-w-0`: this wrapper is a flex item in the composer's right toolbar
+    // group. Without it its automatic minimum is the trigger's min-content —
+    // i.e. the whole model name — so the trigger refuses to shrink and instead
+    // overflows across the toolbar's LEFT actions, painting over the mic /
+    // schedule / compact buttons and making them unclickable in a narrow pane.
+    // The name is what must give way (see the layout comment in ChatInput.tsx);
+    // `truncate` on the label below is what makes that legible.
+    <div data-testid="model-selector" className="min-w-0">
       <Select
         data-testid="ullm-model-select"
         value={selectedModelId ?? undefined}

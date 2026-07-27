@@ -149,11 +149,15 @@ test.describe('Voice — runtime health of key states (TEST-31)', () => {
     await expect(byTestId(page, 'voice-settings-page-title')).toBeVisible({
       timeout: 30000,
     })
-    // All five cards render.
+    // All the admin cards render. NOTE: the single `voice-model-card` was
+    // replaced by the Available + Installed model cards in the model-library
+    // rework (see voice-settings-admin.spec.ts, which asserts the old testid
+    // has count 0).
     for (const id of [
       'voice-installed-versions-card',
       'voice-available-versions-card',
-      'voice-model-card',
+      'voice-available-models-card',
+      'voice-installed-models-card',
       'voice-instance-card',
       'voice-config-card',
     ]) {
