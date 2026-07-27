@@ -1,0 +1,22 @@
+# DESIGN_FIDELITY — Activity Rail
+
+Does `PLAN.md` actually realize `DESIGN.md`'s non-negotiables, or quietly reframe them?
+One verdict per invariant. Each is pinned to an executable `[acceptance]` test in phase 3.
+
+- **INV-1** — fidelity: UPHELD — The plan inverts control rather than centralizing it: ITEM-1 puts a contribution registry in core, ITEM-2 decides span membership **from the contributions themselves rather than a hardcoded content-type list**, and ITEM-11 delegates each step body back through `renderContent({content})` so the rail never learns what any extension renders. Crucially the plan does not merely avoid *new* coupling — ITEM-23/24/25 **delete the four couplings that already exist** (the central nine-module tool map, three cross-module `MessageFilesView` imports, a hardcoded `control_mcp` UUID, and `mcp` owning `js_tool`'s approval UI). An implementation that satisfied the rail but left those in place would be reframing this invariant into "no new coupling", which is not what it says.
+
+- **INV-2** — fidelity: AT-RISK — The plan expands reachable detail in four directions (ITEM-11 inline, ITEM-12 panel, ITEM-13 the `mcp_tool_calls` join that surfaces duration/timeout/`source`/size for the first time, ITEM-16 unblocking non-admins). **But ITEM-17 directly contradicts it for one class of value.** The chat card today renders `tool_use.input` completely unredacted; canonicalizing the detail view on the redacted source makes secret-keyed argument values *less* reachable than they are now. That is a real reduction, not a technicality. Resolution taken: the design's "every detail" means **user-meaningful** detail, not credentials that were never intended to be rendered — a leaked API key is not a feature to preserve. The invariant is therefore upheld for every non-secret field and **deliberately, narrowly violated for secret-keyed values**, with ITEM-17 also closing the denylist gaps (`cookie`, `credentials`, `x_auth_token`, `openai_api_key`, `Bearer-Token`) so the redaction is honest rather than partial. Flagged AT-RISK rather than UPHELD so the phase-6 audit re-examines this trade instead of inheriting my judgement. **Owner sign-off wanted before phase 5.**
+
+- **INV-3** — fidelity: UPHELD — ITEM-10 breaks `elicitation_request`, `run_js_approval`, pending tool approvals and `ask_user` out of the rail as full-width, **non-collapsible** surfaces. The existing force-open invariant (`deriveGroupOpen`, `toolRun.ts:76-81`) is explicitly called out as something that must survive the group card's retirement — PLAN_AUDIT flags it CONCERN precisely because losing it silently would violate this invariant while every structural gate stayed green.
+
+- **INV-4** — fidelity: UPHELD — ITEM-7 states the lifecycle exactly as the design does: open while working, collapsed to one summary line once the answer exists, user-toggleable thereafter.
+
+- **INV-5** — fidelity: UPHELD — ITEM-9 forces the rail open on a failed or timed-out step. Note the plan is stronger than a naive reading: it covers `timeout` as distinct from `failed`, which the chat stream cannot currently express at all (its vocabulary is `started|pending_approval|completed|error`), so this invariant also drives ITEM-13's join.
+
+- **INV-6** — fidelity: UPHELD — ITEM-2 segments blocks into activity spans **versus prose**, and the design's "Explicitly out of the rail" list (text, standalone thinking, `observation`, attachments, images, summary marker, composer chrome) is carried into the plan verbatim. Markdown content boxes — code blocks, tables, GFM alerts — are never candidates for a span, so the rail cannot swallow the answer.
+
+- **INV-7** — fidelity: UPHELD — ITEM-8 puts rail expansion state in `MessageViewState` keyed by message, joining the mechanism `CollapsibleBlock` and `InlineFilePreview` already use. This invariant exists because the current `ThinkingContent` gets this wrong (component-local state + a virtualised list = silent re-collapse mid-read), so the plan fixes the precedent rather than copying it.
+
+- **INV-8** — fidelity: UPHELD — ITEM-26 specifies 390/768/1280 with the label truncating first and never wrapping, timing dropping below 360px; the UI checklist additionally requires the gallery to cover the **populated** 390px state, not the empty one.
+
+- **INV-9** — fidelity: UPHELD — ITEM-4 reuses `ToolStatusKey` + `ToolStatusIcon` verbatim. The plan adds no status strings of its own; ITEM-22's scheduler markers are mapped onto the existing `cancelled` rather than inventing a "skipped".
