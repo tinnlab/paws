@@ -6,6 +6,7 @@ import {
   NO_LLM_SKIP,
   setupControlChat,
   recordedToolNames,
+  recordedInvokedOperations,
   currentConversationId,
   listJson,
 } from './helpers/control-llm-helpers'
@@ -268,7 +269,7 @@ test.describe('control_mcp — real LLM end-to-end (discover → approve → mut
       list: '/api/assistants?per_page=100',
       key: 'assistants',
     },
-  ]
+  ] as const
 
   /**
    * TEST-16 — the deny leg for the SETTINGS operation class, which a
@@ -332,6 +333,18 @@ test.describe('control_mcp — real LLM end-to-end (discover → approve → mut
         `${row.op}: approval must be forced before a deny is possible`,
       ).toBeVisible({ timeout: 120000 })
       await deny.click()
+
+      // The INTENDED operation must be the one that was denied. Asserting only
+      // "the count did not change" would pass on a turn where the model invoked
+      // something else entirely, or nothing at all.
+      const conversationId = currentConversationId(page)
+      expect(conversationId, 'the chat must have created a conversation').toBeTruthy()
+      await expect
+        .poll(
+          async () => recordedInvokedOperations(page, apiURL, token, conversationId as string),
+          { timeout: 60000 },
+        )
+        .toContain(row.op)
 
       // Give the turn a moment to settle; nothing may have been created.
       await page.waitForTimeout(5000)

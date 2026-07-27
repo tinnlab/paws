@@ -1310,6 +1310,23 @@ pub fn resolve_test_llm(get: impl Fn(&str) -> Option<String>) -> Option<TestLlm>
             model_name,
         });
     }
+
+    // A KEYLESS local bridge (`ZIEE_TEST_LLM_BASE_URL` + `ZIEE_TEST_LLM_MODEL`,
+    // no vendor key) is a real, common configuration — a self-hosted
+    // OpenAI-compatible server needs no credential. Refusing it would be exactly
+    // the false skip this seam exists to eliminate. The provider row still needs
+    // SOME key (the backend rejects an enabled remote provider with an empty
+    // one), so a throwaway placeholder is supplied; the bridge ignores it.
+    if let (Some(base_url), Some(model_name)) = (global_base, global_model) {
+        return Some(TestLlm {
+            provider_name: "OpenAI",
+            provider_type: "openai",
+            key_env: "OPENAI_API_KEY",
+            api_key: "sk-local-bridge".to_string(),
+            base_url: Some(base_url),
+            model_name,
+        });
+    }
     None
 }
 
@@ -1415,15 +1432,32 @@ mod configured_test_llm_tests {
         assert_eq!(llm.provider_type, "openai");
     }
 
+    /// A self-hosted bridge needs no credential, so requiring a vendor key would
+    /// be a FALSE skip — the same failure the seam exists to eliminate.
+    #[test]
+    fn a_keyless_bridge_is_a_configured_llm() {
+        let llm = resolve_test_llm(env(&[
+            ("ZIEE_TEST_LLM_BASE_URL", "http://localhost:4000/v1"),
+            ("ZIEE_TEST_LLM_MODEL", "qwen3.6-35b-a3b"),
+        ]))
+        .expect("a keyless local bridge IS a configured LLM");
+        assert_eq!(llm.provider_type, "openai");
+        assert_eq!(llm.model_name, "qwen3.6-35b-a3b");
+        assert_eq!(llm.base_url.as_deref(), Some("http://localhost:4000/v1"));
+        assert!(!llm.api_key.is_empty(), "the provider row needs some key");
+    }
+
     #[test]
     fn nothing_configured_is_the_only_none() {
         assert_eq!(resolve_test_llm(env(&[])), None);
         // Blank values do not count as configured.
         assert_eq!(resolve_test_llm(env(&[("OPENAI_API_KEY", "  ")])), None);
-        // A base URL with no key is not usable on its own.
+        // A base URL with no MODEL is not usable on its own — there would be
+        // nothing to ask for.
         assert_eq!(
             resolve_test_llm(env(&[("ZIEE_TEST_LLM_BASE_URL", "http://localhost:4000/v1")])),
             None
         );
+        assert_eq!(resolve_test_llm(env(&[("ZIEE_TEST_LLM_MODEL", "some-model")])), None);
     }
 }

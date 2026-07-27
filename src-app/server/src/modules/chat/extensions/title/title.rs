@@ -55,6 +55,16 @@ const TITLE_MAX_TOKENS: u32 = 4096;
 /// calls rather than an unbounded escalation.
 const TITLE_RETRY_MAX_TOKENS: u32 = 8192;
 
+/// Wall-clock bound on ONE title attempt.
+///
+/// Title generation is AWAITED inline in `after_llm_call`, so it sits between the
+/// assistant's last token and the turn's terminal frame — the user is watching.
+/// With an escalated retry that is up to two generations on that path, and the
+/// provider client's own timeout is a per-read one (a slow-but-alive stream is
+/// effectively unbounded). A title is a nice-to-have: past this bound, abandon it
+/// and let a later turn retry rather than hold the turn open.
+const TITLE_ATTEMPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// Maximum length of a stored title, in characters.
 const TITLE_MAX_CHARS: usize = 50;
 
@@ -305,9 +315,8 @@ impl TitleGenerationExtension {
         model_name: &str,
         user_content: &str,
     ) -> Result<String, AppError> {
-        let (title, finish_reason) = self
-            .attempt_title(provider, model_name, user_content, TITLE_MAX_TOKENS)
-            .await?;
+        let (title, finish_reason) =
+            self.attempt_title(provider, model_name, user_content, TITLE_MAX_TOKENS).await?;
 
         if !should_retry_with_larger_budget(title.as_deref(), finish_reason.as_deref()) {
             return title.ok_or_else(|| empty_title_error(TITLE_MAX_TOKENS, finish_reason.as_deref()));
@@ -329,6 +338,29 @@ impl TitleGenerationExtension {
     /// ONE title call: stream it, collect the answer text, and report the
     /// cleaned title (if any) plus the stream's finish reason.
     async fn attempt_title(
+        &self,
+        provider: &Provider,
+        model_name: &str,
+        user_content: &str,
+        max_tokens: u32,
+    ) -> Result<(Option<String>, Option<String>), AppError> {
+        // Bounded: this runs on the awaited turn-end path (see
+        // TITLE_ATTEMPT_TIMEOUT). A timeout is a soft failure like any other —
+        // the conversation stays untitled and a later turn retries.
+        tokio::time::timeout(
+            TITLE_ATTEMPT_TIMEOUT,
+            self.attempt_title_inner(provider, model_name, user_content, max_tokens),
+        )
+        .await
+        .map_err(|_| {
+            AppError::internal_error(format!(
+                "title generation exceeded {}s at a {max_tokens}-token budget",
+                TITLE_ATTEMPT_TIMEOUT.as_secs()
+            ))
+        })?
+    }
+
+    async fn attempt_title_inner(
         &self,
         provider: &Provider,
         model_name: &str,

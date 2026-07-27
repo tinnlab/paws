@@ -186,6 +186,14 @@ async fn a_real_model_first_exchange_produces_a_title() {
         )
     });
     eprintln!("chat::title_real_llm — generated title: {title:?}");
+    // …and it is a GENERATED title, not the user's own message echoed back. The
+    // original incarnation of this bug persisted the raw first message as the
+    // title; without this the test would accept that regression.
+    assert_ne!(
+        title.trim().to_lowercase(),
+        "create a new project please",
+        "the title must be model-generated, never the raw user message"
+    );
     assert!(
         title.chars().count() <= 50,
         "a generated title must respect TITLE_MAX_CHARS, got {} chars: {title:?}",

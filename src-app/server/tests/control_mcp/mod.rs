@@ -678,8 +678,19 @@ async fn multi_word_query_finds_and_ranks_the_named_operation() {
         );
     }
 
-    // A SINGLE term that matches nothing still yields nothing — the matcher must
-    // never degrade into "return the whole catalog".
+    // One dead term still empties the result — the ALL-terms rule is intact and
+    // there is no "match any term" fallback papering over it.
+    for q in ["zzzznotathing", "project zzzznotathing"] {
+        let res =
+            call_tool(&server, &admin.token, "list_capabilities", json!({ "query": q })).await;
+        assert_eq!(
+            structured(&res)["total"].as_u64().unwrap(),
+            0,
+            "an unmatched term must empty the result for query {q:?}"
+        );
+    }
+
+    // …and the model is TOLD why, so a retry is informed rather than random.
     let res = call_tool(
         &server,
         &admin.token,
@@ -687,35 +698,60 @@ async fn multi_word_query_finds_and_ranks_the_named_operation() {
         json!({ "query": "zzzznotathing" }),
     )
     .await;
-    assert_eq!(
-        structured(&res)["total"].as_u64().unwrap(),
-        0,
-        "a single unmatched term must yield nothing"
+    let text = res["result"]["content"][0]["text"].as_str().unwrap_or_default();
+    assert!(
+        text.contains("EVERY search term must match"),
+        "a zero-result list must explain the all-terms rule, got: {text}"
     );
 
-    // A SENTENCE with one out-of-vocabulary word must still be USEFUL rather
-    // than empty: strict ALL-terms matches nothing, so the best-effort fallback
-    // returns the closest candidates, ranked. This is the same failure class the
-    // whole fix exists to end — a model writes sentences, not keyword soup.
+    // A natural SENTENCE still finds the operation: punctuation and closed-class
+    // words are stripped query-side, so "please"/"a"/"for me" cannot empty it.
+    for q in ["please create a new project for me", "can you create a project?"] {
+        let res =
+            call_tool(&server, &admin.token, "list_capabilities", json!({ "query": q })).await;
+        let ops = ops_for(&res);
+        assert_eq!(
+            ops.first().map(String::as_str),
+            Some("Project.create"),
+            "query {q:?} must rank Project.create first; got {ops:?}"
+        );
+    }
+
+    // The regression the round-2 audit found on the REAL catalog: a filler word
+    // used to substring-match an unrelated id, so "delete a project" strictly
+    // matched exactly ONE operation — `Citations.delete` — and the model was
+    // handed a confident, wrong, DESTRUCTIVE candidate. Stopword filtering plus
+    // the minimum substring length must put the named operation first.
+    for (q, expected) in [
+        ("delete a project", "Project.delete"),
+        ("delete the project", "Project.delete"),
+        ("update a project", "Project.update"),
+    ] {
+        let res =
+            call_tool(&server, &admin.token, "list_capabilities", json!({ "query": q })).await;
+        let ops = ops_for(&res);
+        assert_eq!(
+            ops.first().map(String::as_str),
+            Some(expected),
+            "query {q:?} must rank {expected} first; got {ops:?}"
+        );
+    }
+
+    // A hyphenated term must be split like the corpus, not kept whole.
     let res = call_tool(
         &server,
         &admin.token,
         "list_capabilities",
-        json!({ "query": "please set up a project" }),
+        json!({ "query": "update mcp-settings" }),
     )
     .await;
     let ops = ops_for(&res);
     assert!(
-        !ops.is_empty(),
-        "a natural sentence must not return zero operations"
-    );
-    assert!(
-        ops.iter().take(5).any(|id| id.starts_with("Project.")),
-        "the closest candidates must lead the fallback ranking; got {ops:?}"
+        !ops.is_empty() && ops.iter().any(|id| id.ends_with("updateMcpSettings")),
+        "a hyphenated term must be split like the corpus; got {ops:?}"
     );
 
-    // The fallback NEVER widens a query that already matched strictly: adding an
-    // unrelated matching term must still narrow, not blow the result open.
+    // A multi-term query must be NARROWER than its broadest single term.
     let strict = call_tool(
         &server,
         &admin.token,
@@ -728,6 +764,6 @@ async fn multi_word_query_finds_and_ranks_the_named_operation() {
     assert!(
         structured(&strict)["total"].as_u64().unwrap()
             < structured(&broad)["total"].as_u64().unwrap(),
-        "a strictly-matching multi-term query must be NARROWER than its single term"
+        "a multi-term query must narrow, not widen"
     );
 }

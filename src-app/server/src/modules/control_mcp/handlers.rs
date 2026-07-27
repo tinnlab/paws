@@ -253,21 +253,48 @@ const SCORE_SUMMARY_SUBSTRING: u32 = 1;
 /// gets a bound rather than an unbounded product.
 const MAX_QUERY_TERMS: usize = 16;
 
-/// Lowercase, punctuation-stripped search terms.
+/// Shortest term allowed to match as a SUBSTRING.
+///
+/// A short token substring-matches almost everything (`"a"` is inside 407 of the
+/// 446 catalog operation ids), which turns relevance into noise. Terms below this
+/// length may still match EXACTLY — as an id segment, a tag, or a summary word —
+/// so `"mcp"` still hits `Project.updateMcpSettings`.
+const MIN_SUBSTRING_TERM_LEN: usize = 4;
+
+/// Closed-class words a person or a model puts in a request but which carry no
+/// search signal ("create **a new** project, **please**"). Under the ALL-terms
+/// rule one of these would otherwise empty an otherwise-good query.
+///
+/// Deliberately tiny and closed-class: only words that can never be part of an
+/// operation name. Domain words (`new`, `list`, `default`) are NOT here — they
+/// are exactly the signal the ranking needs.
+const QUERY_STOPWORDS: &[&str] = &[
+    "a", "an", "the", "please", "for", "me", "my", "to", "of", "in", "on", "and", "or", "with",
+    "can", "you", "i", "it", "is", "are", "do", "does", "that", "this", "there", "would", "could",
+    "should", "want", "need", "am", "be",
+];
+
+/// Lowercase, punctuation-split, stopword-filtered search terms.
 ///
 /// The CORPUS is normalized (ids split on `.`/`_`/`-`/camelCase, summaries split
-/// on any non-alphanumeric), so the QUERY must be normalized the same way or a
-/// trailing comma turns a good term into one that matches nothing — and under the
-/// ALL-terms rule ONE dead term empties the whole result. `"create a project,
-/// please"` must behave like `"create a project please"`.
+/// on any non-alphanumeric), so the QUERY is split the SAME way — otherwise a
+/// trailing comma or a hyphen turns a good term into one that matches nothing
+/// and, under the ALL-terms rule, ONE dead term empties the whole result.
+/// `"create a project, please"` and `"update mcp-settings"` must behave like
+/// `"create project"` and `"update mcp settings"`.
 ///
-/// Empty when the query is blank, which the caller treats as "no filter"
-/// (unchanged passthrough behavior).
+/// Closed-class words are dropped for the same reason: a model asks in
+/// sentences, and "please" / "a" / "for me" carry no signal but would each have
+/// to match something.
+///
+/// Empty when the query is blank (or all stopwords), which the caller treats as
+/// "no filter" — the unchanged passthrough behavior.
 fn query_terms(query: &str) -> Vec<String> {
     query
-        .split(|c: char| c.is_whitespace() || (!c.is_alphanumeric() && c != '_' && c != '-'))
+        .split(|c: char| !c.is_alphanumeric())
         .filter(|t| !t.is_empty())
         .map(str::to_lowercase)
+        .filter(|t| !QUERY_STOPWORDS.contains(&t.as_str()))
         .take(MAX_QUERY_TERMS)
         .collect()
 }
@@ -335,7 +362,7 @@ impl OpIndex {
         if self.id_segments.iter().any(|s| s == term) {
             return SCORE_ID_SEGMENT;
         }
-        if self.id_lower.contains(term) {
+        if term.len() >= MIN_SUBSTRING_TERM_LEN && self.id_lower.contains(term) {
             return SCORE_ID_SUBSTRING;
         }
         if self.tags_lower.iter().any(|t| t == term) {
@@ -344,40 +371,40 @@ impl OpIndex {
         if self.summary_words.iter().any(|w| w == term) {
             return SCORE_SUMMARY_WORD;
         }
-        if self.summary_lower.contains(term) {
+        if term.len() >= MIN_SUBSTRING_TERM_LEN && self.summary_lower.contains(term) {
             return SCORE_SUMMARY_SUBSTRING;
         }
         // A tag substring is the weakest signal but was matched by the old
         // whole-phrase predicate, so keep it — "single-term behavior at least as
         // good as today".
-        if self.tags_lower.iter().any(|t| t.contains(term)) {
+        if term.len() >= MIN_SUBSTRING_TERM_LEN && self.tags_lower.iter().any(|t| t.contains(term)) {
             return SCORE_SUMMARY_SUBSTRING;
         }
         0
     }
 }
 
-/// `(matched_terms, total_score)` for an operation.
-fn score_terms(op: &Operation, terms: &[String]) -> (usize, u32) {
+/// Relevance of an operation for ALL `terms`, or `None` when any term fails to
+/// match — the ALL-terms rule. An empty `terms` slice matches everything at
+/// score 0 (the no-query passthrough).
+///
+/// This is THE matching predicate, and [`rank_matching_ops`] is its only caller,
+/// so a test driven through that function can never pass against a copy of the
+/// rule.
+fn op_match_score(op: &Operation, terms: &[String]) -> Option<u32> {
+    if terms.is_empty() {
+        // The no-query browse path must not pay to build an index it never reads.
+        return Some(0);
+    }
     let index = OpIndex::build(op);
-    let mut matched = 0usize;
     let mut total = 0u32;
     for term in terms {
-        let s = index.term_score(term);
-        if s > 0 {
-            matched += 1;
-            total = total.saturating_add(s);
+        match index.term_score(term) {
+            0 => return None,
+            s => total = total.saturating_add(s),
         }
     }
-    (matched, total)
-}
-
-/// Relevance of an operation for ALL `terms`, or `None` when any term fails to
-/// match — i.e. the ALL-terms rule. An empty `terms` slice matches everything at
-/// score 0 (the no-query passthrough).
-fn op_match_score(op: &Operation, terms: &[String]) -> Option<u32> {
-    let (matched, total) = score_terms(op, terms);
-    (matched == terms.len()).then_some(total)
+    Some(total)
 }
 
 /// Rank the permitted candidates for `terms` — THE production search pipeline.
@@ -386,40 +413,25 @@ fn op_match_score(op: &Operation, terms: &[String]) -> Option<u32> {
 /// security-critical decision is unit-testable) so the unit tests exercise the
 /// REAL matching + ordering rather than a retyped copy of it.
 ///
-/// Two stages:
-/// 1. **Strict** — every term must match (the ALL-terms rule), ranked by summed
-///    relevance, `operation_id` ASC as the deterministic tie-break. With no query,
-///    or when every candidate scores alike, that reproduces the previous
-///    alphabetical order exactly.
-/// 2. **Best-effort fallback** — ONLY when stage 1 matched nothing and the query
-///    had more than one term. A model writes sentences ("turn off memory
-///    retrieval", "please create a new project"), and one out-of-vocabulary word
-///    would otherwise empty the result and strand it exactly as the shipped
-///    matcher did. The fallback keeps operations matching at least one term and
-///    ranks by (terms matched, score), so the closest candidates come first. It
-///    can never change a query that already matched.
+/// Every term must match, ranked by summed relevance with `operation_id` ASC as
+/// the deterministic tie-break. With no query — or when every candidate scores
+/// alike — that reproduces the previous alphabetical order exactly.
+///
+/// There is deliberately NO "match ANY term" fallback. One was implemented and
+/// removed: a short term substring-matches nearly the whole catalog, so a query
+/// with one filler word degenerated into "return 200 arbitrary operations",
+/// which is worse for the model than an empty result plus the retry guidance
+/// `list_capabilities` now emits. Query-side normalization (punctuation +
+/// stopwords) is what makes a natural phrase work.
 fn rank_matching_ops<'a>(
     candidates: impl Iterator<Item = &'a Operation>,
     terms: &[String],
 ) -> Vec<&'a Operation> {
-    let scored: Vec<(usize, u32, &Operation)> = candidates
-        .map(|op| {
-            let (matched, total) = score_terms(op, terms);
-            (matched, total, op)
-        })
+    let mut scored: Vec<(u32, &Operation)> = candidates
+        .filter_map(|op| op_match_score(op, terms).map(|score| (score, op)))
         .collect();
-
-    let all_terms = terms.len();
-    let mut kept: Vec<(usize, u32, &Operation)> =
-        scored.iter().copied().filter(|(m, _, _)| *m == all_terms).collect();
-    if kept.is_empty() && all_terms > 1 {
-        kept = scored.into_iter().filter(|(m, _, _)| *m > 0).collect();
-    }
-
-    kept.sort_by(|(ma, sa, a), (mb, sb, b)| {
-        mb.cmp(ma).then_with(|| sb.cmp(sa)).then_with(|| a.operation_id.cmp(&b.operation_id))
-    });
-    kept.into_iter().map(|(_, _, op)| op).collect()
+    scored.sort_by(|(sa, a), (sb, b)| sb.cmp(sa).then_with(|| a.operation_id.cmp(&b.operation_id)));
+    scored.into_iter().map(|(_, op)| op).collect()
 }
 
 fn list_capabilities(
@@ -482,12 +494,13 @@ fn list_capabilities(
     // operation it had never been shown). Say how the match works so a retry is
     // informed rather than random.
     if total == 0 && !terms.is_empty() {
-        text.push_str(
-            "\nThe search matches each whitespace-separated term against the operation id, \
-             its tags and its summary. Retry with FEWER, more specific keywords \
-             (e.g. \"create project\", \"memory settings\") rather than a full sentence, \
-             or call list_capabilities with no query to browse.\n",
-        );
+        text.push_str(&format!(
+            "\nEVERY search term must match an operation's id, tags or summary — one term that \
+             matches nothing empties the whole result. Your terms were: [{}]. Retry with FEWER, \
+             more specific keywords (e.g. \"create project\", \"memory settings\"), use the \
+             `tag` argument, or call list_capabilities with no query to browse.\n",
+            terms.join(", ")
+        ));
     }
     Ok(text_result(text, Some(structured)))
 }
@@ -1015,16 +1028,6 @@ mod tests {
             .collect()
     }
 
-    /// STRICT (all-terms) ranking only — the fallback disabled, so a test can
-    /// assert the ALL-terms rule itself rather than its best-effort backstop.
-    fn ranked_strict(cat: &catalog::ControlCatalog, query: &str) -> Vec<String> {
-        let terms = query_terms(query);
-        let mut hits: Vec<&Operation> =
-            cat.iter().filter(|op| op_match_score(op, &terms).is_some()).collect();
-        hits.sort_by_key(|op| op.operation_id.clone());
-        hits.into_iter().map(|op| op.operation_id.clone()).collect()
-    }
-
     /// The SHIPPED matcher, reproduced verbatim, so the regression it caused is
     /// encoded in the suite rather than described in a comment.
     fn legacy_whole_phrase_match(op: &Operation, query: &str) -> bool {
@@ -1079,8 +1082,8 @@ mod tests {
         let hits = ranked(&cat, "assistants create");
         assert_eq!(hits, vec!["Assistant.create".to_string()], "got {hits:?}");
 
-        // The ALL-terms rule itself: with one dead term the STRICT set is empty.
-        assert!(ranked_strict(&cat, "create zzzznotathing").is_empty());
+        // The ALL-terms rule itself: one dead term empties the result.
+        assert!(ranked(&cat, "create zzzznotathing").is_empty());
     }
 
     /// TEST-3 — single-term behavior is at least as good as today, plus the
@@ -1126,7 +1129,12 @@ mod tests {
     #[test]
     fn punctuation_in_a_query_does_not_empty_the_result() {
         let cat = search_fixture();
-        for q in ["create a project, please", "create project!", "  create   project  "] {
+        for q in [
+            "create a project, please",
+            "create project!",
+            "  create   project  ",
+            "create/project",
+        ] {
             let hits = ranked(&cat, q);
             assert_eq!(
                 hits.first().map(String::as_str),
@@ -1136,45 +1144,59 @@ mod tests {
         }
     }
 
-    /// A sentence with one out-of-vocabulary word must still be USEFUL.
+    /// A natural sentence must survive its filler words.
     ///
-    /// A model writes "turn off memory retrieval" / "please set up a project",
-    /// not keyword soup. Strict ALL-terms alone would return zero and strand it
-    /// exactly as the shipped whole-phrase matcher did, so an empty strict result
-    /// falls back to best-effort — ranked by how many terms matched, never
-    /// changing a query that already matched.
+    /// A model asks "please create a new project for me", not keyword soup.
+    /// Punctuation and closed-class words are stripped query-side so the ALL-terms
+    /// rule sees only the real signal — without that, one "please" empties the
+    /// result exactly as the shipped whole-phrase matcher did.
     #[test]
-    fn a_sentence_with_an_unmatched_word_falls_back_instead_of_returning_zero() {
+    fn a_natural_sentence_still_finds_the_operation() {
         let cat = search_fixture();
+        for q in [
+            "please create a new project for me",
+            "can you create a project?",
+            "I want to create a project",
+        ] {
+            let hits = ranked(&cat, q);
+            assert_eq!(
+                hits.first().map(String::as_str),
+                Some("Project.create"),
+                "query {q:?} must still rank Project.create first; got {hits:?}"
+            );
+        }
+    }
 
-        // Strict really does match nothing here — the fallback is what saves it.
-        assert!(ranked_strict(&cat, "please set up a project").is_empty());
-        let hits = ranked(&cat, "please set up a project");
-        assert!(!hits.is_empty(), "a sentence must not return zero operations");
+    /// A short term must not substring-match the world.
+    ///
+    /// `"a"` is a substring of nearly every operation id, so allowing short
+    /// substrings would turn relevance into noise (and, with a fallback, into
+    /// "return 200 arbitrary operations"). Short terms may still match EXACTLY.
+    #[test]
+    fn short_terms_match_exactly_but_never_as_substrings() {
+        let cat = search_fixture();
+        // "mcp" is short but an exact id SEGMENT of Project.updateMcpSettings.
+        let hits = ranked(&cat, "mcp");
+        assert_eq!(hits, vec!["Project.updateMcpSettings".to_string()], "got {hits:?}");
+        // A short non-segment term must not sweep the catalog in via substrings.
+        // ("cre" is inside every `*.create` id but is not a segment/word/tag.)
         assert!(
-            hits.iter().take(3).any(|id| id.starts_with("Project.")),
-            "the closest candidates must lead; got {hits:?}"
+            ranked(&cat, "cre").is_empty(),
+            "a short term must not substring-match; got {:?}",
+            ranked(&cat, "cre")
         );
+    }
 
-        // The fallback NEVER alters a query that already matched strictly.
-        assert_eq!(ranked(&cat, "create project"), ranked_strict_ranked(&cat, "create project"));
-
-        // A SINGLE term that matches nothing still yields nothing — the fallback
-        // is for multi-term sentences, not a licence to return the whole catalog.
+    /// One dead term still empties the result — the ALL-terms rule is intact,
+    /// and there is no "match any term" fallback to paper over it.
+    #[test]
+    fn one_unmatched_term_still_empties_the_result() {
+        let cat = search_fixture();
+        assert!(ranked(&cat, "create zzzznotathing").is_empty());
         assert!(ranked(&cat, "zzzznotathing").is_empty());
     }
 
-    /// Strict matches, in the production ORDER (helper for the equality above).
-    fn ranked_strict_ranked(cat: &catalog::ControlCatalog, query: &str) -> Vec<String> {
-        let terms = query_terms(query);
-        let mut hits: Vec<(u32, &Operation)> = cat
-            .iter()
-            .filter_map(|op| op_match_score(op, &terms).map(|s| (s, op)))
-            .collect();
-        hits.sort_by(|(sa, a), (sb, b)| sb.cmp(sa).then_with(|| a.operation_id.cmp(&b.operation_id)));
-        hits.into_iter().map(|(_, op)| op.operation_id.clone()).collect()
-    }
-
+    /// Segmentation is what makes an exact word beat a mere substring.
     /// Segmentation is what makes an exact word beat a mere substring.
     #[test]
     fn id_segments_splits_on_punctuation_and_camel_case() {

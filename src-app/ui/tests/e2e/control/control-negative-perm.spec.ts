@@ -136,11 +136,16 @@ test.describe('control_mcp — an unpermitted operation is not offered', () => {
     })
     // The restricted user must genuinely REACH the control surface — otherwise
     // "User.delete is absent" would be satisfied by a 401/403/empty response and
-    // would prove nothing about the per-user filter.
+    // would prove nothing about the per-user filter. Probed with an operation the
+    // user demonstrably HOLDS (`projects::read` -> Project.list), so this liveness
+    // check stays valid no matter how the catalog's permission coverage changes.
+    const liveness = await controlTool(page, apiURL, restrictedToken, 'list_capabilities', {
+      query: 'list projects',
+    })
     expect(
-      operationIds(asRestricted.body).length,
-      `the restricted user must reach the control surface: ${JSON.stringify(asRestricted.body).slice(0, 400)}`,
-    ).toBeGreaterThan(0)
+      operationIds(liveness.body),
+      `the restricted user must reach the control surface: ${JSON.stringify(liveness.body).slice(0, 400)}`,
+    ).toContain('Project.list')
     expect(
       operationIds(asRestricted.body),
       'a user without users::delete must NOT be offered User.delete',
@@ -164,6 +169,57 @@ test.describe('control_mcp — an unpermitted operation is not offered', () => {
       permitted.body?.error === undefined,
       `describe_capability must still work for a permitted op: ${JSON.stringify(permitted.body).slice(0, 400)}`,
     ).toBeTruthy()
+  })
+
+  /**
+   * TEST-17(b1) — DENIED, deterministically.
+   *
+   * `Project.create` reaches the catalog with `required_permission: null` (the
+   * KNOWN GAP above), so it IS offered to any `control::use` holder even though
+   * its route requires `projects::create`. The real gate is the forwarded-JWT
+   * loopback dispatch: the route re-authorizes and refuses. Driven straight at
+   * the JSON-RPC surface so the authorization proof does not depend on a model
+   * choosing to call the tool (and so it runs on a box with no LLM at all).
+   */
+  test('an offered-but-unpermitted write is REFUSED by the real route and creates nothing', async ({
+    page,
+    testInfra,
+  }) => {
+    const { baseURL, apiURL } = testInfra
+    await loginAsAdmin(page, baseURL)
+    const adminToken = await getAdminToken(apiURL)
+    const { token: restrictedToken } = await seedRestrictedUser(page, apiURL, adminToken)
+
+    // It really is OFFERED — otherwise this would be a not-offered test wearing
+    // the wrong name, and the loopback gate would go unexercised.
+    const offered = await controlTool(page, apiURL, restrictedToken, 'list_capabilities', {
+      query: 'create project',
+    })
+    expect(
+      operationIds(offered.body),
+      'Project.create declares no permission, so it must still be OFFERED',
+    ).toContain('Project.create')
+
+    const name = `ControlNoPerm_${Date.now()}`
+    const invoke = await controlTool(page, apiURL, restrictedToken, 'invoke_capability', {
+      operation_id: 'Project.create',
+      body: { name },
+    })
+    const payload = JSON.stringify(invoke.body)
+    expect(
+      invoke.body?.error !== undefined || invoke.body?.result?.structuredContent?.ok === false,
+      `the loopback dispatch must be refused for a user without projects::create: ${payload.slice(0, 500)}`,
+    ).toBeTruthy()
+    expect(payload, 'the refusal must be an authorization refusal').toMatch(/403|forbidden|permission/i)
+
+    const after = await listJson(
+      page,
+      apiURL,
+      restrictedToken,
+      '/api/projects?per_page=100',
+      'projects',
+    )
+    expect(after.length, 'a refused control write must create nothing').toBe(0)
   })
 })
 
@@ -245,7 +301,15 @@ test.describe('control_mcp — a user lacking the permission cannot drive the op
     expect(before.length, 'the restricted user starts with no projects').toBe(0)
 
     const name = `ControlNoPerm_${Date.now()}`
-    await sendChatMessage(page, `Create a new project called "${name}" for me.`, false)
+    // Nudged like the table rows: names the tool FAMILY, never an operation id,
+    // so discovery is still required. This leg is about AUTHORIZATION, and a
+    // chatty local model stalling on a clarifying question would make it a test
+    // of model manners instead.
+    await sendChatMessage(
+      page,
+      `Create a new project called "${name}" for me. Use the app-control tools; do not ask me first.`,
+      false,
+    )
 
     // If the model reaches the mutating invoke the approval card appears —
     // approve it, so what is under test is the BACKEND refusing, not the model
@@ -255,9 +319,16 @@ test.describe('control_mcp — a user lacking the permission cannot drive the op
       await approve.click()
     }
 
-    // The gate must actually have been REACHED. Without this the test passes
-    // whenever the model asks a clarifying question or never finds the operation
-    // — a green run that never touched authorization at all.
+    // The control surface must genuinely have been EXERCISED in this chat.
+    // Without this the test passes on a turn where the model said nothing at all
+    // — a green run that never touched the feature.
+    //
+    // The assertion is on discovery rather than on `invoke_capability`
+    // deliberately: whether a 35B local model chooses to attempt the write is its
+    // decision, not the product's. The REFUSAL itself is proven deterministically
+    // by the sibling test above ("an offered-but-unpermitted write is REFUSED by
+    // the real route"), which drives the invoke directly; this test's job is the
+    // end-to-end UI journey ending with nothing created.
     const conversationId = currentConversationId(page)
     expect(conversationId, 'the restricted user must have started a conversation').toBeTruthy()
     await expect
@@ -265,10 +336,10 @@ test.describe('control_mcp — a user lacking the permission cannot drive the op
         async () => recordedToolNames(page, apiURL, restrictedToken, conversationId as string),
         { timeout: 120000 },
       )
-      .toContain('invoke_capability')
+      .toContain('list_capabilities')
 
-    // …and it refused: nothing was created. `listJson` throws on a non-OK read,
-    // so this cannot pass on a broken/forbidden list endpoint either.
+    // …and nothing was created. `listJson` throws on a non-OK read, so this
+    // cannot pass on a broken/forbidden list endpoint either.
     await page.waitForTimeout(5000)
     const after = await listJson(
       page,

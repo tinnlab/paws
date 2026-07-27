@@ -214,23 +214,42 @@ async fn real_llm_write_requires_approval() {
     let (server, user, conversation_id, branch_id, model_id) = setup(&llm).await;
     let name = format!("CtlLLM-{}", &Uuid::new_v4().to_string()[..8]);
 
+    // Deliberately does NOT name the operation id: the model must DISCOVER it
+    // through `list_capabilities`, which is the path the shipped search bug
+    // broke. Naming `Assistant.create` here would have made this test pass
+    // straight through that bug.
     let payload = json!({
         "content": format!(
-            "Create a new assistant named '{name}' using the app-control tools \
-             (invoke_capability with Assistant.create). Do it now; do not ask me first."
+            "Create a new assistant named '{name}' for me. Use the app-control tools; \
+             do it now, do not ask me first."
         ),
         "model_id": model_id.to_string(),
         "branch_id": branch_id.to_string(),
         "enable_mcp": true
     });
-    let events = crate::chat::helpers::send_body_and_collect_events(
+    // One retry: whether a 35B local model attempts the write on its FIRST turn
+    // is its decision, not the product's. The assertion below is unweakened — an
+    // approval frame must still appear — this only tolerates the model declining
+    // once, the sole observed flake under a loaded shared bridge.
+    let mut events = crate::chat::helpers::send_body_and_collect_events(
         &server,
         &user.token,
         conversation_id,
-        payload,
+        payload.clone(),
         &["complete"],
     )
     .await;
+    if !events.iter().any(|e| e.event == "mcpApprovalRequired") {
+        eprintln!("real_llm_write_requires_approval: no approval frame on turn 1; retrying once");
+        events = crate::chat::helpers::send_body_and_collect_events(
+            &server,
+            &user.token,
+            conversation_id,
+            payload,
+            &["complete"],
+        )
+        .await;
+    }
 
     // The mutating invoke must be gated: an approval was requested and the
     // assistant was NOT created (it waits behind the user's approval).
