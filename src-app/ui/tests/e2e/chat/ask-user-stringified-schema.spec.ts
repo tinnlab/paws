@@ -293,9 +293,12 @@ test.describe('ask_user — a real model still gets a real form (no regression)'
           `properties were lost between the model and the form (indicator: "${stepText}")`,
       ).toBeGreaterThanOrEqual(2)
 
-      // The degraded card is correct ONLY for a schema that genuinely renders
-      // nothing. Reaching it from a healthy real-model call would mean good input
-      // is now being rejected.
+      // The degraded card is correct ONLY for a request that genuinely renders
+      // nothing. Reaching it here would mean EITHER the decode path started
+      // rejecting good input, OR the model omitted `schema` entirely (which
+      // falls back to a bare `{"type":"object"}` with no properties). Both are
+      // failures of this leg; neither is an acceptable outcome for a prompt that
+      // names two fields.
       await expect(
         page.locator('[data-testid="mcp-elicitation-no-fields-card"]'),
         'a real model’s own schema must not land on the degraded no-fields card',

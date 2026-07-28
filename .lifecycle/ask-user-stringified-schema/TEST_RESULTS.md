@@ -80,11 +80,17 @@ SILENT failure — a dropped query returned a plausible 200 for the wrong
 question), `path_params`, and the actionable-refusal negative control.
 
 **Verified DISCRIMINATING, not assumed.** With `decode_invoke_args` neutered to
-`args.clone()` (the pre-fix behaviour), **5 of the 6 legs go RED**
-(`test24-tautology-guard2.log`). The sixth —
-`triple_stringified_body_is_refused_at_the_bound` — stays green by design: it
-asserts a REFUSAL, which happens in both worlds. It is still not vacuous, because
-it pins the bound-exhausted message text that only `coerce_value` emits.
+`args.clone()` (the pre-fix behaviour), **all 6 legs go RED**
+(`test24-tautology-guard3.log`: `0 passed; 6 failed`), and all 6 pass again once
+it is restored.
+
+An earlier revision of this file said "5 of the 6 — the sixth stays green by
+design". That was measured before
+`triple_stringified_body_is_refused_at_the_bound` gained its bound-exhausted
+message assertion, and was left stale when the assertion landed. Re-measured
+against the current file: pinning the text that only `coerce_value`'s bound arm
+emits makes that leg discriminating too, because `validate_body`'s generic
+scalar-reject — the refusal a neutered build produces — does not carry it.
 
 The measurement also **corrected a false claim** written into the first draft of
 this file: the pre-fix behaviour for these fixtures is NOT a 422 from the target

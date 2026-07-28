@@ -59,33 +59,41 @@ async fn assistant_count(pool: &sqlx::PgPool, name: &str) -> i64 {
         .unwrap_or(0)
 }
 
-/// The total `assistants` count, once it has stopped moving.
+/// Block until the registration-time template clone for `user_id` has landed,
+/// then return the total `assistants` count.
 ///
-/// User registration clones default template assistants on a DETACHED task, so a
-/// count sampled immediately after `create_user_with_permissions` may still be
-/// rising. Two equal consecutive reads is enough here: the only writer is that
-/// one clone task, and it completes in a single burst.
-async fn settled_assistant_total(pool: &sqlx::PgPool) -> i64 {
-    let total = |p: &sqlx::PgPool| {
-        let p = p.clone();
-        async move {
-            sqlx::query_scalar!("SELECT COUNT(*) FROM assistants")
-                .fetch_one(&p)
-                .await
-                .unwrap()
-                .unwrap_or(0)
+/// `/auth/register` emits UserCreated through `emit_async`, whose handler clones
+/// the seeded default template onto the new user on a DETACHED task. A count
+/// sampled before that lands, compared against one sampled after, fails a strict
+/// equality for reasons that have nothing to do with the behaviour under test.
+///
+/// Waits on a POSITIVE condition (the user owns >= 1 assistant) rather than on
+/// "two equal consecutive reads": equal reads cannot distinguish "the clone
+/// already landed" from "the clone has not started yet", so on a loaded box the
+/// naive settle returns a pre-clone number and reintroduces the very race it was
+/// meant to remove. Exactly one `is_default + enabled` template is seeded, so
+/// `>= 1` is the precise completion signal. (`created_by` is the owner column.)
+async fn total_after_template_clone(pool: &sqlx::PgPool, user_id: &str) -> i64 {
+    let uid = Uuid::parse_str(user_id).expect("user id");
+    for _ in 0..100 {
+        let owned = sqlx::query_scalar!(
+            "SELECT COUNT(*) FROM assistants WHERE created_by = $1",
+            uid
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap()
+        .unwrap_or(0);
+        if owned >= 1 {
+            break;
         }
-    };
-    let mut last = total(pool).await;
-    for _ in 0..40 {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        let now = total(pool).await;
-        if now == last {
-            return now;
-        }
-        last = now;
     }
-    last
+    sqlx::query_scalar!("SELECT COUNT(*) FROM assistants")
+        .fetch_one(pool)
+        .await
+        .unwrap()
+        .unwrap_or(0)
 }
 
 /// Create an assistant through the ordinary (well-formed) control path.
@@ -339,13 +347,10 @@ async fn undecodable_body_is_refused_actionably_and_creates_nothing() {
     let admin = create_user_with_permissions(&server, "ctl_strbody_bad", &["*"]).await;
     let pool = pool(&server).await;
 
-    // SETTLE before sampling. `create_user_with_permissions` registers via the
-    // real /auth/register, whose UserCreated event fires a DETACHED handler that
-    // clones the default template assistant. If that clone lands between the two
-    // samples below, a strict equality assertion fails spuriously — a flake that
-    // has nothing to do with the behaviour under test. Poll until the total stops
-    // moving, then sample.
-    let before = settled_assistant_total(&pool).await;
+    // Wait out the detached registration-time template clone before sampling, or
+    // a clone landing between the two samples fails the equality below for
+    // reasons unrelated to the behaviour under test.
+    let before = total_after_template_clone(&pool, &admin.user_id).await;
 
     // A string that is not JSON at all. The tolerance must NOT extend to
     // inventing a body (INV-2): without this, "decode everything, somehow" would
