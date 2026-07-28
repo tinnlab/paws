@@ -118,10 +118,15 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
    * disabled the card permanently after a single failure.
    */
   const hasTransport = hasElicitationTransport()
-  // Once the budget is spent the self-heal has STOPPED, so the present-progressive
-  // copy below would be an active falsehood (FIX_ROUND-10). The user is not stuck
-  // — the controls stay live and still POST — but they should not be told work is
-  // ongoing when it is not.
+  // Neither `not-registered` message claims work is IN FLIGHT (FIX_ROUND-14).
+  //
+  // A retry only happens on a seam change, and a failed register bumps nothing —
+  // so between attempts there is genuinely nothing scheduled, and the earlier
+  // present-progressive "Reopening this request…" was false for as long as that
+  // lasted. Both messages now state the CONDITION (the request is not open
+  // locally) and the thing the user can actually do (answer it anyway); the
+  // exhausted one adds the reload hint, because after the budget there is no
+  // local path back.
   const healExhausted =
     healAttempts.id === data.elicitation_id && healAttempts.n >= HEAL_BUDGET
   // `entryExists` is read from the seam on every bump, so `not-registered` clears
@@ -292,7 +297,7 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
                     : blocked === 'not-registered'
                       ? healExhausted
                         ? 'This request could not be reopened locally — you can still answer it, or reload the conversation.'
-                        : 'Reopening this request — you can still answer it.'
+                        : 'This request is not open locally — you can still answer it.'
                       : blocked === 'resolve-failed'
                         ? "That didn't go through — try again."
                         : ''}

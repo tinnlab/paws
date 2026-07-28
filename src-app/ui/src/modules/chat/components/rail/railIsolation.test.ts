@@ -353,8 +353,9 @@ test('FIX_ROUND-5: ChatMessage re-resolves rail steps THROUGH withSegmentationSh
  *
  * Two mechanical facts about the kit make the first a real defect rather than a
  * style preference:
- *  1. `Button` derives `aria-label` from a STRING `tooltip` unconditionally, so a
- *     tooltip silently REPLACES the visible label in the accessibility tree —
+ *  1. `Button` derives `aria-label` from a STRING `tooltip` when no explicit
+ *     `aria-label` is given — and these controls give none — so a tooltip
+ *     silently REPLACES the visible label in the accessibility tree:
  *     FIX_ROUND-5 shipped exactly this and made Approve and Deny announce
  *     identically (WCAG 2.5.3 / 4.1.2).
  *  2. `disabled` becomes the native attribute and the base class carries
@@ -372,13 +373,13 @@ test('FIX_ROUND-5: ChatMessage re-resolves rail steps THROUGH withSegmentationSh
  * side; it did not deserve an exception here.
  */
 
-/**
- * The files whose approve/deny controls these guards cover. A rename must FAIL,
- * not silently pass.
- */
+/** The surface whose approve/deny controls carry the disable decision. */
 const APPROVAL_SURFACE_WITH_CONTROLS =
   'modules/js-tool/chat-extension/components/JsToolApprovalContent.tsx'
 
+/**
+ * Every surface these guards cover. A rename must FAIL, not silently pass.
+ */
 const APPROVAL_SURFACES = [
   APPROVAL_SURFACE_WITH_CONTROLS,
   'modules/mcp/chat-extension/components/ToolCallPendingApprovalContent.tsx',
@@ -434,7 +435,7 @@ function attr(el: ts.JsxOpeningLikeElement, name: string): ts.JsxAttribute | und
   )
 }
 
-/** Does the element carry a spread that could supply `name`? */
+/** Does the element carry a spread, which could supply or override any prop? */
 function hasSpread(el: ts.JsxOpeningLikeElement): boolean {
   return el.attributes.properties.some(ts.isJsxSpreadAttribute)
 }
@@ -458,6 +459,41 @@ function attrExpr(el: ts.JsxOpeningLikeElement, name: string): ts.Expression | u
  * are rejected — the previous text guard pinned the callee and ignored the
  * argument entirely.
  */
+/** Is `name` a const initialised from `elicitationBlockedReason(...)`? */
+function isBlockedReasonBinding(sf: ts.SourceFile, name: string, fallback: string): boolean {
+  let ok = false
+  const walk = (n: ts.Node): void => {
+    if (
+      ts.isVariableDeclaration(n) &&
+      ts.isIdentifier(n.name) &&
+      n.name.getText(sf) === name &&
+      n.initializer &&
+      ts.isCallExpression(n.initializer) &&
+      n.initializer.expression.getText(sf) === 'elicitationBlockedReason'
+    ) {
+      ok = true
+    }
+    ts.forEachChild(n, walk)
+  }
+  walk(sf)
+  return ok || name === fallback
+}
+
+/** Is `name` imported from the core elicitation seam (not a same-named local)? */
+function importedFromSeam(sf: ts.SourceFile, name: string): boolean {
+  let ok = false
+  for (const st of sf.statements) {
+    if (!ts.isImportDeclaration(st)) continue
+    const from = (st.moduleSpecifier as ts.StringLiteral).text
+    if (!from.endsWith('core/elicitation/transport')) continue
+    const named = st.importClause?.namedBindings
+    if (named && ts.isNamedImports(named)) {
+      if (named.elements.some(e => e.name.getText(sf) === name)) ok = true
+    }
+  }
+  return ok
+}
+
 function isExactCall(
   sf: ts.SourceFile,
   expr: ts.Expression | undefined,
@@ -470,7 +506,11 @@ function isExactCall(
     e.expression.getText(sf) === predicate &&
     e.arguments.length === 1 &&
     ts.isIdentifier(e.arguments[0]) &&
-    e.arguments[0].getText(sf) === argument
+    // The argument is checked by BINDING, not spelling (FIX_ROUND-14): it must be
+    // the local initialised from `elicitationBlockedReason(...)`. Hardcoding the
+    // name false-RED on a pure rename; ignoring it entirely let
+    // `p(blocked ?? 'no-transport')` and `p(f ? 'no-transport' : blocked)` through.
+    isBlockedReasonBinding(sf, e.arguments[0].getText(sf), argument)
   if (callOf(expr)) return true
   // One local hop: a `const` initialised to exactly that call, never reassigned.
   if (!ts.isIdentifier(expr)) return false
@@ -504,11 +544,12 @@ function isExactCall(
 
 test('FIX_ROUND-8: no `tooltip` on a Button that can be disabled (kit clobbers aria-label)', () => {
   // Two mechanical facts about the kit make this a defect, not a style choice:
-  // `Button` derives `aria-label` from a STRING `tooltip` unconditionally (so a
-  // tooltip silently REPLACES the visible label — FIX_ROUND-5 shipped exactly
-  // that and made Approve and Deny announce identically, WCAG 2.5.3 / 4.1.2), and
-  // `disabled` becomes the native attribute under `disabled:pointer-events-none`,
-  // so the trigger can never fire anyway.
+  // `Button` derives `aria-label` from a STRING `tooltip` WHEN NO EXPLICIT
+  // `aria-label` IS GIVEN (`ariaLabelProp ?? (typeof tooltip === 'string' ? …)`)
+  // — and these controls give none, so a tooltip silently REPLACES the visible
+  // label, which is what FIX_ROUND-5 shipped and made Approve and Deny announce
+  // identically (WCAG 2.5.3 / 4.1.2). And `disabled` becomes the native attribute
+  // under `disabled:pointer-events-none`, so the trigger can never fire anyway.
   const violations: string[] = []
   for (const rel of APPROVAL_SURFACES) {
     // No try/catch: a renamed file must fail, not silently pass.
@@ -536,8 +577,14 @@ test('FIX_ROUND-8: no `tooltip` on a Button that can be disabled (kit clobbers a
 
 test('FIX_ROUND-9: the approval controls disable ONLY through the seam predicate', () => {
   const sf = parse(APPROVAL_SURFACE_WITH_CONTROLS)
+  assert.ok(
+    importedFromSeam(sf, 'elicitationIsUnactionable'),
+    'elicitationIsUnactionable must be imported from the core elicitation seam — a ' +
+      'same-named local or sibling-module function satisfies a text match and is ' +
+      'tsc-clean, while deciding something else entirely',
+  )
   const buttons = elements(sf, 'Button')
-  const disabling = buttons.filter(el => attr(el, 'disabled') !== undefined || hasSpread(el))
+  const disabling = buttons.filter(el => attr(el, 'disabled') !== undefined)
   assert.ok(disabling.length >= 2, `expected the approve/deny controls, found ${disabling.length}`)
 
   for (const el of buttons) {
@@ -560,8 +607,56 @@ test('FIX_ROUND-9: the approval controls disable ONLY through the seam predicate
   }
 })
 
+test('FIX_ROUND-14: the click handler gates on the SAME predicate as the control', () => {
+  // The FIX_ROUND-9 guard covered only the JSX `disabled` attribute. The
+  // re-entrancy early-return in `resolve()` decides whether the POST actually
+  // happens, and it was unguarded — an auditor proved that latching it there
+  // reintroduces the FIX_ROUND-4 bug in a WORSE form: the control still RENDERS
+  // enabled, so the user clicks, and the click silently no-ops.
+  const sf = parse(APPROVAL_SURFACE_WITH_CONTROLS)
+  const resolveFn = (() => {
+    let found: ts.VariableDeclaration | undefined
+    const walk = (n: ts.Node): void => {
+      if (ts.isVariableDeclaration(n) && n.name.getText(sf) === 'resolve') found = n
+      ts.forEachChild(n, walk)
+    }
+    walk(sf)
+    return found
+  })()
+  assert.ok(resolveFn, 'the card must still declare a `resolve` handler')
+
+  // Its guard clause must include the seam predicate as a whole operand.
+  const guards: string[] = []
+  const walk = (n: ts.Node): void => {
+    if (ts.isIfStatement(n)) guards.push(n.expression.getText(sf))
+    ts.forEachChild(n, walk)
+  }
+  walk(resolveFn)
+  const gate = guards.find(g => g.includes('submitting'))
+  assert.ok(gate, `resolve() must keep its re-entrancy guard, found ${guards.join(' | ')}`)
+  assert.match(
+    gate.replace(/\s+/g, ' '),
+    /elicitationIsUnactionable\(/,
+    `resolve()'s guard must gate on elicitationIsUnactionable, got \`${gate}\` — ` +
+      `gating it on the raw blocked reason latches the card while the control still ` +
+      `renders ENABLED, so the click silently no-ops with no signal at all`,
+  )
+  assert.doesNotMatch(
+    gate.replace(/\s+/g, ' '),
+    /blocked\s*(!==|===|!=|==)/,
+    `resolve()'s guard must not re-derive from the raw blocked reason, got \`${gate}\``,
+  )
+})
+
 test('FIX_ROUND-11: the two extracted DECISIONS decide at their call sites', () => {
   const sf = parse(APPROVAL_SURFACE_WITH_CONTROLS)
+  for (const p of ['elicitationIsError', 'resolveDidFail']) {
+    assert.ok(
+      importedFromSeam(sf, p),
+      `${p} must be imported from the core elicitation seam — a same-named local ` +
+        `satisfies a text match while deciding something else`,
+    )
+  }
 
   // ── the status tone ────────────────────────────────────────────────────────
   // Located by the element whose own attributes carry `data-testid={statusId}`,
@@ -633,11 +728,42 @@ test('FIX_ROUND-11: the two extracted DECISIONS decide at their call sites', () 
   let guard: ts.Node | undefined = judging[0].parent
   while (guard && !ts.isIfStatement(guard)) guard = guard.parent
   assert.ok(guard && ts.isIfStatement(guard), 'the judgement must sit inside an `if`')
+  const cond = guard.expression
+  assert.ok(
+    ts.isCallExpression(cond) && ts.isObjectLiteralExpression(cond.arguments[0]),
+    `resolveDidFail must be called with the live signals object, got ` +
+      `\`${cond.getText(sf)}\``,
+  )
+  // Constant arguments make the call constant-true (FIX_ROUND-14): every property
+  // must be a shorthand or an identifier reference, never a literal.
+  for (const prop of (
+    (cond as ts.CallExpression).arguments[0] as ts.ObjectLiteralExpression
+  ).properties) {
+    const live =
+      ts.isShorthandPropertyAssignment(prop) ||
+      (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.initializer))
+    assert.ok(
+      live,
+      `resolveDidFail's signals must be live values, got \`${prop.getText(sf)}\` — a ` +
+        `constant makes the judgement constant`,
+    )
+  }
   assert.ok(
     ts.isCallExpression(guard.expression) &&
       guard.expression.expression.getText(sf) === 'resolveDidFail',
     `the failure judgement must be governed by resolveDidFail(...), got ` +
       `\`${guard.expression.getText(sf)}\` — judging it inline marked a SUCCESSFUL ` +
       `approve as failed whenever the provider held no entry`,
+  )
+  // …and in the THEN branch (FIX_ROUND-14). Walking to the enclosing `if` and
+  // checking only its condition let `if (resolveDidFail(...)) {} else
+  // setResolveFailed(true)` pass — a one-token inversion that marks every
+  // SUCCESSFUL approve as failed. The regex this replaced required adjacency and
+  // did catch it; the AST rewrite traded that away.
+  const then = guard.thenStatement
+  assert.ok(
+    judging[0].getStart(sf) >= then.getStart(sf) && judging[0].getEnd() <= then.getEnd(),
+    'the failure judgement must be in the THEN branch of resolveDidFail — an `else` ' +
+      'inverts it and marks every successful approve as failed',
   )
 })
