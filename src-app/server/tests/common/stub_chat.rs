@@ -527,6 +527,51 @@ fn script(
             let answer = last_tool_result_text(messages);
             (Some(format!("Result: {answer}")), None)
         }
+        // ask_user whose `schema` argument is JSON-ENCODED AS A STRING — the
+        // EXACT shape observed in the live session that motivated the
+        // stringified-argument fix. Models routinely encode a nested object
+        // argument one level too many; before the fix this reached the browser
+        // as a string and rendered a form with ZERO fields. The continuation
+        // echoes whatever the user answered.
+        "ask_user_stringified" => {
+            if let (false, Some(wire)) =
+                (had_tool_result, resolve_wire_name(tool_names, "ask_user"))
+            {
+                return (
+                    None,
+                    Some((
+                        wire.to_string(),
+                        json!({
+                            "message": "What would you like to name this new project?",
+                            // NOTE the value is a STRING, not an object. This is
+                            // the defect, reproduced verbatim.
+                            "schema": r#"{"properties": {"name": {"title": "Project name", "type": "string"}, "description": {"title": "Brief description (optional)", "type": "string"}, "instructions": {"title": "System instructions for conversations in this project (optional)", "type": "string"}}, "required": ["name"], "type": "object"}"#
+                        }),
+                    )),
+                );
+            }
+            let answer = last_tool_result_text(messages);
+            (Some(format!("You chose: {answer}")), None)
+        }
+        // ask_user whose `schema` is a string that is NOT valid JSON — the
+        // unrecoverable half of the same class. The built-in must answer with an
+        // ACTIONABLE tool error (what arrived / what is required / a copyable
+        // example) instead of hanging on a form nobody can fill in.
+        "ask_user_bad_string_schema" => {
+            if let (false, Some(wire)) =
+                (had_tool_result, resolve_wire_name(tool_names, "ask_user"))
+            {
+                return (
+                    None,
+                    Some((
+                        wire.to_string(),
+                        json!({ "message": "Pick one", "schema": "not json {" }),
+                    )),
+                );
+            }
+            let answer = last_tool_result_text(messages);
+            (Some(format!("Result: {answer}")), None)
+        }
         // Emit a code_sandbox `write_file` overwriting `STUB_FILE` with
         // `STUB_CONTENT`. Used by the sandbox version-back round-trip test: the
         // write overwrites the copied-in editable file so the per-turn
