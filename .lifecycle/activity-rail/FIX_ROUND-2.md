@@ -377,14 +377,101 @@ Every number below is from a run watched to completion. Nothing was `.skip`ped t
 | AP-4 guard negative control | (temporary re-coupling) | **1 failed** as designed, then green on revert |
 | UI check gate | `npm run check` | **exit 0** (tsc + 9 lints + 10 registry/coverage checks) |
 | **INV-3 REAL-stream e2e** | `playwright test activity-rail-breakout-real.spec.ts --workers=1` | **1 passed (2.1m)**; test 17.9s |
+| Rail e2e family (all 9 `activity-rail-*.spec.ts`) | `playwright test … --workers=1` | **18 passed, 0 failed (6.1m)** |
+| mcp tool-call integration | `cargo test --test integration_tests mcp::tool_call -- --test-threads=4` | **22 passed, 1 failed** (2356 filtered out) |
 | UI unit suite, this branch | `npm run test:unit` | **825 tests / 811 pass / 14 fail** |
 | UI unit suite, untouched `HEAD~1` (baseline) | `npm run test:unit` | **824 tests / 810 pass / 14 fail — the same 14 files** |
 
 The unit-suite delta is therefore **+1 test, +1 pass, +0 failures**. The 14 failures are the
 pre-existing `ERR_UNSUPPORTED_DIR_IMPORT` loader defect recorded as new finding #2 above.
 
+The **one** failing integration test is `mcp::tool_call_history_test::chat_path_tool_call_records_source_chat`,
+and it is CLASS A on CLAUDE.md's known test-environment floor (genuinely-blocked missing dep),
+verified from the log signature, not assumed:
+
+```
+panicked at server/tests/mcp/tool_call_history_test.rs:657:10:
+ANTHROPIC_API_KEY required (source tests/.env.test): NotPresent
+```
+
+`src-app/server/tests/.env.test` **does not exist in this worktree**, so the test panics on the
+missing key before any product code runs. It is a real-LLM test in a file this round never
+touched, and no server change here can affect it. Note it *panics* rather than self-skipping —
+which is arguably the right call for a real-LLM assertion, but it means the mcp integration
+suite cannot report clean on a box without the key. Not fixed here (weakening it to a skip
+would be exactly the "`.skip` to go green" move the brief forbids); recorded.
+
 `npm run gen:state-matrix` was re-run and committed (the generated matrix went stale from the
 `JsToolApprovalContent` + moved-file changes); `check:state-matrix` is green.
+
+## Lifecycle gate state after this round — phases 6 and 7 are RED, deliberately
+
+`node .claude/lifecycle/lifecycle-check.mjs --phase N --repo $PWD --dir .lifecycle/activity-rail
+--base origin/feat/agent-core`:
+
+| phase | result |
+|---|---|
+| 1 PLAN | **EXIT 0** |
+| 2 PLAN_AUDIT | **EXIT 0** |
+| 3 TESTS | **EXIT 0** |
+| 4 DECISIONS | **EXIT 0** |
+| 5 IMPLEMENT | **EXIT 0** |
+| 6 BLIND_AUDIT | **EXIT 1** — 29 hunks with 0 angles; need ≥ 3 |
+| 7 FIX_LOOP | **EXIT 1** — "fix loop not converged — 2 new confirmed finding(s) in the final round" |
+| 8 TEST_RESULTS | **EXIT 0** |
+| 9 HUMAN_FEEDBACK | **EXIT 0** |
+
+Both failures have ONE root cause and it is not a technicality: **this round added 32 hunks of
+code that no blind audit has seen.** `AUDIT_COVERAGE.tsv` was last regenerated at `e9784056c`
+("re-gate phases 2 + 6 after the branch advanced") for the tree as of `589cc38f0`; the two
+commits above moved past it.
+
+**`AUDIT_COVERAGE.tsv` was deliberately NOT regenerated.** `gen-coverage.mjs` assigns angles
+per FILE-GROUP prefix from `angles.json`, which records what the five auditors *actually*
+reviewed — its own header says it "does not invent coverage". Re-running it would stamp
+`chat/core/elicitation/transport.ts`, the new migration and the new e2e spec as reviewed by
+angles whose auditors ran before those files existed. That is making the mechanism green
+while the property is false — the precise failure this feature's own FIX_ROUND-1 caught twice
+(INV-5's green-throughout acceptance test; the deleted-group-card spec that asserted
+`toHaveCount(0)` vacuously). Not repeating it here.
+
+Phase 7 is the same cause seen from the other end: the round honestly reports 2 new confirmed
+findings, and the gate correctly refuses to call that converged.
+
+**Both close together, and only one way:** a blind multi-angle audit of `589cc38f0..HEAD`,
+then a `FIX_ROUND-3` dispositioning whatever it returns (expected to be small — the diff is
+one migration, one core seam, three consumer edits, two tests and one spec). Spawning blind
+auditors was outside this session's authority, so it is handed over rather than faked.
+
+Uncovered hunks, by file:
+
+```
+14  src-app/ui/src/modules/mcp/chat-extension/extension.tsx      (4 new + 10 re-anchored by the insert)
+ 5  src-app/ui/src/modules/js-tool/.../JsToolApprovalContent.tsx
+ 3  src-app/ui/src/modules/chat/core/extensions/registry.tsx
+ 2  src-app/ui/src/modules/chat/components/ChatMessage.tsx
+ 1  src-app/ui/tests/e2e/chat/activity-rail-breakout-real.spec.ts
+ 1  src-app/ui/src/modules/mcp/.../ToolCallPendingApprovalContent.tsx
+ 1  src-app/ui/src/modules/mcp/.../ToolCallPendingApprovalCancelContent.tsx
+ 1  src-app/ui/src/modules/chat/core/elicitation/transport.ts
+ 1  src-app/server/.../202607200200_mcp_tool_calls_lookup_index_owner_leading.sql
+```
+
+## Self-review notes (NOT a substitute for the blind audit above)
+
+Recorded so the auditor has the author's own known-cost list rather than discovering it cold:
+
+- The elicitation seam adds a **second whole-store subscription** to `McpComposer`, alongside
+  the rail live source's. FIX_ROUND-1 already carries the narrowing of that pattern as a
+  deliberately-open MEDIUM. The new one is strictly cheaper in practice: it re-renders only
+  mounted `JsToolApprovalContent` cards, which exist only while a `run_js` script is
+  suspended.
+- The transport's `has`/`status` read through `McpComposer.$` (the NON-reactive accessor).
+  That is deliberate: they are called from a plain function, and a reactive proxy read outside
+  a component render is an illegal hook call. Reactivity comes from `useSyncExternalStore`.
+- `?message_id=` still has no in-tree caller; `idx_mcp_tool_calls_user_message` is built for
+  an API affordance, not a shipped code path. Kept (the filter is public API and the migration
+  that added it is already on the branch), but it is index weight nothing currently reads.
 
 ## Still open (unchanged from FIX_ROUND-1)
 
