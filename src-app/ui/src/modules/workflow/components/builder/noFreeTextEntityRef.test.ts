@@ -133,12 +133,11 @@ test('the scanner would CATCH a regression (negative control)', () => {
   // Guards the guard: if `offendingBindings` silently stopped matching, the
   // test above would pass vacuously forever. This is the EXACT shape the tool
   // step had before this change — a text box and nothing else.
-  // NB: a placeholder testid, not the real `wf-builder-tool-name` — testid
-  // literals must be globally unique (the dev server enforces it), and a
-  // fixture is not a surface.
+  // NB: the fixtures carry NO data-testid — these strings are scanned by the
+  // shared testid-registry generator, and a unit test's fixture must never
+  // enter the app's cross-repo production registry.
   const regressed = `
     <Input
-      data-testid="fixture-tool-name"
       value={step.tool ?? ''}
       onChange={e => patch({ tool: e.target.value })}
     />`
@@ -149,11 +148,11 @@ test('the scanner would CATCH a regression (negative control)', () => {
   // And the carve-out is narrow: adding a picker for the SAME field clears it,
   // adding one for a DIFFERENT field does not.
   const withPicker = `${regressed}
-    <Combobox data-testid="fixture-x" options={o} value={step.tool ?? ''} onChange={f} />`
+    <Combobox options={o} value={step.tool ?? ''} onChange={f} />`
   assert.deepEqual(offendingBindings(withPicker), [])
 
   const withUnrelatedPicker = `${regressed}
-    <Select data-testid="fixture-y" options={o} value={step.server ?? ''} onChange={f} />`
+    <Select options={o} value={step.server ?? ''} onChange={f} />`
   assert.deepEqual(offendingBindings(withUnrelatedPicker), [
     'step.tool is typed, with no picker for it',
   ])
