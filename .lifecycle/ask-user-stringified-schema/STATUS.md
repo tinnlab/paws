@@ -26,7 +26,8 @@ amendment; phase 5's drift round closed at 0 unresolved). Phases 6-9 NOT started
 | Backend `cargo check -p ziee --lib --tests` | — | **clean** (warnings only) |
 | Frontend `tsc --noEmit -p ui/tsconfig.json` | — | **clean** |
 | Backend unit (first run) | `cargo test -p ziee --lib -- <9 module filters>` | **4 FAILED** — see below |
-| Backend unit (after fixes) | same | see `askuser-unit2.log` |
+| Backend unit (FINAL) | same | **135 passed / 0 failed / 0 ignored** (`askuser-unit3.log`) — of which **36 are new** in this branch |
+| `check:state-matrix` (ui) | `npm run check:state-matrix` | **FAIL, as predicted** — "state matrix is stale … a new conditional render was added". This is ITEM-18, which is NOT done. It confirms the PLAN_AUDIT ITEM-18 CONCERN rather than contradicting it. |
 
 ### The 4 first-run failures, and what they were
 
@@ -64,12 +65,14 @@ RUN, so it is unproven:
   PLAN.md *Patterns to follow* (in-worker `http.createServer` → `custom` provider
   → tool-capable model row; loopback passes the `DEV_LOCAL` SSRF policy;
   response shapes port from `server/tests/common/stub_chat.rs:777-855`).
-- **ITEM-18 gallery + state-matrix coverage** — **not done.** ITEM-17 adds a NEW
-  named conditional render state (`mcp-elicitation-no-fields-card`), so
-  `npm run check`'s `check:state-matrix` / `check:gallery-coverage` will almost
-  certainly FAIL until a gallery cell (incl. a 390px state) is added. This is a
-  known, predicted gate failure, flagged at plan time as a CONCERN in
-  PLAN_AUDIT ITEM-18.
+- **ITEM-18 gallery + state-matrix coverage** — **not done, and now MEASURED as
+  failing.** ITEM-17 adds a NEW named conditional render state
+  (`mcp-elicitation-no-fields-card`), and `npm run check:state-matrix` reports
+  "state matrix is stale — run `npm run gen:state-matrix` … then map it in
+  stateCoverage.ts (a gallery entry or an allow-listed reason)". So
+  `npm run check` CANNOT pass until a gallery cell (incl. a 390px state) is
+  added. Predicted at plan time as the PLAN_AUDIT ITEM-18 CONCERN; now
+  confirmed by running it.
 - **`npm run check` / `npm run gate:ui`** — not run.
 
 ## Not started
