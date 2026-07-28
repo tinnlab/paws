@@ -51,37 +51,79 @@ const LEGACY_SINGLE_COLUMN: [(&str, &[&str]); 2] = [
     ("idx_mcp_tool_calls_conv", &["conversation_id"]),
 ];
 
-#[tokio::test]
-async fn every_index_over_a_filtered_column_leads_with_user_id() {
-    let server = crate::common::TestServer::start().await;
-    let pool = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(2)
-        .connect(&server.database_url)
-        .await
-        .expect("connect to the migrated test database");
+/// One index as the catalog reports it: its name and its ORDERED KEY columns,
+/// with `None` for an expression key whose covered columns cannot be determined.
+type IndexRow = (String, Vec<Option<String>>);
 
+/// THE RULE, as one function.
+///
+/// FIX_ROUND-8: extracted so the negative control can exercise the REAL
+/// assertion. The previous "negative control" created a violating index and then
+/// judged it with its own local helper — two Postgres tautologies — so the exact
+/// mutation its docstring named (`Some("user_id")` -> `cols.first().is_some()`)
+/// left BOTH tests green. A control that cannot fail when the rule is weakened is
+/// not a control.
+///
+/// Returns the number of NON-exempt indexes actually checked. Panics on the first
+/// violation, which is what makes it usable as the subject of `catch_unwind`.
+fn assert_owner_leading(rows: &[IndexRow]) -> usize {
+    let mut checked = 0usize;
+    for (name, raw) in rows {
+        let leads_with_owner = matches!(raw.first(), Some(Some(c)) if c == "user_id");
+
+        // An EXPRESSION key (NULL attname) hides which columns it covers.
+        //
+        // FIX_ROUND-8: this is now asked ONLY when the index does not already
+        // lead with `user_id`. Asking it first hard-failed on a fully COMPLIANT
+        // index — `CREATE INDEX … (user_id, lower(tool_name))` leads with the
+        // owner and covers no filtered column, yet carries a NULL key — which is
+        // the same false-RED class the INCLUDE fix removed one round earlier.
+        if !leads_with_owner && raw.iter().any(Option::is_none) {
+            panic!(
+                "index `{name}` does not lead with user_id AND has an EXPRESSION key, so \
+                 this guard cannot rule out that it covers a filtered column. Lead it with \
+                 user_id, or express the key as a plain column."
+            );
+        }
+
+        let cols: Vec<String> = raw.iter().flatten().cloned().collect();
+        if !cols.iter().any(|c| FILTERED.contains(&c.as_str())) {
+            continue;
+        }
+        if LEGACY_SINGLE_COLUMN
+            .iter()
+            .any(|(n, c)| n == name && cols.as_slice() == *c)
+        {
+            continue;
+        }
+        assert!(
+            leads_with_owner,
+            "index `{name}` covers a filtered column {cols:?} but does not lead with \
+             user_id — the owner predicate would become a post-Filter, reading other \
+             users' rows off the heap before discarding them (see 202607200200). \
+             If this index is genuinely needed, lead it with user_id."
+        );
+        checked += 1;
+    }
+    checked
+}
+
+/// Read the table's indexes from the catalog, as `assert_owner_leading` wants them.
+async fn index_rows(pool: &sqlx::PgPool) -> Vec<IndexRow> {
     // `pg_index.indkey` is the ordered attribute list, so `ordinality = 1` is the
-    // LEADING column. This sees every index on the table however it was created —
-    // CREATE INDEX, a UNIQUE / PRIMARY KEY / EXCLUDE constraint, or a column-level
-    // constraint — which is the whole reason the guard lives here rather than in a
-    // text replay of the migrations.
+    // LEADING column. This sees every index however it was created — CREATE INDEX,
+    // a UNIQUE / PRIMARY KEY / EXCLUDE constraint, or a column-level constraint —
+    // which is the whole reason the guard lives here rather than in a text replay
+    // of the migrations.
     //
-    // FIX_ROUND-7, two corrections:
-    //  * `ordinality <= ix.indnkeyatts` restricts to KEY columns. `indkey` also
-    //    carries INCLUDE (non-key) payload columns, so
-    //    `CREATE INDEX … (created_at) INCLUDE (server_id)` looked like an index
-    //    "covering" a filtered column that does not lead with user_id and FAILED —
-    //    a false RED on a legitimate covering index, and a regression versus the
-    //    parser this replaced.
-    //  * an EXPRESSION key has `indkey = 0` and therefore a NULL attname. It is
-    //    kept as NULL here and handled explicitly below rather than being mapped
-    //    to "" and silently skipped (which is what the first cut did, while its
-    //    comment claimed the opposite).
-    //
-    // Scoped to the `public` schema and grouped by index OID, so a same-named
-    // relation in another schema cannot merge its attributes into one ambiguous
-    // array.
-    let rows = sqlx::query(
+    //  * `ordinality <= ix.indnkeyatts` restricts to KEY columns: `indkey` also
+    //    carries INCLUDE payload, so a legitimate covering index looked like one
+    //    "covering" a filtered column without leading with user_id (FIX_ROUND-7).
+    //  * an EXPRESSION key has `indkey = 0` and a NULL attname; it is KEPT as NULL
+    //    and judged by the rule rather than mapped to "" and silently skipped.
+    //  * scoped to `public` and grouped by index OID, so a same-named relation in
+    //    another schema cannot merge its attributes into one ambiguous array.
+    sqlx::query(
         r#"
         SELECT
             i.relname                                  AS index_name,
@@ -98,85 +140,82 @@ async fn every_index_over_a_filtered_column_leads_with_user_id() {
         ORDER BY i.relname
         "#,
     )
-    .fetch_all(&pool)
+    .fetch_all(pool)
     .await
-    .expect("read pg_indexes for mcp_tool_calls");
+    .expect("read the index catalog for mcp_tool_calls")
+    .into_iter()
+    .map(|r| (r.get("index_name"), r.get("columns")))
+    .collect()
+}
 
+#[tokio::test]
+async fn every_index_over_a_filtered_column_leads_with_user_id() {
+    let server = crate::common::TestServer::start().await;
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&server.database_url)
+        .await
+        .expect("connect to the migrated test database");
+
+    let rows = index_rows(&pool).await;
     assert!(
         rows.len() >= 4,
-        "expected the table's indexes to be present — found {}; the query is \
-         looking at the wrong table and this guard would be vacuous",
+        "expected the table's indexes to be present — found {}; the query is looking \
+         at the wrong table and this guard would be vacuous",
         rows.len()
     );
 
-    let mut checked = 0usize;
-    let mut seen_legacy = 0usize;
-    for row in &rows {
-        let name: String = row.get("index_name");
-        let raw: Vec<Option<String>> = row.get("columns");
-
-        // An EXPRESSION key (attname NULL) cannot be compared against the filtered
-        // list at all. Refuse rather than skip: "I could not tell" must not read
-        // as "it is fine" in a security guard (FIX_ROUND-7 — the first cut mapped
-        // NULL to "" and silently skipped, while its comment claimed otherwise).
-        // A plain-column expression like `((server_id))` is canonicalised by
-        // Postgres back to a real column, so this only fires on a genuine
-        // expression, which the planner cannot use for the query's `col = $n`
-        // equality anyway — hence "express it explicitly" rather than a hard ban.
-        assert!(
-            raw.iter().all(Option::is_some),
-            "index `{name}` has an EXPRESSION key, so this guard cannot determine \
-             which columns it covers. Express it as a plain owner-leading column \
-             index, or add it to a documented exemption with the reason."
-        );
-        let cols: Vec<String> = raw.into_iter().map(Option::unwrap).collect();
-
-        if !cols.iter().any(|c| FILTERED.contains(&c.as_str())) {
-            continue;
-        }
-        if LEGACY_SINGLE_COLUMN
-            .iter()
-            .any(|(n, c)| *n == name && cols.as_slice() == *c)
-        {
-            seen_legacy += 1;
-            continue;
-        }
-        assert_eq!(
-            cols.first().map(String::as_str),
-            Some("user_id"),
-            "index `{name}` covers a filtered column {cols:?} but does not lead with \
-             user_id — the owner predicate would become a post-Filter, reading other \
-             users' rows off the heap before discarding them (see 202607200200). \
-             If this index is genuinely needed, lead it with user_id."
-        );
-        checked += 1;
-    }
-
-    // Guard the guard: the loop must not be vacuous.
+    let checked = assert_owner_leading(&rows);
     assert!(
         checked >= 2,
-        "expected at least the (user_id, tool_use_id) and (user_id, message_id) \
-         lookup indexes to be checked, checked {checked} — the filter above is \
-         matching nothing and the assertion would be vacuous"
+        "expected at least the (user_id, tool_use_id) and (user_id, message_id) lookup \
+         indexes to be checked, checked {checked} — the filter is matching nothing and \
+         the assertion would be vacuous"
     );
-    // The exemptions may SHRINK (dropping a legacy single-column index is the
-    // security-CORRECT action and must not fail the suite — FIX_ROUND-7; the
-    // first cut asserted equality and so punished the fix), but never grow.
-    assert!(
-        seen_legacy <= LEGACY_SINGLE_COLUMN.len(),
-        "more exempted indexes than the allowlist names — the exemption matched \
-         something it should not"
-    );
+
+    // ANTI-ROT: every exemption must still name a REAL index, with EXACTLY the
+    // columns it claims.
+    //
+    // FIX_ROUND-8: `seen_legacy <= LEGACY.len()` was UNFALSIFIABLE (relnames are
+    // unique per schema and rows are grouped by OID, so it could never exceed the
+    // length), and it had replaced the only check that an exemption still
+    // corresponds to something. A stale entry is a STANDING HOLE: it silently
+    // re-exempts any future index re-created under that name.
+    //
+    // Tolerating absence does not work either — a stale entry and a legitimately
+    // dropped index look identical. So existence is REQUIRED, and dropping a
+    // legacy index simply means deleting its exemption in the same change. That
+    // is two lines of correct hygiene, not a punishment for fixing the schema:
+    // an exemption for an index that no longer exists protects nothing and can
+    // only ever launder a future one.
+    for (name, cols) in LEGACY_SINGLE_COLUMN {
+        let row = rows.iter().find(|(n, _)| n == name).unwrap_or_else(|| {
+            panic!(
+                "legacy exemption `{name}` names an index that does not exist. If you \
+                 dropped it — good, that is the shape this rule condemns — delete the \
+                 exemption too; leaving it lets a future index re-created under that \
+                 name be silently exempt."
+            )
+        });
+        let actual: Vec<String> = row.1.iter().flatten().cloned().collect();
+        assert_eq!(
+            actual.as_slice(),
+            cols,
+            "legacy exemption `{name}` no longer names a single-column ({cols:?}) index \
+             — it now covers {actual:?}. Remove the exemption or update it; leaving it \
+             is a standing hole."
+        );
+    }
 }
 
-/// The guard's own NEGATIVE CONTROL, committed rather than run by hand.
+/// The guard's own NEGATIVE CONTROL — it drives the REAL rule.
 ///
-/// FIX_ROUND-7: the deleted unit test had one
-/// (`assert_owner_leading_rejects_a_single_column_index_on_every_filtered_column`)
-/// and the replacement did not, so weakening the rule — e.g. `Some("user_id")` to
-/// `cols.first().is_some()` — would have left the guard above green. This creates a
-/// real violating index on the real table, asserts the rule REJECTS it, and drops
-/// it again, for EVERY filtered column.
+/// FIX_ROUND-8: this now calls `assert_owner_leading` under `catch_unwind` on the
+/// live catalog, so weakening that function (the mutation the previous version's
+/// docstring named, and which left it green) turns THIS red. It creates a real
+/// violating index on the real table for every filtered column, asserts the rule
+/// REJECTS it, asserts the owner-leading form of the same index is ACCEPTED — so
+/// the rule is not simply rejecting everything — and drops both.
 #[tokio::test]
 async fn the_owner_leading_rule_rejects_a_single_column_index_on_every_filtered_column() {
     let server = crate::common::TestServer::start().await;
@@ -186,65 +225,57 @@ async fn the_owner_leading_rule_rejects_a_single_column_index_on_every_filtered_
         .await
         .expect("connect to the migrated test database");
 
+    // Sanity: the rule accepts the schema as shipped, so a rejection below is
+    // caused by the fixture and not by pre-existing state.
+    assert!(
+        std::panic::catch_unwind(|| assert_owner_leading(&[])).is_ok(),
+        "the rule must accept an empty set"
+    );
+
     for col in FILTERED {
-        let idx = format!("idx_negctl_{col}");
-        sqlx::query(&format!(
-            "CREATE INDEX {idx} ON public.mcp_tool_calls ({col})"
-        ))
-        .execute(&pool)
-        .await
-        .unwrap_or_else(|e| panic!("create the violating index on {col}: {e}"));
+        let bad = format!("idx_negctl_{col}");
+        sqlx::query(&format!("CREATE INDEX {bad} ON public.mcp_tool_calls ({col})"))
+            .execute(&pool)
+            .await
+            .unwrap_or_else(|e| panic!("create the violating index on {col}: {e}"));
 
-        let violating = leading_column_of(&pool, &idx).await;
-        assert_ne!(
-            violating.as_deref(),
-            Some("user_id"),
-            "the fixture index on `{col}` must genuinely violate the rule"
-        );
+        let rows = index_rows(&pool).await;
         assert!(
-            FILTERED.contains(&col),
-            "the fixture must cover a filtered column"
+            rows.iter().any(|(n, _)| n == &bad),
+            "the fixture index on `{col}` is not in the catalog"
+        );
+        let rejected = std::panic::catch_unwind(|| assert_owner_leading(&rows)).is_err();
+        assert!(
+            rejected,
+            "THE RULE DID NOT REJECT a single-column index on the filtered column \
+             `{col}`. Either the rule has been weakened, or `{col}` is no longer \
+             treated as a filtered column."
         );
 
-        // …and the owner-leading form of the same index is ACCEPTED, so the rule
-        // is not simply rejecting everything.
-        let ok_idx = format!("idx_negctl_ok_{col}");
+        sqlx::query(&format!("DROP INDEX public.{bad}"))
+            .execute(&pool)
+            .await
+            .expect("drop the violating fixture index");
+
+        // …and the OWNER-LEADING form of the same index is accepted.
+        let good = format!("idx_negctl_ok_{col}");
         sqlx::query(&format!(
-            "CREATE INDEX {ok_idx} ON public.mcp_tool_calls (user_id, {col})"
+            "CREATE INDEX {good} ON public.mcp_tool_calls (user_id, {col})"
         ))
         .execute(&pool)
         .await
         .unwrap_or_else(|e| panic!("create the owner-leading index on {col}: {e}"));
-        assert_eq!(
-            leading_column_of(&pool, &ok_idx).await.as_deref(),
-            Some("user_id"),
-            "the owner-leading form must lead with user_id"
+
+        let rows = index_rows(&pool).await;
+        assert!(
+            std::panic::catch_unwind(|| assert_owner_leading(&rows)).is_ok(),
+            "the rule REJECTED the owner-leading form on `{col}` — it is rejecting \
+             everything, so the rejection above proves nothing"
         );
 
-        sqlx::query(&format!("DROP INDEX public.{idx}, public.{ok_idx}"))
+        sqlx::query(&format!("DROP INDEX public.{good}"))
             .execute(&pool)
             .await
-            .expect("drop the fixture indexes");
+            .expect("drop the owner-leading fixture index");
     }
-}
-
-/// The leading KEY column of an index, by the same query shape the guard uses.
-async fn leading_column_of(pool: &sqlx::PgPool, index_name: &str) -> Option<String> {
-    sqlx::query(
-        r#"
-        SELECT a.attname AS col
-        FROM pg_class i
-        JOIN pg_namespace n ON n.oid = i.relnamespace AND n.nspname = 'public'
-        JOIN pg_index ix    ON ix.indexrelid = i.oid
-        JOIN LATERAL unnest(ix.indkey) WITH ORDINALITY AS k(attnum, ordinality)
-             ON k.ordinality = 1
-        LEFT JOIN pg_attribute a ON a.attrelid = ix.indrelid AND a.attnum = k.attnum
-        WHERE i.relname = $1
-        "#,
-    )
-    .bind(index_name)
-    .fetch_one(pool)
-    .await
-    .ok()
-    .and_then(|r| r.get::<Option<String>, _>("col"))
 }

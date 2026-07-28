@@ -9,6 +9,7 @@ import {
   elicitationVersion,
   hasElicitationTransport,
   elicitationBlockedReason,
+  elicitationIsUnactionable,
   elicitationExists,
   registerElicitation,
   resolveElicitationVia,
@@ -64,7 +65,11 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
   // the same reactivity (the provider forwards its store's changes) with no
   // import of the providing module. Same pattern as `ActivityRail`'s live-step
   // subscription.
-  useSyncExternalStore(subscribeElicitation, elicitationVersion, elicitationVersion)
+  const seamVersion = useSyncExternalStore(
+    subscribeElicitation,
+    elicitationVersion,
+    elicitationVersion,
+  )
   const status = elicitationStatus(data.elicitation_id)
   const resolved: 'approved' | 'denied' | null =
     status === 'accepted' ? 'approved' : status === 'declined' || status === 'cancelled' ? 'denied' : null
@@ -107,7 +112,11 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
     // `resolveFailed` instead, which keeps the buttons enabled and reports a
     // resolve the user never attempted, and latched.
     registerElicitation(runJsElicitationInit(data))
-  }, [hasTransport, resolved, data])
+    // `seamVersion` is a dep so a FAILED register is retried on the next seam
+    // change (FIX_ROUND-8). A failed register bumps nothing itself, so without a
+    // trigger tied to the seam the effect never re-ran and the state it produced
+    // could not clear — the latch this card has now grown three times.
+  }, [hasTransport, resolved, data, seamVersion])
 
   /**
    * Focus the outcome when the buttons unmount. Without this, resolving destroys
@@ -135,10 +144,9 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
   const resolve = async (action: 'accept' | 'decline') => {
     // Re-entrancy guard: never POST twice to a single-use elicitation.
     // Only `no-transport` blocks a retry; a failed resolve stays actionable.
-    // Only the two DISABLING reasons block a retry; `resolve-failed` stays
-    // actionable, which is what makes it a retry rather than a dead end.
-    if (submitting || resolved !== null || blocked === 'no-transport' || blocked === 'not-registered')
-      return
+    // Only the UNACTIONABLE state blocks; everything else stays clickable, which
+    // is what keeps a degraded card recoverable rather than latched.
+    if (submitting || resolved !== null || elicitationIsUnactionable(blocked)) return
     setSubmitting(true)
     setResolveFailed(false)
     try {
@@ -158,9 +166,13 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
       // transport. The shipped provider swallows its own errors and signals a
       // rejected POST by ROLLING THE ENTRY BACK — so the failure a user actually
       // hits produced no message at all.
-      // FIX_ROUND-7: `undefined` counts too. When the provider holds no entry its
+      // FIX_ROUND-7: `undefined` counts too — with no entry the provider's
       // optimistic set is a no-op and its catch returns early, so the status stays
-      // undefined and a genuinely no-op'd resolve reported success.
+      // undefined. Defensive rather than observed (FIX_ROUND-8): the shipped
+      // provider never deletes an entry, and the `not-registered` state already
+      // describes the no-entry case at higher precedence. Kept because the seam's
+      // contract permits `status()` to return undefined, so a conforming provider
+      // that DOES delete on resolve must not read as success here.
       const after = elicitationStatus(data.elicitation_id)
       if (!carried || after === 'pending' || after === undefined) setResolveFailed(true)
     } finally {
@@ -229,7 +241,7 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
                   : blocked === 'no-transport'
                     ? 'This request cannot be answered right now — the approval channel is unavailable. It will become answerable on its own once the connection is back, or reload the conversation.'
                     : blocked === 'not-registered'
-                      ? 'Reopening this request… if it stays this way, reload the conversation.'
+                      ? 'Reopening this request — you can still answer it.'
                       : blocked === 'resolve-failed'
                         ? "That didn't go through — try again."
                         : ''}
@@ -260,7 +272,7 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
                     icon={<Check />}
                     onClick={() => resolve('accept')}
                     loading={submitting}
-                    disabled={blocked === 'no-transport' || blocked === 'not-registered'}
+                    disabled={elicitationIsUnactionable(blocked)}
                     aria-describedby={blocked ? statusId : undefined}
                     size="default"
                     data-testid={`run-js-approval-approve-${data.elicitation_id}`}
@@ -272,7 +284,7 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
                     icon={<X />}
                     onClick={() => resolve('decline')}
                     loading={submitting}
-                    disabled={blocked === 'no-transport' || blocked === 'not-registered'}
+                    disabled={elicitationIsUnactionable(blocked)}
                     aria-describedby={blocked ? statusId : undefined}
                     size="default"
                     data-testid={`run-js-approval-deny-${data.elicitation_id}`}

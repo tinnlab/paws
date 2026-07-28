@@ -2165,14 +2165,14 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!hasTransport \|\| resolved !== null` | 101 |
-| branch | `elicitationExists(data.elicitation_id)` | 102 |
-| branch | `submitting \|\| resolved !== null \|\| blocked === 'no-transport' \|\| blocked === 'not-registered'` | 140 |
-| branch | `resolved === 'approved'` | 172 |
-| branch | `resolved === 'denied'` | 172 |
-| branch | `serverParenLabel(data.server)` | 183 |
-| branch | `data.input !== undefined` | 195 |
-| branch | `resolved === null` | 237 |
+| branch | `!hasTransport \|\| resolved !== null` | 106 |
+| branch | `elicitationExists(data.elicitation_id)` | 107 |
+| branch | `submitting \|\| resolved !== null \|\| elicitationIsUnactionable(blocked)` | 149 |
+| branch | `resolved === 'approved'` | 184 |
+| branch | `resolved === 'denied'` | 184 |
+| branch | `serverParenLabel(data.server)` | 195 |
+| branch | `data.input !== undefined` | 207 |
+| branch | `resolved === null` | 249 |
 
 ### `modules/js-tool/components/JsToolSettingsSection`
 

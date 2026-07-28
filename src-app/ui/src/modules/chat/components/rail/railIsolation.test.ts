@@ -291,9 +291,15 @@ test('FIX_ROUND-5: ChatMessage re-resolves rail steps THROUGH withSegmentationSh
   // locally-defined shadow of the same name cannot satisfy the call check) and
   // CALL it. FIX_ROUND-7 restored the import half, which FIX_ROUND-6 dropped
   // while removing a genuinely redundant assertion next to it.
-  assert.ok(
-    importsOf(file).some(spec => spec.endsWith('rail/railSegmentation')),
-    'withSegmentationShape must come from the segmentation module, not a local shadow',
+  // The NAMED specifier, not merely the module (FIX_ROUND-8): ChatMessage already
+  // imports `segmentRail` and `PlacedRailStep` from here, so a module-level check
+  // was satisfied by those — a local function of the same name shadowing the
+  // helper passed both this and the call check, verified by mutation.
+  assert.match(
+    code,
+    /import\s*\{[^}]*\bwithSegmentationShape\b[^}]*\}\s*from\s*['"][^'"]*rail\/railSegmentation['"]/,
+    'withSegmentationShape must be IMPORTED from the segmentation module by name — ' +
+      'a local shadow of the same name would satisfy the call check below',
   )
   assert.match(
     code,
@@ -304,18 +310,86 @@ test('FIX_ROUND-5: ChatMessage re-resolves rail steps THROUGH withSegmentationSh
   // FIX_ROUND-6: the first version used `[^)]*`, which cannot cross the inner `)`
   // of `railCtx(placed)` — so it did not match the real revert spelling at all
   // and was decoration reading as coverage.
-  // Whitespace normalised PER LINE, not across the file (FIX_ROUND-7): collapsing
-  // the whole file to one line let the lazy `.*?` span it, so any future unrelated
-  // co-occurrence of `resolveRailStep(` and `)?.step ?? placed.step` would
-  // false-RED.
-  const perLine = code
-    .split(/\r?\n/)
-    .map(l => l.replace(/\s+/g, ' '))
-    .join('\n')
+  // Scoped to the `resolveStep` DECLARATION and collapsed within it (FIX_ROUND-8).
+  // Whole-file collapse let the lazy `.*?` span unrelated code (a false RED);
+  // per-line collapse then missed a line-WRAPPED revert (a false GREEN). Bounding
+  // the search to the declaration gives both properties.
+  const declStart = code.indexOf('const resolveStep')
+  assert.notEqual(declStart, -1, 'ChatMessage must still declare resolveStep')
+  const decl = code.slice(declStart, declStart + 400).replace(/\s+/g, ' ')
   assert.doesNotMatch(
-    perLine,
-    /resolveRailStep\([^\n]*?\)\?\.step \?\? placed\.step/,
+    decl,
+    /resolveRailStep\(.*?\)\?\.step \?\? placed\.step/,
     'resolveStep must not return the contribution step directly — that discards ' +
       'segmentation’s disambiguated key and its consumed clamp',
+  )
+})
+
+/**
+ * FIX_ROUND-8 — a `tooltip` must never be passed to a control that can be
+ * `disabled`.
+ *
+ * Two mechanical facts about the kit make this a real defect rather than a style
+ * preference:
+ *  1. `Button` derives `aria-label` from a STRING `tooltip` unconditionally, so a
+ *     tooltip silently REPLACES the visible label in the accessibility tree —
+ *     FIX_ROUND-5 shipped exactly this and made Approve and Deny announce
+ *     identically (WCAG 2.5.3 / 4.1.2).
+ *  2. `disabled` becomes the native attribute and the base class carries
+ *     `disabled:pointer-events-none`, so the trigger can never fire anyway.
+ *
+ * This is a SOURCE guard, and it is here because the e2e cannot be one: the
+ * regression's tooltip was CONDITIONAL on the degraded state, and no spec can
+ * reach that state (it needs mcp's transport to be absent mid-conversation). An
+ * e2e that only ever visits the healthy state sees `tooltip === undefined` and
+ * stays green — which is precisely what round 8 proved about the first attempt at
+ * pinning this.
+ */
+test('FIX_ROUND-8: no `tooltip` on a Button that can be disabled (kit clobbers aria-label)', () => {
+  const files = [
+    'modules/js-tool/chat-extension/components/JsToolApprovalContent.tsx',
+    'modules/mcp/chat-extension/components/ToolCallPendingApprovalContent.tsx',
+  ]
+  const violations: string[] = []
+  for (const rel of files) {
+    let text: string
+    try {
+      text = readFileSync(join(SRC, rel), 'utf8')
+    } catch {
+      continue // the file may legitimately have been renamed
+    }
+    const code = text
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split(/\r?\n/)
+      .map(l => l.replace(/\/\/.*$/, ''))
+      .join('\n')
+    // Each `<Button …>` element's props. The opening tag ends at the first `>`
+    // seen at BRACE DEPTH ZERO — a lazy `/<Button[\s\S]*?>/` stops at the `>` of a
+    // nested element inside a prop (`icon={<Check />}`) and reads none of the
+    // props, which is how the first cut of this guard missed its own control.
+    let from = 0
+    for (;;) {
+      const open = code.indexOf('<Button', from)
+      if (open === -1) break
+      let depth = 0
+      let i = open + '<Button'.length
+      for (; i < code.length; i++) {
+        const ch = code[i]
+        if (ch === '{') depth++
+        else if (ch === '}') depth--
+        else if (ch === '>' && depth === 0) break
+      }
+      const props = code.slice(open + '<Button'.length, i)
+      from = i + 1
+      if (/\bdisabled\s*=/.test(props) && /\btooltip\s*=/.test(props)) {
+        violations.push(`${rel}: a <Button> takes BOTH \`disabled\` and \`tooltip\``)
+      }
+    }
+  }
+  assert.deepEqual(
+    violations,
+    [],
+    `a tooltip on a disable-able Button overwrites its accessible name and can never ` +
+      `render:\n${violations.join('\n')}`,
   )
 })

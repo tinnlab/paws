@@ -8,6 +8,7 @@ import {
   elicitationVersion,
   hasElicitationTransport,
   elicitationBlockedReason,
+  elicitationIsUnactionable,
   registerElicitation,
   resolveElicitationVia,
   setElicitationTransport,
@@ -223,4 +224,16 @@ test('elicitationBlockedReason keeps its THREE states distinct', () => {
   // LIVE, not latched: with the transport back and the entry present, the same
   // resolveFailed is the retryable state, and clearing it is actionable again.
   assert.equal(elicitationBlockedReason(healthy), null)
+})
+
+test('ONLY the impossible state disables a control', () => {
+  // The through-line of three regressions in this file: every time a state that
+  // the user could still act through was DISABLED, the card became unanswerable.
+  // `not-registered` in particular is actionable — the provider POSTs
+  // unconditionally, so a click still reaches /respond and still resumes the
+  // suspended script.
+  assert.equal(elicitationIsUnactionable('no-transport'), true)
+  assert.equal(elicitationIsUnactionable('not-registered'), false)
+  assert.equal(elicitationIsUnactionable('resolve-failed'), false)
+  assert.equal(elicitationIsUnactionable(null), false)
 })

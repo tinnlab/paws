@@ -171,9 +171,14 @@ export function elicitationStatus(elicitationId: string): ElicitationStatus | un
 
 /**
  * Open a request. Returns `false` when it could NOT be opened (no transport, or
- * the provider threw) so the caller can tell "registered" from "dropped on the
- * floor" — the consumer injects a card unconditionally after this call, and a
- * silently-failed registration leaves that card pending forever.
+ * the provider threw).
+ *
+ * The return value is a DIAGNOSTIC, not the mechanism (FIX_ROUND-8). A consumer
+ * that needs to know whether the entry exists asks the seam — `elicitationExists`
+ * — because that answer is LIVE and this one is a snapshot of one attempt.
+ * Routing the failure through caller state is what produced a latch twice: a
+ * failed `register` bumps nothing, so nothing re-renders to clear whatever the
+ * caller recorded.
  *
  * Never throws: a provider must not break a transcript render.
  */
@@ -260,30 +265,31 @@ export function __resetElicitationTransportForTests(): void {
   listeners.clear()
 }
 
-/** Why a card's approve/deny cannot be actioned right now, or `null` when it can. */
+/** Why a card's approve/deny is not in its ordinary state, or `null` when it is. */
 export type ElicitationBlockedReason = 'no-transport' | 'not-registered' | 'resolve-failed'
 
 /**
- * Classify a card's actionability. THREE distinct states, because collapsing them
- * has now caused a regression twice:
+ * Classify a card's actionability. Three distinct states — and, after three
+ * rounds of getting this wrong, exactly ONE of them disables anything.
  *
- *  - **`no-transport`** — nothing can carry the decision. DISABLE (clicking would
- *    silently no-op). LIVE: clears itself the moment an extension installs a
- *    transport, because the caller re-derives on every seam bump.
- *  - **`not-registered`** (FIX_ROUND-7) — a transport exists but the provider
- *    holds no entry for this id, so a decision would resolve into nothing. DISABLE.
- *    Also live: the card re-registers itself, and this clears when that succeeds.
- *    FIX_ROUND-6 signalled this case as `resolve-failed`, which by design keeps the
- *    buttons ENABLED and says "that didn't go through" about an attempt the user
- *    never made — the opposite of what its own comment claimed, and it latched.
- *  - **`resolve-failed`** — a resolve attempt genuinely failed with an entry
- *    present. TRANSIENT: keep the controls ENABLED, because retrying is the point.
- *    FIX_ROUND-4 folded this into the disable predicate, which gated its own reset
- *    and disabled the card for the life of the mount.
+ *  - **`no-transport`** — there is literally nothing to POST through. DISABLE:
+ *    a click cannot leave the browser. LIVE — it clears itself when an extension
+ *    installs a transport, because the caller re-derives on every seam bump.
+ *  - **`not-registered`** — a transport exists but holds no local entry for this
+ *    id. **Do NOT disable** (FIX_ROUND-8): the provider's `resolve` POSTs
+ *    unconditionally, so a click still reaches `/respond` and still resumes the
+ *    suspended script. FIX_ROUND-7 disabled here and thereby removed a recovery
+ *    path that WORKED — and, because a failed `register` bumps nothing, the
+ *    effect that would clear the state never re-ran, so the card latched
+ *    disabled and unanswerable. Surface it, do not block on it.
+ *  - **`resolve-failed`** — a resolve genuinely failed. Also enabled: retrying is
+ *    the point. FIX_ROUND-4 folded this into the disable predicate, which gated
+ *    its own reset and disabled the card for the life of the mount.
  *
- * Nothing here is latched, and there is deliberately no "declared" term: a
- * registration failure recorded into the message block could never be corrected
- * (see the FIX_ROUND-5 note in js-tool's SSE handler).
+ * The through-line of those three regressions: every time this file has DISABLED
+ * a control on a state the user could still act through, the result was a card
+ * that could not be answered at all. The rule now is that only the impossible
+ * case disables.
  */
 export function elicitationBlockedReason(args: {
   hasTransport: boolean
@@ -294,4 +300,9 @@ export function elicitationBlockedReason(args: {
   if (!args.entryExists) return 'not-registered'
   if (args.resolveFailed) return 'resolve-failed'
   return null
+}
+
+/** Does this state mean a click cannot possibly reach the server? */
+export function elicitationIsUnactionable(reason: ElicitationBlockedReason | null): boolean {
+  return reason === 'no-transport'
 }
