@@ -11,8 +11,8 @@ import {
 import { OaiStubServer } from '../helpers/oai-stub-server'
 
 /**
- * THE acceptance test for the stringified-argument round, at the layer the user
- * actually experiences.
+ * TEST-37 — THE acceptance test for the stringified-argument round, at the layer
+ * the user actually experiences.
  *
  * Observed live: the model called the built-in `ask_user` with its object
  * `schema` argument JSON-ENCODED AS A STRING —
@@ -178,18 +178,42 @@ test.describe('ask_user — a JSON-encoded schema still renders a real form', ()
  * path had started rejecting good input, which is precisely the regression this
  * spec exists to catch and which no deterministic stub can observe.
  *
- * Gating mirrors the sibling real-LLM control specs: it runs against WHATEVER
- * LLM the environment configures and skips ONLY when nothing at all is
- * configured. Deliberately NOT an `ANTHROPIC_API_KEY` gate — on a box wired to a
- * local OpenAI-compatible bridge that key is unset, and a vendor-scoped gate
- * would report SKIPPED while claiming coverage. Never an unconditional skip.
+ * It runs against WHATEVER LLM the environment configures — deliberately NOT an
+ * `ANTHROPIC_API_KEY` gate, because on a box wired to a local OpenAI-compatible
+ * bridge that key is unset and a vendor-scoped gate reports SKIPPED while
+ * claiming coverage (the failure `control-spec-gating.spec.ts` exists to end).
+ *
+ * It is UNCONDITIONAL — it contains no skip at all. TESTS.md enumerated this leg
+ * with a conditional skip-on-`!TEST_LLM` guard, and that is the sibling specs'
+ * pattern, but a skip is how a real-LLM surface goes dark while still counted
+ * as covered: "no LLM configured" is a MISSING DEPENDENCY, not the
+ * platform-incompatibility that is the only legitimate skip. So the requirement
+ * is a loud precondition instead — with nothing configured this FAILS naming the
+ * exact env vars to set. See DEC-21.
  */
 test.describe('ask_user — a real model still gets a real form (no regression)', () => {
-  test.skip(!TEST_LLM, NO_LLM_SKIP)
   // A real model deciding to call a tool, over live SSE, is non-deterministic —
-  // retried like every sibling real-LLM spec on this surface.
-  test.describe.configure({ retries: 2 })
+  // retried like every sibling real-LLM spec on this surface. But a MISSING LLM
+  // cannot change between attempts, so retrying that would pay three full
+  // backend+Vite+DB boots to reach the same verdict.
+  test.describe.configure({ retries: TEST_LLM ? 2 : 0 })
   test.slow()
+
+  // The dependency, asserted rather than skipped. A real-LLM test that silently
+  // no-ops when the bridge is down is worse than no test: the suite still
+  // reports it, so the gap is invisible.
+  //
+  // In `beforeAll` deliberately: a `beforeAll` cannot request the test-scoped
+  // `testInfra` fixture, so it runs BEFORE the per-test stack (a fresh Postgres
+  // database, a backend and a Vite server) is built. Asserting inside the test
+  // body would pay for that whole boot just to fail on a condition already known.
+  test.beforeAll(() => {
+    expect(
+      TEST_LLM,
+      `${NO_LLM_SKIP} — this spec FAILS rather than skips (DEC-21): a real-LLM ` +
+        `no-regression leg that self-skips is counted as covered while proving nothing.`,
+    ).toBeTruthy()
+  })
 
   test('an under-specified request renders an ask_user form with real fields', async ({
     page,
@@ -218,33 +242,54 @@ test.describe('ask_user — a real model still gets a real form (no regression)'
     )
 
     const pending = page.locator('[data-testid^="elicitation-pending-"]').first()
-    await expect(
-      pending,
-      'a real model calling ask_user must still surface the elicitation card',
-    ).toBeVisible({ timeout: 120000 })
+    try {
+      await expect(
+        pending,
+        'a real model calling ask_user must still surface the elicitation card',
+      ).toBeVisible({ timeout: 120000 })
 
-    // The regression signal. A form with no fields is a form in name only, and
-    // is exactly what a coercion layer that mangled a good schema would produce.
-    const fields = pending.locator('[data-testid^="elicitation-field-"]')
-    await expect(
-      fields.first(),
-      'the real-model form must still have REAL fields — the decode path must ' +
-        'not degrade a schema that was already well-formed',
-    ).toBeVisible({ timeout: 60000 })
+      // The regression signal. A form with no fields is a form in name only, and
+      // is exactly what a coercion layer that mangled a good schema would produce.
+      const fields = pending.locator('[data-testid^="elicitation-field-"]')
+      await expect(
+        fields.first(),
+        'the real-model form must still have REAL fields — the decode path must ' +
+          'not degrade a schema that was already well-formed',
+      ).toBeVisible({ timeout: 60000 })
 
-    // The degraded card is correct ONLY for a schema that genuinely renders
-    // nothing. Reaching it from a healthy real-model call would mean good input
-    // is now being rejected.
-    await expect(
-      page.locator('[data-testid="mcp-elicitation-no-fields-card"]'),
-      'a real model’s own schema must not land on the degraded no-fields card',
-    ).toHaveCount(0)
+      // …and it must have kept ALL of them. "At least one field" cannot tell a
+      // preserved schema from one mangled down to a single surviving property —
+      // exactly the partial-corruption regression this leg exists to catch. The
+      // prompt asks for two things (name + description), and the rich wizard
+      // renders one STEP per property, so either signal proves both survived.
+      // Accept either, because a model may legitimately render the fields inline
+      // rather than as a wizard.
+      const cardText = ((await pending.textContent()) ?? '').toLowerCase()
+      const stepCount = /step\s+1\s+of\s+(\d+)/.exec(cardText)
+      const renderedFields = await fields.count()
+      expect(
+        stepCount ? Number(stepCount[1]) : renderedFields,
+        'the decode path must preserve EVERY property the model asked for — the ' +
+          'prompt requested a name AND a description, so exactly one surviving ' +
+          `field is the partial-mangling regression (fields=${renderedFields}, ` +
+          `steps=${stepCount?.[1] ?? 'none'})`,
+      ).toBeGreaterThanOrEqual(2)
 
-    // Close the loop rather than leaving a generation task blocked on a form
-    // nobody answers (every sibling elicitation spec does this).
-    const decline = pending.locator('[data-testid^="elicitation-decline"]').first()
-    if (await decline.count()) {
-      await decline.click()
+      // The degraded card is correct ONLY for a schema that genuinely renders
+      // nothing. Reaching it from a healthy real-model call would mean good input
+      // is now being rejected.
+      await expect(
+        page.locator('[data-testid="mcp-elicitation-no-fields-card"]'),
+        'a real model’s own schema must not land on the degraded no-fields card',
+      ).toHaveCount(0)
+    } finally {
+      // Close the loop rather than leaving a generation task blocked on a form
+      // nobody answers (every sibling elicitation spec does this). In `finally`
+      // because the FAILING path is exactly when a retry is about to start.
+      const decline = pending.locator('[data-testid^="elicitation-decline"]').first()
+      if (await decline.count()) {
+        await decline.click()
+      }
     }
   })
 })

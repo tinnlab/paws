@@ -236,6 +236,41 @@ existing `cancelled` card at `ElicitationFormContent.tsx:271`. Accept is kept
 external MCP server remains answerable — but it is labelled honestly, which is the
 difference between a real choice and a card that lies.
 
+### DEC-21: How is TEST-38's "needs a real LLM" requirement expressed — a skip, or a failure?
+
+**Resolution:** An UNCONDITIONAL precondition —
+`expect(TEST_LLM, NO_LLM_SKIP).toBeTruthy()` inside the test — NOT the
+`test.skip(!TEST_LLM, NO_LLM_SKIP)` guard TESTS.md enumerated at phase 3. The
+spec always registers and always runs; on a box with no LLM configured at all it
+FAILS, naming the exact env vars to set.
+
+**Basis:** convention + gate. The lifecycle rule is explicit and mechanical
+(`lifecycle-check.mjs::checkA3`, SKILL.md: "no diff-added `#[ignore]`/`.skip`/
+`.only`; only genuine platform-incompatibility is a legit skip"). "No LLM is
+configured" is a MISSING DEPENDENCY, not a platform incompatibility — the
+dependency can be supplied on any box, and on this one it was: the leg was run
+against the local Qwen bridge (`ZIEE_TEST_LLM_BASE_URL` + `ZIEE_TEST_LLM_MODEL`)
+and PASSED in 24.8s.
+
+This is the same failure mode `control-spec-gating.spec.ts` was written to end,
+one level up. That guard stops a spec skipping because ONE VENDOR's key is
+absent; it still permits a skip when nothing is configured, and a real-LLM leg
+that self-skips is counted as covered while proving nothing — exactly the
+"covered by tests that never execute" defect this whole feature exists to close
+(see TEST_GAP_ANALYSIS.md). Failing loud makes the gap visible instead of
+invisible, which is strictly the safer direction for a NO-REGRESSION check: a
+silent skip means a real regression ships unnoticed.
+
+**Tradeoff, stated plainly:** a box with no LLM configured now sees this spec RED
+rather than SKIPPED. That is intended — it is a true statement about coverage.
+The deterministic acceptance proof for the same surface (TEST-37) needs no LLM
+and is unaffected, so the feature never depends on a bridge being present to be
+verified at all.
+
+**TESTS.md was amended in place** (the TEST-38 line records the amendment and
+points here) rather than left to disagree with the code. The test-ID, tier and
+assertion are unchanged; only the mechanism by which the dependency is enforced
+changed, and it changed to be STRICTER.
 ---
 
 ## Descoped items

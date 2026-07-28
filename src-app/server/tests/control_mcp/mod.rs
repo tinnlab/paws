@@ -6,6 +6,11 @@
 //! limited user does not), and the real loopback round-trip (`invoke_capability`
 //! actually creates/does not create a row, with NO mocked authz). Denylist,
 //! schema validation, path-param, and kill-switch paths.
+//!
+//! Submodules:
+//!   - `real_llm_test` — tier 4, a real model driving the control tools.
+//!   - `stringified_args_test` — tier 3, JSON-ENCODED `body`/`query`/`path_params`
+//!     surviving the decode all the way to the real loopback route.
 
 mod real_llm_test;
 mod stringified_args_test;
