@@ -946,23 +946,44 @@ async fn ask_user_unusable_string_schema_returns_actionable_feedback() {
         !frames.iter().any(|f| f.event_type == "mcpElicitationRequired"),
         "an unusable schema must NOT surface a form the user cannot fill in"
     );
-    let text = ChatStreamProbe::assemble_text(&frames);
+    // Assert on the bytes the backend ACTUALLY SENT TO THE MODEL — the
+    // continuation request's message history — not on the assistant text the
+    // stub chose to echo back. The stub truncates its echo to 200 chars
+    // (`last_tool_result_text`), so asserting on the visible reply would test
+    // the fixture's echo policy rather than the product's feedback, and would
+    // have "passed" on a refusal whose corrective example was cut off. The
+    // whole requirement is that the MODEL can act on the message, so the
+    // model's own input is the right artifact.
+    let sent_to_model = fx
+        .stub
+        .requests()
+        .into_iter()
+        .find(|r| r.had_tool_result)
+        .map(|r| r.all_text)
+        .expect("the refusal must be sent back to the model as a tool result");
+
     // (a) what was RECEIVED, (b) what is EXPECTED, (c) a copyable EXAMPLE.
     assert!(
-        text.contains("schema"),
-        "the refusal must name the argument; got: {text:?}"
+        sent_to_model.contains("schema"),
+        "the refusal must name the argument; got: {sent_to_model:?}"
     );
     assert!(
-        text.contains("not valid JSON") || text.contains("string"),
-        "the refusal must say what ARRIVED; got: {text:?}"
+        sent_to_model.contains("not valid JSON"),
+        "the refusal must say what ARRIVED; got: {sent_to_model:?}"
     );
     assert!(
-        text.contains("JSON object"),
-        "the refusal must say what is EXPECTED; got: {text:?}"
+        sent_to_model.contains("JSON object"),
+        "the refusal must say what is EXPECTED; got: {sent_to_model:?}"
     );
     assert!(
-        text.contains("Example:") && text.contains("\"type\":\"object\""),
-        "the refusal must carry a literal-JSON example the model can copy; got: {text:?}"
+        sent_to_model.contains("Example:") && sent_to_model.contains("\"type\":\"object\""),
+        "the refusal must carry a literal-JSON example the model can copy; got: {sent_to_model:?}"
+    );
+    // The example must arrive COMPLETE — a corrective example the model cannot
+    // copy in full is no better than prose.
+    assert!(
+        sent_to_model.contains("\"required\":[\"name\"]}"),
+        "the example must reach the model UNTRUNCATED; got: {sent_to_model:?}"
     );
 }
 
