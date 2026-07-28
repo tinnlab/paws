@@ -179,7 +179,11 @@ function AvailableVersionRow({
         <Flex justify="between" align="center" gap="small" wrap>
           <Space wrap>
             <Text strong>{v.version}</Text>
-            {v.size_bytes != null && !v.installed && (
+            {/* Only a REAL asset size is worth showing. A release whose asset
+                size is 0/unknown would otherwise render a naked "0 B" on the
+                row — the same meaningless zero the models card suppresses.
+                See `.lifecycle/voice-model-bad-magic/` (INV-6, ITEM-12). */}
+            {v.size_bytes != null && v.size_bytes > 0 && !v.installed && (
               <Text type="secondary" className="text-xs">
                 {formatBytes(v.size_bytes)}
               </Text>

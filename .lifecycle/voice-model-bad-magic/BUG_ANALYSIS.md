@@ -85,10 +85,15 @@ composed that impression out of a failed-attempt error and an unlabelled zero.
 ## 4. Why the message is unactionable even when legitimate
 
 `"file is not a whisper ggml/GGUF model (bad magic)"` states neither what was
-found, nor what was expected, nor what the user should do. It is also emitted
-for a genuinely different condition — `model.rs:452` folds
-`downloaded == 0` (an empty response body) into the same rejection, so an empty
-HTTP 200 is reported as a magic failure.
+found, nor what was expected, nor what the user should do. A genuinely different
+condition is also folded into the same *rejection*: `model.rs:452` is
+`if downloaded == 0 || !has_whisper_magic(&head)`, so an empty HTTP 200 exits
+through the wrong-container branch and carries the same `VOICE_MODEL_INVALID`
+code. (Correction, verified against the pre-fix source during phase-6 re-audit:
+that site emits a *different sentence* — `"download produced no valid whisper
+model bytes"` — not the `bad magic` string quoted above, which comes from the
+first-chunk site at `model.rs:417`. The conflation being fixed is of the
+*condition and the code*, not of the literal message.)
 
 ## 5. Blast radius
 

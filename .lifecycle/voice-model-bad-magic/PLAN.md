@@ -29,6 +29,7 @@ Lifted verbatim from the owner's statement of the defect and from BUG_ANALYSIS
 - **INV-5**: A 0-byte or wrong-content upload should be rejected at ingest with a clear message, not stored and failed later.
 - **INV-6**: "0 Bytes" next to a catalog size of 56.94 MB — make sure the right number appears in the right place.
 - **INV-7**: The canonical valid-model bytes used by tests must be built from the documented `GGML_FILE_MAGIC` u32, so that a future byte-order regression turns them red. (BUG_ANALYSIS D-5.)
+- **INV-8**: *(added in fix-round 4 — see DRIFT-2.9.)* The corrective action this branch introduces must not itself be a defect: a control that MUTATES is gated by the same permission as the primary action it re-issues, so a read-only voice admin — who legitimately sees the failed task, because the download-task list is served under `voice::admin::read` — is never shown a control that can only 403. The failure MESSAGE is not gated; the control is.
 
 ## Items
 
@@ -44,6 +45,7 @@ Lifted verbatim from the owner's statement of the defect and from BUG_ANALYSIS
 - **ITEM-5**: In `AvailableModelsCard.tsx`, render a failed install as an explicit, error-toned **"Install failed — <reason>"** line with a **Retry** action, instead of the current bare `<Text type="secondary">{progress.error}</Text>`. This is what makes INV-1/INV-2 hold structurally: a failure on a not-installed row can only ever read as a failed install attempt, never as a file error on an installed file.
 - **ITEM-6**: Fix the byte-count display (INV-6): suppress the progress byte line entirely for a `failed` download that transferred nothing, and label the count when the total is unknown, so a naked "0 Bytes" can never sit under a row advertising a catalog size. Keep the catalog size where it belongs (the row's metadata line).
 - **ITEM-12**: Apply the same failed-download presentation fix to the sibling `AvailableVersionsCard.tsx` (the runtime-binary card rendered directly above, on the SAME page), which carries the byte-identical defect at `:215` (`{failed && progress?.error && <Text type="secondary">{progress.error}</Text>}`) and the same unlabelled-zero progress line. INV-2 is a statement about the page, not about one card; leaving the twin unfixed knowingly ships the identical incoherence one card higher. Extract the shared failure-row presentation so the two cards cannot drift apart again.
+- **ITEM-13** *(added in fix-round 4 — see DRIFT-2.9 / FIX_ROUND-4)*: Gate the new Retry control on `voice::admin::manage` inside `DownloadFailureRow` (so both cards inherit it), leaving the failure message ungated; and finish INV-6's catalog-side suppression on `AvailableVersionsCard` (`size_bytes > 0`), which fix-round 1 applied to the models card only. Realizes INV-8 and closes the last ITEM-12 drift.
 
 ### The test gap (equal weight to the fix — see TEST_GAP.md)
 
@@ -64,6 +66,7 @@ Lifted verbatim from the owner's statement of the defect and from BUG_ANALYSIS
 - `src-app/ui/src/modules/voice/components/DownloadFailureRow.tsx` (new) — ITEM-5, ITEM-6, ITEM-12 shared presentation
 - `src-app/ui/src/modules/voice/gallery.tsx` — ITEM-5/ITEM-6 gallery states (failed-install cell)
 - `src-app/ui/tests/e2e/14-voice/voice-model-mgmt.spec.ts` — ITEM-10
+- `src-app/ui/tests/e2e/14-voice/voice-model-permissions.spec.ts` — ITEM-13 (TEST-16)
 - `.lifecycle/voice-model-bad-magic/TEST_GAP.md` — ITEM-11
 
 No migration. No backend type change is expected (the error strings are payload

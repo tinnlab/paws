@@ -336,6 +336,16 @@ test.describe('Voice — failed install presentation', () => {
     const state = defaultVoiceState()
     state.failVersionDownloadWith =
       'the downloaded file is empty (0 bytes). Expected a whisper runtime binary. The source returned no data — check the release URL, then try the download again.'
+    // INV-6 from the CATALOG side on this card too: a release whose asset size
+    // is 0/unknown must not print a naked zero on the row. The models card
+    // suppresses this; the twin did not, until ITEM-12's shared-presentation
+    // rule was applied to the size line as well.
+    state.updateCheck = {
+      ...state.updateCheck,
+      versions: state.updateCheck.versions.map(v =>
+        v.version === 'v1.1.0' ? { ...v, size_bytes: 0 } : v,
+      ),
+    }
     await routeVoice(page, state)
 
     await loginAsAdmin(page, baseURL)
@@ -358,9 +368,19 @@ test.describe('Voice — failed install presentation', () => {
       byTestId(page, 'voice-version-failed-v1.1.0-retry'),
     ).toBeEnabled()
 
-    // INV-6 on this card too: a failure that transferred nothing renders no
-    // byte count at all, so no naked "0 Bytes" sits under the row's real size.
+    // INV-6 on this card too, from BOTH directions: the failed transfer renders
+    // no byte count, and the 0-size release renders no catalog size.
+    //
+    // The zero must be matched as this card actually renders it. `AvailableVersionsCard`
+    // has its OWN local `formatBytes` (`0` → `"0 B"`), NOT the shared
+    // `@/utils/downloadUtils` one the models card uses (`0` → `"0 Bytes"`), so an
+    // assertion written only against `/0 Bytes/` here is one the card can never
+    // fail — it passed with the guard removed. See FIX_ROUND-4 F4-3.
     const row = byTestId(page, 'voice-version-row-v1.1.0')
-    expect(await row.innerText()).not.toMatch(/\b0 Bytes\b/)
+    const rowText = await row.innerText()
+    expect(rowText).not.toMatch(/\b0 Bytes\b/)
+    expect(rowText, 'the versions card renders a zero as "0 B"').not.toMatch(
+      /\b0 B\b/,
+    )
   })
 })

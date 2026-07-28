@@ -125,15 +125,56 @@ also make the blind audit's diff-coverage obligation disproportionate to the
 defect.
 
 ### DEC-12: Does the gallery need a new state cell for the failed-install row?
-**Resolution:** No new cassette-driven gallery cell. The failed state is driven
-by the SSE download store, not by an API cassette, so it is not expressible in
-the gallery's cassette model; the conditional branch itself already exists in the
-code today (`{failed && progress?.error && …}`) and is therefore not a
-newly-introduced render state. Coverage for the failed presentation comes from
-TEST-6 (unit, the presentation helper) and TEST-11 (e2e, the real rendered row).
-**Basis:** codebase — `modules/voice/gallery.tsx` seeds only `Voice.*` API
-responses; there is no store-seeding mechanism for the download-progress store in
-it. `npm run check:state-matrix` is green on the baseline (verified: full
-`npm run check` exits 0 before any edit) and must stay green — re-verified at
-Phase 8. If `check:state-matrix` flags the branch, a gallery cell is added then;
-the check, not this decision, is authoritative.
+**Resolution:** Yes — the cell is added, as the
+`seeded-available-models-failed-install` seeded surface in
+`modules/voice/gallery.tsx`. This **REVERSES** the original resolution below,
+which rested on a factually wrong premise (found in the fix-round-2 re-audit).
+
+*Original resolution (superseded):* "No new cassette-driven gallery cell — the
+failed state is driven by the SSE download store, not by an API cassette, so it
+is not expressible in the gallery's cassette model; there is no store-seeding
+mechanism for the download-progress store."
+
+*Why it was reversed:* the premise is false. `ModuleGallery` has a `seeded:
+SeededSurfaceEntry[]` field whose `setup?: () => void | Promise<void>` hook exists
+precisely to "seed the transient state through the real store", and
+`modules/llm-local-runtime/gallery.tsx` already uses it for the
+**byte-identical** case — `seeded-s3-available-versions-failed-row`, which seeds
+`RuntimeDownloadProgress.__setState({ activeByKey: … })` with a failed snapshot.
+So the mechanism the decision said did not exist is in the same directory, used
+for the same shape of state, by the module this card's twin belongs to. PLAN's
+*Files to touch* and its UI-surface checklist both promised the cell ("so the
+design-critic pass reviews the real failure layout, not an empty card"); a
+decision resting on a false premise is not grounds to drop a plan item.
+
+*Why the `check:state-matrix` fallback did not catch it:* that gate asks whether
+a renderable-state SIGNAL is registered, not whether a gallery CELL renders it.
+It went green once `DownloadFailureRow` was registered as a `via` surface in
+fix-round 1, so the missing review surface stayed invisible to the machine gate —
+which is exactly why the plan item existed.
+
+**Basis:** codebase — `sdk/packages/gallery/src/registry/types.ts`
+(`SeededSurfaceEntry.setup`), `modules/llm-local-runtime/gallery.tsx:96-160`.
+Recorded as DRIFT-2.3 / FIX_ROUND-2 F2-3.
+
+### DEC-13: How long must a `*.tmp` sit before the boot sweep reclaims it?
+**Resolution:** 6 hours (`model::STALE_TEMP_MIN_AGE`), applied to the file's
+mtime; anything younger is left alone.
+**Basis:** codebase + threat model. The sweep runs at module init, so within a
+single process no download can be in flight when it fires — the guard exists only
+for the case of a SECOND process sharing the same `app.data_dir` (a desktop build
+and a server, or two dev instances). The largest whisper model is ~3.1 GB, so a
+healthy transfer finishes orders of magnitude inside 6h, while a `.tmp` older
+than that is necessarily dead. Erring long is the safe direction: the cost of
+waiting is bounded disk, the cost of being wrong is deleting a live download.
+
+### DEC-14: Should the upload path abort as soon as the 4-byte head is known?
+**Resolution:** No. Keep reading the multipart field to completion, then reject.
+**Basis:** convention + user-visible behaviour. Aborting the request-body read
+mid-upload typically reaches the browser as a connection reset rather than the
+400 + actionable message, i.e. it would degrade the exact interaction this branch
+exists to improve. INV-5's requirement ("rejected at ingest, never stored and
+failed later") is already met — rejection happens before any row is written and
+inside the `TempGuard` scope — and `VOICE_MODEL_MAX_UPLOAD_BYTES` (5 GiB,
+enforced as bytes arrive) bounds the cost. Recorded as an accepted trade-off in
+LEDGER.jsonl / FIX_ROUND-2 rather than left as an unexamined gap.

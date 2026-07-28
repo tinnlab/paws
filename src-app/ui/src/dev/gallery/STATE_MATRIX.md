@@ -4022,13 +4022,13 @@ Required states: `empty`, `error`
 | branch | `!updateCheck` | 130 |
 | empty | `readyUpstream.length === 0` | 132 |
 | branch | `readyUpstream.length > 10` | 147 |
-| branch | `v.size_bytes != null && !v.installed` | 182 |
-| branch | `isLatest` | 187 |
-| branch | `v.installed` | 192 |
-| branch | `v.prerelease` | 197 |
-| branch | `progress` | 216 |
-| error | `failed && progress?.error` | 217 |
-| branch | `byteLabel` | 264 |
+| branch | `v.size_bytes != null && v.size_bytes > 0 && !v.installed` | 186 |
+| branch | `isLatest` | 191 |
+| branch | `v.installed` | 196 |
+| branch | `v.prerelease` | 201 |
+| branch | `progress` | 220 |
+| error | `failed && progress?.error` | 221 |
+| branch | `byteLabel` | 268 |
 
 ### `modules/voice/components/DownloadFailureRow`
 
@@ -4036,7 +4036,7 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `onRetry` | 50 |
+| branch | `onRetry` | 62 |
 
 ### `modules/voice/components/InstalledModelsCard`
 
