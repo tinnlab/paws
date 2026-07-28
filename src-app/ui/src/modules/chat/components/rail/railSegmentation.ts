@@ -204,27 +204,52 @@ export function isQuietSingle(steps: readonly PlacedRailStep[]): boolean {
 }
 
 /**
- * Merge a RE-RESOLVED step back onto its placed one, keeping SEGMENTATION's key.
+ * Merge a RE-RESOLVED step back onto its placed one, keeping every field
+ * SEGMENTATION owns: `key`, `consumed` and `blocking`.
  *
  * `ChatMessage` re-resolves each step through the contribution registry on every
  * render so live status/timing refresh (`ActivityRail` is subscribed to the
- * live-step seam; the memoised message is not). But `segmentRail` above
- * disambiguates a REPEATED key to `${key}#${i}`, and the contribution — which
- * knows nothing about how many times its `tool_use_id` appears in this message —
- * always returns the bare key. Taking the resolved key wholesale therefore threw
- * the disambiguation away on exactly the replayed-call case it exists for,
- * colliding the React key in `ActivityRail` and the per-message expansion state
- * (`stepStateKey`) in `RailStep`, and splitting a breakout's `data-step-key` from
- * a rail row's into two namespaces.
+ * live-step seam; the memoised message is not). But re-resolution goes back to
+ * the CONTRIBUTION, which knows nothing about this message's layout — so any
+ * shape field taken from it silently overrides what segmentation decided.
+ *
+ * Three fields, three reasons:
+ *  - **`key`** — `segmentRail` disambiguates a REPEATED key to `${key}#${i}`;
+ *    the contribution always returns the bare one. Losing the suffix collides
+ *    the React key in `ActivityRail` and the per-message expansion state
+ *    (`stepStateKey`) in `RailStep`, and splits a breakout's `data-step-key`
+ *    from a rail row's into two namespaces.
+ *  - **`consumed`** (FIX_ROUND-5) — `segmentRail` CLAMPS it to the first
+ *    `RAIL_EXCLUDED_TYPES` block after the anchor, which is the ITEM-5 guard
+ *    against a contribution swallowing the prose answer. `ActivityRail` passes
+ *    the re-resolved step to `renderStepDetail`, which reads
+ *    `placed.step.consumed` — so an over-reporting contribution had its clamp
+ *    bypassed at detail-render time and its body redrew blocks the segmentation
+ *    loop already rendered separately. That is exactly the "span says N, renders
+ *    M" class ITEM-5 exists to make impossible.
+ *  - **`blocking`** — segmentation is what turns a blocking step into a
+ *    BREAKOUT rather than a span member; a span member re-resolving to
+ *    `blocking: true` cannot change that decision and must not pretend to.
  *
  * Segmentation owns the SHAPE and the identity; re-resolution owns the STATE.
  * Extracted (FIX_ROUND-4) so that rule is pinned by a test rather than living
  * inline where a one-line revert turned nothing red.
  */
-export function withSegmentationKey(
+export function withSegmentationShape(
   placed: PlacedRailStep,
   resolved: RailStepDescriptor | undefined | null,
 ): RailStepDescriptor {
   if (!resolved) return placed.step
-  return resolved.key === placed.step.key ? resolved : { ...resolved, key: placed.step.key }
+  const shapeIntact =
+    resolved.key === placed.step.key &&
+    resolved.consumed === placed.step.consumed &&
+    resolved.blocking === placed.step.blocking
+  return shapeIntact
+    ? resolved
+    : {
+        ...resolved,
+        key: placed.step.key,
+        consumed: placed.step.consumed,
+        blocking: placed.step.blocking,
+      }
 }

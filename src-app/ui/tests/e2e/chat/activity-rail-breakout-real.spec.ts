@@ -285,32 +285,31 @@ test.describe('Activity rail — a request for input breaks OUT of the rail, on 
       .filter({ has: page.getByTestId('activity-rail-summary') })
       .first()
     if (await rail.isVisible().catch(() => false)) {
-      // FIX_ROUND-4: evaluate on THE SAME rail the block selected. The first cut
-      // narrowed the `rail` locator but left this probe on a document-wide
-      // `querySelector('[data-testid="activity-rail"]')`, so it could assert
-      // siblinghood of a DIFFERENT rail (possibly the quiet-single the filter
-      // just excluded) than the one every other assertion here operates on.
-      const isSibling = await rail.evaluate(r => {
-        const b = document.querySelector('[data-testid="rail-breakout"]')
-        return !!b && b.parentElement === r.parentElement
+      // FIX_ROUND-5: BOTH sides scoped, from the breakout outward. FIX_ROUND-4
+      // narrowed the `rail` locator but left the breakout resolved document-wide
+      // inside the evaluate, so in a multi-turn transcript the probe could pair a
+      // breakout in message N against a rail in message N-1 — and because the
+      // rail was now filtered to summary-bearing rails while the breakout was
+      // not, the pairing could be MORE mismatched than before the narrowing.
+      const isSibling = await breakout.evaluate(b => {
+        const parent = b.parentElement
+        if (!parent) return false
+        return Array.from(parent.children).some(
+          el => el !== b && el.getAttribute('data-testid') === 'activity-rail',
+        )
       })
       expect(isSibling, 'the breakout must be a sibling of the rail').toBe(true)
 
-      // Collapsing is only assertable when the rail is TOGGLEABLE
-      // (`!hasFailure && !isStreaming`). At the pending-approval moment the turn
-      // is usually still streaming, so INV-4/INV-5 render the summary as a plain
-      // div with no `aria-expanded` and no collapse control — there is nothing
-      // to click. Stated here rather than left implicit: the DETERMINISTIC
-      // "collapsing the rail does not hide the request" proof is owned by the
-      // mocked sibling spec, which can guarantee a settled, toggleable rail.
-      const summary = rail.getByTestId('activity-rail-summary')
-      if (await summary.isVisible().catch(() => false)) {
-        if ((await summary.getAttribute('aria-expanded')) === 'true') {
-          await summary.click()
-          await expect(summary).toHaveAttribute('aria-expanded', 'false')
-          await expect(rail.getByTestId('activity-rail-steps')).toHaveCount(0)
-        }
-      }
+      // NOTE, stated rather than implied: the collapse leg the first cut had here
+      // could not execute in this spec's configuration. `ActivityRail` sets
+      // `toggleable = !hasFailure && !isStreaming`, and at the pending-approval
+      // moment the stream is still open — so INV-4/INV-5 render the summary as a
+      // plain div with no `aria-expanded` and no collapse control, and the
+      // click-then-assert branch was dead while still reading as coverage. The
+      // deterministic "collapsing the rail does not hide the request" proof is
+      // owned by the mocked sibling (`activity-rail-breakout.spec.ts`), which can
+      // guarantee a settled, toggleable rail; a real stream cannot. Removed here
+      // rather than left as decoration.
       await expect(breakout).toBeVisible()
       await expect(
         breakout.locator('[data-testid="tool-approval-approve-once"]'),

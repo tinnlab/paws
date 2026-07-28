@@ -120,7 +120,15 @@ export function subscribeRailLive(onChange: () => void): () => void {
 
 /** Test-only reset so specs don't leak a source across files. */
 export function __resetRailLiveSourceForTests(): void {
-  unsubscribeSource?.()
+  // Guarded like the production path (FIX_ROUND-5 — the twin seam's reset got
+  // this in FIX_ROUND-4 and this one was left bare, in the same file the same
+  // commit claimed to harden "in step"): an unguarded throw would abort the
+  // reset with `source` still set and leak it into the next spec.
+  try {
+    unsubscribeSource?.()
+  } catch {
+    /* the reset must always complete */
+  }
   unsubscribeSource = null
   source = null
   sourceOwner = null

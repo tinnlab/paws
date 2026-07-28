@@ -19,7 +19,7 @@ import { normalizeToolResultOrder } from '@/modules/chat/core/utils/normalizeToo
 import { ActivityRail } from '@/modules/chat/components/rail/ActivityRail'
 import {
   segmentRail,
-  withSegmentationKey,
+  withSegmentationShape,
   type PlacedRailStep,
 } from '@/modules/chat/components/rail/railSegmentation'
 
@@ -175,7 +175,7 @@ export const ChatMessage = memo(function ChatMessage({
    * only the per-step status/timing/artifacts refresh.
    */
   const resolveStep = (placed: PlacedRailStep) =>
-    withSegmentationKey(placed, chatExtensionRegistry.resolveRailStep(railCtx(placed))?.step)
+    withSegmentationShape(placed, chatExtensionRegistry.resolveRailStep(railCtx(placed))?.step)
 
   /** Resolve one step's inline detail through the SAME contribution that
    *  described it, so the label and the body can never come from different

@@ -7,7 +7,7 @@ import {
   elicitationStatus,
   elicitationVersion,
   hasElicitationTransport,
-  isElicitationUnresolvable,
+  elicitationBlockedReason,
   registerElicitation,
   resolveElicitationVia,
   setElicitationTransport,
@@ -22,8 +22,11 @@ import {
  * makes and that nothing else in the tree exercises: the e2e path only ever runs
  * with a healthy transport installed, so the degrade-when-absent, wrong-owner and
  * throwing-provider branches — i.e. all of the defensive code — were unreachable
- * from any test. Its precedent (`chat/core/rail/liveSteps.ts`) is unit-tested
- * through exactly this reset helper; this file follows it.
+ * from any test. (An earlier draft of this note claimed the precedent
+ * `chat/core/rail/liveSteps.ts` was already unit-tested through the same reset
+ * helper. It was not — there was no spec for it at all. FIX_ROUND-5 added
+ * `liveSteps.test.ts`, so the two seams are now pinned symmetrically as well as
+ * written symmetrically.)
  */
 
 /** A recording stub. `fail` makes each provider entry point throw. */
@@ -62,14 +65,24 @@ function stubTransport(fail: Partial<Record<keyof ElicitationTransport, boolean>
   return { t, entries, unsubscribeCount: () => unsubscribed, listenerCount: () => listeners.size }
 }
 
-/** Silence the module's deliberate `console.error` diagnostics for one call. */
+/**
+ * Silence the module's deliberate diagnostics for one call.
+ *
+ * BOTH channels (FIX_ROUND-5): the no-transport paths log at `warn` and the
+ * throwing-provider paths at `error`, so stubbing only `error` let the warnings
+ * leak into the suite output — the helper stopped doing what its name says on
+ * the very path it was written for.
+ */
 async function quiet<T>(fn: () => T | Promise<T>): Promise<T> {
-  const original = console.error
+  const originalError = console.error
+  const originalWarn = console.warn
   console.error = () => {}
+  console.warn = () => {}
   try {
     return await fn()
   } finally {
-    console.error = original
+    console.error = originalError
+    console.warn = originalWarn
   }
 }
 
@@ -169,26 +182,27 @@ test('a throwing provider never breaks a transcript render', async () => {
   assert.equal(await quiet(() => resolveElicitationVia('e1', 'accept')), false)
 })
 
-test('isElicitationUnresolvable folds the three independent failure sources', () => {
-  const ok = { declaredUnresolvable: false, resolveFailed: false, hasTransport: true }
-  assert.equal(isElicitationUnresolvable(ok), false, 'the healthy case must stay actionable')
-
-  // Each source ALONE is sufficient — a consumer must not be able to handle one
-  // and silently miss another.
-  assert.equal(isElicitationUnresolvable({ ...ok, declaredUnresolvable: true }), true)
-  assert.equal(isElicitationUnresolvable({ ...ok, resolveFailed: true }), true)
-  assert.equal(isElicitationUnresolvable({ ...ok, hasTransport: false }), true)
-
-  // Absent (the ordinary block, which carries no flag) is not unresolvable.
+test('elicitationBlockedReason keeps NO-TRANSPORT and RESOLVE-FAILED distinct', () => {
   assert.equal(
-    isElicitationUnresolvable({ resolveFailed: false, hasTransport: true }),
-    false,
+    elicitationBlockedReason({ hasTransport: true, resolveFailed: false }),
+    null,
+    'the healthy case is actionable',
   )
 
-  // RECOVERY: the transport term is a live input, so re-deriving with a transport
-  // present clears the state. This is what makes the banner non-latching.
-  assert.equal(
-    isElicitationUnresolvable({ declaredUnresolvable: false, resolveFailed: false, hasTransport: true }),
-    false,
-  )
+  // No transport: nothing can carry the decision -> the controls must be dead.
+  assert.equal(elicitationBlockedReason({ hasTransport: false, resolveFailed: false }), 'no-transport')
+
+  // A rejected POST with a transport present is TRANSIENT and must stay
+  // retryable — this is the distinction FIX_ROUND-4 collapsed, which made one
+  // failure disable the card for the life of the mount.
+  assert.equal(elicitationBlockedReason({ hasTransport: true, resolveFailed: true }), 'resolve-failed')
+
+  // No transport dominates: reporting "try again" would be a lie when there is
+  // nothing to try against.
+  assert.equal(elicitationBlockedReason({ hasTransport: false, resolveFailed: true }), 'no-transport')
+
+  // LIVE, not latched: the same resolveFailed with a transport back is the
+  // retryable state, and with the failure cleared it is actionable again — the
+  // caller re-derives on every seam bump, so the card recovers by itself.
+  assert.equal(elicitationBlockedReason({ hasTransport: true, resolveFailed: false }), null)
 })

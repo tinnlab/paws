@@ -7,7 +7,7 @@ import {
   isQuietSingle,
   segmentRail,
   spanHasFailure,
-  withSegmentationKey,
+  withSegmentationShape,
   type RailSegment,
 } from './railSegmentation.ts'
 import type { RailStepDescriptor } from './railTypes.ts'
@@ -224,7 +224,7 @@ test('segmentRail disambiguates a REPEATED step key (replayed tool_use_id)', () 
   assert.equal(new Set(keys).size, keys.length, 'keys must be unique within a span')
 })
 
-test('withSegmentationKey PRESERVES the segmentation key across re-resolution', () => {
+test('withSegmentationShape PRESERVES the segmentation key across re-resolution', () => {
   const placed = {
     index: 1,
     step: { key: 'dup#1', label: 'l', status: 'success' as const, consumed: 1 },
@@ -233,15 +233,15 @@ test('withSegmentationKey PRESERVES the segmentation key across re-resolution', 
   // key, because a contribution cannot know its tool_use_id repeats in this message.
   const resolved: RailStepDescriptor = { key: 'dup', label: 'l', status: 'failed', consumed: 1 }
 
-  const merged = withSegmentationKey(placed, resolved)
+  const merged = withSegmentationShape(placed, resolved)
   assert.equal(merged.key, 'dup#1', 'segmentation owns the identity')
   assert.equal(merged.status, 'failed', 're-resolution owns the state')
 
   // Unchanged key -> the SAME object, no needless copy on the common path.
   const same: RailStepDescriptor = { key: 'dup#1', label: 'l', status: 'success', consumed: 1 }
-  assert.equal(withSegmentationKey(placed, same), same)
+  assert.equal(withSegmentationShape(placed, same), same)
 
   // No resolution at all -> fall back to the placed step, never undefined.
-  assert.equal(withSegmentationKey(placed, null), placed.step)
-  assert.equal(withSegmentationKey(placed, undefined), placed.step)
+  assert.equal(withSegmentationShape(placed, null), placed.step)
+  assert.equal(withSegmentationShape(placed, undefined), placed.step)
 })

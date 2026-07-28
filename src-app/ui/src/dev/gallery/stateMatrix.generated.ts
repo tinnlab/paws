@@ -4,7 +4,7 @@
 // renders + overlay triggers + panel/slot registrations) that the reconciliation
 // gate (scripts/reconcile-state-matrix.mjs) checks the gallery entries against.
 //
-// 347 surfaces carry renderable-state signals; 2105 signals total.
+// 347 surfaces carry renderable-state signals; 2107 signals total.
 
 /** A signal is one mechanically-detected render fork (a state the surface can be in). */
 export interface StateSignal {
@@ -1958,12 +1958,14 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/js-tool/chat-extension/components/JsToolApprovalContent",
     requiredStates: [],
     signals: [
-      { kind: "branch", condition: "submitting || resolved !== null || unresolvable", line: 101 },
-      { kind: "branch", condition: "resolved === 'approved'", line: 118 },
-      { kind: "branch", condition: "resolved === 'denied'", line: 118 },
-      { kind: "branch", condition: "serverParenLabel(data.server)", line: 129 },
-      { kind: "branch", condition: "data.input !== undefined", line: 141 },
-      { kind: "branch", condition: "resolved === null", line: 176 },
+      { kind: "branch", condition: "!hasTransport || resolved !== null", line: 91 },
+      { kind: "branch", condition: "elicitationExists(data.elicitation_id)", line: 92 },
+      { kind: "branch", condition: "submitting || resolved !== null || !hasTransport", line: 127 },
+      { kind: "branch", condition: "resolved === 'approved'", line: 144 },
+      { kind: "branch", condition: "resolved === 'denied'", line: 144 },
+      { kind: "branch", condition: "serverParenLabel(data.server)", line: 155 },
+      { kind: "branch", condition: "data.input !== undefined", line: 167 },
+      { kind: "branch", condition: "resolved === null", line: 207 },
     ],
   },
   "modules/js-tool/components/JsToolSettingsSection": {

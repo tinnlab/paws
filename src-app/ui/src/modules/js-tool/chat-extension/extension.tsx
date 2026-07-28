@@ -65,16 +65,17 @@ const jsToolExtension: ChatExtension = createExtension({
       // double-delivered SSE frame can't reset an already-resolved entry to
       // 'pending' (which would re-show the buttons + allow a duplicate POST).
       //
-      // FIX_ROUND-4: the registration's outcome is CARRIED ONTO THE CARD. The
-      // card below is injected unconditionally, so a registration that failed —
-      // no transport installed, or a provider whose `register` threw while
-      // `hasElicitationTransport()` is still true — used to leave live
-      // Approve/Deny buttons over an elicitation the provider has no entry for,
-      // which is precisely the "pending forever, silently" case the boolean
-      // return was introduced to expose. `unresolvable` makes the card say so.
-      let registered = true
+      // FIX_ROUND-5: the outcome is deliberately NOT stamped onto the block.
+      // FIX_ROUND-4 wrote `unresolvable: !registered` into the block's content —
+      // a transient CLIENT transport condition recorded in the message CONTENT
+      // vocabulary, snapshotted once and never correctable (the block is deduped
+      // by elicitation_id and never rewritten). Because mcp's `initialize`
+      // awaits a dynamic import BEFORE installing the transport, a frame landing
+      // in that window latched the card into a permanently disabled state even
+      // after mcp finished wiring. The card RECONCILES against the live seam
+      // instead and re-registers itself, so the same failure self-heals.
       if (!elicitationExists(data.elicitation_id)) {
-        registered = registerElicitation({
+        registerElicitation({
           elicitation_id: data.elicitation_id,
           message: `run_js wants to call ${data.tool_name}`,
           server: data.server,
@@ -97,7 +98,6 @@ const jsToolExtension: ChatExtension = createExtension({
           tool_name: data.tool_name,
           server: data.server,
           input: data.input,
-          unresolvable: !registered,
         },
         sequence_order: 0,
         created_at: now,

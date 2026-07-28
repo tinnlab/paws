@@ -260,3 +260,40 @@ test('FIX_ROUND-2 #3 (AP-4): js-tool and mcp are decoupled in BOTH directions', 
     `AP-4 must not re-couple js-tool and mcp in either direction:\n${violations.join('\n')}`,
   )
 })
+
+/**
+ * FIX_ROUND-5 — SEAM GUARD: the rail's re-resolution must route through
+ * `withSegmentationShape`.
+ *
+ * `withSegmentationShape` is pinned behaviourally by `railSegmentation.test.ts`,
+ * but that only proves the helper is correct — not that anything USES it. The
+ * one-line revert that actually matters is at the call site
+ * (`ChatMessage.resolveStep` returning the registry's step directly), and no
+ * unit or e2e test can observe it: the divergence only shows on a message that
+ * REPLAYS a `tool_use_id`, and the workspace's unit runner cannot mount JSX.
+ *
+ * So this is a source-level guard, and it is labelled as one. It does not assert
+ * behaviour; it asserts that the single production consumer still goes through
+ * the seam, which is the property the extraction exists to keep.
+ */
+test('FIX_ROUND-5: ChatMessage re-resolves rail steps THROUGH withSegmentationShape', () => {
+  const file = join(SRC, 'modules/chat/components/ChatMessage.tsx')
+  const text = readFileSync(file, 'utf8')
+
+  assert.ok(
+    importsOf(file).some(spec => spec.endsWith('rail/railSegmentation')),
+    'ChatMessage must import the segmentation module',
+  )
+  assert.match(
+    text,
+    /withSegmentationShape\s*\(/,
+    'ChatMessage must call withSegmentationShape — segmentation owns key/consumed/blocking',
+  )
+  // The revert this guards: handing the registry's step back untouched.
+  assert.doesNotMatch(
+    text,
+    /resolveRailStep\([^)]*\)\?\.step\s*\?\?\s*placed\.step/,
+    'resolveStep must not return the contribution step directly — that discards ' +
+      'segmentation’s disambiguated key and its consumed clamp',
+  )
+})

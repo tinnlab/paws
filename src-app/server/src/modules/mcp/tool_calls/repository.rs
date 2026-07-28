@@ -424,91 +424,45 @@ mod tests {
         );
     }
 
-    /// FIX_ROUND-2 #1: every index this module leaves on `mcp_tool_calls` that
-    /// covers a column [`list_calls_for_user`] filters must be OWNER-LEADING.
+    /// Replay the index DDL of a set of migration SOURCES, in the order given,
+    /// into `index name -> indexed columns`.
     ///
-    /// `user_id = $1` is the unconditional cross-user guard; each other predicate
-    /// is an optional narrowing. An index on the narrowing column ALONE is still
-    /// chosen under a custom plan, but it leaves `user_id` as a post-`Filter` —
-    /// i.e. a row belonging to ANOTHER user is read off the heap and only then
-    /// discarded (observed as `Rows Removed by Filter: 1` on the `?message_id=`
-    /// probe in `.lifecycle/activity-rail/explain-mcp-tool-calls.sql`).
-    /// `202607200200` replaced the single-column pair with `(user_id, col)`.
+    /// Extracted (FIX_ROUND-5) so every branch is reachable from a test. The
+    /// real corpus exercises almost none of them — there is no lowercase
+    /// `create index`, no `DROP INDEX CONCURRENTLY` and no `ALTER TABLE` on
+    /// `mcp_tool_calls` anywhere in it — so hardening the parser against the
+    /// real files alone was unverifiable by construction: reverting any of it
+    /// turned nothing red. The synthetic cases below each corpus test are what
+    /// actually pin this.
     ///
-    /// This walks EVERY module's real migration directory in application order
-    /// and replays its `CREATE [UNIQUE] INDEX` / `DROP INDEX` statements, so it
-    /// fails on a re-added single-column index OR on a reverted drop — not just
-    /// on the two filenames that happen to exist today.
-    ///
-    /// FIX_ROUND-3 widened three blind spots the first cut had:
-    ///  * it only recognised `CREATE INDEX`, so the canonical one-line violation
-    ///    written as `CREATE UNIQUE INDEX …` slipped past;
-    ///  * it only scanned `mcp/migrations`, while the set actually applied at
-    ///    boot is the generated union of every module's dir — an index on
-    ///    `mcp_tool_calls` authored from another module escaped entirely;
-    ///  * `FILTERED` listed 2 of the 5 columns [`list_calls_for_user`] narrows
-    ///    on, so the docstring claimed more than the assertion checked. All five
-    ///    are checked now, with the two PRE-EXISTING single-column indexes
-    ///    (`idx_mcp_tool_calls_server`, `idx_mcp_tool_calls_conv`, both from
-    ///    `202607140180`) named in an explicit legacy allowlist — this branch did
-    ///    not create them, and a blanket assert would be red for reasons it did
-    ///    not cause. Anything NEW on those columns must still be owner-leading.
-    #[test]
-    fn tool_call_lookup_indexes_are_owner_leading() {
-        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        // The set actually applied at boot is `build.rs::compose_merged_migrations`:
-        // every module's own dir UNION the five named SDK crates UNION desktop.
-        // FIX_ROUND-4: the first widening stopped at `src/modules/*` and so still
-        // missed 8 of the 109 applied files — an index on `mcp_tool_calls`
-        // authored from an SDK crate migration escaped the guard entirely.
-        let mut roots: Vec<std::path::PathBuf> = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(manifest.join("src/modules")) {
-            roots.extend(entries.filter_map(|e| e.ok().map(|e| e.path().join("migrations"))));
-        }
-        let sdk_crates = manifest.join("../../sdk/crates");
-        for c in [
-            "ziee-auth",
-            "ziee-file",
-            "ziee-notification",
-            "ziee-onboarding",
-            "ziee-seed",
-        ] {
-            roots.push(sdk_crates.join(c).join("migrations"));
-        }
-        roots.push(manifest.join("../desktop/tauri/migrations"));
-
-        let mut files: Vec<std::path::PathBuf> = Vec::new();
-        for dir in &roots {
-            let Ok(entries) = std::fs::read_dir(dir) else {
-                continue;
-            };
-            files.extend(
-                entries
-                    .filter_map(|e| e.ok().map(|e| e.path()))
-                    .filter(|p| p.extension().is_some_and(|x| x == "sql")),
-            );
-        }
-        assert!(
-            files.len() > 100,
-            "expected to find every module's migrations, found {} — the walk is \
-             looking in the wrong place and the guard would be vacuous",
-            files.len()
-        );
-        // Filename order IS application order (the version prefix sorts), and it
-        // is global across modules because every name is timestamp-prefixed.
-        files.sort_by_key(|p| p.file_name().map(|n| n.to_os_string()));
-
-        // index name -> indexed columns, replayed across every migration.
+    /// `refuse` is called for DDL that creates a REAL backing index this replay
+    /// cannot model (a table-level UNIQUE / PRIMARY KEY / EXCLUDE constraint, or
+    /// index DDL hidden inside a `$$ … $$` body). Refusing is the safe answer:
+    /// silently ignoring it would make the owner-leading guarantee vacuous for
+    /// exactly the spellings that evade the parser.
+    fn replay_index_ddl(
+        sources: &[(String, String)],
+        table: &str,
+        mut refuse: impl FnMut(&str, &str),
+    ) -> std::collections::BTreeMap<String, Vec<String>> {
         let mut indexes: std::collections::BTreeMap<String, Vec<String>> = Default::default();
-        for path in &files {
-            let raw = std::fs::read_to_string(path).expect("read a migration");
-            // Strip `--` line comments AND `/* … */` block comments: the
-            // rationale prose in these very files quotes the DDL, and a
-            // commented-out CREATE INDEX must not register as a real one
-            // (FIX_ROUND-4 — block comments were not stripped, and at least one
-            // migration already uses them).
-            let mut sql = String::with_capacity(raw.len());
-            let mut rest = raw.as_str();
+        for (name, raw) in sources {
+            // Strip `--` LINE comments FIRST, then `/* … */` blocks.
+            //
+            // FIX_ROUND-5: the order is load-bearing and was wrong. Stripping
+            // blocks first is not comment-aware, so a `/*` occurring INSIDE a
+            // line comment — e.g. the glob `…/migrations/*_schema.sql` in a
+            // header — opened a block that never closed and discarded the entire
+            // rest of the file. That is live in the real corpus today, and it
+            // would silently void this guard for any future migration whose
+            // prose mentions a glob path.
+            let no_line_comments: String = raw
+                .lines()
+                .map(|l| l.split("--").next().unwrap_or(""))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let mut sql = String::with_capacity(no_line_comments.len());
+            let mut rest = no_line_comments.as_str();
             while let Some(open) = rest.find("/*") {
                 sql.push_str(&rest[..open]);
                 rest = match rest[open + 2..].find("*/") {
@@ -517,47 +471,123 @@ mod tests {
                 };
             }
             sql.push_str(rest);
-            let sql: String = sql
-                .lines()
-                .map(|l| l.split("--").next().unwrap_or(""))
-                .collect::<Vec<_>>()
-                .join("\n");
+
+            // `$$ … $$` bodies are not statement-split safely, so index DDL
+            // inside one would evade the replay entirely. Refuse rather than
+            // pretend (FIX_ROUND-5).
+            let mut scan = sql.as_str();
+            while let Some(open) = scan.find("$$") {
+                let after = &scan[open + 2..];
+                let Some(close) = after.find("$$") else { break };
+                let body = &after[..close];
+                if body.contains(table) {
+                    refuse(name, "index DDL inside a `$$ … $$` body cannot be replayed");
+                }
+                scan = &after[close + 2..];
+            }
+
             for stmt in sql.split(';').map(str::trim).filter(|s| !s.is_empty()) {
                 let flat = stmt.split_whitespace().collect::<Vec<_>>().join(" ");
                 let upper = flat.to_uppercase();
-                // FIX_ROUND-4: an `ALTER TABLE … ADD CONSTRAINT … UNIQUE (col)`
-                // creates a REAL single-column index on `mcp_tool_calls` and was
-                // invisible here. Refuse it outright rather than half-parse it —
-                // the owner-leading rule has no exception for a constraint.
-                if upper.starts_with("ALTER TABLE")
-                    && flat.contains("mcp_tool_calls")
-                    && upper.contains("UNIQUE")
-                {
-                    panic!(
-                        "{}: an ALTER TABLE … UNIQUE on mcp_tool_calls creates a \
-                         backing index this guard cannot inspect. Express it as an \
-                         explicit owner-leading CREATE [UNIQUE] INDEX instead.",
-                        path.display()
-                    );
+
+                // A table-level constraint creates a REAL backing index, so
+                // MODEL it as one rather than refusing: the corpus already has
+                // `ALTER TABLE ONLY mcp_tool_calls ADD CONSTRAINT …_pkey PRIMARY
+                // KEY (id)`, which is perfectly fine — `id` is not a filtered
+                // column — and refusing it outright (FIX_ROUND-5's first cut)
+                // would have failed the suite on a legitimate migration. Modelled
+                // as an index, the ordinary owner-leading rule decides: a PK on
+                // `id` is skipped, a UNIQUE on `message_id` is flagged.
+                //
+                // Scoped to the ALTERED table (FIX_ROUND-5: FIX_ROUND-4 matched
+                // the name ANYWHERE, so another table's `… REFERENCES
+                // mcp_tool_calls(id)` false-fired) and to ADD only (a DROP
+                // creates nothing). PRIMARY KEY / EXCLUDE evade a `UNIQUE`
+                // substring test, so all three spellings are handled.
+                if let Some(after_alter) = upper.strip_prefix("ALTER TABLE ") {
+                    let mut target = after_alter;
+                    for kw in ["ONLY ", "IF EXISTS "] {
+                        target = target.strip_prefix(kw).unwrap_or(target);
+                    }
+                    let target = target
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or("")
+                        .rsplit('.')
+                        .next()
+                        .unwrap_or("");
+                    let adds_constraint =
+                        upper.contains(" ADD CONSTRAINT ") || upper.contains(" ADD UNIQUE") || upper.contains(" ADD PRIMARY KEY");
+                    let kind = ["UNIQUE", "PRIMARY KEY", "EXCLUDE"]
+                        .iter()
+                        .find(|k| upper.contains(**k));
+                    if target.eq_ignore_ascii_case(table) && adds_constraint && kind.is_some() {
+                        let cols = flat
+                            .split_once('(')
+                            .and_then(|(_, rest)| rest.rsplit_once(')'))
+                            .map(|(inner, _)| inner)
+                            .unwrap_or_default()
+                            .split(')')
+                            .next()
+                            .unwrap_or_default()
+                            .split(',')
+                            .filter_map(|c| c.split_whitespace().next())
+                            .map(|c| c.trim_matches('"').to_string())
+                            .filter(|c| !c.is_empty())
+                            .collect::<Vec<_>>();
+                        if cols.is_empty() {
+                            refuse(
+                                name,
+                                "a constraint on this table creates a backing index whose \
+                                 columns this guard cannot parse — express it as an explicit \
+                                 owner-leading CREATE [UNIQUE] INDEX instead",
+                            );
+                        } else {
+                            // `EXCLUDE USING gist (col WITH =)` also lands here;
+                            // the first token per element is the column.
+                            let cname = flat
+                                .to_uppercase()
+                                .find(" ADD CONSTRAINT ")
+                                .map(|i| {
+                                    flat[i + " ADD CONSTRAINT ".len()..]
+                                        .split_whitespace()
+                                        .next()
+                                        .unwrap_or("constraint")
+                                        .to_string()
+                                })
+                                .unwrap_or_else(|| format!("{target}_constraint"));
+                            indexes.insert(cname, cols);
+                        }
+                    }
+                    continue;
                 }
-                // Name extraction reads the UPPERCASED form so a lowercase
-                // `create index …` does not get recorded under the name "create"
-                // (FIX_ROUND-4), then maps back to the original spelling.
+
                 if upper.starts_with("CREATE INDEX") || upper.starts_with("CREATE UNIQUE INDEX") {
-                    if !flat.contains("mcp_tool_calls") {
+                    if !flat.contains(table) {
                         continue;
                     }
+                    // Trim on the UPPERCASED copy so a lowercase `create index`
+                    // is not recorded under the name "create", then map the
+                    // offset back. FIX_ROUND-5: the offset is taken from
+                    // `upper`, not `flat` — `to_uppercase()` is NOT
+                    // length-preserving for non-ASCII, so deriving it from
+                    // `flat.len()` could slice at a non-char boundary or
+                    // underflow.
                     let head = upper
                         .trim_start_matches("CREATE ")
                         .trim_start_matches("UNIQUE ")
                         .trim_start_matches("INDEX ")
                         .trim_start_matches("CONCURRENTLY ")
                         .trim_start_matches("IF NOT EXISTS ");
-                    let offset = flat.len() - head.len();
-                    let name = flat[offset..]
+                    let offset = upper.len() - head.len();
+                    if !flat.is_char_boundary(offset) {
+                        refuse(name, "non-ASCII in index DDL defeats the name parser");
+                        continue;
+                    }
+                    let idx_name = flat[offset..]
                         .split_whitespace()
                         .next()
-                        .expect("index name")
+                        .unwrap_or_default()
                         .to_string();
                     let cols = flat
                         .split_once('(')
@@ -573,60 +603,65 @@ mod tests {
                         .filter_map(|c| c.split_whitespace().next())
                         .map(|c| c.trim_matches('"').to_string())
                         .collect::<Vec<_>>();
-                    indexes.insert(name, cols);
+                    indexes.insert(idx_name, cols);
                 } else if upper.starts_with("DROP INDEX") {
-                    // Same uppercase-then-map-back treatment, and CONCURRENTLY
-                    // is trimmed HERE too (FIX_ROUND-4: it was added to the
-                    // CREATE chain only, so `DROP INDEX CONCURRENTLY idx_x`
-                    // parsed the name as "CONCURRENTLY" and silently failed to
-                    // remove the index — a false RED).
                     let head = upper
                         .trim_start_matches("DROP INDEX ")
                         .trim_start_matches("CONCURRENTLY ")
                         .trim_start_matches("IF EXISTS ");
-                    let offset = flat.len() - head.len();
-                    let name = flat[offset..]
-                        .trim_end_matches(';')
-                        .split_whitespace()
-                        .next()
-                        .unwrap_or_default()
-                        .rsplit('.')
-                        .next()
-                        .unwrap_or_default()
-                        .to_string();
-                    indexes.remove(&name);
+                    let offset = upper.len() - head.len();
+                    if !flat.is_char_boundary(offset) {
+                        continue;
+                    }
+                    // `DROP INDEX a, b` drops BOTH (FIX_ROUND-5: only the first
+                    // name was removed, leaving a phantom in the map).
+                    for target in flat[offset..].split(',') {
+                        let idx_name = target
+                            .trim()
+                            .trim_end_matches(';')
+                            .split_whitespace()
+                            .next()
+                            .unwrap_or_default()
+                            .rsplit('.')
+                            .next()
+                            .unwrap_or_default()
+                            .to_string();
+                        if !idx_name.is_empty() {
+                            indexes.remove(&idx_name);
+                        }
+                    }
                 }
             }
         }
+        indexes
+    }
 
-        // EVERY column `list_calls_for_user` narrows on under `user_id = $1` —
-        // read off the query at the top of this file, NOT off the table's column
-        // list. FIX_ROUND-4: the first widening got this wrong in BOTH
-        // directions — it added `workflow_run_id`, which the query never filters
-        // on (it is INSERT-only), and dropped `is_built_in`, which it does
-        // (`$4::bool IS NULL OR is_built_in = $4`). The fictional entry is what
-        // then forced a third exemption below, hiding the real gap.
-        const FILTERED: [&str; 5] = [
-            "server_id",
-            "conversation_id",
-            "is_built_in",
-            "tool_use_id",
-            "message_id",
-        ];
-        /// Single-column indexes on a filtered column that PRE-DATE this rule
-        /// (`202607140180_mcp_schema.sql`). Named, not silently excluded, so the
-        /// assertion's scope is legible: nothing NEW may join this list.
-        ///
-        /// Pinned to the EXACT column vector, not just the name: an exemption
-        /// keyed on a name alone would silently survive a future migration that
-        /// drops one of these and re-creates the same NAME over a different,
-        /// wider, still-not-owner-leading column set.
-        const LEGACY_SINGLE_COLUMN: [(&str, &str); 2] = [
-            ("idx_mcp_tool_calls_server", "server_id"),
-            ("idx_mcp_tool_calls_conv", "conversation_id"),
-        ];
+    /// EVERY column [`list_calls_for_user`] narrows on under `user_id = $1` —
+    /// read off the query, NOT off the table's column list.
+    const FILTERED: [&str; 5] = [
+        "server_id",
+        "conversation_id",
+        "is_built_in",
+        "tool_use_id",
+        "message_id",
+    ];
+
+    /// Single-column indexes on a filtered column that PRE-DATE this rule
+    /// (`202607140180_mcp_schema.sql`). Pinned to the EXACT column vector, not
+    /// just the name, so a future migration re-creating the same NAME over a
+    /// different column set is not silently exempt.
+    const LEGACY_SINGLE_COLUMN: [(&str, &str); 2] = [
+        ("idx_mcp_tool_calls_server", "server_id"),
+        ("idx_mcp_tool_calls_conv", "conversation_id"),
+    ];
+
+    /// Assert the owner-leading rule over a replayed index map, returning the
+    /// number of NON-exempt indexes it checked.
+    fn assert_owner_leading(
+        indexes: &std::collections::BTreeMap<String, Vec<String>>,
+    ) -> usize {
         let mut owner_leading = 0usize;
-        for (name, cols) in &indexes {
+        for (name, cols) in indexes {
             if !cols.iter().any(|c| FILTERED.contains(&c.as_str())) {
                 continue;
             }
@@ -645,6 +680,107 @@ mod tests {
             );
             owner_leading += 1;
         }
+        owner_leading
+    }
+
+    /// FIX_ROUND-2 #1: every index left on `mcp_tool_calls` that covers a column
+    /// [`list_calls_for_user`] filters must be OWNER-LEADING.
+    ///
+    /// `user_id = $1` is the unconditional cross-user guard; each other predicate
+    /// is an optional narrowing. An index on the narrowing column ALONE is still
+    /// chosen under a custom plan, but it leaves `user_id` as a post-`Filter` —
+    /// i.e. a row belonging to ANOTHER user is read off the heap and only then
+    /// discarded. `202607200200` replaced the single-column pair with
+    /// `(user_id, col)`.
+    ///
+    /// This replays the REAL migration corpus, in application order, so it fails
+    /// on a re-added single-column index OR on a reverted drop — not just on the
+    /// two filenames that happen to exist today.
+    #[test]
+    fn tool_call_lookup_indexes_are_owner_leading() {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        // `build.rs::compose_merged_migrations` composes the module dirs plus the
+        // five named SDK crates. `desktop/tauri/migrations` is NOT part of the
+        // server's merged set (desktop composes its own) — it is scanned here as
+        // deliberate over-inclusion, since an index it creates would still exist
+        // on a desktop deployment.
+        let module_root = manifest.join("src/modules");
+        let sdk_crates = manifest.join("../../sdk/crates");
+        let mut roots: Vec<(&str, Vec<std::path::PathBuf>)> = Vec::new();
+        let mut module_dirs = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&module_root) {
+            module_dirs.extend(entries.filter_map(|e| e.ok().map(|e| e.path().join("migrations"))));
+        }
+        roots.push(("modules", module_dirs));
+        roots.push((
+            "sdk-crates",
+            [
+                "ziee-auth",
+                "ziee-file",
+                "ziee-notification",
+                "ziee-onboarding",
+                "ziee-seed",
+            ]
+            .iter()
+            .map(|c| sdk_crates.join(c).join("migrations"))
+            .collect(),
+        ));
+        roots.push(("desktop", vec![manifest.join("../desktop/tauri/migrations")]));
+
+        let mut files: Vec<std::path::PathBuf> = Vec::new();
+        for (label, dirs) in &roots {
+            let before = files.len();
+            for dir in dirs {
+                let Ok(entries) = std::fs::read_dir(dir) else {
+                    continue;
+                };
+                files.extend(
+                    entries
+                        .filter_map(|e| e.ok().map(|e| e.path()))
+                        .filter(|p| p.extension().is_some_and(|x| x == "sql")),
+                );
+            }
+            // PER-ROOT, not one global count. FIX_ROUND-5: a single
+            // `files.len() > 100` sat BELOW the 101 files the module dirs alone
+            // already yield, so losing the SDK or desktop roots entirely — the
+            // exact regression widening the walk was meant to prevent — still
+            // passed.
+            assert!(
+                files.len() > before,
+                "migration root `{label}` contributed no files — the walk is looking in \
+                 the wrong place and the guard would be silently narrowed"
+            );
+        }
+
+        // Filename order IS application order (every name is timestamp-prefixed,
+        // globally unique across modules).
+        files.sort_by_key(|p| p.file_name().map(|n| n.to_os_string()));
+        let sources: Vec<(String, String)> = files
+            .iter()
+            .map(|p| {
+                (
+                    p.display().to_string(),
+                    std::fs::read_to_string(p).expect("read a migration"),
+                )
+            })
+            .collect();
+
+        let indexes = replay_index_ddl(&sources, "mcp_tool_calls", |file, why| {
+            panic!("{file}: {why}");
+        });
+
+        // Every exemption must still correspond to a REAL index, so the
+        // allowlist cannot rot into a silent widening (FIX_ROUND-5).
+        for (name, col) in LEGACY_SINGLE_COLUMN {
+            assert_eq!(
+                indexes.get(name).map(Vec::as_slice),
+                Some([col.to_string()].as_slice()),
+                "legacy exemption `{name}` no longer matches a single-column ({col}) index — \
+                 remove the exemption rather than leaving it as a standing hole"
+            );
+        }
+
+        let owner_leading = assert_owner_leading(&indexes);
         // Guard the guard: a rename must not make the loop above vacuous.
         assert_eq!(
             owner_leading, 2,
@@ -652,4 +788,129 @@ mod tests {
              lookup indexes to survive, found {owner_leading}: {indexes:?}"
         );
     }
+
+    /// The parser branches the real corpus never exercises. Without these, every
+    /// hardening in `replay_index_ddl` is unfalsifiable (FIX_ROUND-5).
+    #[test]
+    fn replay_index_ddl_sees_the_spellings_the_real_corpus_lacks() {
+        let src = |sql: &str| vec![("synthetic.sql".to_string(), sql.to_string())];
+        let noop = |_: &str, _: &str| {};
+
+        // lowercase DDL — was recorded under the name "create".
+        let m = replay_index_ddl(&src("create index idx_low on mcp_tool_calls (tool_use_id);"), "mcp_tool_calls", noop);
+        assert_eq!(m.get("idx_low").map(Vec::as_slice), Some(["tool_use_id".to_string()].as_slice()));
+
+        // CREATE UNIQUE INDEX — the canonical one-line violation.
+        let m = replay_index_ddl(&src("CREATE UNIQUE INDEX idx_u ON mcp_tool_calls (message_id);"), "mcp_tool_calls", noop);
+        assert_eq!(m.get("idx_u").map(Vec::as_slice), Some(["message_id".to_string()].as_slice()));
+
+        // CONCURRENTLY on both CREATE and DROP.
+        let m = replay_index_ddl(
+            &src("CREATE INDEX CONCURRENTLY idx_c ON mcp_tool_calls (tool_use_id); DROP INDEX CONCURRENTLY idx_c;"),
+            "mcp_tool_calls",
+            noop,
+        );
+        assert!(!m.contains_key("idx_c"), "DROP INDEX CONCURRENTLY must remove it, got {m:?}");
+
+        // Multi-target DROP.
+        let m = replay_index_ddl(
+            &src("CREATE INDEX a ON mcp_tool_calls (tool_use_id); CREATE INDEX b ON mcp_tool_calls (message_id); DROP INDEX a, b;"),
+            "mcp_tool_calls",
+            noop,
+        );
+        assert!(m.is_empty(), "both dropped names must go, got {m:?}");
+
+        // A commented-out CREATE is not real.
+        let m = replay_index_ddl(&src("/* CREATE INDEX idx_x ON mcp_tool_calls (tool_use_id); */"), "mcp_tool_calls", noop);
+        assert!(m.is_empty(), "block-commented DDL must be ignored, got {m:?}");
+        let m = replay_index_ddl(&src("-- CREATE INDEX idx_y ON mcp_tool_calls (tool_use_id);"), "mcp_tool_calls", noop);
+        assert!(m.is_empty(), "line-commented DDL must be ignored, got {m:?}");
+
+        // A `/*` INSIDE a line comment must not swallow the rest of the file.
+        let m = replay_index_ddl(
+            &src("-- see migrations/*_schema.sql\nCREATE INDEX idx_after ON mcp_tool_calls (user_id, tool_use_id);"),
+            "mcp_tool_calls",
+            noop,
+        );
+        assert!(
+            m.contains_key("idx_after"),
+            "a glob in a line comment must not open a block strip, got {m:?}"
+        );
+    }
+
+    #[test]
+    fn replay_index_ddl_refuses_ddl_it_cannot_model() {
+        use std::cell::RefCell;
+        let refusals: RefCell<Vec<String>> = RefCell::new(Vec::new());
+        let record = |_: &str, why: &str| refusals.borrow_mut().push(why.to_string());
+        let src = |sql: &str| vec![("synthetic.sql".to_string(), sql.to_string())];
+
+        // A constraint-backed index on the guarded table is MODELLED, then judged
+        // by the ordinary owner-leading rule — all three spellings.
+        for sql in [
+            "ALTER TABLE ONLY public.mcp_tool_calls ADD CONSTRAINT c UNIQUE (message_id);",
+            "ALTER TABLE mcp_tool_calls ADD CONSTRAINT c PRIMARY KEY (tool_use_id);",
+            "ALTER TABLE mcp_tool_calls ADD CONSTRAINT c EXCLUDE USING gist (server_id WITH =);",
+        ] {
+            let m = replay_index_ddl(&src(sql), "mcp_tool_calls", record);
+            assert_eq!(m.len(), 1, "the constraint index must be modelled: {sql}");
+            let caught = std::panic::catch_unwind(|| assert_owner_leading(&m)).is_err();
+            assert!(caught, "a single-column constraint index must be rejected: {sql}");
+        }
+
+        // A PRIMARY KEY on a NON-filtered column is legitimate and must pass —
+        // the real corpus has exactly this (`…_pkey PRIMARY KEY (id)`), and
+        // refusing it outright failed the suite on a valid migration.
+        let m = replay_index_ddl(
+            &src("ALTER TABLE ONLY public.mcp_tool_calls ADD CONSTRAINT mcp_tool_calls_pkey PRIMARY KEY (id);"),
+            "mcp_tool_calls",
+            record,
+        );
+        assert_eq!(assert_owner_leading(&m), 0, "a PK on `id` touches no filtered column");
+
+        // …but NOT another table's constraint that merely REFERENCES it, and NOT
+        // a DROP (which creates nothing). Both false-RED under FIX_ROUND-4.
+        for sql in [
+            "ALTER TABLE other_tbl ADD CONSTRAINT c UNIQUE (tool_call_id) REFERENCES mcp_tool_calls(id);",
+            "ALTER TABLE mcp_tool_calls DROP CONSTRAINT foo_unique;",
+            "ALTER TABLE mcp_tool_calls ADD COLUMN unique_key TEXT;",
+        ] {
+            refusals.borrow_mut().clear();
+            replay_index_ddl(&src(sql), "mcp_tool_calls", record);
+            assert!(
+                refusals.borrow().is_empty(),
+                "must NOT refuse: {sql} (got {:?})",
+                refusals.borrow()
+            );
+        }
+
+        // Index DDL hidden in a `$$ … $$` body cannot be replayed -> refuse.
+        refusals.borrow_mut().clear();
+        replay_index_ddl(
+            &src("DO $$ BEGIN CREATE INDEX z ON mcp_tool_calls (tool_use_id); END $$;"),
+            "mcp_tool_calls",
+            record,
+        );
+        assert_eq!(
+            refusals.borrow().len(),
+            1,
+            "a $$ body touching the table must be refused"
+        );
+    }
+
+    #[test]
+    fn assert_owner_leading_rejects_a_single_column_index_on_every_filtered_column() {
+        for col in FILTERED {
+            let mut m: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+            m.insert("idx_new".to_string(), vec![col.to_string()]);
+            let caught = std::panic::catch_unwind(|| assert_owner_leading(&m)).is_err();
+            assert!(caught, "a NEW single-column index on `{col}` must be rejected");
+
+            // The owner-leading form is accepted.
+            let mut ok: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+            ok.insert("idx_ok".to_string(), vec!["user_id".to_string(), col.to_string()]);
+            assert_eq!(assert_owner_leading(&ok), 1);
+        }
+    }
+
 }

@@ -260,29 +260,33 @@ export function __resetElicitationTransportForTests(): void {
   listeners.clear()
 }
 
+/** Why a card's approve/deny cannot be actioned right now, or `null` when it can. */
+export type ElicitationBlockedReason = 'no-transport' | 'resolve-failed'
+
 /**
- * Can a card's approve/deny decision actually be CARRIED right now?
+ * Classify a card's actionability. TWO DISTINCT states that FIX_ROUND-4 wrongly
+ * collapsed into one boolean, with a real regression as the result:
  *
- * Three independent ways it cannot, deliberately folded into one predicate so a
- * consumer cannot handle some and miss others:
- *  - `declaredUnresolvable` — the SSE handler could not even REGISTER the
- *    request (no transport at the time, or the provider's `register` threw), and
- *    said so on the injected block;
- *  - `resolveFailed` — a resolve attempt came back `false`;
- *  - `!hasTransport` — there is no transport installed right now.
+ *  - **`no-transport`** — there is nothing to carry the decision. The controls
+ *    must be DISABLED (clicking would silently no-op), and the state is LIVE: it
+ *    clears by itself the moment an extension installs a transport, because the
+ *    caller re-reads it on every seam bump.
+ *  - **`resolve-failed`** — a resolve attempt came back `false` with a transport
+ *    present, i.e. the provider rejected. That is TRANSIENT and must stay
+ *    RETRYABLE. FIX_ROUND-4 folded it into the disable predicate, which also
+ *    gated the reset that cleared it — one failure disabled both buttons for the
+ *    life of the mount, with the reset statement unreachable. That was strictly
+ *    worse than the behaviour it replaced.
  *
- * DERIVED, never latched: the transport term is re-read on every seam bump, so a
- * card recovers by itself the moment a transport is installed instead of being
- * stranded behind a message that is no longer true.
- *
- * Extracted (FIX_ROUND-4) because this decision is the whole of the degraded
- * state a user actually sees, and this workspace's unit runner cannot parse JSX
- * — inline in the component it was unpinnable.
+ * Nothing here is latched, and there is deliberately no third "declared" term:
+ * a registration failure recorded into the message block could never be
+ * corrected (see the FIX_ROUND-5 note in js-tool's SSE handler).
  */
-export function isElicitationUnresolvable(args: {
-  declaredUnresolvable?: boolean
-  resolveFailed: boolean
+export function elicitationBlockedReason(args: {
   hasTransport: boolean
-}): boolean {
-  return args.declaredUnresolvable === true || args.resolveFailed || !args.hasTransport
+  resolveFailed: boolean
+}): ElicitationBlockedReason | null {
+  if (!args.hasTransport) return 'no-transport'
+  if (args.resolveFailed) return 'resolve-failed'
+  return null
 }
