@@ -1029,7 +1029,8 @@ mod tests {
     #[tokio::test]
     async fn ask_user_without_sse_returns_non_error_no_session_marker() {
         let result = run_ask_user_elicitation(
-            serde_json::json!({ "message": "Pick a color", "schema": { "type": "object" } }),
+            serde_json::json!({ "message": "Pick a color", "schema": { "type": "object",
+                "properties": { "color": { "type": "string" } } } }),
             None,
             None,
             None, // no sse_tx
@@ -1188,7 +1189,8 @@ mod tests {
             mpsc::unbounded_channel::<Result<axum::response::sse::Event, std::convert::Infallible>>();
 
         let handle = tokio::spawn(run_ask_user_elicitation(
-            serde_json::json!({ "message": "Pick a color", "schema": { "type": "object" } }),
+            serde_json::json!({ "message": "Pick a color", "schema": { "type": "object",
+                "properties": { "color": { "type": "string" } } } }),
             None,
             None,
             Some(tx),
@@ -1460,7 +1462,8 @@ mod tests {
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(5),
             run_ask_user_elicitation(
-                serde_json::json!({ "message": "Pick a color", "schema": { "type": "object" } }),
+                serde_json::json!({ "message": "Pick a color", "schema": { "type": "object",
+                "properties": { "color": { "type": "string" } } } }),
                 None,
                 None,
                 Some(tx),

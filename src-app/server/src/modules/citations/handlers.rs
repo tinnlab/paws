@@ -889,7 +889,7 @@ mod stringified_arg_tests {
         // Undecodable is refused with actionable text, not a silent empty vec.
         let err = array_arg(&json!({ "ids": "not json {" }), "ids", CITATION_IDS_EXAMPLE)
             .expect_err("an undecodable ids must be refused, never treated as absent");
-        let msg = format!("{:?}", err.1);
+        let msg = err.1.message.clone();
         assert!(msg.contains("ids") && msg.contains("JSON array"), "got: {msg}");
         assert!(msg.contains("3f1c2a44"), "must carry a copyable example: {msg}");
     }
@@ -907,7 +907,7 @@ mod stringified_arg_tests {
             extract: |args: serde_json::Value| {
                 array_arg(&args, "items", CITATION_ITEMS_EXAMPLE)
                     .map(|o| o.map(serde_json::Value::Array))
-                    .map_err(|e| format!("{:?}", e.1))
+                    .map_err(|e| e.1.message.clone())
             },
         });
     }
