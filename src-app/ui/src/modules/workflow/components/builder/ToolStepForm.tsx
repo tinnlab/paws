@@ -1,10 +1,18 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
-import { Button, Input } from '@ziee/kit'
+import { Alert, Button, Combobox, Input } from '@ziee/kit'
+import { McpServer } from '@/modules/mcp/stores/mcpServer'
 import type { WorkflowBuilderStore } from '../../stores/WorkflowBuilder.store'
+import {
+  ToolCatalogStoreDef,
+  entryForServerName,
+  failureMessage,
+} from '../../stores/ToolCatalog.store'
 import { type BuilderStep, configErrors } from './stepForms'
 import { LabeledControl } from './builderFields'
 import { CapabilitySelect } from './capabilities'
+import { ToolArgumentsForm } from './ToolArgumentsForm'
+import { describeToolSchema, splitArguments } from './toolSchemaForm'
 
 type ToolStep = Extract<BuilderStep, { kind: 'tool' }>
 
@@ -80,7 +88,7 @@ function argsToRows(args: unknown, nextRowId: () => number): ArgRow[] {
   })
 }
 
-/** Serialize rows to the arguments object. A row whose `text` is unchanged since
+/** Serialize rows to an arguments object. A row whose `text` is unchanged since
  *  load re-emits its EXACT loaded value (no re-parse — so editing row A can't
  *  coerce an untouched string row B); only a genuinely-edited row (`text !==
  *  baseText`) is re-derived from its text via `parseValue`. */
@@ -94,46 +102,117 @@ function rowsToArgs(rows: ArgRow[]): Record<string, unknown> {
   return obj
 }
 
-/** Call one specific tool on a server. Arguments use a key/value editor (each
- *  value may embed `{{ … }}` references, resolved at run time) rather than a raw
- *  JSON blob. Keyed by step id by the panel, so rows reset on step switch. */
+/**
+ * Call one specific tool on a server.
+ *
+ * The Tool field is a PICKER over the chosen server's real tools, and the
+ * Arguments are GENERATED from the chosen tool's declared input schema — the
+ * house rule that a person never types what the system can enumerate or supply
+ * (INV-3 / INV-4). Both degrade to hand entry WITH A STATED REASON when the
+ * server can't be reached or the tool declares no schema (INV-6).
+ *
+ * Keyed by step id by the panel, so local buffers reset on step switch.
+ */
 export function ToolStepForm({ store, step }: Props) {
   const errors = configErrors(step)
   const patch = (p: Record<string, unknown>) => store.updateStep(step.id, p)
 
-  // Stable monotonic row-id source (replaces the `useState(()=>({v}))[0]`
-  // mutable-object anti-pattern). Rows are keyed by this id, never the index.
+  const catalog = ToolCatalogStoreDef.use()
+  const servers = McpServer.servers
+  const byServerId = catalog.byServerId
+
+  // A step stores the server NAME (`resolve_tool_server` resolves by name at run
+  // time); the tools endpoint is keyed by id, so resolve name → id here.
+  const { entry, serverId } = useMemo(
+    () =>
+      entryForServerName(
+        step.server,
+        (servers ?? []).map(s => ({ id: s.id, name: s.name })),
+        byServerId,
+      ),
+    [step.server, servers, byServerId],
+  )
+
+  useEffect(() => {
+    if (serverId && step.server) void catalog.load(serverId, step.server)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverId, step.server])
+
+  const toolOptions = useMemo(
+    () =>
+      entry.tools.map(t => ({
+        value: t.name,
+        label: t.description ? `${t.name} — ${t.description}` : t.name,
+      })),
+    [entry.tools],
+  )
+
+  const selectedTool = entry.tools.find(t => t.name === step.tool)
+  const spec = useMemo(
+    () => (selectedTool ? describeToolSchema(selectedTool.input_schema) : null),
+    [selectedTool],
+  )
+
+  // A catalog we could not read at all ⇒ the documented hand-entry escape hatch.
+  // `no-server` is NOT a failure to report — it is the ordinary initial state.
+  const blockingFailure =
+    entry.failure && entry.failure.kind !== 'no-server' ? entry.failure : null
+  const usePicker = !blockingFailure && !entry.loading && toolOptions.length > 0
+  // The generated form applies only when the chosen tool actually declared one.
+  const useGenerated = !!spec
+
+  // ── Free key/value rows: the fallback editor, and the "Additional arguments"
+  // section that keeps schema-undeclared keys alive (DEC-6). The round-trip
+  // machinery above is preserved verbatim for exactly these rows.
   const rowIdSeq = useRef(0)
   const nextRowId = () => {
     rowIdSeq.current += 1
     return rowIdSeq.current
   }
 
-  const [rows, setRows] = useState<ArgRow[]>(() =>
-    argsToRows(step.arguments, nextRowId),
+  const { known, extra } = useMemo(
+    () => splitArguments(step.arguments, spec),
+    [step.arguments, spec],
   )
 
-  // Serialized snapshot of the store's `arguments` as we last saw it, so we can
-  // tell an external change (a sync refetch replacing `step.arguments`) apart
-  // from our own commit and only resync the buffer for the former (FIX-F).
+  const [rows, setRows] = useState<ArgRow[]>(() =>
+    argsToRows(useGenerated ? extra : step.arguments, nextRowId),
+  )
+
+  // Serialized snapshot of the rows' source as we last saw it, so we can tell an
+  // external change (a sync refetch replacing `step.arguments`) apart from our
+  // own commit and only resync the buffer for the former (FIX-F).
   const argsSnapshot = (a: unknown) =>
     JSON.stringify(a && typeof a === 'object' && !Array.isArray(a) ? a : {})
-  const lastPushed = useRef<string>(argsSnapshot(step.arguments))
+  const lastPushed = useRef<string>(
+    argsSnapshot(useGenerated ? extra : step.arguments),
+  )
 
   useEffect(() => {
-    const incoming = argsSnapshot(step.arguments)
+    const source = useGenerated ? extra : step.arguments
+    const incoming = argsSnapshot(source)
     if (incoming !== lastPushed.current) {
       lastPushed.current = incoming
-      setRows(argsToRows(step.arguments, nextRowId))
+      setRows(argsToRows(source, nextRowId))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step.arguments])
+  }, [step.arguments, useGenerated])
 
-  const commit = (next: ArgRow[]) => {
+  /** Commit the free rows, merging the generated values back in so neither half
+   *  can clobber the other. */
+  const commitRows = (next: ArgRow[]) => {
     setRows(next)
-    const obj = rowsToArgs(next)
-    lastPushed.current = JSON.stringify(obj)
-    patch({ arguments: obj })
+    const rowObj = rowsToArgs(next)
+    lastPushed.current = JSON.stringify(rowObj)
+    patch({ arguments: useGenerated ? { ...known, ...rowObj } : rowObj })
+  }
+
+  /** Commit one generated field, preserving every schema-undeclared key. */
+  const commitField = (name: string, value: unknown) => {
+    const nextKnown = { ...known }
+    if (value === undefined || value === '') delete nextKnown[name]
+    else nextKnown[name] = value
+    patch({ arguments: { ...nextKnown, ...rowsToArgs(rows) } })
   }
 
   const addRow = () => {
@@ -148,28 +227,75 @@ export function ToolStepForm({ store, step }: Props) {
       <LabeledControl label="Server" required error={errors.server}>
         <CapabilitySelect
           value={step.server ?? ''}
-          onChange={v => patch({ server: v })}
+          onChange={v => {
+            // Switching server invalidates the tool AND its arguments — keeping
+            // them would silently send server A's arguments to server B's tool.
+            patch({ server: v, tool: '', arguments: {} })
+          }}
           testid="wf-builder-tool-server"
         />
       </LabeledControl>
 
+      {blockingFailure && (
+        <Alert
+          data-testid="wf-builder-tool-catalog-error"
+          tone="warning"
+          title="Tool list unavailable"
+          description={failureMessage(blockingFailure)}
+        />
+      )}
+
       <LabeledControl
         label="Tool"
-        description="The exact name of the tool to call on that server."
+        description={
+          usePicker
+            ? 'Pick the tool this step should call.'
+            : 'The exact name of the tool to call on that server.'
+        }
         required
         error={errors.tool}
       >
-        <Input
-          data-testid="wf-builder-tool-name"
-          value={step.tool ?? ''}
-          onChange={e => patch({ tool: e.target.value })}
-          placeholder="e.g. search"
-        />
+        {usePicker ? (
+          <Combobox
+            data-testid="wf-builder-tool-name"
+            aria-label="Tool"
+            options={toolOptions}
+            value={step.tool ?? ''}
+            onChange={v => patch({ tool: v, arguments: {} })}
+            loading={entry.loading}
+            placeholder="Search this server's tools…"
+            emptyText="No tool matches"
+          />
+        ) : (
+          <Input
+            data-testid="wf-builder-tool-name"
+            value={step.tool ?? ''}
+            onChange={e => patch({ tool: e.target.value })}
+            placeholder={
+              entry.loading ? 'Loading this server’s tools…' : 'e.g. search'
+            }
+            disabled={entry.loading}
+          />
+        )}
       </LabeledControl>
 
+      {useGenerated && spec && (
+        <ToolArgumentsForm
+          store={store}
+          stepId={step.id}
+          spec={spec}
+          values={known}
+          onChange={commitField}
+        />
+      )}
+
       <LabeledControl
-        label="Arguments"
-        description="Key/value pairs passed to the tool. A value may reference an input or prior step, e.g. {{ inputs.query }}."
+        label={useGenerated ? 'Additional arguments' : 'Arguments'}
+        description={
+          useGenerated
+            ? 'Extra values this tool did not declare. Usually empty.'
+            : 'Key/value pairs passed to the tool. A value may reference an input or prior step, e.g. {{ inputs.query }}.'
+        }
       >
         <div className="flex flex-col gap-2">
           {rows.length === 0 && (
@@ -183,7 +309,7 @@ export function ToolStepForm({ store, step }: Props) {
                 className="w-1/3"
                 value={row.key}
                 onChange={e =>
-                  commit(
+                  commitRows(
                     rows.map(r =>
                       r.rowId === row.rowId ? { ...r, key: e.target.value } : r,
                     ),
@@ -197,7 +323,7 @@ export function ToolStepForm({ store, step }: Props) {
                 className="flex-1"
                 value={row.text}
                 onChange={e =>
-                  commit(
+                  commitRows(
                     rows.map(r =>
                       r.rowId === row.rowId
                         ? { ...r, text: e.target.value }
@@ -214,7 +340,7 @@ export function ToolStepForm({ store, step }: Props) {
                 icon={<Trash2 />}
                 aria-label="Remove argument"
                 data-testid={`wf-builder-tool-arg-remove-${i}`}
-                onClick={() => commit(rows.filter(r => r.rowId !== row.rowId))}
+                onClick={() => commitRows(rows.filter(r => r.rowId !== row.rowId))}
               />
             </div>
           ))}

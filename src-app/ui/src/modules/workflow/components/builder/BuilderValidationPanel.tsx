@@ -1,44 +1,86 @@
 import { AlertTriangle, CheckCircle2, XCircle } from 'lucide-react'
 import { Spinner, Text } from '@ziee/kit'
-import type { ValidationError } from '@/api-client/types'
 import type { WorkflowBuilderStore } from '../../stores/WorkflowBuilder.store'
+import {
+  type AttributedFinding,
+  attributeFindings,
+  findingStepTitle,
+} from './validationCopy'
 
 interface BuilderValidationPanelProps {
   store: WorkflowBuilderStore
 }
 
+/**
+ * One finding.
+ *
+ * It is a BUTTON, not static text (ITEM-3 / INV-2): a finding names the step it
+ * belongs to and takes the author there. The panel sits at the bottom of the
+ * page while the config panel shows whichever step is selected, so a finding the
+ * author cannot act on from where they are reading it is the defect this fixes.
+ * A whole-workflow finding (no resolvable step) renders as plain text — there is
+ * nowhere to go.
+ */
 function Finding({
   finding,
-  tone,
+  onSelect,
 }: {
-  finding: ValidationError
-  tone: 'error' | 'warning'
+  finding: AttributedFinding
+  onSelect: (stepId: string) => void
 }) {
-  const Icon = tone === 'error' ? XCircle : AlertTriangle
-  const color = tone === 'error' ? 'text-destructive' : 'text-warning'
-  return (
-    <li className="flex items-start gap-2">
+  const isError = finding.severity === 'error'
+  const Icon = isError ? XCircle : AlertTriangle
+  const color = isError ? 'text-destructive' : 'text-warning'
+  const title = findingStepTitle(finding)
+
+  const body = (
+    <>
       <Icon className={`size-4 mt-0.5 shrink-0 ${color}`} aria-hidden />
-      <div className="flex flex-col">
-        <Text className="text-sm">{finding.message}</Text>
-        {finding.location && (
-          <Text type="secondary" className="text-xs">
-            at {finding.location}
-          </Text>
-        )}
-      </div>
+      <span className="flex min-w-0 flex-col text-start">
+        <Text className="text-xs font-medium text-muted-foreground">{title}</Text>
+        <Text className="text-sm">{finding.text}</Text>
+      </span>
+    </>
+  )
+
+  if (!finding.stepId) {
+    return (
+      <li className="flex items-start gap-2" data-testid="wf-builder-finding">
+        {body}
+      </li>
+    )
+  }
+
+  return (
+    <li data-testid="wf-builder-finding" data-step-id={finding.stepId}>
+      <button
+        type="button"
+        data-testid={`wf-builder-finding-goto-${finding.stepId}`}
+        className="flex w-full items-start gap-2 rounded-md p-1 text-start hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        onClick={() => onSelect(finding.stepId as string)}
+      >
+        {body}
+      </button>
     </li>
   )
 }
 
 /** ITEM-7 — inline validation + cost estimate from `POST /validate-def`. Errors
- *  block Save (the page disables the button); warnings are surfaced but allowed. */
+ *  block Save (the page disables the button); warnings are surfaced but allowed.
+ *  Every finding is humanised + attributed to its step (ITEM-1 / ITEM-3). */
 export function BuilderValidationPanel({ store }: BuilderValidationPanelProps) {
   const validation = store.validation
   const validating = store.validating
-  const errors = validation?.errors ?? []
-  const warnings = validation?.warnings ?? []
+  const steps = store.def.steps
   const cost = validation?.cost_estimate
+
+  // Attribute + humanise ONCE, above any map, so the panel and the step list can
+  // never disagree about which steps are broken — and so no store read happens
+  // inside a loop (Rules of Hooks).
+  const errors = attributeFindings(validation?.errors ?? [], steps)
+  const warnings = attributeFindings(validation?.warnings ?? [], steps)
+
+  const onSelect = (stepId: string) => store.selectStep(stepId)
 
   return (
     <div className="flex flex-col gap-3" data-testid="wf-builder-validation">
@@ -63,7 +105,7 @@ export function BuilderValidationPanel({ store }: BuilderValidationPanelProps) {
       {errors.length > 0 && (
         <ul className="flex flex-col gap-2" data-testid="wf-builder-errors">
           {errors.map((f, i) => (
-            <Finding key={`e-${i}`} finding={f} tone="error" />
+            <Finding key={`e-${i}`} finding={f} onSelect={onSelect} />
           ))}
         </ul>
       )}
@@ -71,7 +113,7 @@ export function BuilderValidationPanel({ store }: BuilderValidationPanelProps) {
       {warnings.length > 0 && (
         <ul className="flex flex-col gap-2" data-testid="wf-builder-warnings">
           {warnings.map((f, i) => (
-            <Finding key={`w-${i}`} finding={f} tone="warning" />
+            <Finding key={`w-${i}`} finding={f} onSelect={onSelect} />
           ))}
         </ul>
       )}
