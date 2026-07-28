@@ -267,6 +267,22 @@ test('resolveDidFail: judge the outcome ONLY when there was an entry to judge by
   assert.equal(resolveDidFail({ carried: true, hadEntry: true, after: 'accepted' }), false)
   assert.equal(resolveDidFail({ carried: true, hadEntry: true, after: 'declined' }), false)
 
+  // THE DISCRIMINATING CELL (FIX_ROUND-11): carried, NO entry, but the provider
+  // reports 'pending' anyway. Without this row the `hadEntry &&` conjunct — the
+  // whole point of the function — could be deleted and the test stayed green,
+  // because every other hadEntry:false row pairs with `undefined`, where both
+  // implementations agree. The published contract permits `status()` to answer
+  // while `has()` is false, so this is reachable for a conforming provider.
+  assert.equal(
+    resolveDidFail({ carried: true, hadEntry: false, after: 'pending' }),
+    false,
+    'with no entry there is nothing to judge — the POST still went out',
+  )
+
+  // Terminal statuses are not failures, including the 404 -> cancelled mapping.
+  assert.equal(resolveDidFail({ carried: true, hadEntry: true, after: 'cancelled' }), false)
+  assert.equal(resolveDidFail({ carried: true, hadEntry: true, after: undef }), false)
+
   // THE FIX (FIX_ROUND-9): carried with NO entry. The optimistic update is a
   // no-op so the status stays undefined — but the POST went out and the script
   // resumed. Reporting that as a failure marked a SUCCESSFUL approve as failed.

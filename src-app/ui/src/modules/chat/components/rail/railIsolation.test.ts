@@ -409,11 +409,17 @@ function buttonProps(code: string): string[] {
         if (ch === quote) quote = null
         continue
       }
-      // Quotes only count in the ATTRIBUTE list (depth 0). Inside a prop
-      // expression an apostrophe is ordinary JSX TEXT (`icon={<span>Don't…`),
-      // not a string opener — treating it as one swallowed the next element and
-      // false-RED'd on correct code (FIX_ROUND-10).
-      if (depth === 0 && (ch === '"' || ch === "'" || ch === '`')) quote = ch
+      // Quotes are tracked at EVERY depth — a `}` inside a string inside a prop
+      // expression would otherwise decrement `depth` early and truncate the
+      // window, silently missing a violation (FIX_ROUND-11; the previous cut only
+      // tracked at depth 0 and traded a false positive for a false negative).
+      //
+      // The apostrophe problem that motivated that cut is handled precisely
+      // instead: inside a prop expression, `'` opens a string only in EXPRESSION
+      // position. In `icon={<span>Don't…}` it follows a letter, so it is JSX text.
+      const prev = code[i - 1] ?? ''
+      const apostropheInWord = ch === "'" && depth > 0 && /[A-Za-z0-9]/.test(prev)
+      if ((ch === '"' || ch === '`' || (ch === "'" && !apostropheInWord))) quote = ch
       else if (ch === '{') depth++
       else if (ch === '}') depth--
       else if (ch === '>' && depth === 0) break
@@ -457,44 +463,76 @@ test('FIX_ROUND-8: no `tooltip` on a Button that can be disabled (kit clobbers a
   )
 })
 
+/**
+ * Does `expr` route through `predicate`, directly or via one local hop?
+ *
+ * FIX_ROUND-11: the previous guard ENUMERATED bad spellings (`blocked !== null`),
+ * which is unbounded — `blocked != null`, `!!blocked`, `Boolean(blocked)` and
+ * `blocked ? true : false` are the same latch and all passed. Requiring the GOOD
+ * form is bounded, and the one local hop keeps a hoist-to-a-const refactor legal.
+ */
+function routesThrough(code: string, expr: string, predicate: string): boolean {
+  const call = new RegExp(`\\b${predicate}\\s*\\(`)
+  if (call.test(expr)) return true
+  const ident = /^[A-Za-z_$][\w$]*$/.exec(expr.trim())?.[0]
+  if (!ident) return false
+  return new RegExp(`\\b(?:const|let)\\s+${ident}\\s*=[^\\n]*\\b${predicate}\\s*\\(`).test(code)
+}
+
 test('FIX_ROUND-9: the approval controls disable ONLY through the seam predicate', () => {
-  // The rule "only the impossible state disables" was pinned as a pure predicate
-  // (`elicitationIsUnactionable`) but NOT at the two JSX call sites that render
-  // it — so re-introducing the FIX_ROUND-7 latch (`disabled={blocked !== null}`)
-  // left everything green. This pins the call sites.
-  const rel = 'modules/js-tool/chat-extension/components/JsToolApprovalContent.tsx'
-  const props = buttonProps(codeOf(rel))
+  const rel = APPROVAL_SURFACES[0]
+  const code = codeOf(rel)
+  const props = buttonProps(code)
   const disabling = props.filter(
     p => /\bdisabled\s*=/.test(p) || /\{\s*\.\.\..*\bdisabled\b/.test(p),
   )
   assert.ok(disabling.length >= 2, `expected the approve/deny controls, found ${disabling.length}`)
-  assert.match(
-    codeOf(rel),
-    /elicitationIsUnactionable\s*\(/,
-    'the card must derive its disable decision from the seam predicate — every time ' +
-      'a state the user could still act through was disabled, the card became ' +
-      'unanswerable (three times: FIX_ROUND-4, -6, -7)',
-  )
+
   for (const p of props) {
-    // A PREDICATE, not an exact string (FIX_ROUND-10): pinning the spelling
-    // false-RED'd on behaviour-preserving refactors (hoisting the value to a
-    // const, renaming the local) with a message that misdiagnosed them. What
-    // matters is that the decision goes through the seam and that nothing
-    // re-derives it from "any blocked reason", which is the latch.
-    const hasDisabled = /\bdisabled\s*=/.test(p) || /\{\s*\.\.\..*\bdisabled\b/.test(p)
-    if (!hasDisabled) continue
-    // The file must go through the seam predicate SOMEWHERE — checked once,
-    // below — and each element must not re-derive the decision. Requiring the
-    // call INSIDE the prop would false-RED on hoisting it to a local, which is a
-    // behaviour-preserving refactor the guard has no business rejecting.
-    // …and must not ALSO re-derive it. A later spread wins at runtime, so a
-    // conforming prop plus `{...{ disabled: blocked !== null }}` fully reverts
-    // the decision while satisfying the check above (FIX_ROUND-10).
+    // A spread carrying `disabled` can never be verified, and later props win at
+    // runtime — so it is refused outright rather than parsed (FIX_ROUND-11).
     assert.doesNotMatch(
       p.replace(/\s+/g, ' '),
-      /disabled\s*[:=]\s*\{?\s*blocked\s*(!==|===)/,
-      'an approval control must not re-derive `disabled` from the raw blocked ' +
-        'reason — that is the FIX_ROUND-7 latch',
+      /\{\s*\.\.\..*\bdisabled\b/,
+      'an approval control must not take `disabled` through a spread — a later ' +
+        'spread silently overrides the checked prop',
+    )
+    const expr = /\bdisabled\s*=\s*\{([^}]*)\}/.exec(p)?.[1]
+    if (expr === undefined) continue
+    assert.ok(
+      routesThrough(code, expr, 'elicitationIsUnactionable'),
+      `an approval control's \`disabled\` must route through elicitationIsUnactionable ` +
+        `(directly or via one local const), got \`${expr.trim()}\`. Every time a state ` +
+        `the user could still act through was disabled, the card became unanswerable ` +
+        `(three times: FIX_ROUND-4, -6, -7).`,
     )
   }
+})
+
+test('FIX_ROUND-11: the two extracted DECISIONS are used at their call sites', () => {
+  // FIX_ROUND-10 extracted these on the explicit grounds that "reverting the fix
+  // left every test green" — and then pinned only the functions. Reverting either
+  // at the CALL SITE was still green, so each fix was one inline expression away
+  // from being undone. This pins the wiring; the predicates' own tests pin the
+  // logic.
+  const rel = APPROVAL_SURFACES[0]
+  const code = codeOf(rel)
+
+  const tone = /\btype=\{([^}]*)\}/.exec(code)?.[1]
+  assert.ok(tone !== undefined, 'the status region must set a tone')
+  assert.ok(
+    routesThrough(code, tone, 'elicitationIsError'),
+    `the status tone must route through elicitationIsError, got \`${tone.trim()}\` — ` +
+      `otherwise a transient, answerable state gets painted in the destructive red ` +
+      `DESIGN_SYSTEM.md reserves for errors`,
+  )
+
+  const judged = /setResolveFailed\(true\)/.test(code)
+  assert.ok(judged, 'the card must still be able to record a failed resolve')
+  assert.match(
+    code,
+    /if\s*\(\s*resolveDidFail\s*\(/,
+    'the failure judgement must route through resolveDidFail — judging it inline ' +
+      'marked a SUCCESSFUL approve as failed whenever the provider held no entry',
+  )
 })

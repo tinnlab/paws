@@ -69,7 +69,15 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
    * chance for a transient failure to have cleared.
    */
   const HEAL_BUDGET = 3
-  const healAttempts = useRef<{ id: string; n: number }>({ id: data.elicitation_id, n: 0 })
+  // STATE, not a ref (FIX_ROUND-11). A ref mutated inside the effect is invisible
+  // to the render that reads it, so the "budget spent" copy was stale by one pass
+  // — and in the terminal case never appeared at all, because the only thing that
+  // would have re-rendered it is the retry that just stopped. The one state
+  // update per attempt is bounded by the budget.
+  const [healAttempts, setHealAttempts] = useState<{ id: string; n: number }>({
+    id: data.elicitation_id,
+    n: 0,
+  })
   const statusId = `run-js-approval-status-${data.elicitation_id}`
 
   // Derive the resolved state from the CORE-owned elicitation seam (the live
@@ -109,7 +117,7 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
   // — the controls stay live and still POST — but they should not be told work is
   // ongoing when it is not.
   const healExhausted =
-    healAttempts.current.id === data.elicitation_id && healAttempts.current.n >= HEAL_BUDGET
+    healAttempts.id === data.elicitation_id && healAttempts.n >= HEAL_BUDGET
   // `entryExists` is read from the seam on every bump, so `not-registered` clears
   // itself the moment the self-heal below succeeds — nothing latches.
   const blocked = elicitationBlockedReason({
@@ -130,23 +138,24 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
   useEffect(() => {
     if (!hasTransport || resolved !== null) return
     if (elicitationExists(data.elicitation_id)) return
-    if (healAttempts.current.id !== data.elicitation_id) {
-      healAttempts.current = { id: data.elicitation_id, n: 0 }
-    }
-    if (healAttempts.current.n >= HEAL_BUDGET) return
-    healAttempts.current.n += 1
+    const spent = healAttempts.id === data.elicitation_id ? healAttempts.n : 0
+    if (spent >= HEAL_BUDGET) return
+    setHealAttempts({ id: data.elicitation_id, n: spent + 1 })
     // No need to consume the boolean here (FIX_ROUND-7): whether it succeeded is
     // observable from the seam itself — `entryExists` above derives the
-    // `not-registered` state, which DISABLES the controls and clears itself when
-    // a later attempt lands. FIX_ROUND-6 routed the failure through
-    // `resolveFailed` instead, which keeps the buttons enabled and reports a
-    // resolve the user never attempted, and latched.
+    // `not-registered` state, which SURFACES the condition and clears itself when
+    // a later attempt lands. (It does NOT disable: since FIX_ROUND-8 only
+    // `no-transport` does, because the provider POSTs unconditionally. An earlier
+    // draft of this comment said otherwise; corrected in FIX_ROUND-11 — the same
+    // stale claim FIX_ROUND-10 fixed in the sibling test file and missed here.)
+    // FIX_ROUND-6 routed the failure through `resolveFailed` instead, which
+    // reports a resolve the user never attempted, and latched.
     registerElicitation(runJsElicitationInit(data))
     // `seamVersion` is a dep so a FAILED register is retried on the next seam
     // change (FIX_ROUND-8). A failed register bumps nothing itself, so without a
     // trigger tied to the seam the effect never re-ran and the state it produced
     // could not clear — the latch this card has now grown three times.
-  }, [hasTransport, resolved, data, seamVersion])
+  }, [hasTransport, resolved, data, seamVersion, healAttempts])
 
   /**
    * Focus the outcome when the buttons unmount. Without this, resolving destroys
