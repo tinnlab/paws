@@ -18,6 +18,7 @@ import {
   registerElicitation,
 } from '@/modules/chat/core/elicitation/transport'
 import { runJsStep, runJsApprovalStep } from './railContribution'
+import { runJsElicitationInit } from './elicitationInit'
 import { JsToolApprovalContent } from './components/JsToolApprovalContent'
 
 const jsToolExtension: ChatExtension = createExtension({
@@ -75,12 +76,7 @@ const jsToolExtension: ChatExtension = createExtension({
       // after mcp finished wiring. The card RECONCILES against the live seam
       // instead and re-registers itself, so the same failure self-heals.
       if (!elicitationExists(data.elicitation_id)) {
-        registerElicitation({
-          elicitation_id: data.elicitation_id,
-          message: `run_js wants to call ${data.tool_name}`,
-          server: data.server,
-          message_id: null,
-        })
+        registerElicitation(runJsElicitationInit(data))
       }
 
       const chatState = get()

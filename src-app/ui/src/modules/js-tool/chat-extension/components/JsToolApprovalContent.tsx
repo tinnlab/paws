@@ -3,6 +3,7 @@ import { Alert, Button, Space, Text } from '@ziee/kit'
 import { Check, Clock, X } from 'lucide-react'
 import type { ContentRendererProps } from '@/modules/chat/core/extensions/types'
 import { serverParenLabel } from '@/modules/chat/core/utils/serverLabel'
+import { runJsElicitationInit } from '../elicitationInit'
 import {
   elicitationStatus,
   elicitationVersion,
@@ -90,13 +91,11 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
   useEffect(() => {
     if (!hasTransport || resolved !== null) return
     if (elicitationExists(data.elicitation_id)) return
-    registerElicitation({
-      elicitation_id: data.elicitation_id,
-      message: `run_js wants to call ${data.tool_name}`,
-      server: data.server,
-      message_id: null,
-    })
-  }, [hasTransport, resolved, data.elicitation_id, data.tool_name, data.server])
+    // The boolean IS consumed: a self-heal that itself fails leaves the card
+    // reporting that it cannot be answered rather than offering live buttons over
+    // an entry the provider does not have.
+    if (!registerElicitation(runJsElicitationInit(data))) setResolveFailed(true)
+  }, [hasTransport, resolved, data])
 
   /**
    * Focus the outcome when the buttons unmount. Without this, resolving destroys
@@ -134,7 +133,14 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
       // failure from "the POST was rejected", and the only one the transport can
       // report, so it gets its own user-visible message.
       const carried = await resolveElicitationVia(data.elicitation_id, action)
-      if (!carried) setResolveFailed(true)
+      // FIX_ROUND-6: `carried === false` only covers a transport that is absent or
+      // THROWS. The shipped provider swallows its own errors and signals a
+      // rejected POST by ROLLING THE ENTRY BACK to 'pending' — so the failure a
+      // user actually hits produced no message at all, which is the original
+      // silent-failure symptom this whole thread started from. Treat a settled
+      // resolve that left the entry pending as the same failure.
+      const stillPending = elicitationStatus(data.elicitation_id) === 'pending'
+      if (!carried || stillPending) setResolveFailed(true)
     } finally {
       setSubmitting(false)
     }
@@ -208,24 +214,30 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
               <div className="mt-3">
                 <Space>
                   {/*
-                    Disabled ONLY when there is no transport — and then with a
-                    tooltip + `aria-describedby` pointing at the status region
-                    above, per the kit Button's own "if it must be disabled,
-                    explain WHY" convention: a natively-disabled control leaves
-                    the tab order, so without this a keyboard or screen-reader
-                    user meets no control and no reason (FIX_ROUND-5).
+                    Disabled ONLY when there is no transport, and explained by
+                    `aria-describedby` -> the status region above.
+                    FIX_ROUND-6: the tooltip FIX_ROUND-5 added is REMOVED, for two
+                    reasons the kit made unavoidable. (a) kit Button derives
+                    `aria-label` from a string `tooltip` UNCONDITIONALLY, so both
+                    controls announced as "The approval channel is unavailable
+                    right now" and became indistinguishable to a screen reader —
+                    the a11y "fix" was an a11y REGRESSION (WCAG 2.5.3 / 4.1.2).
+                    (b) it could never render anyway: `disabled` becomes the native
+                    attribute and the base class carries
+                    `disabled:pointer-events-none`, so the trigger gets neither
+                    hover nor focus. (The repo's own `SettingsFormActions`
+                    documents the focusable-wrapper pattern for when a tooltip on
+                    a disabled control is genuinely required; it is not here,
+                    because the reason is already on screen in the status region
+                    this points at.) `aria-describedby` is set only when there IS
+                    something to describe.
                   */}
                   <Button
                     icon={<Check />}
                     onClick={() => resolve('accept')}
                     loading={submitting}
                     disabled={blocked === 'no-transport'}
-                    tooltip={
-                      blocked === 'no-transport'
-                        ? 'The approval channel is unavailable right now'
-                        : undefined
-                    }
-                    aria-describedby={statusId}
+                    aria-describedby={blocked ? statusId : undefined}
                     size="default"
                     data-testid={`run-js-approval-approve-${data.elicitation_id}`}
                   >
@@ -237,12 +249,7 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
                     onClick={() => resolve('decline')}
                     loading={submitting}
                     disabled={blocked === 'no-transport'}
-                    tooltip={
-                      blocked === 'no-transport'
-                        ? 'The approval channel is unavailable right now'
-                        : undefined
-                    }
-                    aria-describedby={statusId}
+                    aria-describedby={blocked ? statusId : undefined}
                     size="default"
                     data-testid={`run-js-approval-deny-${data.elicitation_id}`}
                   >

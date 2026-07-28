@@ -224,21 +224,39 @@ test('segmentRail disambiguates a REPEATED step key (replayed tool_use_id)', () 
   assert.equal(new Set(keys).size, keys.length, 'keys must be unique within a span')
 })
 
-test('withSegmentationShape PRESERVES the segmentation key across re-resolution', () => {
+test('withSegmentationShape PRESERVES every field segmentation owns', () => {
+  // The fixture DELIBERATELY differs on all three: FIX_ROUND-6 found the earlier
+  // version pinned only `key`, because `consumed` happened to be equal on both
+  // sides and `blocking` was undefined on both — so reverting the `consumed` /
+  // `blocking` clamp (the ITEM-5 guard) turned nothing red.
   const placed = {
     index: 1,
-    step: { key: 'dup#1', label: 'l', status: 'success' as const, consumed: 1 },
+    step: {
+      key: 'dup#1',
+      label: 'l',
+      status: 'success' as const,
+      consumed: 1, // segmentation CLAMPED it
+      blocking: false, // segmentation placed it in a span, not a breakout
+    },
   }
-  // What the registry hands back: fresh live STATE, but the bare (undisambiguated)
-  // key, because a contribution cannot know its tool_use_id repeats in this message.
-  const resolved: RailStepDescriptor = { key: 'dup', label: 'l', status: 'failed', consumed: 1 }
+  // What the registry hands back: fresh live STATE, but the contribution's own
+  // shape — a bare key, an UNCLAMPED consumed, and its own blocking claim.
+  const resolved: RailStepDescriptor = {
+    key: 'dup',
+    label: 'l',
+    status: 'failed',
+    consumed: 3,
+    blocking: true,
+  }
 
   const merged = withSegmentationShape(placed, resolved)
   assert.equal(merged.key, 'dup#1', 'segmentation owns the identity')
+  assert.equal(merged.consumed, 1, 'segmentation owns the consumed CLAMP (ITEM-5)')
+  assert.equal(merged.blocking, false, 'segmentation owns span-vs-breakout')
   assert.equal(merged.status, 'failed', 're-resolution owns the state')
 
-  // Unchanged key -> the SAME object, no needless copy on the common path.
-  const same: RailStepDescriptor = { key: 'dup#1', label: 'l', status: 'success', consumed: 1 }
+  // Shape intact -> the SAME object, no needless copy on the common path.
+  const same: RailStepDescriptor = { ...placed.step }
   assert.equal(withSegmentationShape(placed, same), same)
 
   // No resolution at all -> fall back to the placed step, never undefined.

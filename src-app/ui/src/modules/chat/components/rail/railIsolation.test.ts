@@ -278,21 +278,27 @@ test('FIX_ROUND-2 #3 (AP-4): js-tool and mcp are decoupled in BOTH directions', 
  */
 test('FIX_ROUND-5: ChatMessage re-resolves rail steps THROUGH withSegmentationShape', () => {
   const file = join(SRC, 'modules/chat/components/ChatMessage.tsx')
-  const text = readFileSync(file, 'utf8')
+  // Strip comments (FIX_ROUND-6): matched against RAW text, a doc comment merely
+  // MENTIONING `withSegmentationShape(...)` would keep this green after a real
+  // revert — the same prose-as-code trap `importsOf` already strips for.
+  const code = readFileSync(file, 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split(/\r?\n/)
+    .map(l => l.replace(/\/\/.*$/, ''))
+    .join('\n')
 
-  assert.ok(
-    importsOf(file).some(spec => spec.endsWith('rail/railSegmentation')),
-    'ChatMessage must import the segmentation module',
-  )
   assert.match(
-    text,
+    code,
     /withSegmentationShape\s*\(/,
     'ChatMessage must call withSegmentationShape — segmentation owns key/consumed/blocking',
   )
-  // The revert this guards: handing the registry's step back untouched.
+  // The revert this guards, written the way it would actually be written.
+  // FIX_ROUND-6: the first version used `[^)]*`, which cannot cross the inner `)`
+  // of `railCtx(placed)` — so it did not match the real revert spelling at all
+  // and was decoration reading as coverage.
   assert.doesNotMatch(
-    text,
-    /resolveRailStep\([^)]*\)\?\.step\s*\?\?\s*placed\.step/,
+    code.replace(/\s+/g, ' '),
+    /resolveRailStep\(.*?\)\?\.step \?\? placed\.step/,
     'resolveStep must not return the contribution step directly — that discards ' +
       'segmentation’s disambiguated key and its consumed clamp',
   )

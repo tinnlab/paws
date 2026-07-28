@@ -280,7 +280,14 @@ test.describe('Activity rail — a request for input breaks OUT of the rail, on 
     //            The collapse assertion now lives inside the toggleable branch,
     //            where it is the actual claim; the forced-open case asserts the
     //            thing INV-3 governs there — the breakout survives regardless.
-    const rail = page
+    //       FIX_ROUND-6: the GATE is scoped to the breakout's own message too.
+    //       Scoping only the probe left a document-wide `.first()` summary-bearing
+    //       rail deciding whether the block runs — so in a multi-turn transcript
+    //       where an earlier turn rendered a rail and the breakout's turn did not,
+    //       the gate opened and the breakout-anchored probe returned false: a
+    //       false RED for a reason INV-3 does not govern.
+    const bubble = breakout.locator('xpath=..')
+    const rail = bubble
       .getByTestId('activity-rail')
       .filter({ has: page.getByTestId('activity-rail-summary') })
       .first()

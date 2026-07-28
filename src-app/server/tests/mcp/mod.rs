@@ -76,6 +76,7 @@ mod sync_emit_test;
 mod permission_revocation_test;
 // all-f44bdb26e811: revoking group membership denies subsequent MCP calls
 mod tool_call_history_test;
+mod tool_call_index_test;
 // ITEM-13 (activity rail): the tool_use_id / message_id lookup filters that
 // join a chat message to its recorded invocations.
 mod tool_call_lookup_test;
