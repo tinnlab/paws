@@ -91,4 +91,4 @@ verification is scoped to `-p ziee`, which is clean. See BASE.md / DEC-19.
 
 ## Not pushed
 
-Four commits on `fix/ask-user-stringified-schema`, local only, as instructed.
+6 commits on `fix/ask-user-stringified-schema`, local only, as instructed.
