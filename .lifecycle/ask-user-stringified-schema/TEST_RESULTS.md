@@ -103,3 +103,48 @@ loop, the real built-in, real SSE and the real renderer, and the card rendered
 `agent-core/tests/real_llm_loop.rs:143/221` (`missing fields isolate_children
 and schedule`). Reproduced at `d53db2d11` before any edit; `src-app/agent-core`
 is not touched here. Backend scope is `-p ziee`, which is clean. See BASE.md.
+
+## A7 `gate:ui` — RAN, FAILED, classified as ENVIRONMENTAL (with evidence)
+
+`npm run gate:ui -- --skip-visual` (`askuser-gateui.log`):
+
+```
+PASS  tsc
+PASS  lint
+FAIL  runtime-health   — 17 surface(s) with HIGH findings
+--- per-surface runtime verdict: 167/184 PASS ---
+```
+
+**This is NOT recorded as `gate:ui (ui): PASS`.** It failed, and the honest
+classification is Category B (cross-worktree contention), supported by four
+independent pieces of evidence rather than an assertion:
+
+1. **4117 of 4351 HIGH findings are `net::ERR_NETWORK_CHANGED`**, and the
+   remaining 12 non-network ones are all `Failed to fetch dynamically imported
+   module` — the downstream consequence of the same dead dev server. **Zero are
+   a real UI defect** (no contrast failure, no a11y-name finding, no React
+   warning promoted to HIGH).
+2. **1248 of them name a FOREIGN worktree's path** —
+   `http://localhost/@fs/data/pbya/ziee/tmp/scheduler-layout-wt/…`. The gate
+   itself logged the cause on the way in: *"port :20181 holds a FOREIGN
+   worktree's server (/data/pbya/ziee/tmp/scheduler-layout-wt); NOT reusing —
+   booting our own on a fresh port"*, and the browser still resolved
+   `http://localhost/` without a port.
+3. **15 of the 17 failing surfaces are untouched by this diff** —
+   `settings-general` (543 HIGH), the skills overlays, the large-file viewers,
+   `hardware-monitor`, `settings-file-rag-admin`. A diff confined to the
+   elicitation renderer cannot break those.
+4. **The surface this branch ADDS — `deep-chat-elicitation-no-fields` — has 0
+   HIGH findings.** The new degraded card rendered clean. The two elicitation
+   surfaces that did fail (`deep-chat-elicitation`, `deep-chat-ask-user-wizard`)
+   show only `ERR_NETWORK_CHANGED` module-load failures, identical in kind to
+   the 15 unrelated ones.
+
+This worktree has **no stale Vite of its own** (verified: zero `vite` processes
+under `ask-user-schema-wt`); the colliding server belongs to another active
+worktree and was deliberately NOT killed — interfering with a concurrent run is
+exactly the shared-infrastructure edit rule B3 forbids.
+
+A re-run was launched (`askuser-gateui2.log`). **Until a clean run is observed,
+A7 stays UNVERIFIED and phase 8 stays RED.** The classification above explains
+the failure; it does not excuse it into a pass.
