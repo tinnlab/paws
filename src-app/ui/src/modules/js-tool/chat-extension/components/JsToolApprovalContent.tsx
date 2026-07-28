@@ -310,9 +310,10 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
                     `aria-describedby` -> the status region above.
                     FIX_ROUND-6: the tooltip FIX_ROUND-5 added is REMOVED, for two
                     reasons the kit made unavoidable. (a) kit Button derives
-                    `aria-label` from a string `tooltip` UNCONDITIONALLY, so both
-                    controls announced as "The approval channel is unavailable
-                    right now" and became indistinguishable to a screen reader —
+                    `aria-label` from a string `tooltip` when no explicit
+                    `aria-label` is given — and these controls give none — so both
+                    announced as "The approval channel is unavailable right now"
+                    and became indistinguishable to a screen reader —
                     the a11y "fix" was an a11y REGRESSION (WCAG 2.5.3 / 4.1.2).
                     (b) it could never render anyway: `disabled` becomes the native
                     attribute and the base class carries

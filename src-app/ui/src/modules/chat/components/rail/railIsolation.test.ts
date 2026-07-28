@@ -459,9 +459,20 @@ function attrExpr(el: ts.JsxOpeningLikeElement, name: string): ts.Expression | u
  * are rejected — the previous text guard pinned the callee and ignored the
  * argument entirely.
  */
-/** Is `name` a const initialised from `elicitationBlockedReason(...)`? */
-function isBlockedReasonBinding(sf: ts.SourceFile, name: string, fallback: string): boolean {
+/**
+ * Is `name` a `const` initialised from `elicitationBlockedReason(...)`, and never
+ * reassigned?
+ *
+ * FIX_ROUND-15: the `|| name === fallback` escape this used to end with made the
+ * whole check vacuous for the name in use — replacing the classifier with a
+ * hand-rolled `const blocked = …` passed, because the identifier was still spelled
+ * `blocked`. And without the reassignment check, `let blocked = classifier(); if
+ * (!hasTransport) blocked = null` killed the one state that is supposed to
+ * disable, with every guard green.
+ */
+function isBlockedReasonBinding(sf: ts.SourceFile, name: string): boolean {
   let ok = false
+  let reassigned = false
   const walk = (n: ts.Node): void => {
     if (
       ts.isVariableDeclaration(n) &&
@@ -471,12 +482,22 @@ function isBlockedReasonBinding(sf: ts.SourceFile, name: string, fallback: strin
       ts.isCallExpression(n.initializer) &&
       n.initializer.expression.getText(sf) === 'elicitationBlockedReason'
     ) {
-      ok = true
+      const isConst =
+        ts.isVariableDeclarationList(n.parent) && (n.parent.flags & ts.NodeFlags.Const) !== 0
+      if (isConst) ok = true
+      else reassigned = true
+    }
+    if (
+      ts.isBinaryExpression(n) &&
+      n.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      n.left.getText(sf) === name
+    ) {
+      reassigned = true
     }
     ts.forEachChild(n, walk)
   }
   walk(sf)
-  return ok || name === fallback
+  return ok && !reassigned
 }
 
 /** Is `name` imported from the core elicitation seam (not a same-named local)? */
@@ -498,7 +519,6 @@ function isExactCall(
   sf: ts.SourceFile,
   expr: ts.Expression | undefined,
   predicate: string,
-  argument: string,
 ): boolean {
   if (!expr) return false
   const callOf = (e: ts.Expression): boolean =>
@@ -510,7 +530,7 @@ function isExactCall(
     // the local initialised from `elicitationBlockedReason(...)`. Hardcoding the
     // name false-RED on a pure rename; ignoring it entirely let
     // `p(blocked ?? 'no-transport')` and `p(f ? 'no-transport' : blocked)` through.
-    isBlockedReasonBinding(sf, e.arguments[0].getText(sf), argument)
+    isBlockedReasonBinding(sf, e.arguments[0].getText(sf))
   if (callOf(expr)) return true
   // One local hop: a `const` initialised to exactly that call, never reassigned.
   if (!ts.isIdentifier(expr)) return false
@@ -596,7 +616,7 @@ test('FIX_ROUND-9: the approval controls disable ONLY through the seam predicate
     if (attr(el, 'disabled') === undefined) continue
     const expr = attrExpr(el, 'disabled')
     assert.ok(
-      isExactCall(sf, expr, 'elicitationIsUnactionable', 'blocked'),
+      isExactCall(sf, expr, 'elicitationIsUnactionable'),
       `an approval control's \`disabled\` must BE elicitationIsUnactionable(blocked) ` +
         `(or a const whose sole initializer is that call), got ` +
         `\`${expr?.getText(sf) ?? '<boolean shorthand>'}\`. Anything combined with it — ` +
@@ -608,44 +628,87 @@ test('FIX_ROUND-9: the approval controls disable ONLY through the seam predicate
 })
 
 test('FIX_ROUND-14: the click handler gates on the SAME predicate as the control', () => {
-  // The FIX_ROUND-9 guard covered only the JSX `disabled` attribute. The
-  // re-entrancy early-return in `resolve()` decides whether the POST actually
-  // happens, and it was unguarded — an auditor proved that latching it there
-  // reintroduces the FIX_ROUND-4 bug in a WORSE form: the control still RENDERS
-  // enabled, so the user clicks, and the click silently no-ops.
+  // The re-entrancy early-return in `resolve()` decides whether the POST actually
+  // happens, and it was unguarded — latching it there reintroduces the
+  // FIX_ROUND-4 bug in a WORSE form: the control still RENDERS enabled, so the
+  // user clicks, and the click silently no-ops with no signal at all.
+  //
+  // FIX_ROUND-15: this check now runs the gate's OPERANDS through `isExactCall`,
+  // the same AST predicate the JSX attribute uses. Its first cut was a regex over
+  // `getText()` — the very anti-pattern this file's FIX_ROUND-13 block says the
+  // rewrite exists to stop — and it fell to a one-token inversion
+  // (`!elicitationIsUnactionable(blocked)`, which makes every actionable decision
+  // return early and never POST) and to three latch operands (`|| resolveFailed`,
+  // `|| Boolean(blocked)`, `|| healExhausted`). Operands are also why the guard no
+  // longer cares HOW the clauses are split across `if`s.
   const sf = parse(APPROVAL_SURFACE_WITH_CONTROLS)
-  const resolveFn = (() => {
-    let found: ts.VariableDeclaration | undefined
-    const walk = (n: ts.Node): void => {
-      if (ts.isVariableDeclaration(n) && n.name.getText(sf) === 'resolve') found = n
-      ts.forEachChild(n, walk)
-    }
-    walk(sf)
-    return found
-  })()
-  assert.ok(resolveFn, 'the card must still declare a `resolve` handler')
 
-  // Its guard clause must include the seam predicate as a whole operand.
-  const guards: string[] = []
-  const walk = (n: ts.Node): void => {
-    if (ts.isIfStatement(n)) guards.push(n.expression.getText(sf))
-    ts.forEachChild(n, walk)
+  // Locate `resolve` as a declaration OR a function statement, so neither the
+  // arrow-vs-function spelling nor the name of an unrelated local can move it.
+  let body: ts.Node | undefined
+  const findResolve = (n: ts.Node): void => {
+    if (
+      (ts.isVariableDeclaration(n) || ts.isFunctionDeclaration(n)) &&
+      n.name?.getText(sf) === 'resolve'
+    ) {
+      body = n
+    }
+    ts.forEachChild(n, findResolve)
   }
-  walk(resolveFn)
-  const gate = guards.find(g => g.includes('submitting'))
-  assert.ok(gate, `resolve() must keep its re-entrancy guard, found ${guards.join(' | ')}`)
-  assert.match(
-    gate.replace(/\s+/g, ' '),
-    /elicitationIsUnactionable\(/,
-    `resolve()'s guard must gate on elicitationIsUnactionable, got \`${gate}\` — ` +
-      `gating it on the raw blocked reason latches the card while the control still ` +
-      `renders ENABLED, so the click silently no-ops with no signal at all`,
+  findResolve(sf)
+  assert.ok(body, 'the card must still declare a `resolve` handler')
+
+  // Every operand of every early-return guard in the handler.
+  const operands: ts.Expression[] = []
+  const flatten = (e: ts.Expression): void => {
+    if (
+      ts.isBinaryExpression(e) &&
+      (e.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
+        e.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken)
+    ) {
+      flatten(e.left)
+      flatten(e.right)
+      return
+    }
+    operands.push(e)
+  }
+  const collect = (n: ts.Node): void => {
+    if (ts.isIfStatement(n)) flatten(n.expression)
+    ts.forEachChild(n, collect)
+  }
+  collect(body)
+  assert.ok(operands.length > 0, 'resolve() must keep an early-return guard')
+
+  // Exactly one operand may be the seam predicate, and it must be the call
+  // itself — not a negation, not a wrapper.
+  const seamOperands = operands.filter(o => o.getText(sf).includes('elicitationIsUnactionable'))
+  assert.equal(
+    seamOperands.length,
+    1,
+    `resolve() must gate on elicitationIsUnactionable exactly once, found ` +
+      `${seamOperands.length}: ${seamOperands.map(o => o.getText(sf)).join(' | ')}`,
   )
-  assert.doesNotMatch(
-    gate.replace(/\s+/g, ' '),
-    /blocked\s*(!==|===|!=|==)/,
-    `resolve()'s guard must not re-derive from the raw blocked reason, got \`${gate}\``,
+  assert.ok(
+    isExactCall(sf, seamOperands[0], 'elicitationIsUnactionable'),
+    `resolve()'s gate operand must BE elicitationIsUnactionable(<blocked reason>), ` +
+      `got \`${seamOperands[0].getText(sf)}\` — a negation returns early exactly when ` +
+      `the card IS actionable, so no decision ever POSTs`,
   )
+
+  // No OTHER operand may re-derive the decision from the blocked reason or from
+  // the card's own failure/heal state — that latches the handler while the
+  // control still renders ENABLED, so the click silently no-ops.
+  for (const o of operands) {
+    if (o === seamOperands[0]) continue
+    const text = o.getText(sf).replace(/\s+/g, ' ')
+    assert.doesNotMatch(
+      text,
+      /\bblocked\b|\bresolveFailed\b|\bhealExhausted\b/,
+      `resolve()'s gate must not re-derive from the card's blocked/failure state, ` +
+        `got \`${text}\` — the control still renders enabled, so the click silently ` +
+        `no-ops with no signal at all`,
+    )
+  }
 })
 
 test('FIX_ROUND-11: the two extracted DECISIONS decide at their call sites', () => {
@@ -691,7 +754,7 @@ test('FIX_ROUND-11: the two extracted DECISIONS decide at their call sites', () 
       `\`${tone.condition.getText(sf)}\``,
   )
   assert.ok(
-    isExactCall(sf, (tone.condition as ts.BinaryExpression).right, 'elicitationIsError', 'blocked'),
+    isExactCall(sf, (tone.condition as ts.BinaryExpression).right, 'elicitationIsError'),
     `the status tone must be decided by elicitationIsError(blocked), got ` +
       `\`${(tone.condition as ts.BinaryExpression).right.getText(sf)}\` — otherwise a ` +
       `transient, answerable state gets painted in the destructive red ` +
