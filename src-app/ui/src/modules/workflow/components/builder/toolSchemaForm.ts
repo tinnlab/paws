@@ -457,9 +457,16 @@ const STALE_OPTION_SUFFIX = ' — not one of this tool’s choices'
  * A synthetic option for a STORED value none of `options` declares, or null when
  * one of them already covers it. Its key is disambiguated against the list it
  * will join, so it can never shadow a declared choice.
+ *
+ * `undefined` is the ONLY value treated as "no value" here — it cannot be
+ * expressed in JSON, so it never arrives as a stored argument. `null` CAN, and
+ * whether it means "nothing chosen" or a real member depends on the CALL SITE,
+ * so that reading is made in `fieldForValue`, not here: rejecting `null` at this
+ * level erased a stored `null` ELEMENT of a multi-select on the next toggle —
+ * the exact data loss this closure exists to prevent.
  */
 function staleOption(options: ToolOption[], value: unknown): ToolOption | null {
-  if (value === undefined || value === null) return null
+  if (value === undefined) return null
   if (matchOption(options, value)) return null
   const base = optionKeyOf(value)
   let key = base
@@ -468,7 +475,16 @@ function staleOption(options: ToolOption[], value: unknown): ToolOption | null {
     n += 1
     key = `${base}#${n}`
   }
-  return { value: key, label: `${valueToText(value)}${STALE_OPTION_SUFFIX}`, raw: value }
+  return { value: key, label: `${staleLabel(value)}${STALE_OPTION_SUFFIX}`, raw: value }
+}
+
+/** How a stale value NAMES itself in its option label. `valueToText` renders
+ *  `null` (and `''`) as the empty string, which left the option reading as a
+ *  bare " — not one of this tool's choices" with nothing to identify it. */
+function staleLabel(value: unknown): string {
+  const text = valueToText(value)
+  if (text !== '') return text
+  return optionKeyOf(value) || JSON.stringify(value) || String(value)
 }
 
 /**
@@ -501,8 +517,13 @@ export function fieldForValue(field: ToolField, value: unknown): ToolField {
 
   if (field.kind === 'multiselect') {
     if (!Array.isArray(value)) return field
+    // Every ELEMENT is a real member of the stored list, `null` included — the
+    // control's key list is what the commit is rebuilt from, so an element with
+    // no option to bind to is erased on the next toggle.
     for (const v of value) consider(v)
-  } else {
+  } else if (value !== null) {
+    // For a SINGLE picker, `null` is "nothing chosen": inventing an option for
+    // it would show a phantom selection where the placeholder belongs.
     consider(value)
   }
 

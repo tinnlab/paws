@@ -8,7 +8,10 @@ import {
   type StepKind,
   createStep,
 } from '../components/builder/stepForms'
-import { humaniseRequestError } from '../components/builder/validationCopy'
+import {
+  type FindingIdentity,
+  describeRequestError,
+} from '../components/builder/validationCopy'
 
 // ---------------------------------------------------------------------------
 // PRIVATE, per-instance store backing ONE builder editing session (ITEM-6).
@@ -80,6 +83,29 @@ export interface ValidationSlice {
   validation: ValidateDefResponse | null
   error: string | null
   errorSource: ErrorSource
+  /** The validator finding `error` restates, when it restates one. See
+   *  `findingStillPresent` — it is how a message about a condition the author
+   *  has since FIXED gets retired. */
+  errorFinding: FindingIdentity | null
+}
+
+/**
+ * Is the finding a stored failure describes still among the blocking findings
+ * of a fresh check?
+ *
+ * `validate_for_install` collapses the FIRST blocking finding into the save
+ * error, so a save failure is a claim about one specific finding. Once a later
+ * check no longer reports that finding, the claim is provably false — and it
+ * would otherwise sit above a green "No blocking errors." until the author
+ * happened to press Save again.
+ */
+function findingStillPresent(
+  result: ValidateDefResponse,
+  finding: FindingIdentity,
+): boolean {
+  return (result.errors ?? []).some(
+    e => e.code === finding.code && (e.location ?? null) === finding.location,
+  )
 }
 
 export interface ValidateRunnerDeps {
@@ -97,12 +123,18 @@ export interface ValidateRunnerDeps {
  *    directly (mount, save), so two requests are routinely in flight; an older
  *    response landing last used to overwrite the newer result — which drives
  *    the findings panel, the step list's invalid markers AND the Save gate.
- * 2. **A run clears only the error validation itself owns.** A successful
- *    check says nothing about a failed SAVE, so blanking `error` wholesale made
- *    the save/install failure self-erase (and the green "No blocking errors."
- *    return) while the workflow was still unsaved. Symmetrically, a failed
- *    check does not overwrite a save failure — that one is the author's
- *    blocking problem until they retry the save.
+ * 2. **A run clears only the error validation itself owns — plus a save error
+ *    it can PROVE is spent.** A successful check says nothing about a failed
+ *    SAVE, so blanking `error` wholesale made the save/install failure
+ *    self-erase (and the green "No blocking errors." return) while the workflow
+ *    was still unsaved. Symmetrically, a failed check does not overwrite a save
+ *    failure. The ONE exception: when the save failure restated a specific
+ *    validator finding and a fresh check no longer reports that finding, the
+ *    author has fixed exactly the thing the message describes — leaving it on
+ *    screen (above a green "No blocking errors.") states something provably
+ *    untrue. A save error that is NOT a validator finding (a name collision, a
+ *    502, "give the workflow a name") is untouched: a successful check proves
+ *    nothing about those.
  */
 export function createValidateRunner(
   deps: ValidateRunnerDeps,
@@ -120,9 +152,14 @@ export function createValidateRunner(
       deps.apply(d => {
         d.validation = result
         d.validating = false
-        if (d.errorSource === 'validate') {
+        const spentSaveError =
+          d.errorSource === 'save' &&
+          !!d.errorFinding &&
+          !findingStillPresent(result, d.errorFinding)
+        if (d.errorSource === 'validate' || spentSaveError) {
           d.error = null
           d.errorSource = null
+          d.errorFinding = null
         }
       })
     } catch (error) {
@@ -133,12 +170,14 @@ export function createValidateRunner(
         // failure; surface the error so Save isn't silently stuck — unless a
         // save failure is already on screen, which outranks it.
         if (d.errorSource === 'save') return
-        d.error = humaniseRequestError(
+        const described = describeRequestError(
           error,
           def.steps,
           VALIDATE_FAILURE_FALLBACK,
         )
+        d.error = described.text
         d.errorSource = 'validate'
+        d.errorFinding = described.finding
       })
     }
   }
@@ -159,9 +198,14 @@ export const WorkflowBuilderStoreDef = defineLocalStore({
     saving: false,
     loading: false,
     loadError: null as string | null,
+    /** The author-facing failure sentence. This store is the SINGLE place a
+     *  raw failure is turned into copy (`describeRequestError`); the panel and
+     *  the page render this string verbatim. */
     error: null as string | null,
     /** Which act `error` belongs to — see `createValidateRunner`. */
     errorSource: null as ErrorSource,
+    /** The validator finding `error` restates, when it restates one. */
+    errorFinding: null as FindingIdentity | null,
     /** Flipped when the workflow being edited is deleted on another device. */
     deletedExternally: false,
   },
@@ -218,6 +262,7 @@ export const WorkflowBuilderStoreDef = defineLocalStore({
           d.loadError = null
           d.error = null
           d.errorSource = null
+          d.errorFinding = null
           d.deletedExternally = false
         })
       },
@@ -364,6 +409,7 @@ export const WorkflowBuilderStoreDef = defineLocalStore({
           set(d => {
             d.error = msg
             d.errorSource = 'save'
+            d.errorFinding = null
           })
           throw new Error(msg)
         }
@@ -371,6 +417,7 @@ export const WorkflowBuilderStoreDef = defineLocalStore({
           d.saving = true
           d.error = null
           d.errorSource = null
+          d.errorFinding = null
         })
         try {
           const payload = toWorkflowDef(def)
@@ -404,14 +451,24 @@ export const WorkflowBuilderStoreDef = defineLocalStore({
             errObj.error_code === 'WORKFLOW_NAME_EXISTS' || errObj.status === 409
           // NEVER `error.message`: the api-client formats a transport failure as
           // `HTTP error! status: 502 - <the whole response body>`, which would
-          // land verbatim in the Alert title AND the page toast.
-          const msg = isNameCollision
-            ? `A workflow named '${trimmedName || 'this'}' already exists — choose a different name`
-            : humaniseRequestError(error, def.steps, SAVE_FAILURE_FALLBACK)
+          // land verbatim in the Alert title AND the page toast. This is the
+          // ONE humanisation boundary — what lands in `error` is what the panel
+          // and the toast show, unchanged.
+          const described = isNameCollision
+            ? {
+                text: `A workflow named '${trimmedName || 'this'}' already exists — choose a different name`,
+                finding: null,
+              }
+            : describeRequestError(error, def.steps, SAVE_FAILURE_FALLBACK)
+          const msg = described.text
           set(d => {
             d.saving = false
             d.error = msg
             d.errorSource = 'save'
+            // When the save was rejected by a specific validator finding, keep
+            // hold of WHICH — a later successful check retires the message once
+            // the author has fixed it.
+            d.errorFinding = described.finding
           })
           // Re-throw a friendly Error so the page toast shows the actionable
           // message (the page surfaces `e.message`).

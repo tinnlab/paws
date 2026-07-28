@@ -9,7 +9,7 @@
  * invalidate/retry path and the failure classification testable HERE rather than
  * only through the tool-picker E2E.
  */
-import { createElement, useState } from 'react'
+import { createElement, useLayoutEffect, useState } from 'react'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -35,16 +35,34 @@ vi.mock('@/api-client', () => ({
     McpServer: { listAccessible },
   },
 }))
-vi.mock('@/core/permissions', () => ({ hasPermissionNow: () => true }))
+
+/** The user's `mcp_servers::read` grant, flippable per test — a user may hold
+ *  `workflows::manage` without it, which is the case finding 1 is about. */
+const permitted = vi.hoisted(() => ({ mcpServersRead: true }))
+vi.mock('@/core/permissions', () => ({
+  hasPermissionNow: () => permitted.mcpServersRead,
+  usePermission: () => permitted.mcpServersRead,
+}))
+
 // The accessible-server list is a cross-module lazy store; the step form only
 // reads three fields off it, so it is stubbed at the boundary rather than booted.
-vi.mock('@/modules/mcp/stores/mcpServer', () => ({
-  McpServer: {
-    servers: [{ id: 'srv-1', name: 'lit', display_name: 'Lit', enabled: true }],
-    isInitialized: true,
-    error: null,
-  },
+// MUTABLE, because its three fields are exactly what the form reasons about:
+// a user without `mcp_servers::read` gets `isInitialized:false, error:null`
+// FOREVER (`loadMcpServers` returns before setting either).
+const mcpServerStub = vi.hoisted(() => ({
+  servers: [] as { id: string; name: string; display_name?: string; enabled: boolean }[],
+  isInitialized: true,
+  error: null as string | null,
 }))
+const DEFAULT_SERVERS = [{ id: 'srv-1', name: 'lit', display_name: 'Lit', enabled: true }]
+vi.mock('@/modules/mcp/stores/mcpServer', () => ({ McpServer: mcpServerStub }))
+
+beforeEach(() => {
+  permitted.mcpServersRead = true
+  mcpServerStub.servers = [...DEFAULT_SERVERS]
+  mcpServerStub.isInitialized = true
+  mcpServerStub.error = null
+})
 
 import {
   type CatalogEntry,
@@ -190,6 +208,30 @@ describe('entryForServerName', () => {
       lookups: { literature_search: { status: 'no-permission' } },
     })
     expect(denied.entry.failure).toEqual({ kind: 'no-permission' })
+  })
+
+  it('answers immediately for a user who cannot list servers at all', () => {
+    // `loadMcpServers` returns at its permission gate WITHOUT setting
+    // `isInitialized` or `error`, so `listReady` is false FOREVER for a user
+    // holding `workflows::manage` but not `mcp_servers::read`: no lookup is ever
+    // requested, the resolution sticks at `resolving-server`, and the Tool field
+    // stays disabled behind a reason that is not true. Nothing is enumerable for
+    // this user, so the verdict is known without asking anyone.
+    const denied = entryForServerName('literature_search', [], {}, {
+      listReady: false,
+      canList: false,
+    })
+    expect(denied.entry.failure).toEqual({ kind: 'no-permission' })
+    expect(denied.needsLookup).toBe(false)
+    expect(denied.serverId).toBeNull()
+
+    // Still the ordinary "nothing picked yet" state when there is no server.
+    expect(
+      entryForServerName('', [], {}, { canList: false }).entry.failure?.kind,
+    ).toBe('no-server')
+
+    // The default is unchanged for every permitted caller.
+    expect(entryForServerName('literature_search', servers, {}).serverId).toBe('srv-1')
   })
 
   it('returns a not-yet-loaded entry (not a failure) for a known but unfetched server', () => {
@@ -996,10 +1038,22 @@ interface StepHarness {
   unmount: () => void
 }
 
-/** Mount a real `ToolStepForm` over a fake builder store, with the accessible
- *  server list stubbed at module level (see the `vi.mock` at the top). */
-function mountToolStep(initial: Record<string, unknown>): StepHarness {
+/**
+ * Mount a real `ToolStepForm` over a fake builder store, with the accessible
+ * server list stubbed at module level (see the `vi.mock` at the top).
+ *
+ * `onFirstCommit` runs in a PARENT layout effect, i.e. after the form's first
+ * DOM commit and BEFORE its own passive effects — which is precisely the frame
+ * the browser can paint before `catalog.load` has even been called. Everything
+ * `act()` does afterwards is invisible to it, so it is the only way to observe
+ * a one-frame flash from a test.
+ */
+function mountToolStep(
+  initial: Record<string, unknown>,
+  onFirstCommit?: (container: HTMLElement) => void,
+): StepHarness {
   let latest = initial
+  const container = document.createElement('div')
   function Probe() {
     const [step, setStep] = useState(initial)
     latest = step
@@ -1008,13 +1062,16 @@ function mountToolStep(initial: Record<string, unknown>): StepHarness {
       updateStep: (_id: string, patch: Record<string, unknown>) =>
         setStep(prev => ({ ...prev, ...patch })),
     } as unknown as WorkflowBuilderStore
+    // Unconditional, and it never re-arms: `[]`.
+    useLayoutEffect(() => {
+      onFirstCommit?.(container)
+    }, [])
     return createElement(ToolStepForm, {
       store,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       step: step as any,
     })
   }
-  const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
   act(() => {
@@ -1092,6 +1149,199 @@ describe('the tool step’s additional-arguments rows', () => {
         sel('wf-builder-tool-arg-field-query'),
       )!.value,
     ).toBe('ziee builder')
+    h.unmount()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The tool step form's degradation boundaries (round-3 findings 1, 3, 4)
+// ---------------------------------------------------------------------------
+
+const toolInput = (h: StepHarness) =>
+  h.container.querySelector<HTMLInputElement>(sel('wf-builder-tool-name'))
+
+const catalogAlert = (h: StepHarness) =>
+  h.container.querySelector(sel('wf-builder-tool-catalog-error'))
+
+const serverField = (h: StepHarness) =>
+  h.container.querySelector(sel('wf-builder-tool-server'))
+
+describe('the tool step under a user who cannot list MCP servers', () => {
+  beforeEach(() => {
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    listTools.mockReset()
+    listAccessible.mockReset()
+    // The real shape of this user's accessible-server store: `loadMcpServers`
+    // returns at its permission gate WITHOUT setting `isInitialized` OR
+    // `error`, so the list never settles and never explains itself.
+    permitted.mcpServersRead = false
+    mcpServerStub.servers = []
+    mcpServerStub.isInitialized = false
+    mcpServerStub.error = null
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('lets them author the step by hand, with the reason stated', async () => {
+    // Before: `serversSettled` was `isInitialized || !!error` — both false
+    // forever — so the resolution never left `resolving-server`, the Tool field
+    // stayed DISABLED behind "Looking up this server…" for the rest of the
+    // session, and the one reason the user was given was false. A user holding
+    // `workflows::manage` but not `mcp_servers::read` could not author a tool
+    // step at all and was told nothing (INV-6).
+    const h = mountToolStep({
+      id: 'step_1',
+      kind: 'tool',
+      server: 'lit',
+      tool: 'search',
+      arguments: {},
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    const field = toolInput(h)!
+    expect(field).toBeTruthy()
+    // The hand-entry Input (the Combobox would carry role=combobox), usable.
+    expect(field.getAttribute('role')).not.toBe('combobox')
+    expect(field.disabled).toBe(false)
+    expect(field.getAttribute('placeholder')).not.toMatch(/looking up/i)
+
+    // …and the escape hatch is VISIBLE, with a reason that is actually true.
+    const alert = catalogAlert(h)
+    expect(alert).toBeTruthy()
+    expect(alert!.textContent).toMatch(/permission/i)
+    expect(alert!.textContent).toMatch(/by hand/i)
+    expect(alert!.textContent).not.toMatch(/looking up/i)
+
+    // Nothing is asked of an API that would 403.
+    expect(listAccessible).not.toHaveBeenCalled()
+    expect(listTools).not.toHaveBeenCalled()
+    h.unmount()
+  })
+
+  it('keeps the configured SERVER visible instead of blanking the picker', () => {
+    const h = mountToolStep({
+      id: 'step_1',
+      kind: 'tool',
+      server: 'lit',
+      tool: 'search',
+      arguments: {},
+    })
+    expect(serverField(h)!.textContent).toContain('lit')
+    h.unmount()
+  })
+})
+
+describe('the tool step’s server picker', () => {
+  beforeEach(() => {
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    listTools.mockReset()
+    listAccessible.mockReset()
+    listTools.mockResolvedValue({ tools: [SCHEMA_TOOL] })
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  // REGRESSION GUARD for a REJECTED round-3 finding (3), which read the Server
+  // field as the Tool field's twin and expected it to drop a value it cannot
+  // offer. It does not, and the two are not twins: the Tool field is a
+  // `Combobox`, whose `selected` is `byValue.get(current) ?? null` — an unknown
+  // value really does render blank there, which is why it needed the synthetic
+  // `storedToolMissing` option. The Server field is a `Select`, which renders
+  // `<SelectValue>{undefined}</SelectValue>` for an unmatched value and base-ui
+  // then paints the raw VALUE. These tests pin that difference so the claim does
+  // not have to be re-derived, and so a future kit change that DID start
+  // dropping the value fails here.
+  it('keeps a configured server the loaded PAGE cannot offer visible', async () => {
+    // `McpServer.servers` is ONE page of 10, sharing the settings page's own
+    // search/status filters, so a step's server is routinely absent from it —
+    // and being absent from it is not a defect: the by-name lookup resolves it
+    // and the tool picker loads normally.
+    listAccessible.mockResolvedValue({
+      servers: [{ id: 'srv-40', name: 'page_3_server', enabled: true }],
+    })
+    const h = mountToolStep({
+      id: 'step_1',
+      kind: 'tool',
+      server: 'page_3_server',
+      tool: 'search',
+      arguments: {},
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(serverField(h)!.textContent).toContain('page_3_server')
+    // Resolved off-page ⇒ no failure to explain, and the tools were fetched.
+    expect(catalogAlert(h)).toBeNull()
+    expect(listTools).toHaveBeenCalledWith({ id: 'srv-40' })
+    h.unmount()
+  })
+
+  it('shows a server that is genuinely gone, WITH the reason, rather than blanking', async () => {
+    listAccessible.mockResolvedValue({ servers: [] })
+    const h = mountToolStep({
+      id: 'step_1',
+      kind: 'tool',
+      server: 'ghost_server',
+      tool: 'search',
+      arguments: {},
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    // The value is NOT dropped…
+    expect(serverField(h)!.textContent).toContain('ghost_server')
+    // …and the reason it is not among the options is stated, visibly (INV-6).
+    const alert = catalogAlert(h)
+    expect(alert).toBeTruthy()
+    expect(alert!.textContent).toContain('ghost_server')
+    expect(alert!.textContent).toMatch(/isn’t|isn't/)
+    h.unmount()
+  })
+})
+
+describe('the tool field before the tool list has been asked for', () => {
+  beforeEach(() => {
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    listTools.mockReset()
+    listAccessible.mockReset()
+    listTools.mockResolvedValue({ tools: [SCHEMA_TOOL] })
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('is never an ENABLED hand-entry box in the frame before the fetch starts', async () => {
+    // On the frame where `serverId` first resolves, the catalog has no entry for
+    // it yet — no failure, `loading:false` — which read as a SETTLED empty
+    // result: the picker's condition failed and the hand-entry Input rendered,
+    // enabled, under the generic "the exact name of the tool" blurb, before
+    // anything had been asked of the server. An author typing in that frame was
+    // silently in the fallback (INV-6). `catalog.load` runs in a PASSIVE effect,
+    // so that frame is committed — and paintable — first.
+    let firstFrame: { present: boolean; disabled: boolean } | null = null
+    const h = mountToolStep(
+      { id: 'step_1', kind: 'tool', server: 'lit', tool: '', arguments: {} },
+      container => {
+        const el = container.querySelector<HTMLInputElement>(sel('wf-builder-tool-name'))
+        firstFrame = el ? { present: true, disabled: el.disabled } : { present: false, disabled: false }
+      },
+    )
+    expect(firstFrame).toEqual({ present: true, disabled: true })
+
+    // And once the list has arrived it is the PICKER, as before — the Combobox
+    // reuses the same testid, so it is identified by its combobox role.
+    await act(async () => {
+      await Promise.resolve()
+    })
+    const settled = toolInput(h)!
+    expect(settled.getAttribute('role')).toBe('combobox')
+    expect(settled.disabled).toBe(false)
     h.unmount()
   })
 })

@@ -2155,6 +2155,11 @@ mod humanisation_contract {
         // `Some(d)` while inside a `#[cfg(test)]` item body opened at depth `d`.
         let mut test_body_from: Option<i32> = None;
         let mut pending_cfg_test = false;
+        // `Some(d)` while inside an `impl … ValidationError` body opened at depth
+        // `d` — the ONE region where the bare keyword `Self` names the type, and
+        // therefore where `Self::at("semantic", "CODE", …)` is a real emit site.
+        let mut impl_ve_from: Option<i32> = None;
+        let mut pending_impl_ve = false;
         let mut prev_word = String::new();
 
         while i < ch.len() {
@@ -2198,7 +2203,11 @@ mod humanisation_contract {
                 if pending_cfg_test && test_body_from.is_none() {
                     test_body_from = Some(depth);
                 }
+                if pending_impl_ve && impl_ve_from.is_none() {
+                    impl_ve_from = Some(depth);
+                }
                 pending_cfg_test = false;
+                pending_impl_ve = false;
                 depth += 1;
                 i += 1;
                 continue;
@@ -2208,12 +2217,16 @@ mod humanisation_contract {
                 if test_body_from == Some(depth) {
                     test_body_from = None;
                 }
+                if impl_ve_from == Some(depth) {
+                    impl_ve_from = None;
+                }
                 i += 1;
                 continue;
             }
             if c == ';' {
                 // A `#[cfg(test)] use …;` has no body to skip.
                 pending_cfg_test = false;
+                pending_impl_ve = false;
                 i += 1;
                 continue;
             }
@@ -2234,9 +2247,18 @@ mod humanisation_contract {
                     scan_type_alias(&ch, i, line, file, scan);
                 }
                 if word == "ValidationError" && test_body_from.is_none() {
-                    scan_validation_error_use(
+                    let opens_impl = scan_validation_error_use(
                         &ch, &mut i, &mut line, file, &prev_word, scan,
                     );
+                    if opens_impl {
+                        pending_impl_ve = true;
+                    }
+                }
+                if word == "Self" && test_body_from.is_none() && impl_ve_from.is_some() {
+                    // Inside `impl … ValidationError`, `Self` IS the type — so a
+                    // finding built through it must be exactly as visible to this
+                    // scanner as one built through the spelled-out name.
+                    scan_self_use(&ch, &mut i, &mut line, file, &prev_word, scan);
                 }
                 prev_word = word;
                 continue;
@@ -2323,6 +2345,10 @@ mod humanisation_contract {
     }
 
     /// Called with `*i` just past a `ValidationError` identifier in real code.
+    ///
+    /// Returns `true` when this occurrence is the HEAD of an `impl … ValidationError`
+    /// — i.e. the `{` the caller is about to see opens a body in which the keyword
+    /// `Self` names this type (see `scan_self_use`).
     fn scan_validation_error_use(
         ch: &[char],
         i: &mut usize,
@@ -2330,7 +2356,7 @@ mod humanisation_contract {
         file: &str,
         prev_word: &str,
         scan: &mut Scan,
-    ) {
+    ) -> bool {
         let mut j = *i;
         let mut jline = *line;
         skip_trivia(ch, &mut j, &mut jline);
@@ -2348,7 +2374,10 @@ mod humanisation_contract {
                      `ValidationError::{{err,at,warn}}(\"<layer>\", \"<CODE>\", …)`."
                 ));
             }
-            return; // leave the brace to the caller's depth accounting
+            // `impl ValidationError {` / `impl Trait for ValidationError {` open a
+            // body where `Self` is an ALIAS for the type. Report it upward so the
+            // caller can scan that body's `Self::…` uses.
+            return matches!(prev_word, "impl" | "for");
         }
 
         // `use …::ValidationError as VE;` (or `use …::{ValidationError as VE}`).
@@ -2373,22 +2402,170 @@ mod humanisation_contract {
                 ));
                 *i = k;
                 *line = kline;
-                return;
+                return false;
             }
         }
 
         if !(ch.get(j) == Some(&':') && ch.get(j + 1) == Some(&':')) {
-            return; // a type mention (`Vec<ValidationError>`, a return type, …)
+            return false; // a type mention (`Vec<ValidationError>`, a return type, …)
         }
-        j += 2;
+        *i = j + 2;
+        *line = jline;
+        scan_ctor_call(ch, i, line, file, "ValidationError", scan);
+        false
+    }
+
+    /// Called with `*i` just past a `Self` identifier inside an `impl …
+    /// ValidationError` body, where `Self` IS `ValidationError`.
+    ///
+    /// Without this the idiomatic convenience constructor
+    ///
+    /// ```ignore
+    /// impl ValidationError {
+    ///     pub(crate) fn dead_tools(loc: &str) -> Self {
+    ///         Self::at("semantic", "WORKFLOW_NEW_CODE", "…", loc)
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// emits a real code this scanner never sees — and a code missing from the
+    /// emitted set AND from the humanisation demand at the same time makes the
+    /// two halves AGREE: no copy is required, the guard is green, and a raw wire
+    /// code reaches the author. Every other hole here is loud; that one was
+    /// silent, which is the exact failure mode the guard exists to prevent.
+    fn scan_self_use(
+        ch: &[char],
+        i: &mut usize,
+        line: &mut usize,
+        file: &str,
+        prev_word: &str,
+        scan: &mut Scan,
+    ) {
+        let mut j = *i;
+        let mut jline = *line;
+        skip_trivia(ch, &mut j, &mut jline);
+
+        if ch.get(j) == Some(&'{') {
+            // A TYPE position (`-> Self {`, `impl … for Self {`): the brace opens
+            // a body, not a literal. Anywhere else `Self { … }` is a struct
+            // literal of `ValidationError`, which the guard cannot read a code out
+            // of — but the type's OWN `err`/`at`/`warn` constructors are built
+            // that way and thread their `code` PARAMETER through, so only a
+            // literal `code: "…"` is a finding built behind the guard's back.
+            if !matches!(
+                prev_word,
+                "struct" | "impl" | "enum" | "union" | "trait" | "for" | "->"
+            ) {
+                scan_self_struct_literal(ch, j, *line, file, scan);
+            }
+            return; // leave the brace to the caller's depth accounting
+        }
+
+        if !(ch.get(j) == Some(&':') && ch.get(j + 1) == Some(&':')) {
+            return; // `Option<Self>`, `Self,`, … — a type mention
+        }
+        *i = j + 2;
+        *line = jline;
+        scan_ctor_call(ch, i, line, file, "Self", scan);
+    }
+
+    /// A `Self { … }` struct literal inside `impl ValidationError`, starting at
+    /// its `{`. Reports one carrying a LITERAL `code: "…"` field — that is a
+    /// finding built without going through `err`/`at`/`warn`, so its code would
+    /// escape both halves of the contract. Purely a lookahead: nothing is
+    /// consumed, so the caller's depth accounting is untouched.
+    fn scan_self_struct_literal(
+        ch: &[char],
+        brace: usize,
+        line: usize,
+        file: &str,
+        scan: &mut Scan,
+    ) {
+        let mut j = brace + 1;
+        let mut depth = 0usize;
+        let mut sink = 0usize;
+        while let Some(&c) = ch.get(j) {
+            if c == '/' && (ch.get(j + 1) == Some(&'/') || ch.get(j + 1) == Some(&'*')) {
+                skip_trivia(ch, &mut j, &mut sink);
+                continue;
+            }
+            if let Some((offset, hashes)) = raw_string_prefix(ch, j) {
+                skip_raw_string(ch, &mut j, &mut sink, offset, hashes);
+                continue;
+            }
+            if c == '"' {
+                let _ = read_string_literal(ch, &mut j, &mut sink);
+                continue;
+            }
+            if c == '\'' {
+                skip_char_literal_or_lifetime(ch, &mut j);
+                continue;
+            }
+            match c {
+                '{' | '(' | '[' => {
+                    depth += 1;
+                    j += 1;
+                    continue;
+                }
+                '}' | ')' | ']' => {
+                    if depth == 0 {
+                        return; // end of this literal
+                    }
+                    depth -= 1;
+                    j += 1;
+                    continue;
+                }
+                _ => {}
+            }
+            if depth == 0 && is_ident_char(c) && !c.is_ascii_digit() {
+                let word = read_ident(ch, &mut j);
+                if word == "code" {
+                    let mut k = j;
+                    skip_trivia_no_line(ch, &mut k);
+                    if ch.get(k) == Some(&':') {
+                        k += 1;
+                        skip_trivia_no_line(ch, &mut k);
+                        let mut ksink = 0usize;
+                        if let Some(code) = read_string_literal(ch, &mut k, &mut ksink) {
+                            scan.problems.push(format!(
+                                "{file}:{line}: `Self {{ …, code: \"{code}\", … }}` builds a \
+                                 finding as a struct literal inside `impl ValidationError`, \
+                                 bypassing the constructors the drift guard reads. Build it \
+                                 through `ValidationError::{{err,at,warn}}(\"<layer>\", \
+                                 \"<CODE>\", …)` (or `Self::…`) so the code is registered and \
+                                 author-facing copy is demanded for it."
+                            ));
+                            return;
+                        }
+                    }
+                }
+                continue;
+            }
+            j += 1;
+        }
+    }
+
+    /// The shared tail of both emit-site readers: called with `*i` just past the
+    /// `::` of `<Type>::<ctor>(…)`, where `type_name` is how the type was spelled
+    /// at this site (`ValidationError` or `Self`).
+    fn scan_ctor_call(
+        ch: &[char],
+        i: &mut usize,
+        line: &mut usize,
+        file: &str,
+        type_name: &str,
+        scan: &mut Scan,
+    ) {
+        let mut j = *i;
+        let mut jline = *line;
         skip_trivia(ch, &mut j, &mut jline);
         let ctor = read_ident(ch, &mut j);
         if !matches!(ctor.as_str(), "err" | "at" | "warn") {
             scan.problems.push(format!(
-                "{file}:{line}: `ValidationError::{ctor}` is not one of the \
+                "{file}:{line}: `{type_name}::{ctor}` is not one of the \
                  `err`/`at`/`warn` constructors the drift guard can read a code out of. \
                  Either build the finding through one of those, or teach \
-                 `scan_validation_error_use` about the new constructor."
+                 `scan_ctor_call` about the new constructor."
             ));
             *i = j;
             *line = jline;
@@ -2397,7 +2574,7 @@ mod humanisation_contract {
         skip_trivia(ch, &mut j, &mut jline);
         if ch.get(j) != Some(&'(') {
             scan.problems.push(format!(
-                "{file}:{line}: `ValidationError::{ctor}` is not followed by a call — \
+                "{file}:{line}: `{type_name}::{ctor}` is not followed by a call — \
                  the drift guard cannot read its layer/code."
             ));
             *i = j;
@@ -2412,7 +2589,7 @@ mod humanisation_contract {
         skip_trivia(ch, &mut j, &mut jline);
         let Some(layer) = read_string_literal(ch, &mut j, &mut jline) else {
             scan.problems.push(format!(
-                "{file}:{line}: the 1st argument of `ValidationError::{ctor}` is not a \
+                "{file}:{line}: the 1st argument of `{type_name}::{ctor}` is not a \
                  string literal, so the drift guard cannot tell which layer/code it emits."
             ));
             *i = j;
@@ -2422,7 +2599,7 @@ mod humanisation_contract {
         skip_trivia(ch, &mut j, &mut jline);
         if ch.get(j) != Some(&',') {
             scan.problems.push(format!(
-                "{file}:{line}: `ValidationError::{ctor}(\"{layer}\" …)` has an \
+                "{file}:{line}: `{type_name}::{ctor}(\"{layer}\" …)` has an \
                  unexpected argument shape — the drift guard cannot read its code."
             ));
             *i = j;
@@ -2433,7 +2610,7 @@ mod humanisation_contract {
         skip_trivia(ch, &mut j, &mut jline);
         let Some(code) = read_string_literal(ch, &mut j, &mut jline) else {
             scan.problems.push(format!(
-                "{file}:{line}: the 2nd argument of `ValidationError::{ctor}` is not a \
+                "{file}:{line}: the 2nd argument of `{type_name}::{ctor}` is not a \
                  string literal, so the drift guard cannot register/humanise its code."
             ));
             *i = j;
@@ -2446,7 +2623,7 @@ mod humanisation_contract {
 
         if !KNOWN_LAYERS.contains(&layer.as_str()) {
             scan.problems.push(format!(
-                "{file}:{line}: `ValidationError::{ctor}` emits code '{code}' on the \
+                "{file}:{line}: `{type_name}::{ctor}` emits code '{code}' on the \
                  UNKNOWN layer '{layer}'. Add the layer to `KNOWN_LAYERS` (and to \
                  `ValidationError::layer`'s doc) — until then the guard refuses to \
                  vouch for the codes it emits."
@@ -2455,7 +2632,7 @@ mod humanisation_contract {
         }
         if !is_screaming_snake(&code) {
             scan.problems.push(format!(
-                "{file}:{line}: `ValidationError::{ctor}` emits '{code}', which is not a \
+                "{file}:{line}: `{type_name}::{ctor}` emits '{code}', which is not a \
                  SCREAMING_SNAKE code — the builder keys its author-facing copy off the \
                  code, so it must be a stable identifier."
             ));
@@ -2821,6 +2998,126 @@ mod tests {
             );
             assert!(scan.codes.is_empty());
         }
+
+        // 4b. `Self` inside `impl … ValidationError` — the THIRD renaming
+        //     dialect, and the only SILENT one: `use … as VE` and `type VE = …`
+        //     are both reported, but a convenience constructor written inside the
+        //     type's own impl emits a code that used to be invisible to this
+        //     scanner, so it went missing from the emitted set AND from the
+        //     humanisation demand at once — the two agreed and the guard passed.
+        let self_ctor = "\
+impl ValidationError {
+    pub(crate) fn dead_tools(loc: &str) -> Self {
+        Self::at(\"semantic\", \"CODE_VIA_SELF\", \"m\", loc)
+    }
+}
+";
+        let scan = scan_of(self_ctor);
+        assert!(
+            scan.problems.is_empty(),
+            "a `Self::at` constructor inside `impl ValidationError` reported a problem: {:?}",
+            scan.problems
+        );
+        assert_eq!(
+            scan.codes.into_iter().collect::<Vec<_>>(),
+            vec!["CODE_VIA_SELF".to_string()],
+            "a code emitted through `Self::at` inside `impl ValidationError` was invisible \
+             to the scanner — it would escape BOTH the registry and the copy check silently"
+        );
+
+        // The trait-impl spelling opens the same `Self` alias.
+        let self_in_trait_impl = "\
+impl Default for ValidationError {
+    fn default() -> Self {
+        Self::err(\"schema\", \"CODE_VIA_SELF_TRAIT_IMPL\", \"m\")
+    }
+}
+";
+        assert_eq!(
+            codes(self_in_trait_impl),
+            vec!["CODE_VIA_SELF_TRAIT_IMPL".to_string()],
+            "`impl Trait for ValidationError` also aliases `Self` to the type"
+        );
+
+        // A non-`err/at/warn` `Self::` constructor is refused, exactly like the
+        // spelled-out form — and the message names `Self`, not the type.
+        let self_other = "\
+impl ValidationError {
+    fn x() -> Self { Self::other(\"semantic\", \"X\") }
+}
+";
+        let scan = scan_of(self_other);
+        assert!(
+            scan.problems.iter().any(|p| p.contains("`Self::other`")),
+            "an unknown `Self::` constructor must be reported: {:?}",
+            scan.problems
+        );
+
+        // A hand-rolled struct literal with a LITERAL code bypasses the
+        // constructors entirely — also reported.
+        let self_literal = "\
+impl ValidationError {
+    fn y() -> Self {
+        Self { layer: \"semantic\", code: \"CODE_VIA_SELF_LITERAL\", message: String::new(),
+               location: None, severity: Severity::Error }
+    }
+}
+";
+        let scan = scan_of(self_literal);
+        assert!(
+            scan.problems
+                .iter()
+                .any(|p| p.contains("struct literal") && p.contains("CODE_VIA_SELF_LITERAL")),
+            "a `Self {{ code: \"…\" }}` literal must be reported: {:?}",
+            scan.problems
+        );
+        assert!(scan.codes.is_empty());
+
+        // Negative controls. The type's OWN constructors ARE `Self { … }`
+        // literals threading a `code` PARAMETER through — reporting those would
+        // make the guard cry wolf on the very file it guards. And `Self` outside
+        // an `impl … ValidationError` belongs to some other type entirely.
+        let real_ctor = "\
+impl ValidationError {
+    pub(crate) fn err<S: Into<String>>(layer: &'static str, code: &'static str, msg: S) -> Self {
+        Self {
+            layer,
+            code,
+            message: msg.into(),
+            location: None,
+            severity: Severity::Error,
+        }
+    }
+}
+";
+        let scan = scan_of(real_ctor);
+        assert!(
+            scan.problems.is_empty(),
+            "the type's own constructor was reported: {:?}",
+            scan.problems
+        );
+        assert!(scan.codes.is_empty());
+
+        let self_elsewhere = "\
+impl SomethingElse {
+    fn f() -> Self { Self::at(\"semantic\", \"NOT_A_VALIDATION_CODE\", \"m\", \"l\") }
+}
+fn after() -> Vec<ValidationError> {
+    vec![ValidationError::err(\"semantic\", \"CODE_AFTER_OTHER_IMPL\", \"m\")]
+}
+";
+        let scan = scan_of(self_elsewhere);
+        assert!(
+            scan.problems.is_empty(),
+            "`Self` in an unrelated impl was mis-read: {:?}",
+            scan.problems
+        );
+        assert_eq!(
+            scan.codes.into_iter().collect::<Vec<_>>(),
+            vec!["CODE_AFTER_OTHER_IMPL".to_string()],
+            "`Self` in an unrelated impl must contribute no code — and must not \
+             desync the scanner for the emit site after it"
+        );
 
         // 5. The constructions the guard already refuses stay refused.
         for (src, needle) in [

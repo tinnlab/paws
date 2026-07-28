@@ -470,6 +470,45 @@ test('a multi-select does not ERASE the entries the schema dropped', () => {
   assert.equal(fieldForValue(tags, 'a'), tags)
 })
 
+test('a multi-select keeps a stored NULL element instead of erasing it', () => {
+  // The same data loss as above, for the one value the synthetic-option guard
+  // still dropped. `null` means two different things at the two call sites:
+  // for a SINGLE select it is "nothing chosen" (no synthetic option is right),
+  // but as an ELEMENT of a stored list it is a real member — and dropping it
+  // erased it from `arguments` on the next toggle, which is precisely the class
+  // `fieldForValue` was added to close.
+  const spec = describeToolSchema({
+    type: 'object',
+    properties: { tags: { type: 'array', items: { enum: ['a'] } } },
+  })
+  assert.ok(spec)
+  const tags = spec.fields[0]
+  const stored = ['a', null]
+
+  const rendered = fieldForValue(tags, stored)
+  const keys = optionKeysForValues(rendered, stored)
+  assert.equal(keys.length, 2, 'every stored element must have a key to bind to')
+  assert.deepEqual(optionValuesForKeys(rendered, keys), stored)
+  // Toggling something else off must not take the null with it.
+  assert.deepEqual(optionValuesForKeys(rendered, keys.slice(1)), [null])
+  // The synthetic entry still NAMES the value rather than rendering as a bare
+  // suffix over an empty label.
+  const nullOption = rendered.options!.find(o => o.raw === null)!
+  assert.match(nullOption.label, /null/)
+  assert.match(nullOption.label, /not one of this tool/)
+
+  // …and the single-select reading of `null` is unchanged: no value ⇒ no
+  // synthetic option (the picker shows its placeholder).
+  const mode = describeToolSchema({
+    type: 'object',
+    properties: { mode: { type: 'string', enum: ['fast'] } },
+  })!.fields[0]
+  assert.equal(fieldForValue(mode, null), mode)
+  assert.equal(fieldForValue(mode, undefined), mode)
+  // An `undefined` ELEMENT is not a value either — JSON cannot express one.
+  assert.equal(fieldForValue(tags, [undefined]), tags)
+})
+
 test('string enums are untouched by the mapping (the common case stays trivial)', () => {
   const spec = describeToolSchema(richSchema)
   assert.ok(spec)

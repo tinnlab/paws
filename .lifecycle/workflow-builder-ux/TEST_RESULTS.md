@@ -170,8 +170,9 @@ gate:ui (desktop/ui): PASS
 - `gate:ui (ui)`: `198/198 PASS`, `runtime-health: 520 findings (HIGH 0 gating +
   2 harness-noise + 2 baselined / MEDIUM 158 / LOW 358)`, `✅ GATE PASSED`.
 
-**The previously-reported `gate:ui (ui)` FAIL is explained and resolved, not
-waived.** Earlier runs in this session reported 1003–3237 gating HIGH across a
+**The earlier red runtime-health result on the web workspace is explained and
+resolved, not waived.** Earlier runs in this session reported 1003–3237 gating
+HIGH across a
 *shifting* set of 2–16 surfaces, every one of them `net::ERR_NETWORK_CHANGED` on
 `/@fs/…` dev-transport URLs. The cause was Vite's **dep optimizer re-bundling
 mid-run**, which invalidates in-flight module requests. `rm -rf

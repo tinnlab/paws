@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { Alert, Button, Combobox, Input } from '@ziee/kit'
+import { Permissions } from '@/api-client/permissions'
+import { usePermission } from '@/core/permissions'
 import { McpServer } from '@/modules/mcp/stores/mcpServer'
 import type { WorkflowBuilderStore } from '../../stores/WorkflowBuilder.store'
 import {
@@ -134,6 +136,11 @@ export function ToolStepForm({ store, step }: Props) {
   const serversSettled = serversInitialized || !!serversError
   const byServerId = catalog.byServerId
   const serverByName = catalog.serverByName
+  // `loadMcpServers` returns at its own permission gate without setting EITHER
+  // flag, so for a user without `mcp_servers::read` the list above never
+  // settles and never explains itself. Reactive (`usePermission`, not
+  // `hasPermissionNow`) so a grant arriving mid-session opens the picker.
+  const canListServers = usePermission(Permissions.McpServersRead)
 
   // A step stores the server NAME (`resolve_tool_server` resolves by name at run
   // time); the tools endpoint is keyed by id, so resolve name → id here.
@@ -146,9 +153,9 @@ export function ToolStepForm({ store, step }: Props) {
         step.server,
         (servers ?? []).map(s => ({ id: s.id, name: s.name, enabled: s.enabled })),
         byServerId,
-        { listReady: serversSettled, lookups: serverByName },
+        { listReady: serversSettled, lookups: serverByName, canList: canListServers },
       ),
-    [step.server, servers, serversSettled, byServerId, serverByName],
+    [step.server, servers, serversSettled, byServerId, serverByName, canListServers],
   )
 
   useEffect(() => {
@@ -187,8 +194,20 @@ export function ToolStepForm({ store, step }: Props) {
   const transientKind =
     entry.failure?.kind === 'no-server' || entry.failure?.kind === 'resolving-server'
   const blockingFailure = entry.failure && !transientKind ? entry.failure : null
+  /**
+   * A server id we have resolved but never ASKED about. `catalog.load` runs in a
+   * passive effect, so the frame that first resolves `serverId` is committed —
+   * and paintable — while `byServerId` still has no entry for it. `entry` is
+   * `EMPTY` there (no failure, `loading:false`), which is indistinguishable from
+   * a settled empty answer: the field rendered as the ENABLED hand-entry box,
+   * under the generic "the exact name of the tool" blurb, before anything had
+   * been asked of the server. An author typing in that frame was silently in the
+   * fallback, which INV-6 forbids. "Not asked yet" is busy, not settled.
+   */
+  const awaitingCatalog = !!serverId && !byServerId[serverId]
   /** Nothing can be decided about the tool list yet. */
-  const busy = entry.loading || entry.failure?.kind === 'resolving-server'
+  const busy =
+    entry.loading || awaitingCatalog || entry.failure?.kind === 'resolving-server'
   const usePicker = !blockingFailure && !busy && serverToolOptions.length > 0
   // The generated form applies only when the chosen tool actually declared one.
   const useGenerated = !!spec
@@ -400,7 +419,9 @@ export function ToolStepForm({ store, step }: Props) {
             placeholder={
               entry.failure?.kind === 'resolving-server'
                 ? 'Looking up this server…'
-                : entry.loading
+                : // `busy` — not `entry.loading` — so the frame BEFORE the fetch
+                  // starts says what it is doing rather than inviting entry.
+                  busy
                   ? 'Loading this server’s tools…'
                   : 'e.g. search'
             }

@@ -373,6 +373,19 @@ export interface ServerResolutionContext {
   listReady?: boolean
   /** Authoritative by-name verdicts already obtained (`resolveServer`). */
   lookups?: Record<string, ServerLookup>
+  /**
+   * May this user enumerate MCP servers at all (`mcp_servers::read`)?
+   *
+   * Load-bearing, not defensive. `loadMcpServers` returns at its own permission
+   * gate WITHOUT setting `isInitialized` or `error`, so for a user who holds
+   * `workflows::manage` but not `mcp_servers::read` the shared list never
+   * settles — `listReady` is false forever, no by-name lookup is ever asked
+   * for, and the resolution sticks at `resolving-server`: a permanently
+   * DISABLED Tool field whose one stated reason ("Still looking up…") is false.
+   * Nothing is enumerable for this user, so the answer is known immediately and
+   * the documented hand-entry escape hatch opens at once (INV-6).
+   */
+  canList?: boolean
 }
 
 /**
@@ -397,7 +410,7 @@ export function entryForServerName(
   byServerId: Record<string, CatalogEntry>,
   context: ServerResolutionContext = {},
 ): { entry: CatalogEntry; serverId: string | null; needsLookup: boolean } {
-  const { listReady = true, lookups = {} } = context
+  const { listReady = true, lookups = {}, canList = true } = context
   const unresolved = (failure: CatalogFailure, needsLookup = false) => ({
     entry: { ...EMPTY, failure },
     serverId: null,
@@ -405,6 +418,10 @@ export function entryForServerName(
   })
 
   if (!serverName) return unresolved({ kind: 'no-server' })
+  // Nothing here is enumerable for this user — neither the accessible-server
+  // list nor `tools/list` — so say so NOW rather than waiting on a list that
+  // will never answer. See `ServerResolutionContext.canList`.
+  if (!canList) return unresolved({ kind: 'no-permission' })
 
   const match = servers.find(s => s.name === serverName)
   if (match) {

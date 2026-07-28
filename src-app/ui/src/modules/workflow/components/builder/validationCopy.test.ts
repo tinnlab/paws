@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { test } from 'node:test'
 
 import type { ValidationError } from '@/api-client/types'
@@ -7,9 +9,9 @@ import {
   HUMANISED_CODES,
   WORKFLOW_LEVEL,
   attributeFindings,
+  describeRequestError,
   findingStepTitle,
   humaniseFinding,
-  humaniseInstallError,
   humaniseRequestError,
   indexFindingsByStep,
   parseInstallError,
@@ -323,7 +325,7 @@ test('the save path never shows the author the raw validator string', () => {
   // toast whenever the panel's validation was absent or stale.
   const raw =
     '[semantic/WORKFLOW_PROMPT_MISSING] agent_1: step has neither prompt: nor prompt_file:'
-  const shown = humaniseInstallError(raw, steps)
+  const shown = humaniseRequestError(raw, steps)
 
   assert.notEqual(shown, raw, 'the raw wire string reached the author')
   assert.doesNotMatch(shown, /\[semantic\//)
@@ -334,7 +336,7 @@ test('the save path never shows the author the raw validator string', () => {
 })
 
 test('the save path humanises per step kind, like the panel', () => {
-  const onLlm = humaniseInstallError(
+  const onLlm = humaniseRequestError(
     '[semantic/WORKFLOW_PROMPT_MISSING] summarize: step has neither prompt: nor prompt_file:',
     steps,
   )
@@ -344,7 +346,7 @@ test('the save path humanises per step kind, like the panel', () => {
 })
 
 test('a workflow-level save finding is humanised without a step prefix', () => {
-  const shown = humaniseInstallError(
+  const shown = humaniseRequestError(
     '[schema/WORKFLOW_NO_STEPS] workflow.yaml: steps[] must contain at least one step',
     steps,
   )
@@ -361,7 +363,7 @@ test('a save error that is not a validator finding is shown unchanged, never bla
     // rather than to nothing (the Rust drift guard is what prevents this).
     '[semantic/WORKFLOW_SOMETHING_NEW] agent_1: a brand new problem',
   ]) {
-    assert.equal(humaniseInstallError(raw, steps), raw)
+    assert.equal(humaniseRequestError(raw, steps), raw)
   }
 })
 
@@ -379,7 +381,7 @@ test('a transport failure never shows the author the api-client wire string', ()
     'HTTP error! status: 502 - <!DOCTYPE html><html><head><title>502 Bad Gateway</title>' +
     '</head><body bgcolor="white"><center><h1>502 Bad Gateway</h1></center>' +
     '<hr><center>nginx/1.25.3</center></body></html>'
-  const shown = humaniseInstallError(raw, steps)
+  const shown = humaniseRequestError(raw, steps)
 
   assert.doesNotMatch(shown, /HTTP error!/, 'the api-client wire string reached the author')
   assert.doesNotMatch(shown, /[<>]/, 'markup reached the author')
@@ -412,7 +414,7 @@ test('a status becomes a sentence, from the Error object or from the message', (
     // The store persists only the STRING, so the panel must reach the same
     // sentence with the status read back out of the message.
     assert.equal(
-      humaniseInstallError(`HTTP error! status: ${status} - <html>x</html>`, steps),
+      humaniseRequestError(`HTTP error! status: ${status} - <html>x</html>`, steps),
       fromObject,
       `status ${status} must read the same from the stored string`,
     )
@@ -456,12 +458,104 @@ test('a long non-HTTP machine string is clipped rather than pasted whole', () =>
   assert.match(shown, /…$/)
 })
 
-test('humanising is idempotent — the store humanises, then the panel humanises again', () => {
+// ---------------------------------------------------------------------------
+// EXACTLY ONCE. Humanising is NOT idempotent, so the surface must apply it at a
+// single boundary. (This replaced a test that asserted the opposite — it only
+// held because all three of its examples happened to be under the 160-char
+// machine-text clip, so it certified a truncation bug instead of catching it.)
+// ---------------------------------------------------------------------------
+
+test('humanising is NOT idempotent — a second pass truncates correct copy', () => {
+  // The real sentence for WORKFLOW_BAD_STEP_ID, step-prefixed as the store
+  // stores it. It is longer than the machine-text clip, and a second pass no
+  // longer matches `[layer/CODE] loc: msg`, so it falls to the transport path.
+  const already = humaniseRequestError(
+    '[schema/WORKFLOW_BAD_STEP_ID] agent_1: id must match ^[a-z][a-z0-9_]*$',
+    steps,
+  )
+  assert.ok(
+    already.length > 160,
+    `this test needs a >160-char sentence to be meaningful (got ${already.length})`,
+  )
+  const twice = humaniseRequestError(already, steps)
+  assert.notEqual(
+    twice,
+    already,
+    'if a second pass became lossless, the exactly-once rule below can be relaxed',
+  )
+  assert.match(twice, /…$/, 'the second pass clipped the sentence')
+})
+
+test('short sentences survive a second pass — which is what made the bug silent', () => {
+  // Documented so nobody re-derives "it looked fine in my case".
   for (const already of [
     'The server reported an internal error — try again in a moment.',
     'The workflow could not be saved — try again.',
-    'Step 1 · Research the topic: This step needs a task description — say what the assistant should do.',
   ]) {
-    assert.equal(humaniseInstallError(already, steps), already)
+    assert.equal(humaniseRequestError(already, steps), already)
+  }
+})
+
+test('the store is the ONLY humanisation boundary in the builder', () => {
+  // A SOURCE guard, in the spirit of the backend's `humanisation_contract`:
+  // the defect it prevents (a renderer humanising the store's already-humanised
+  // string, and clipping it) is invisible to a unit test of either module alone,
+  // and shows up only for copy longer than the clip.
+  const dir = new URL('.', import.meta.url).pathname
+  // Comments stripped: this rule is about what the code DOES, and both files
+  // carry a comment explaining why they no longer do it.
+  const read = (rel: string) =>
+    readFileSync(join(dir, rel), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, ' ')
+      .replace(/(^|[^:])\/\/[^\n]*/g, '$1 ')
+
+  for (const rel of ['BuilderValidationPanel.tsx', 'WorkflowBuilderPage.tsx']) {
+    const src = read(rel)
+    assert.ok(
+      !/\bhumanise|\bdescribeRequestError\b/i.test(src),
+      `${rel} humanises a failure. The store already did (it writes the sentence ` +
+        `into 'error' and re-throws it), and a second pass falls through to the ` +
+        `machine-text path, which CLIPS at 160 chars — silently truncating copy ` +
+        `that was already correct. Render what the store stored.`,
+    )
+  }
+
+  // …and the boundary must not vanish either: the store has to be the one
+  // applying it, or nothing does and the raw wire string reaches the author.
+  const store = read('../../stores/WorkflowBuilder.store.ts')
+  assert.ok(
+    /describeRequestError\(/.test(store),
+    'WorkflowBuilder.store.ts no longer humanises — the wire string ' +
+      '`[semantic/CODE] step_id: …` would reach the author verbatim (INV-1)',
+  )
+})
+
+test('describeRequestError reports WHICH finding it restated', () => {
+  // The store keeps this so a later successful check can retire a save error
+  // whose condition the author has since fixed.
+  const fromFinding = describeRequestError(
+    '[semantic/WORKFLOW_PROMPT_MISSING] agent_1: step has neither prompt: nor prompt_file:',
+    steps,
+  )
+  assert.deepEqual(fromFinding.finding, {
+    code: 'WORKFLOW_PROMPT_MISSING',
+    location: 'agent_1',
+  })
+
+  // A workflow-level finding carries its location as the validator sent it.
+  assert.deepEqual(
+    describeRequestError('[schema/WORKFLOW_NO_STEPS] steps[] must contain at least one step', steps)
+      .finding,
+    { code: 'WORKFLOW_NO_STEPS', location: null },
+  )
+
+  // Anything that is not a validator finding reports none — a successful check
+  // proves nothing about a name collision or a dead gateway.
+  for (const raw of [
+    "A workflow named 'triage' already exists — choose a different name",
+    'HTTP error! status: 502 - <html>gateway</html>',
+    '[semantic/WORKFLOW_SOMETHING_NEW] agent_1: a brand new problem',
+  ]) {
+    assert.equal(describeRequestError(raw, steps).finding, null, raw)
   }
 })

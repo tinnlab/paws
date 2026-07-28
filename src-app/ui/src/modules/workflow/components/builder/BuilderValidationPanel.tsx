@@ -5,7 +5,6 @@ import {
   type AttributedFinding,
   attributeFindings,
   findingStepTitle,
-  humaniseInstallError,
 } from './validationCopy'
 
 interface BuilderValidationPanelProps {
@@ -92,10 +91,14 @@ export function BuilderValidationPanel({ store }: BuilderValidationPanelProps) {
   // `runValidate` writes its failure reason here and deliberately KEEPS the
   // prior `validation` — so without this the author sees either "Add steps to
   // validate" with steps present, or a stale green "No blocking errors." while
-  // Save is computed from that same stale object. Humanised because `save()`
-  // also writes here, and its message is the raw validator wire string (INV-1).
-  const error = store.error
-  const errorText = error ? humaniseInstallError(error, steps) : null
+  // Save is computed from that same stale object.
+  //
+  // Rendered VERBATIM. The store is the single humanisation boundary (it calls
+  // `describeRequestError` at both catch sites, so `error` is already the
+  // author-facing sentence). Humanising again here is not a no-op: the machine-
+  // text path clips at 160 chars, which silently TRUNCATED copy that was
+  // already correct.
+  const errorText = store.error
   // WHICH act failed. A save failure and a check failure both land in `error`
   // but mean opposite things about the findings below: after a failed CHECK they
   // are stale; after a failed SAVE they are current (the check still ran).

@@ -4412,15 +4412,15 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!finding.stepId` | 52 |
-| branch | `!el` | 121 |
-| branch | `validating` | 138 |
-| branch | `errorText` | 141 |
-| branch | `!validation && !validating && !errorText` | 154 |
-| empty | `validation && errors.length === 0 && !checkFailed` | 164 |
-| branch | `errors.length > 0` | 171 |
-| branch | `warnings.length > 0` | 179 |
-| branch | `cost` | 187 |
+| branch | `!finding.stepId` | 51 |
+| branch | `!el` | 124 |
+| branch | `validating` | 141 |
+| branch | `errorText` | 144 |
+| branch | `!validation && !validating && !errorText` | 157 |
+| empty | `validation && errors.length === 0 && !checkFailed` | 167 |
+| branch | `errors.length > 0` | 174 |
+| branch | `warnings.length > 0` | 182 |
+| branch | `cost` | 190 |
 
 ### `modules/workflow/components/builder/RefInsertMenu`
 
@@ -4473,16 +4473,16 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!step.server` | 230 |
-| branch | `serverId` | 231 |
-| branch | `!useGenerated \|\| !spec` | 304 |
-| branch | `!key \|\| !spec.fields.some(f => f.name === key)` | 306 |
-| branch | `blockingFailure` | 345 |
-| branch | `isRetryableFailure(blockingFailure)` | 355 |
-| branch | `usePicker` | 377 |
-| branch | `v === (step.tool ?? '')` | 388 |
-| branch | `useGenerated && spec` | 412 |
-| empty | `rows.length === 0` | 437 |
+| branch | `!step.server` | 249 |
+| branch | `serverId` | 250 |
+| branch | `!useGenerated \|\| !spec` | 323 |
+| branch | `!key \|\| !spec.fields.some(f => f.name === key)` | 325 |
+| branch | `blockingFailure` | 364 |
+| branch | `isRetryableFailure(blockingFailure)` | 374 |
+| branch | `usePicker` | 396 |
+| branch | `v === (step.tool ?? '')` | 407 |
+| branch | `useGenerated && spec` | 433 |
+| empty | `rows.length === 0` | 458 |
 
 ### `modules/workflow/components/builder/WorkflowBuilderPage`
 
@@ -4490,14 +4490,14 @@ Required states: `delayed`, `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!canAccess` | 43 |
-| branch | `!canAccess` | 101 |
-| branch | `deletedExternally` | 119 |
-| error | `loadError` | 128 |
-| loading | `loading` | 136 |
-| branch | `isEdit` | 154 |
-| branch | `existingName` | 155 |
-| branch | `dirty` | 173 |
+| branch | `!canAccess` | 42 |
+| branch | `!canAccess` | 99 |
+| branch | `deletedExternally` | 117 |
+| error | `loadError` | 126 |
+| loading | `loading` | 134 |
+| branch | `isEdit` | 152 |
+| branch | `existingName` | 153 |
+| branch | `dirty` | 171 |
 
 ### `modules/workflow/components/builder/WorkflowInputsEditor`
 

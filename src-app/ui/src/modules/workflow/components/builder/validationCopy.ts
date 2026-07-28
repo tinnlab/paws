@@ -178,7 +178,7 @@ const HUMAN_COPY: Record<string, CopyFn> = {
 /**
  * Every code this module can say in human language.
  *
- * Two consumers: `humaniseInstallError` below (it only rewrites a save/install
+ * Two consumers: `describeRequestError` below (it only rewrites a save/install
  * failure whose code it actually has copy for) and the drift test in this
  * directory (which asserts none of the copy leaks wire vocabulary).
  */
@@ -328,15 +328,20 @@ export function findingStepTitle(a: AttributedFinding): string {
 // humanises. But the SAVE path does not: `validate_for_install` collapses the
 // FIRST blocking finding into an `AppError` whose message is the wire string
 //     [semantic/WORKFLOW_PROMPT_MISSING] agent_1: step has neither prompt: nor prompt_file:
-// and the store re-throws it verbatim. That string is reachable whenever the
-// panel's `validation` is absent or stale — a never-validated workflow, a
-// transient `/validate-def` failure (the store deliberately KEEPS the prior
-// result), the debounce race, or the `prompt_file:` divergence between
-// `/validate-def` (temp dir) and install (the real bundle root).
+// That string is reachable whenever the panel's `validation` is absent or stale
+// — a never-validated workflow, a transient `/validate-def` failure (the store
+// deliberately KEEPS the prior result), the debounce race, or the
+// `prompt_file:` divergence between `/validate-def` (temp dir) and install (the
+// real bundle root).
 //
 // So the same humanisation is applied here, by re-deriving a `ValidationError`
 // from that formatted string. INV-1 is a property of the SURFACE, not of one
 // code path.
+//
+// ONE BOUNDARY: the STORE calls `describeRequestError` when it catches the
+// failure, and stores the sentence. Every renderer (the panel's Alert, the
+// page's toast) shows `store.error` as-is. Humanising a second time is not
+// harmless — see the warning on `describeRequestError`.
 // ---------------------------------------------------------------------------
 
 /** The pieces `validate_for_install` packs into its `AppError` message. */
@@ -368,14 +373,25 @@ export function parseInstallError(raw: string): ParsedInstallError | null {
   return { layer, code, location: null, message: rest }
 }
 
+/** Which finding a humanised failure came from, when it came from one. */
+export interface FindingIdentity {
+  code: string
+  location: string | null
+}
+
 /**
  * The humanised sentence for a raw string that IS a validator finding, else
  * `null` (a network failure, a name collision, a code with no copy yet).
+ *
+ * It also returns WHICH finding it restated, because the failure outlives the
+ * condition: a save rejected by `validate_for_install` keeps its message on
+ * screen after the author fixes the step, so the store needs to recognise that
+ * finding in a later check result to retire it.
  */
 function humaniseValidatorFinding(
   raw: string,
   steps: BuilderStep[],
-): string | null {
+): { text: string; identity: FindingIdentity } | null {
   const parsed = parseInstallError(raw)
   if (!parsed) return null
   if (!HUMANISED_CODES.includes(parsed.code)) return null
@@ -386,9 +402,12 @@ function humaniseValidatorFinding(
     ...(parsed.location != null ? { location: parsed.location } : {}),
   } as ValidationError
   const [attributed] = attributeFindings([finding], steps)
-  return attributed.stepId
-    ? `${findingStepTitle(attributed)}: ${attributed.text}`
-    : attributed.text
+  return {
+    text: attributed.stepId
+      ? `${findingStepTitle(attributed)}: ${attributed.text}`
+      : attributed.text,
+    identity: { code: parsed.code, location: parsed.location },
+  }
 }
 
 // ── the OTHER half of the save/validate boundary: transport failures ────────
@@ -455,6 +474,14 @@ function tidyMachineText(raw: string): string {
     : oneLine
 }
 
+/** A failure, as the author should read it — plus its provenance. */
+export interface DescribedRequestError {
+  /** The person-facing sentence. */
+  text: string
+  /** The validator finding it restates, or `null` when it is not one. */
+  finding: FindingIdentity | null
+}
+
 /**
  * The person-facing sentence for ANY save/validate failure.
  *
@@ -467,12 +494,19 @@ function tidyMachineText(raw: string): string {
  *
  * `fallback` lets the caller name the act that failed ("could not be saved" vs
  * "could not be checked"); it is only reached when nothing else is readable.
+ *
+ * APPLY THIS EXACTLY ONCE, at the store. Step 3 CLIPS machine text at
+ * `MAX_ERROR_CHARS`, which is right for a response body and wrong for a
+ * sentence this module itself wrote — so a second pass over an
+ * already-humanised message silently truncates correct copy. The store is the
+ * single boundary (`WorkflowBuilder.store.ts` writes `error`); the panel and
+ * the page render what it stored, verbatim.
  */
-export function humaniseRequestError(
+export function describeRequestError(
   error: unknown,
   steps: BuilderStep[],
   fallback: string = GENERIC_REQUEST_FAILURE,
-): string {
+): DescribedRequestError {
   const raw =
     typeof error === 'string'
       ? error
@@ -481,31 +515,26 @@ export function humaniseRequestError(
         : ''
 
   const asFinding = humaniseValidatorFinding(raw, steps)
-  if (asFinding) return asFinding
+  if (asFinding) return { text: asFinding.text, finding: asFinding.identity }
 
   const fromMessage = HTTP_ERROR_RE.exec(raw)?.[1]
   const status = statusOf(error) ?? (fromMessage ? Number(fromMessage) : null)
   if (status != null) {
     const sentence = statusSentence(status)
-    if (sentence) return sentence
+    if (sentence) return { text: sentence, finding: null }
   }
 
   // An `HTTP error!` string whose status told us nothing is still a machine
   // artefact wrapped around a response body — do not paste it.
-  if (HTTP_ERROR_RE.test(raw)) return fallback
-  return tidyMachineText(raw) || fallback
+  if (HTTP_ERROR_RE.test(raw)) return { text: fallback, finding: null }
+  return { text: tidyMachineText(raw) || fallback, finding: null }
 }
 
-/**
- * The person-facing sentence for a save/install failure STRING (the shape the
- * store persists in `error`). Thin wrapper over `humaniseRequestError` so the
- * panel, which only ever sees the stored string, gets the same treatment.
- *
- * Idempotent: an already-humanised sentence passes through unchanged.
- */
-export function humaniseInstallError(
-  raw: string,
+/** `describeRequestError`'s sentence, for callers that need nothing else. */
+export function humaniseRequestError(
+  error: unknown,
   steps: BuilderStep[],
+  fallback: string = GENERIC_REQUEST_FAILURE,
 ): string {
-  return humaniseRequestError(raw, steps)
+  return describeRequestError(error, steps, fallback).text
 }

@@ -108,6 +108,7 @@ describe('createValidateRunner — the two ordering rules of a validation run', 
       validation: null,
       error: null,
       errorSource: null,
+      errorFinding: null,
     }
     const run = createValidateRunner({
       getDef: () => emptyDef(),
@@ -213,6 +214,86 @@ describe('createValidateRunner — the two ordering rules of a validation run', 
     expect(slice.error).not.toMatch(/HTTP error!/)
     expect(slice.error).not.toMatch(/[<>]/)
     expect(slice.validating).toBe(false)
+  })
+
+  it('retires a save failure once the finding it described is GONE', async () => {
+    // The sequence this fixes: Save is rejected by
+    //   [semantic/WORKFLOW_PROMPT_MISSING] agent_1: step has neither prompt: …
+    // → the author FIXES the prompt → the next check comes back clean → the
+    // panel says "No blocking errors." with the save alert still above it,
+    // stating something the author has already dealt with. Nothing retired it
+    // until they happened to press Save again.
+    const { slice, run } = harness(async () => RESULT_A)
+    slice.error =
+      'Step 1 · Research the topic: This step needs a task description — say what the assistant should do.'
+    slice.errorSource = 'save'
+    slice.errorFinding = { code: 'WORKFLOW_PROMPT_MISSING', location: 'agent_1' }
+
+    await run()
+
+    expect(
+      slice.error,
+      'a save failure whose finding the author has fixed stayed on screen, above a green "No blocking errors."',
+    ).toBeNull()
+    expect(slice.errorSource).toBeNull()
+    expect(slice.errorFinding).toBeNull()
+  })
+
+  it('KEEPS a save failure while its finding is still reported', async () => {
+    const stillBroken = {
+      errors: [
+        {
+          layer: 'semantic',
+          code: 'WORKFLOW_PROMPT_MISSING',
+          message: 'step has neither prompt: nor prompt_file:',
+          location: 'agent_1',
+        },
+      ],
+      warnings: [],
+      cost_estimate: null,
+    } as unknown as ValidateDefResponse
+    const { slice, run } = harness(async () => stillBroken)
+    const msg =
+      'Step 1 · Research the topic: This step needs a task description — say what the assistant should do.'
+    slice.error = msg
+    slice.errorSource = 'save'
+    slice.errorFinding = { code: 'WORKFLOW_PROMPT_MISSING', location: 'agent_1' }
+
+    await run()
+
+    expect(slice.error, 'the save failure was retired while still true').toBe(msg)
+    expect(slice.errorSource).toBe('save')
+  })
+
+  it('matches on LOCATION too — the same code on another step is not the same claim', async () => {
+    // The stored sentence names step 1 ("Step 1 · Research the topic: …"). A
+    // check that reports the same code against step 2 means step 1's problem is
+    // gone, so that sentence is now false and must go — the live step-2 finding
+    // is rendered by the panel's own list, in its own words.
+    const otherStep = {
+      errors: [
+        {
+          layer: 'semantic',
+          code: 'WORKFLOW_PROMPT_MISSING',
+          message: 'step has neither prompt: nor prompt_file:',
+          location: 'summarize',
+        },
+      ],
+      warnings: [],
+      cost_estimate: null,
+    } as unknown as ValidateDefResponse
+    const { slice, run } = harness(async () => otherStep)
+    slice.error = 'Step 1 · Research the topic: This step needs a task description — say what the assistant should do.'
+    slice.errorSource = 'save'
+    slice.errorFinding = { code: 'WORKFLOW_PROMPT_MISSING', location: 'agent_1' }
+
+    await run()
+
+    expect(
+      slice.errorSource,
+      'a sentence naming step 1 survived a check in which step 1 is clean',
+    ).toBeNull()
+    expect(slice.error).toBeNull()
   })
 
   it('a failed check does not clobber a save failure already on screen', async () => {
