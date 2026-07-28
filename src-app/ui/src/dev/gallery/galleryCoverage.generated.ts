@@ -417,6 +417,7 @@ export const GALLERY_SURFACES = [
   "modules/workflow/components/builder/SandboxStepForm",
   "modules/workflow/components/builder/StepConfigPanel",
   "modules/workflow/components/builder/StepList",
+  "modules/workflow/components/builder/ToolArgumentsForm",
   "modules/workflow/components/builder/ToolStepForm",
   "modules/workflow/components/builder/WorkflowBuilderPage",
   "modules/workflow/components/builder/WorkflowInputsEditor",

@@ -8,6 +8,11 @@ import {
   type StepKind,
   createStep,
 } from '../components/builder/stepForms'
+import {
+  type FindingIdentity,
+  describeRequestError,
+  humaniseRequestError,
+} from '../components/builder/validationCopy'
 
 // ---------------------------------------------------------------------------
 // PRIVATE, per-instance store backing ONE builder editing session (ITEM-6).
@@ -64,6 +69,157 @@ export function toWorkflowDef(def: BuilderDef): WorkflowDef {
 
 const VALIDATE_DEBOUNCE_MS = 400
 
+/** Which act owns the message currently in `error`. The two acts fail
+ *  independently and at different times, so a run of one must never retire —
+ *  or overwrite — the other's failure. */
+export type ErrorSource = 'save' | 'validate' | null
+
+const SAVE_FAILURE_FALLBACK = 'The workflow could not be saved — try again.'
+const VALIDATE_FAILURE_FALLBACK =
+  'The workflow could not be checked — try again.'
+
+/** The slice of builder state one validation run writes. */
+export interface ValidationSlice {
+  validating: boolean
+  validation: ValidateDefResponse | null
+  error: string | null
+  errorSource: ErrorSource
+  /** The validator finding `error` restates, when it restates one. See
+   *  `findingStillPresent` — it is how a message about a condition the author
+   *  has since FIXED gets retired. */
+  errorFinding: FindingIdentity | null
+}
+
+/**
+ * Codes `POST /validate-def` is structurally UNABLE to decide, so its silence
+ * about them is not evidence of anything.
+ *
+ * A draft has no materialized bundle, so the def-validation endpoint skips the
+ * `prompt_file:` existence/confinement half entirely (see `check_prompt_files`
+ * in `server/src/modules/workflow/validate.rs`). Only the SAVE path, which
+ * validates against the real bundle root, can reach a verdict on these. Reading
+ * "the check did not report it" as "the author fixed it" would retire a true
+ * save failure the moment the author touched any field — exactly the
+ * nothing-was-fixed retirement this rule exists to prevent.
+ */
+const UNDECIDABLE_BY_DEF_CHECK: readonly string[] = [
+  'WORKFLOW_PROMPT_FILE_MISSING',
+  'WORKFLOW_PROMPT_FILE_ESCAPE',
+]
+
+/**
+ * Is the finding a stored failure describes still among the blocking findings
+ * of a fresh check?
+ *
+ * `validate_for_install` collapses the FIRST blocking finding into the save
+ * error, so a save failure is a claim about one specific finding. Once a later
+ * check no longer reports that finding, the claim is provably false — and it
+ * would otherwise sit above a green "No blocking errors." until the author
+ * happened to press Save again.
+ *
+ * Two things make "the check no longer reports it" weaker evidence than it
+ * looks, and both resolve the SAME way — keep the message:
+ *
+ * 1. the check may not be able to answer the question at all
+ *    (`UNDECIDABLE_BY_DEF_CHECK`);
+ * 2. the stored `location` may have been GUESSED out of the save error's
+ *    message rather than sent by the backend (`FindingIdentity.locationCertain`)
+ *    — a location-less `workflow.yaml: …` finding parses as
+ *    `location: "workflow.yaml"` and would never match the structured result's
+ *    absent location, retiring the error on the first check with nothing fixed.
+ *
+ * Retirement is only ever taken on PROOF; every uncertainty leaves the author's
+ * message where it is (at worst until they press Save again).
+ */
+function findingStillPresent(
+  result: ValidateDefResponse,
+  finding: FindingIdentity,
+): boolean {
+  if (UNDECIDABLE_BY_DEF_CHECK.includes(finding.code)) return true
+  const errors = result.errors ?? []
+  if (!finding.locationCertain) {
+    return errors.some(e => e.code === finding.code)
+  }
+  return errors.some(
+    e => e.code === finding.code && (e.location ?? null) === finding.location,
+  )
+}
+
+export interface ValidateRunnerDeps {
+  getDef: () => BuilderDef
+  request: (def: WorkflowDef) => Promise<ValidateDefResponse>
+  apply: (mutate: (d: ValidationSlice) => void) => void
+}
+
+/**
+ * The validation run, with its two ordering rules — extracted so both are
+ * directly testable (the store itself is a `defineLocalStore`, reachable only
+ * through a React hook).
+ *
+ * 1. **Only the newest run may write.** Validation is debounced AND fired
+ *    directly (mount, save), so two requests are routinely in flight; an older
+ *    response landing last used to overwrite the newer result — which drives
+ *    the findings panel, the step list's invalid markers AND the Save gate.
+ * 2. **A run clears only the error validation itself owns — plus a save error
+ *    it can PROVE is spent.** A successful check says nothing about a failed
+ *    SAVE, so blanking `error` wholesale made the save/install failure
+ *    self-erase (and the green "No blocking errors." return) while the workflow
+ *    was still unsaved. Symmetrically, a failed check does not overwrite a save
+ *    failure. The ONE exception: when the save failure restated a specific
+ *    validator finding and a fresh check no longer reports that finding, the
+ *    author has fixed exactly the thing the message describes — leaving it on
+ *    screen (above a green "No blocking errors.") states something provably
+ *    untrue. A save error that is NOT a validator finding (a name collision, a
+ *    502, "give the workflow a name") is untouched: a successful check proves
+ *    nothing about those.
+ */
+export function createValidateRunner(
+  deps: ValidateRunnerDeps,
+): () => Promise<void> {
+  let issued = 0
+  return async () => {
+    const seq = ++issued
+    const def = deps.getDef()
+    deps.apply(d => {
+      d.validating = true
+    })
+    try {
+      const result = await deps.request(toWorkflowDef(def))
+      if (seq !== issued) return // a newer run has already answered
+      deps.apply(d => {
+        d.validation = result
+        d.validating = false
+        const spentSaveError =
+          d.errorSource === 'save' &&
+          !!d.errorFinding &&
+          !findingStillPresent(result, d.errorFinding)
+        if (d.errorSource === 'validate' || spentSaveError) {
+          d.error = null
+          d.errorSource = null
+          d.errorFinding = null
+        }
+      })
+    } catch (error) {
+      if (seq !== issued) return // a newer run has already answered
+      deps.apply(d => {
+        d.validating = false
+        // Keep the prior validation rather than blanking it on a transient
+        // failure; surface the error so Save isn't silently stuck — unless a
+        // save failure is already on screen, which outranks it.
+        if (d.errorSource === 'save') return
+        const described = describeRequestError(
+          error,
+          def.steps,
+          VALIDATE_FAILURE_FALLBACK,
+        )
+        d.error = described.text
+        d.errorSource = 'validate'
+        d.errorFinding = described.finding
+      })
+    }
+  }
+}
+
 export const WorkflowBuilderStoreDef = defineLocalStore({
   immer: true,
   state: {
@@ -79,7 +235,14 @@ export const WorkflowBuilderStoreDef = defineLocalStore({
     saving: false,
     loading: false,
     loadError: null as string | null,
+    /** The author-facing failure sentence. This store is the SINGLE place a
+     *  raw failure is turned into copy (`describeRequestError`); the panel and
+     *  the page render this string verbatim. */
     error: null as string | null,
+    /** Which act `error` belongs to — see `createValidateRunner`. */
+    errorSource: null as ErrorSource,
+    /** The validator finding `error` restates, when it restates one. */
+    errorFinding: null as FindingIdentity | null,
     /** Flipped when the workflow being edited is deleted on another device. */
     deletedExternally: false,
   },
@@ -89,27 +252,11 @@ export const WorkflowBuilderStoreDef = defineLocalStore({
     // instance, so this timer never leaks across concurrent builders).
     let validateTimer: ReturnType<typeof setTimeout> | null = null
 
-    const runValidate = async () => {
-      const def = get().def
-      set(d => {
-        d.validating = true
-      })
-      try {
-        const result = await ApiClient.Workflow.validateDef(toWorkflowDef(def))
-        set(d => {
-          d.validation = result
-          d.validating = false
-        })
-      } catch (error) {
-        set(d => {
-          d.validating = false
-          // Keep the prior validation rather than blanking it on a transient
-          // failure; surface the error so Save isn't silently stuck.
-          d.error =
-            error instanceof Error ? error.message : 'Failed to validate workflow'
-        })
-      }
-    }
+    const runValidate = createValidateRunner({
+      getDef: () => get().def,
+      request: def => ApiClient.Workflow.validateDef(def),
+      apply: set,
+    })
 
     const scheduleValidate = () => {
       if (validateTimer) clearTimeout(validateTimer)
@@ -151,6 +298,8 @@ export const WorkflowBuilderStoreDef = defineLocalStore({
           d.validation = null
           d.loadError = null
           d.error = null
+          d.errorSource = null
+          d.errorFinding = null
           d.deletedExternally = false
         })
       },
@@ -189,10 +338,23 @@ export const WorkflowBuilderStoreDef = defineLocalStore({
         } catch (error) {
           set(d => {
             d.loading = false
-            d.loadError =
-              error instanceof Error
-                ? error.message
-                : 'Failed to load workflow definition'
+            // The LOAD boundary humanises through the same one place every
+            // other failure surface does. `error.message` here is the generated
+            // api-client's `HTTP error! status: 502 - <the whole response body>`
+            // — routinely a full HTML error page, which the page renders into
+            // `ErrorState`'s details. There is no definition to attribute a
+            // finding against yet (the load is what failed), so no steps.
+            //
+            // `boundary: 'read'` because opening a workflow is NOT a change:
+            // the mutation copy ("the server rejected this change", "permission
+            // to make this change") describes an act the author never
+            // performed. It also lets the 400 this endpoint really answers with
+            // — a stored workflow.yaml that no longer deserializes — keep the
+            // server's "which step/field" diagnostic instead of discarding it.
+            d.loadError = humaniseRequestError(error, [], {
+              boundary: 'read',
+              fallback: 'This workflow could not be opened — try again.',
+            })
           })
         }
       },
@@ -296,12 +458,16 @@ export const WorkflowBuilderStoreDef = defineLocalStore({
           const msg = 'Give the workflow a name before saving'
           set(d => {
             d.error = msg
+            d.errorSource = 'save'
+            d.errorFinding = null
           })
           throw new Error(msg)
         }
         set(d => {
           d.saving = true
           d.error = null
+          d.errorSource = null
+          d.errorFinding = null
         })
         try {
           const payload = toWorkflowDef(def)
@@ -333,14 +499,26 @@ export const WorkflowBuilderStoreDef = defineLocalStore({
               : {}
           const isNameCollision =
             errObj.error_code === 'WORKFLOW_NAME_EXISTS' || errObj.status === 409
-          const msg = isNameCollision
-            ? `A workflow named '${trimmedName || 'this'}' already exists — choose a different name`
-            : error instanceof Error
-              ? error.message
-              : 'Failed to save workflow'
+          // NEVER `error.message`: the api-client formats a transport failure as
+          // `HTTP error! status: 502 - <the whole response body>`, which would
+          // land verbatim in the Alert title AND the page toast. This is the
+          // ONE humanisation boundary — what lands in `error` is what the panel
+          // and the toast show, unchanged.
+          const described = isNameCollision
+            ? {
+                text: `A workflow named '${trimmedName || 'this'}' already exists — choose a different name`,
+                finding: null,
+              }
+            : describeRequestError(error, def.steps, SAVE_FAILURE_FALLBACK)
+          const msg = described.text
           set(d => {
             d.saving = false
             d.error = msg
+            d.errorSource = 'save'
+            // When the save was rejected by a specific validator finding, keep
+            // hold of WHICH — a later successful check retires the message once
+            // the author has fixed it.
+            d.errorFinding = described.finding
           })
           // Re-throw a friendly Error so the page toast shows the actionable
           // message (the page surfaces `e.message`).

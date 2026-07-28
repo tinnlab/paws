@@ -11,11 +11,14 @@ import type {
   DryRunResult,
   SSEElicitationRequiredData,
   TestRunResponse,
+  Tool,
   ValidateDefResponse,
   Workflow,
 } from '@/api-client/types'
 import type { ModuleGallery } from '@/dev/gallery/support'
 import { holdPatch, lazyBound, lazyNamed, lazyProps } from '@/dev/gallery/support'
+import type { BuilderStep } from './components/builder/stepForms'
+import { HUMANISED_CODES } from './components/builder/validationCopy'
 import type { BuilderDef } from './stores/WorkflowBuilder.store'
 import { workflowCassette } from '@/dev/gallery/fixtures/workflow'
 import { llmGroupsList } from '@/dev/gallery/fixtures/llm-providers'
@@ -227,11 +230,19 @@ const arrayEmptySurface = lazy(async () => {
 })
 
 // ── Builder + agent-timeline fixtures (ITEM-7/9) ────────────────────────────
+//
+// Every fixture below is TYPED against the generated api-client (`BuilderStep`
+// = `StepBase & StepDef`, `Tool`, `ValidateDefResponse`) rather than written as
+// an untyped literal, so a backend shape change breaks the build here instead of
+// silently leaving the gallery showing a state the server can no longer produce.
+
+type AgentStep = Extract<BuilderStep, { kind: 'agent' }>
+type ToolStep = Extract<BuilderStep, { kind: 'tool' }>
 
 /** A representative, fully-populated agent step: a plain-language task, two
  *  selected capabilities, Balanced effort (max_steps 30), Text output, and a
  *  system directive — the centrepiece the friendly agent form renders. */
-const agentStepFixture = {
+const agentStepFixture: AgentStep = {
   id: 'agent_1',
   kind: 'agent',
   description: 'Research the topic',
@@ -244,9 +255,134 @@ const agentStepFixture = {
   output_format: 'text',
 }
 
-/** A representative 4-step workflow (agent → llm → elicit → sandbox) so the
- *  populated builder shows real-data master/detail layout. */
-const builderFourStepDef = {
+/** A tool step pointing at a server that is NOT in the author's accessible set —
+ *  the input to the documented hand-entry fallback (INV-6). Its arguments are
+ *  free key/value rows: a literal, a `{{ }}` reference, and a boolean. */
+const toolStepFixture: ToolStep = {
+  id: 'tool_1',
+  kind: 'tool',
+  description: 'Look up the trial registry',
+  depends_on: ['agent_1'],
+  server: 'literature_search',
+  tool: 'search_trials',
+  arguments: {
+    query: 'CRISPR base editing',
+    limit: '{{ inputs.since_year }}',
+    legacy_flag: true,
+  },
+}
+
+// ── The RESOLVED tool-step path (INV-3 + INV-4) ─────────────────────────────
+//
+// The primary state needs a server the builder can actually resolve, so the Tool
+// field renders as a POPULATED PICKER and the arguments form is generated from
+// the picked tool's declared schema. `ToolStepForm` resolves the step's server
+// NAME against `McpServer.servers` and then fetches
+// `GET /api/mcp/servers/{id}/tools`, so the fixture has to satisfy BOTH halves:
+//   - the name must be one the shared crawl cassette makes accessible
+//     (`McpServer.listAccessible` seeds `weather-api` + `fetch`);
+//   - `McpServerRuntime.listTools` must be in this module's cassette (below).
+// If the crawl fixture ever drops that server the surface degrades VISIBLY to
+// the stated-reason alert rather than silently rendering the escape hatch.
+
+/** A server name the shared crawl cassette really makes accessible. */
+const RESOLVABLE_SERVER = 'weather-api'
+
+/** The declared input schema of `get_forecast`, as a real MCP server returns it
+ *  — a required string, an optional integer with a default, a boolean, and a
+ *  closed enum — so the generated form shows one typed control per kind. */
+const forecastInputSchema = {
+  type: 'object',
+  required: ['location'],
+  properties: {
+    location: {
+      type: 'string',
+      title: 'Location',
+      description: 'City, region or coordinates to forecast.',
+    },
+    days: {
+      type: 'integer',
+      description: 'How many days ahead to forecast.',
+      default: 3,
+    },
+    include_hourly: {
+      type: 'boolean',
+      description: 'Include an hour-by-hour breakdown.',
+    },
+    units: {
+      type: 'string',
+      enum: ['metric', 'imperial'],
+      description: 'Unit system for the returned values.',
+    },
+  },
+}
+
+/** What `GET /api/mcp/servers/{id}/tools` answers for the tool-step surfaces —
+ *  several tools so the picker has something to search, the first carrying the
+ *  four-shape schema above. */
+const resolvableServerTools: Tool[] = [
+  {
+    name: 'get_forecast',
+    description: 'Daily forecast for a place',
+    input_schema: forecastInputSchema,
+  },
+  {
+    name: 'get_current_conditions',
+    description: 'Current conditions for a place',
+    input_schema: {
+      type: 'object',
+      required: ['location'],
+      properties: { location: { type: 'string', title: 'Location' } },
+    },
+  },
+  {
+    name: 'list_stations',
+    description: 'Weather stations near a place',
+    input_schema: {
+      type: 'object',
+      properties: {
+        location: { type: 'string', title: 'Location' },
+        radius_km: { type: 'integer', default: 50 },
+      },
+    },
+  },
+]
+
+/** A CORRECTLY-CONFIGURED tool step on a resolvable server: the picked tool
+ *  declares a schema, so each declared property gets its own typed control — a
+ *  literal for `location`, a `{{ }}` reference in the NUMBER field (the case a
+ *  typed control cannot hold, so it renders as template text with a way back),
+ *  a boolean, and one schema-undeclared key that must survive editing (DEC-6). */
+const resolvedToolStepFixture: ToolStep = {
+  id: 'tool_1',
+  kind: 'tool',
+  description: 'Look up the forecast',
+  depends_on: [],
+  server: RESOLVABLE_SERVER,
+  tool: 'get_forecast',
+  arguments: {
+    location: 'Detroit, MI',
+    days: '{{ inputs.horizon_days }}',
+    include_hourly: true,
+    legacy_units: 'imperial',
+  },
+}
+
+/** A JUST-ADDED tool step (what `AddStepMenu` produces once a server is picked):
+ *  no tool chosen yet and no arguments — the `ToolStepForm` empty state. */
+const newToolStepFixture: ToolStep = {
+  id: 'tool_1',
+  kind: 'tool',
+  description: '',
+  depends_on: [],
+  server: RESOLVABLE_SERVER,
+  tool: '',
+  arguments: {},
+}
+
+/** A representative 5-step workflow (agent → llm → elicit → sandbox → tool) so
+ *  the populated builder shows real-data master/detail layout. */
+const builderFiveStepDef: BuilderDef = {
   inputs: [
     { name: 'topic', description: 'The research topic', required: true },
     {
@@ -288,8 +424,47 @@ const builderFourStepDef = {
       stdin: null,
       timeout_ms: 30_000,
     },
+    toolStepFixture,
   ],
-} as unknown as BuilderDef
+}
+
+/**
+ * The SAME workflow, genuinely broken in exactly the ways `errorValidation`
+ * describes — because a fixture whose findings contradict its own definition is
+ * a state the real system can never produce, and a reviewer reading it sees a
+ * self-contradictory surface (two steps marked broken whose config is visibly
+ * complete). Each divergence from `builderFiveStepDef` is the precondition of
+ * one finding below:
+ *
+ *  - `agent_1.prompt` is EMPTY          → `WORKFLOW_PROMPT_MISSING` (validate.rs:684)
+ *  - `agent_1.output_format` is `json`  → its output type is Unknown, so a field
+ *    access on it DEGRADES TO A WARNING instead of erroring (type_infer.rs:114 +
+ *    ref_check.rs:361)
+ *  - `summarize.prompt` reads `{{ agent_1.output.title }}` → the access the
+ *    `WORKFLOW_REF_FIELD_UNRESOLVED` warning names actually EXISTS in the def
+ *  - `tool_1.tool` is EMPTY             → `WORKFLOW_TOOL_NO_TOOL` (validate.rs:729)
+ *  - there is a `sandbox` step and no top-level sandbox flavor (`BuilderDef`
+ *    carries none) → `WORKFLOW_SANDBOX_FLAVOR_REQUIRED` (validate.rs:1106)
+ */
+const builderBrokenDef: BuilderDef = {
+  inputs: builderFiveStepDef.inputs,
+  steps: builderFiveStepDef.steps.map(step => {
+    if (step.id === 'agent_1' && step.kind === 'agent') {
+      return { ...step, prompt: '', output_format: 'json' }
+    }
+    if (step.id === 'summarize' && step.kind === 'llm') {
+      return {
+        ...step,
+        prompt:
+          'Summarise the key points from {{ agent_1.output.title }} in five bullets.',
+      }
+    }
+    if (step.id === 'tool_1' && step.kind === 'tool') {
+      return { ...step, tool: '' }
+    }
+    return step
+  }),
+}
 
 /** A clean validation (no errors) with a cost estimate — the populated-builder
  *  happy path. */
@@ -299,28 +474,76 @@ const cleanValidation: ValidateDefResponse = {
   cost_estimate: cannedDryRunResult,
 }
 
-/** A validation with ≥1 error + ≥1 warning + a cost estimate — the panel's
- *  error/warning/cost branches all lit. */
+/** A validation with ≥2 errors + a warning + a whole-workflow finding + a cost
+ *  estimate — every panel branch lit, including the unattributed one.
+ *
+ *  These are REAL backend findings: each `code`/`layer`/`location`/`message`
+ *  quadruple is copied from the emit site named beside it, so what the design
+ *  review sees here is what the server actually produces for `builderBrokenDef`.
+ *  (This fixture previously carried invented codes — `unresolved_reference`,
+ *  layer `graph` — and prose that was ALREADY humanised, which is precisely why
+ *  a design pass over the gallery never saw the raw "step has neither prompt:
+ *  nor prompt_file:" the live app was showing. A fixture that flatters the
+ *  product hides the defect it was built to catch.)
+ *
+ *  The warning's message is NOT hand-shortened: `ref_check.rs:434 render_expr`
+ *  renders the WHOLE `RefExpr` (head + every access), so the quoted expression
+ *  is `agent_1.output.title`, not `agent_1.output` — the loop at `:302` mutates
+ *  its own cursor and never truncates `expr`. */
 const errorValidation: ValidateDefResponse = {
   errors: [
     {
-      code: 'unresolved_reference',
-      layer: 'graph',
-      location: 'summarize',
-      message:
-        'Step "Summarise the findings" references {{ agent_1.output }}, but the agent step produces no named output — give the agent a Structured output or reference its text result.',
+      // validate.rs:684 — `agent_1` has an empty prompt and no prompt_file.
+      code: 'WORKFLOW_PROMPT_MISSING',
+      layer: 'semantic',
+      location: 'agent_1',
+      message: 'step has neither prompt: nor prompt_file:',
+    },
+    {
+      // validate.rs:729 — `tool_1` has an empty tool:.
+      code: 'WORKFLOW_TOOL_NO_TOOL',
+      layer: 'semantic',
+      location: 'tool_1',
+      message: 'tool step has empty tool:',
+    },
+    {
+      // validate.rs:1107 — emitted via `ValidationError::err`, so it carries NO
+      // location: it resolves to no step and renders as "Whole workflow".
+      code: 'WORKFLOW_SANDBOX_FLAVOR_REQUIRED',
+      layer: 'semantic',
+      message: 'workflow has kind: sandbox steps but no top-level sandbox.flavor',
     },
   ],
   warnings: [
     {
-      code: 'long_prompt',
-      layer: 'lint',
-      location: 'agent_1',
+      // ref_check.rs:361-372, reached from `walk_accesses` for the `.title`
+      // access in `summarize.prompt` against `agent_1`'s Unknown json output.
+      code: 'WORKFLOW_REF_FIELD_UNRESOLVED',
+      layer: 'semantic',
+      location: 'summarize.prompt',
       message:
-        'This task prompt is long; consider splitting it into two steps for clearer run progress.',
+        "'agent_1.output.title' accesses field '.title' but the object shape is unknown; cannot type-check (ensure the field exists at runtime)",
+      severity: 'warning',
     },
   ],
   cost_estimate: cannedDryRunResult,
+}
+
+// A GATE, not a comment: every code in the fixture must be one the builder can
+// humanise. `HUMANISED_CODES` is the same registry the backend's
+// `validation_codes_are_registered_and_humanised` test reads, so a fixture code
+// the server can no longer emit (or that lost its human copy) fails LOUDLY at
+// gallery boot instead of quietly rendering the raw wire message — the exact
+// failure mode that let the invented `unresolved_reference` code survive here.
+// It throws for the same reason `mergeModuleCassettes` throws on a collision:
+// the gallery is a review instrument, and a silently wrong instrument is worse
+// than a broken one.
+for (const finding of [...errorValidation.errors, ...errorValidation.warnings]) {
+  if (!HUMANISED_CODES.includes(finding.code)) {
+    throw new Error(
+      `[gallery] workflow validation fixture uses "${finding.code}", which is not in validationCopy.ts's HUMANISED_CODES — either the backend renamed it or the fixture invented it.`,
+    )
+  }
 }
 
 /** The friendly agent form (ITEM-9), populated — a wrapper instantiates the
@@ -336,12 +559,12 @@ const agentFormSurface = lazy(async () => {
   return {
     default: () => {
       const store = WorkflowBuilderStoreDef.use({
-        def: { inputs: [], steps: [agentStepFixture] } as unknown as BuilderDef,
+        def: { inputs: [], steps: [agentStepFixture] },
         selectedStepId: 'agent_1',
       })
       return (
         <div className="max-w-xl p-4">
-          <AgentStepForm store={store} step={agentStepFixture as any} />
+          <AgentStepForm store={store} step={agentStepFixture} />
         </div>
       )
     },
@@ -371,7 +594,7 @@ const populatedBuilderSurface = lazy(async () => {
     default: () => {
       const store = WorkflowBuilderStoreDef.use({
         name: 'CRISPR literature digest',
-        def: builderFourStepDef,
+        def: builderFiveStepDef,
         selectedStepId: 'agent_1',
         validation: cleanValidation,
       })
@@ -393,6 +616,141 @@ const populatedBuilderSurface = lazy(async () => {
   }
 })
 
+/**
+ * The tool step's PRIMARY state (INV-3 + INV-4) — the one a design review has to
+ * be able to look at: a resolvable server, so the Tool field is a real PICKER
+ * over that server's tools, and a picked tool that declares a schema, so each
+ * property gets its own typed control (required string / integer with a default
+ * / boolean / closed enum) plus a `{{ }}` reference held in the number field and
+ * one schema-undeclared key kept alive under "Additional arguments".
+ *
+ * Rendered through the real `StepConfigPanel` with the TOOL step selected, so
+ * this is genuinely `StepConfigPanel → ToolStepForm → ToolArgumentsForm` — the
+ * production path, not a hand-assembled sub-component. Nothing is stubbed: the
+ * catalog store fetches `McpServerRuntime.listTools` through the mock API from
+ * this module's cassette, and every control commits into the builder store, so
+ * the generated fields and the DEC-5 back-to-a-typed-control button are LIVE.
+ */
+const toolStepSchemaSurface = lazy(async () => {
+  const { WorkflowBuilderStoreDef } = await import(
+    '@/modules/workflow/stores/WorkflowBuilder.store'
+  )
+  const { StepConfigPanel } = await import(
+    '@/modules/workflow/components/builder/StepConfigPanel'
+  )
+  return {
+    default: () => {
+      const store = WorkflowBuilderStoreDef.use({
+        def: {
+          inputs: [
+            {
+              name: 'horizon_days',
+              description: 'How many days ahead to look',
+              required: false,
+              default: 3,
+            },
+          ],
+          steps: [resolvedToolStepFixture],
+        },
+        selectedStepId: 'tool_1',
+      })
+      return (
+        <div className="max-w-xl p-4">
+          <StepConfigPanel store={store} />
+        </div>
+      )
+    },
+  }
+})
+
+/** A JUST-ADDED tool step: the server is chosen but no tool is picked yet, so
+ *  the picker sits at its placeholder, no schema-generated form exists, and the
+ *  arguments list shows its "No arguments" empty row — the state an author is in
+ *  the moment they add the step. */
+const toolStepNewSurface = lazy(async () => {
+  const { WorkflowBuilderStoreDef } = await import(
+    '@/modules/workflow/stores/WorkflowBuilder.store'
+  )
+  const { ToolStepForm } = await import(
+    '@/modules/workflow/components/builder/ToolStepForm'
+  )
+  return {
+    default: () => {
+      const store = WorkflowBuilderStoreDef.use({
+        def: { inputs: [], steps: [newToolStepFixture] },
+        selectedStepId: 'tool_1',
+      })
+      return (
+        <div className="max-w-xl p-4">
+          <ToolStepForm store={store} step={newToolStepFixture} />
+        </div>
+      )
+    },
+  }
+})
+
+/** The tool step's documented FALLBACK (INV-6): the step points at a server that
+ *  is not in the author's accessible set, so the tool name + arguments are
+ *  entered by hand — with a stated reason, never a silently empty picker. */
+const toolStepFallbackSurface = lazy(async () => {
+  const { WorkflowBuilderStoreDef } = await import(
+    '@/modules/workflow/stores/WorkflowBuilder.store'
+  )
+  const { ToolStepForm } = await import(
+    '@/modules/workflow/components/builder/ToolStepForm'
+  )
+  return {
+    default: () => {
+      const store = WorkflowBuilderStoreDef.use({
+        def: { inputs: [], steps: [toolStepFixture] },
+        selectedStepId: 'tool_1',
+      })
+      return (
+        <div className="max-w-xl p-4">
+          <ToolStepForm store={store} step={toolStepFixture} />
+        </div>
+      )
+    },
+  }
+})
+
+/** The builder with PROBLEMS: the step list marks which steps are incomplete
+ *  and the panel names + links to each (INV-2). Two steps are broken for
+ *  DIFFERENT reasons while a THIRD, unrelated step is selected — the owner's
+ *  actual situation, and the state a clean-validation fixture cannot show. */
+const problemBuilderSurface = lazy(async () => {
+  const { WorkflowBuilderStoreDef } = await import(
+    '@/modules/workflow/stores/WorkflowBuilder.store'
+  )
+  const { StepList } = await import(
+    '@/modules/workflow/components/builder/StepList'
+  )
+  const { BuilderValidationPanel } = await import(
+    '@/modules/workflow/components/builder/BuilderValidationPanel'
+  )
+  return {
+    default: () => {
+      const store = WorkflowBuilderStoreDef.use({
+        def: builderBrokenDef,
+        // Deliberately NOT one of the broken steps: a finding must be
+        // actionable from wherever the author happens to be reading it.
+        selectedStepId: 'review',
+        validation: errorValidation,
+      })
+      return (
+        <div className="flex flex-col gap-4 p-4 md:flex-row">
+          <div className="shrink-0 md:w-80">
+            <StepList store={store} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <BuilderValidationPanel store={store} />
+          </div>
+        </div>
+      )
+    },
+  }
+})
+
 /** The builder validation panel with ≥1 error + ≥1 warning + a cost estimate. */
 const validationErrorSurface = lazy(async () => {
   const { WorkflowBuilderStoreDef } = await import(
@@ -403,7 +761,14 @@ const validationErrorSurface = lazy(async () => {
   )
   return {
     default: () => {
-      const store = WorkflowBuilderStoreDef.use({ validation: errorValidation })
+      // The def MUST be seeded alongside the validation: a finding is attributed
+      // by resolving its `location` against the real steps, so a validation-only
+      // fixture renders every finding as "Whole workflow" and silently fails to
+      // exercise the attribution this panel exists to do.
+      const store = WorkflowBuilderStoreDef.use({
+        def: builderBrokenDef,
+        validation: errorValidation,
+      })
       return (
         <div className="max-w-2xl p-4">
           <BuilderValidationPanel store={store} />
@@ -414,7 +779,17 @@ const validationErrorSurface = lazy(async () => {
 })
 
 export const gallery: ModuleGallery = {
-  cassette: workflowCassette,
+  cassette: {
+    ...workflowCassette,
+    // The tool step's PICKER + schema-generated arguments are driven by the real
+    // `ToolCatalogStoreDef.load` → `GET /api/mcp/servers/{id}/tools` path, so the
+    // tool-step surfaces need this endpoint recorded. It is answered for ANY
+    // server id: the surfaces that must NOT resolve point at a server NAME the
+    // accessible list does not contain, so `entryForServerName` short-circuits
+    // before any request is made. (No other module seeds this key — the merge
+    // step throws on a collision.)
+    'McpServerRuntime.listTools': { tools: resolvableServerTools },
+  },
   overlays: [
     {
       slug: 'overlay-group-workflows-assignment',
@@ -720,18 +1095,58 @@ export const gallery: ModuleGallery = {
     // ── Builder — populated (4-step workflow incl. an agent step). ─────────────
     {
       slug: 'seeded-wf-builder-populated',
-      title: 'Workflow builder — populated (4 steps)',
-      note: 'step-list + config-panel + inputs + validation, seeded with agent→llm→elicit→sandbox; agent step selected',
+      title: 'Workflow builder — populated (5 steps)',
+      note: 'step-list + config-panel + inputs + validation, seeded with agent→llm→elicit→sandbox→tool; agent step selected',
       path: '/',
       initialPath: '/',
       fullHeight: true,
       component: populatedBuilderSurface,
     },
+    // ── Builder — steps with problems: per-step invalid markers + attribution.
+    {
+      slug: 'seeded-wf-builder-problems',
+      title: 'Workflow builder — steps with problems',
+      note: 'a genuinely broken def: two steps invalid for different reasons + a whole-workflow finding, with a THIRD step selected — the step list marks the broken ones and each attributed finding names + links to its step',
+      path: '/',
+      initialPath: '/',
+      fullHeight: true,
+      component: problemBuilderSurface,
+    },
+    // ── Builder — tool step: the PRIMARY state (INV-3 + INV-4). ───────────────
+    {
+      slug: 'seeded-wf-builder-tool-schema-form',
+      title: 'Workflow builder — tool step, picker + schema-driven arguments',
+      note: 'StepConfigPanel with the TOOL step selected: a resolvable server, a populated tool picker, and one typed control per declared property (required string, integer with a default, boolean, enum) plus a {{ }} reference held in the NUMBER field and a schema-undeclared key kept alive',
+      path: '/',
+      initialPath: '/',
+      fullHeight: true,
+      component: toolStepSchemaSurface,
+    },
+    // ── Builder — tool step: just added, nothing picked yet. ──────────────────
+    {
+      slug: 'seeded-wf-builder-tool-new',
+      title: 'Workflow builder — tool step, nothing picked yet',
+      note: 'a just-added tool step: server chosen, no tool selected, no generated form, and the "No arguments" empty row',
+      path: '/',
+      initialPath: '/',
+      fullHeight: true,
+      component: toolStepNewSurface,
+    },
+    // ── Builder — tool step: hand-entry fallback (INV-6). ─────────────────────
+    {
+      slug: 'seeded-wf-builder-tool-fallback',
+      title: 'Workflow builder — tool step, server not available',
+      note: 'the documented escape hatch: the step points at a server the author cannot access, so a stated reason + free-text tool name + key/value arguments — never a silently empty picker',
+      path: '/',
+      initialPath: '/',
+      fullHeight: true,
+      component: toolStepFallbackSurface,
+    },
     // ── Builder — validation panel with errors + warnings + cost. ──────────────
     {
       slug: 'seeded-wf-builder-validation-error',
       title: 'Workflow builder — validation errors',
-      note: 'ValidateDefResponse with 1 error + 1 warning + a cost estimate → all panel branches',
+      note: 'ValidateDefResponse with 2 step-attributed errors + an unattributed "Whole workflow" error + a warning + a cost estimate → every panel branch',
       path: '/',
       initialPath: '/',
       fullHeight: true,

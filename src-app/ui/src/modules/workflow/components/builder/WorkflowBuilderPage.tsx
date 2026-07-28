@@ -80,7 +80,16 @@ export function WorkflowBuilderPage() {
         navigate(`${WORKFLOWS_PATH}/${workflow.id}/edit`, { replace: true })
       }
     } catch (e) {
-      message.error(e instanceof Error ? e.message : 'Failed to save workflow')
+      // INV-1 also holds HERE — and it is the STORE that holds it. Save runs the
+      // backend's `validate_for_install`, which collapses the first blocking
+      // finding into the wire string `[semantic/CODE] step_id: message`; the
+      // store rewrites that into the SAME author-facing sentence the panel
+      // shows (naming the step) before it re-throws. So the toast shows the
+      // thrown message as-is: humanising a second time here would push an
+      // already-correct sentence back down the machine-text path, which clips
+      // at 160 chars.
+      const shown = e instanceof Error ? e.message.trim() : ''
+      message.error(shown || 'Failed to save workflow')
     }
   }
 

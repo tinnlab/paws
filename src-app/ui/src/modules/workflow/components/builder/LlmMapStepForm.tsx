@@ -3,8 +3,7 @@ import type { WorkflowBuilderStore } from '../../stores/WorkflowBuilder.store'
 import {
   type BuilderStep,
   MAX_PARALLEL_HARD_CAP,
-  configErrors,
-} from './stepForms'
+  configErrors, promptSuppliedByFile, PROMPT_FROM_FILE_NOTE } from './stepForms'
 import { LabeledControl, PromptField } from './builderFields'
 
 type LlmMapStep = Extract<BuilderStep, { kind: 'llm_map' }>
@@ -18,6 +17,12 @@ interface Props {
 export function LlmMapStepForm({ store, step }: Props) {
   const errors = configErrors(step)
   const patch = (p: Record<string, unknown>) => store.updateStep(step.id, p)
+
+  // A step whose wording comes from `prompt_file:` needs no typed prompt
+  // (validate.rs: WORKFLOW_PROMPT_MISSING fires only when NEITHER is
+  // present). Marking it required anyway is a false statement, and the
+  // only one left on the field — obeying it produces WORKFLOW_PROMPT_BOTH.
+  const fromFile = promptSuppliedByFile(step)
 
   return (
     <div className="flex flex-col gap-4">
@@ -53,10 +58,18 @@ export function LlmMapStepForm({ store, step }: Props) {
         stepId={step.id}
         label="Prompt (per item)"
         value={step.prompt ?? ''}
-        onChange={v => patch({ prompt: v })}
+        // A CLEARED box must become absent, not `""`. The backend reads
+        // `Some("")` as "no typed prompt" (validate.rs: has_prompt filters
+        // empty), so `prompt: "" ` + `prompt_file:` passes validation GREEN —
+        // and then dispatch.rs's load_raw_prompt, which matches only
+        // (Some,None)/(None,Some), fails the RUN with "invalid prompt config".
+        // WORKFLOW_PROMPT_BOTH's copy tells the author to clear this box, so
+        // without this normalisation the builder's own remedy breaks the run.
+        onChange={v => patch({ prompt: v || null })}
         placeholder="Runs once per item. Reference the current item as {{ item }} (or your item-variable name)."
         rows={5}
-        required
+        required={!fromFile}
+        description={fromFile ? PROMPT_FROM_FILE_NOTE : undefined}
         error={errors.prompt}
         testid="wf-builder-map-prompt"
       />
