@@ -377,6 +377,9 @@ test('FIX_ROUND-5: ChatMessage re-resolves rail steps THROUGH withSegmentationSh
 const APPROVAL_SURFACE_WITH_CONTROLS =
   'modules/js-tool/chat-extension/components/JsToolApprovalContent.tsx'
 
+/** The component in that file. Every local guard scopes its AST walk to it. */
+const APPROVAL_COMPONENT = 'JsToolApprovalContent'
+
 /**
  * Every surface these guards cover. A rename must FAIL, not silently pass.
  */
@@ -460,47 +463,281 @@ function attrExpr(el: ts.JsxOpeningLikeElement, name: string): ts.Expression | u
  * argument entirely.
  */
 /**
- * Is `name` a `const` initialised from `elicitationBlockedReason(...)`, and never
- * reassigned?
+ * The shipped component's body. EVERY local guard below scopes its walk to this
+ * node rather than to the whole file.
  *
- * FIX_ROUND-15: the `|| name === fallback` escape this used to end with made the
- * whole check vacuous for the name in use — replacing the classifier with a
- * hand-rolled `const blocked = …` passed, because the identifier was still spelled
- * `blocked`. And without the reassignment check, `let blocked = classifier(); if
- * (!hasTransport) blocked = null` killed the one state that is supposed to
- * disable, with every guard green.
+ * FIX_ROUND-16: file-wide walks were defeated in both directions. A decoy
+ * `resolve` in a dead scope AFTER the component relocated the entire click-gate
+ * guard onto itself (the finder kept the LAST match), so the real, latched gate
+ * passed; and an unrelated helper containing a local named `blocked` FALSE-RED
+ * three tests. Scope answers both by construction.
  */
-function isBlockedReasonBinding(sf: ts.SourceFile, name: string): boolean {
-  let ok = false
-  let reassigned = false
+function componentBody(sf: ts.SourceFile, name: string): ts.Node {
+  const found: ts.Node[] = []
   const walk = (n: ts.Node): void => {
-    if (
-      ts.isVariableDeclaration(n) &&
-      ts.isIdentifier(n.name) &&
-      n.name.getText(sf) === name &&
-      n.initializer &&
-      ts.isCallExpression(n.initializer) &&
-      n.initializer.expression.getText(sf) === 'elicitationBlockedReason'
-    ) {
-      const isConst =
-        ts.isVariableDeclarationList(n.parent) && (n.parent.flags & ts.NodeFlags.Const) !== 0
-      if (isConst) ok = true
-      else reassigned = true
-    }
-    if (
-      ts.isBinaryExpression(n) &&
-      n.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
-      n.left.getText(sf) === name
-    ) {
-      reassigned = true
-    }
+    if (ts.isFunctionDeclaration(n) && n.name?.getText(sf) === name && n.body) found.push(n.body)
     ts.forEachChild(n, walk)
   }
   walk(sf)
-  return ok && !reassigned
+  assert.equal(
+    found.length,
+    1,
+    `${sf.fileName}: expected exactly ONE \`${name}\` function component, found ${found.length}`,
+  )
+  return found[0]
 }
 
-/** Is `name` imported from the core elicitation seam (not a same-named local)? */
+/** Every declaration of `name` inside `scope` (const/let/function/parameter). */
+function declarationsOf(sf: ts.SourceFile, scope: ts.Node, name: string): ts.Node[] {
+  const out: ts.Node[] = []
+  const walk = (n: ts.Node): void => {
+    if (
+      (ts.isVariableDeclaration(n) || ts.isFunctionDeclaration(n) || ts.isParameter(n)) &&
+      n.name?.getText(sf) === name
+    ) {
+      out.push(n)
+    }
+    ts.forEachChild(n, walk)
+  }
+  walk(scope)
+  return out
+}
+
+/** Every `&&` left-operand of the JSX expression containers enclosing `el`. */
+function renderConditions(scope: ts.Node, el: ts.Node): ts.Expression[] {
+  const out: ts.Expression[] = []
+  for (let n: ts.Node | undefined = el; n && n !== scope; n = n.parent) {
+    if (!ts.isJsxExpression(n) || !n.expression) continue
+    let e: ts.Expression = n.expression
+    while (
+      ts.isBinaryExpression(e) &&
+      e.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken
+    ) {
+      out.push(e.left)
+      e = e.right
+    }
+  }
+  return out
+}
+
+/** Is `name` bound by `const [name, setX] = useState(…)` inside `scope`? */
+function isUseStateBinding(sf: ts.SourceFile, scope: ts.Node, name: string): boolean {
+  let ok = false
+  const walk = (n: ts.Node): void => {
+    if (
+      ts.isVariableDeclaration(n) &&
+      n.initializer &&
+      ts.isCallExpression(n.initializer) &&
+      n.initializer.expression.getText(sf) === 'useState' &&
+      ts.isArrayBindingPattern(n.name) &&
+      n.name.elements.length > 0 &&
+      ts.isBindingElement(n.name.elements[0]) &&
+      n.name.elements[0].name.getText(sf) === name
+    ) {
+      ok = true
+    }
+    ts.forEachChild(n, walk)
+  }
+  walk(scope)
+  return ok
+}
+
+/**
+ * The two names the approval controls are themselves keyed on: the in-flight
+ * flag they pass to `loading`, and the decided-outcome const their render gate
+ * tests for `null`.
+ *
+ * FIX_ROUND-16: the click-gate allowlist must name the operands it permits, and
+ * the obvious spelling of `submitting` / `resolved` would have made a pure rename
+ * of either RED — the "punishes a correct refactor, so it gets edited away rather
+ * than obeyed" failure this round is also fixing elsewhere. Deriving both names
+ * from the JSX ties the handler's gate to the control's own rendering, which is
+ * the actual invariant (the handler must act in exactly the states the control
+ * renders actionable) and is rename-proof by construction.
+ */
+function approvalControlNames(
+  sf: ts.SourceFile,
+  scope: ts.Node,
+): { loadingName: string; resolvedName: string } {
+  const control = elements(sf, 'Button').find(el => attr(el, 'disabled') !== undefined)
+  assert.ok(control, 'expected an approval control carrying `disabled`')
+
+  const loading = attrExpr(control, 'loading')
+  assert.ok(
+    loading && ts.isIdentifier(loading) && isUseStateBinding(sf, scope, loading.getText(sf)),
+    `an approval control's \`loading\` must be a bare useState flag, got ` +
+      `\`${loading?.getText(sf) ?? '<absent>'}\` — the kit computes ` +
+      `\`isDisabled = surfaceDisabled || loading\` and swaps \`onClick\` for a ` +
+      `preventDefault, so any richer expression is a second, unguarded disable channel`,
+  )
+
+  const conds = renderConditions(scope, control)
+  assert.equal(
+    conds.length,
+    1,
+    `the approval controls may be gated on exactly ONE render condition, got ` +
+      `[${conds.map(c => c.getText(sf).replace(/\s+/g, ' ')).join(', ')}] — any further ` +
+      `condition un-renders the controls in a state the status region still describes ` +
+      `as answerable, which is strictly worse than disabling them`,
+  )
+  const gate = conds[0]
+  assert.ok(
+    ts.isBinaryExpression(gate) &&
+      gate.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken &&
+      ts.isIdentifier(gate.left) &&
+      gate.right.kind === ts.SyntaxKind.NullKeyword,
+    `the controls' render gate must read \`<decided> === null\`, got ` +
+      `\`${gate.getText(sf).replace(/\s+/g, ' ')}\``,
+  )
+  return {
+    loadingName: (loading as ts.Identifier).getText(sf),
+    resolvedName: (gate as ts.BinaryExpression).left.getText(sf),
+  }
+}
+
+/**
+ * The setter paired with the local that feeds the classifier's `resolveFailed`
+ * signal — derived, never spelled. FIX_ROUND-16: hardcoding `setResolveFailed`
+ * made a behaviour-preserving rename of the state pair RED with the message
+ * "must judge in exactly one place, found 0", which reads as "the judgement was
+ * deleted" when it was renamed.
+ */
+function resolveFailedSetter(sf: ts.SourceFile, scope: ts.Node): string | undefined {
+  let local: string | undefined
+  const findLocal = (n: ts.Node): void => {
+    if (
+      ts.isCallExpression(n) &&
+      n.expression.getText(sf) === 'elicitationBlockedReason' &&
+      n.arguments.length === 1 &&
+      ts.isObjectLiteralExpression(n.arguments[0])
+    ) {
+      for (const p of n.arguments[0].properties) {
+        if (p.name?.getText(sf) !== 'resolveFailed') continue
+        if (ts.isShorthandPropertyAssignment(p)) local = p.name.getText(sf)
+        else if (ts.isPropertyAssignment(p) && ts.isIdentifier(p.initializer)) {
+          local = p.initializer.getText(sf)
+        }
+      }
+    }
+    ts.forEachChild(n, findLocal)
+  }
+  findLocal(scope)
+  if (!local) return undefined
+
+  let setter: string | undefined
+  const findSetter = (n: ts.Node): void => {
+    if (
+      ts.isVariableDeclaration(n) &&
+      n.initializer &&
+      ts.isCallExpression(n.initializer) &&
+      n.initializer.expression.getText(sf) === 'useState' &&
+      ts.isArrayBindingPattern(n.name) &&
+      n.name.elements.length === 2 &&
+      ts.isBindingElement(n.name.elements[0]) &&
+      ts.isBindingElement(n.name.elements[1]) &&
+      n.name.elements[0].name.getText(sf) === local
+    ) {
+      setter = (n.name.elements[1] as ts.BindingElement).name.getText(sf)
+    }
+    ts.forEachChild(n, findSetter)
+  }
+  findSetter(scope)
+  return setter
+}
+
+/** Does this element have visible TEXT children (so it already has a name)? */
+function hasTextChildren(el: ts.JsxOpeningLikeElement): boolean {
+  const parent = el.parent
+  if (!parent || !ts.isJsxElement(parent)) return false
+  return parent.children.some(
+    c =>
+      (ts.isJsxText(c) && c.getText().trim().length > 0) ||
+      (ts.isJsxExpression(c) && !!c.expression),
+  )
+}
+
+/**
+ * Is the classifier's argument built from LIVE signals rather than pinned?
+ *
+ * FIX_ROUND-16: `isBlockedReasonBinding` checked the classifier's CALLEE and
+ * never its arguments, so `elicitationBlockedReason({ hasTransport: false, … })`
+ * passed — `blocked` pins at `'no-transport'`, both controls are permanently
+ * disabled, and the card can never be answered. That is the exact failure mode
+ * this guard family exists for, one token away from the binding it did verify.
+ */
+function isLiveClassifierArg(sf: ts.SourceFile, scope: ts.Node, call: ts.CallExpression): boolean {
+  if (call.arguments.length !== 1) return false
+  const arg = call.arguments[0]
+  if (!ts.isObjectLiteralExpression(arg)) return false
+  const want = ['hasTransport', 'entryExists', 'resolveFailed']
+  const got = arg.properties.map(p => p.name?.getText(sf) ?? '')
+  if (want.length !== got.length || !want.every(w => got.includes(w))) return false
+  for (const p of arg.properties) {
+    // Shorthand (`hasTransport`) is live by definition; an explicit initializer
+    // must not be a literal.
+    if (ts.isShorthandPropertyAssignment(p)) continue
+    if (!ts.isPropertyAssignment(p)) return false
+    const v = p.initializer
+    if (
+      ts.isLiteralExpression(v) ||
+      v.kind === ts.SyntaxKind.TrueKeyword ||
+      v.kind === ts.SyntaxKind.FalseKeyword ||
+      v.kind === ts.SyntaxKind.NullKeyword ||
+      (ts.isPrefixUnaryExpression(v) && ts.isLiteralExpression(v.operand))
+    ) {
+      return false
+    }
+  }
+  // …and the one signal supplied by shorthand must itself be live, not pinned:
+  // `const hasTransport = true` defeats the check above by moving the literal
+  // one statement up.
+  for (const d of declarationsOf(sf, scope, 'hasTransport')) {
+    if (!ts.isVariableDeclaration(d)) return false
+    const init = d.initializer
+    if (!init || !ts.isCallExpression(init)) return false
+    if (init.expression.getText(sf) !== 'hasElicitationTransport') return false
+  }
+  return true
+}
+
+/**
+ * Is `name` a `const` inside `scope`, initialised from a LIVE
+ * `elicitationBlockedReason(...)` call, and declared exactly once?
+ *
+ * FIX_ROUND-15 removed a `|| name === fallback` escape that made this vacuous.
+ * FIX_ROUND-16 removed the file-wide reassignment scan it added in its place:
+ * that branch could not fire for a `const` (the declaration check already
+ * rejects a `let`), so it protected nothing, while REDding on any unrelated
+ * local named `blocked` anywhere in the file.
+ */
+function isBlockedReasonBinding(sf: ts.SourceFile, scope: ts.Node, name: string): boolean {
+  const decls = declarationsOf(sf, scope, name)
+  if (decls.length !== 1) return false
+  const d = decls[0]
+  if (!ts.isVariableDeclaration(d)) return false
+  const isConst =
+    ts.isVariableDeclarationList(d.parent) && (d.parent.flags & ts.NodeFlags.Const) !== 0
+  if (!isConst) return false
+  const init = d.initializer
+  if (!init || !ts.isCallExpression(init)) return false
+  if (init.expression.getText(sf) !== 'elicitationBlockedReason') return false
+  return isLiveClassifierArg(sf, scope, init)
+}
+
+/**
+ * Does `name` resolve to the seam export of the SAME name — no alias, no shadow?
+ *
+ * FIX_ROUND-16: this proved only that an import binding existed, and matched on
+ * `e.name` (the LOCAL binding) while ignoring `e.propertyName` (what was actually
+ * imported). Two tsc-clean evasions followed, each reinstating FIX_ROUND-4
+ * verbatim:
+ *   `elicitationIsError as elicitationIsUnactionable`  — a different predicate,
+ *      identical signature, so `resolve-failed` disables both controls and the
+ *      disable gates its own reset: the card is dead for the life of the mount.
+ *   a component-local `const elicitationIsUnactionable = () => true` shadowing
+ *      the import — the card is permanently unanswerable in every state.
+ * The guard's own comment already claimed to stop both; now it does.
+ */
 function importedFromSeam(sf: ts.SourceFile, name: string): boolean {
   let ok = false
   for (const st of sf.statements) {
@@ -509,14 +746,20 @@ function importedFromSeam(sf: ts.SourceFile, name: string): boolean {
     if (!from.endsWith('core/elicitation/transport')) continue
     const named = st.importClause?.namedBindings
     if (named && ts.isNamedImports(named)) {
-      if (named.elements.some(e => e.name.getText(sf) === name)) ok = true
+      // `propertyName` is set ONLY for `x as y`; requiring it absent is what
+      // rejects an alias that re-points the name at a different export.
+      if (named.elements.some(e => e.propertyName === undefined && e.name.getText(sf) === name)) {
+        ok = true
+      }
     }
   }
-  return ok
+  // A local binding of the same name shadows the import at every call site.
+  return ok && declarationsOf(sf, sf, name).length === 0
 }
 
 function isExactCall(
   sf: ts.SourceFile,
+  scope: ts.Node,
   expr: ts.Expression | undefined,
   predicate: string,
 ): boolean {
@@ -530,36 +773,19 @@ function isExactCall(
     // the local initialised from `elicitationBlockedReason(...)`. Hardcoding the
     // name false-RED on a pure rename; ignoring it entirely let
     // `p(blocked ?? 'no-transport')` and `p(f ? 'no-transport' : blocked)` through.
-    isBlockedReasonBinding(sf, e.arguments[0].getText(sf))
+    isBlockedReasonBinding(sf, scope, e.arguments[0].getText(sf))
   if (callOf(expr)) return true
-  // One local hop: a `const` initialised to exactly that call, never reassigned.
+  // One local hop: a `const` in THIS scope whose sole initializer is that call.
+  // (A `const` cannot be reassigned, so the file-wide assignment scan this used
+  // to run protected nothing and false-RED on unrelated locals — FIX_ROUND-16.)
   if (!ts.isIdentifier(expr)) return false
-  const ident = expr.getText(sf)
-  let ok = false
-  let reassigned = false
-  const walk = (n: ts.Node): void => {
-    if (
-      ts.isVariableDeclaration(n) &&
-      ts.isIdentifier(n.name) &&
-      n.name.getText(sf) === ident
-    ) {
-      const isConst =
-        ts.isVariableDeclarationList(n.parent) &&
-        (n.parent.flags & ts.NodeFlags.Const) !== 0
-      if (isConst && n.initializer && callOf(n.initializer)) ok = true
-      else reassigned = true
-    }
-    if (
-      ts.isBinaryExpression(n) &&
-      n.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
-      n.left.getText(sf) === ident
-    ) {
-      reassigned = true
-    }
-    ts.forEachChild(n, walk)
-  }
-  walk(sf)
-  return ok && !reassigned
+  const decls = declarationsOf(sf, scope, expr.getText(sf))
+  if (decls.length !== 1) return false
+  const d = decls[0]
+  if (!ts.isVariableDeclaration(d)) return false
+  const isConst =
+    ts.isVariableDeclarationList(d.parent) && (d.parent.flags & ts.NodeFlags.Const) !== 0
+  return isConst && !!d.initializer && callOf(d.initializer)
 }
 
 test('FIX_ROUND-8: no `tooltip` on a Button that can be disabled (kit clobbers aria-label)', () => {
@@ -581,9 +807,23 @@ test('FIX_ROUND-8: no `tooltip` on a Button that can be disabled (kit clobbers a
         `control was renamed (update the scanner) or the surface no longer belongs here.`,
     )
     for (const el of buttons) {
+      if (attr(el, 'tooltip') === undefined) continue
       const canDisable = attr(el, 'disabled') !== undefined || hasSpread(el)
-      if (canDisable && attr(el, 'tooltip') !== undefined) {
+      if (canDisable) {
         violations.push(`${rel}: a <Button> takes BOTH \`disabled\` and \`tooltip\``)
+        continue
+      }
+      // FIX_ROUND-16: hazard (a) needs no `disabled` at all. A string tooltip
+      // REPLACES the accessible name of a button that already has one from its
+      // visible text — which is exactly the FIX_ROUND-5 regression — so the
+      // conjunction with `canDisable` left the larger half of the hazard
+      // unguarded on BOTH surfaces.
+      if (hasTextChildren(el) && attr(el, 'aria-label') === undefined) {
+        violations.push(
+          `${rel}: a <Button> with visible text takes a \`tooltip\` and no explicit ` +
+            `\`aria-label\` — a string tooltip becomes the accessible name and ` +
+            `overwrites the visible one`,
+        )
       }
     }
   }
@@ -597,15 +837,24 @@ test('FIX_ROUND-8: no `tooltip` on a Button that can be disabled (kit clobbers a
 
 test('FIX_ROUND-9: the approval controls disable ONLY through the seam predicate', () => {
   const sf = parse(APPROVAL_SURFACE_WITH_CONTROLS)
-  assert.ok(
-    importedFromSeam(sf, 'elicitationIsUnactionable'),
-    'elicitationIsUnactionable must be imported from the core elicitation seam — a ' +
-      'same-named local or sibling-module function satisfies a text match and is ' +
-      'tsc-clean, while deciding something else entirely',
-  )
+  const scope = componentBody(sf, APPROVAL_COMPONENT)
+  // BOTH the predicate and the classifier that feeds it. FIX_ROUND-16: only the
+  // predicate was checked, so replacing `elicitationBlockedReason` with a local
+  // function of the same name — which can answer anything — was tsc-clean and
+  // green.
+  for (const seamFn of ['elicitationIsUnactionable', 'elicitationBlockedReason']) {
+    assert.ok(
+      importedFromSeam(sf, seamFn),
+      `${seamFn} must resolve to the core elicitation seam export of the SAME name — ` +
+        'an import alias, a same-named local, or a sibling-module function satisfies a ' +
+        'text match and is tsc-clean, while deciding something else entirely',
+    )
+  }
   const buttons = elements(sf, 'Button')
   const disabling = buttons.filter(el => attr(el, 'disabled') !== undefined)
   assert.ok(disabling.length >= 2, `expected the approve/deny controls, found ${disabling.length}`)
+  // Also asserts the `loading` channel and the render gate are well-shaped.
+  const { loadingName, resolvedName } = approvalControlNames(sf, scope)
 
   for (const el of buttons) {
     assert.ok(
@@ -616,13 +865,62 @@ test('FIX_ROUND-9: the approval controls disable ONLY through the seam predicate
     if (attr(el, 'disabled') === undefined) continue
     const expr = attrExpr(el, 'disabled')
     assert.ok(
-      isExactCall(sf, expr, 'elicitationIsUnactionable'),
+      isExactCall(sf, scope, expr, 'elicitationIsUnactionable'),
       `an approval control's \`disabled\` must BE elicitationIsUnactionable(blocked) ` +
         `(or a const whose sole initializer is that call), got ` +
         `\`${expr?.getText(sf) ?? '<boolean shorthand>'}\`. Anything combined with it — ` +
         `\`|| blocked !== null\`, a negation, a different argument — changes which ` +
         `states disable, and every time a state the user could still act through was ` +
         `disabled, the card became unanswerable (FIX_ROUND-4, -6, -7).`,
+    )
+
+    // `disabled` is not the only disabling channel. The kit computes
+    // `isDisabled = surfaceDisabled || loading` and, when loading, applies
+    // `pointer-events-none` and swaps `onClick` for a preventDefault — so
+    // `loading={submitting || blocked !== null}` makes the card inert in exactly
+    // the states the status text says are answerable, and FIX_ROUND-9 could not
+    // see it (FIX_ROUND-16). `approvalControlNames` pins the shape by BINDING
+    // (a bare useState flag), so a rename stays green.
+    const loading = attrExpr(el, 'loading')
+    assert.ok(
+      loading && ts.isIdentifier(loading) && loading.getText(sf) === loadingName,
+      `every approval control must pass the SAME in-flight flag to \`loading\`, ` +
+        `expected \`${loadingName}\`, got \`${loading?.getText(sf) ?? '<absent>'}\``,
+    )
+  }
+
+  // Which ACTION each control dispatches. Nothing pinned this, so swapping Deny's
+  // handler to `resolve('accept')` — clicking Deny APPROVES the tool call — was
+  // green (FIX_ROUND-16).
+  for (const [kind, action] of [
+    ['approve', 'accept'],
+    ['deny', 'decline'],
+  ]) {
+    const el = buttons.find(b =>
+      attrExpr(b, 'data-testid')?.getText(sf).includes(`run-js-approval-${kind}-`),
+    )
+    assert.ok(el, `the ${kind} control must be identifiable by its data-testid`)
+    const onClick = attrExpr(el, 'onClick')?.getText(sf).replace(/\s+/g, ' ')
+    assert.equal(
+      onClick,
+      `() => resolve('${action}')`,
+      `the ${kind} control must dispatch resolve('${action}'), got \`${onClick}\``,
+    )
+  }
+
+  // Every control must sit under the SAME single render gate — the one
+  // `approvalControlNames` already shape-checked. Vanishing is strictly worse
+  // than disabling (no affordance at all), and the JSX ancestor conditions were
+  // unguarded, so `resolved === null && blocked !== 'not-registered'` silently
+  // removed both controls in a state the card's own copy calls answerable
+  // (FIX_ROUND-16).
+  for (const el of disabling) {
+    const conds = renderConditions(scope, el).map(c => c.getText(sf).replace(/\s+/g, ' '))
+    assert.deepEqual(
+      conds,
+      [`${resolvedName} === null`],
+      `an approval control may be gated on \`${resolvedName} === null\` and nothing ` +
+        `else, got [${conds.join(', ')}]`,
     )
   }
 })
@@ -641,78 +939,142 @@ test('FIX_ROUND-14: the click handler gates on the SAME predicate as the control
   // return early and never POST) and to three latch operands (`|| resolveFailed`,
   // `|| Boolean(blocked)`, `|| healExhausted`). Operands are also why the guard no
   // longer cares HOW the clauses are split across `if`s.
+  //
+  // FIX_ROUND-16: the operand check is now an ALLOWLIST. FIX_ROUND-15's version
+  // pre-selected the seam operand by SUBSTRING and screened the rest with
+  // `assert.doesNotMatch(/\bblocked\b|\bresolveFailed\b|\bhealExhausted\b/)` — a
+  // `getText()` regex over three identifier spellings, which is the unbounded
+  // enumeration FIX_ROUND-13 exists to stop. Five latches walked past it, each
+  // leaving the control ENABLED while the click silently no-ops:
+  //   `const alreadyTried = resolveFailed; … || alreadyTried`   (one alias)
+  //   `if (!elicitationExists(data.elicitation_id)) return`     (outside the vocab)
+  //   `if (healAttempts.n >= HEAL_BUDGET) return`               (outside the vocab)
+  //   a pure rename of `blocked`, which retires the whole vocabulary at once
+  // Enumerating what is FORBIDDEN can never terminate; enumerating what is
+  // PERMITTED terminates immediately, and any new operand at all now fails.
   const sf = parse(APPROVAL_SURFACE_WITH_CONTROLS)
+  const scope = componentBody(sf, APPROVAL_COMPONENT)
+  const { loadingName, resolvedName } = approvalControlNames(sf, scope)
 
-  // Locate `resolve` as a declaration OR a function statement, so neither the
-  // arrow-vs-function spelling nor the name of an unrelated local can move it.
-  let body: ts.Node | undefined
-  const findResolve = (n: ts.Node): void => {
-    if (
-      (ts.isVariableDeclaration(n) || ts.isFunctionDeclaration(n)) &&
-      n.name?.getText(sf) === 'resolve'
-    ) {
-      body = n
-    }
-    ts.forEachChild(n, findResolve)
-  }
-  findResolve(sf)
-  assert.ok(body, 'the card must still declare a `resolve` handler')
+  // `resolve` must be declared exactly ONCE inside the component. A decoy in a
+  // dead scope elsewhere in the file used to relocate this entire guard onto
+  // itself, so the real, latched handler passed (FIX_ROUND-16).
+  const decls = declarationsOf(sf, scope, 'resolve')
+  assert.equal(
+    decls.length,
+    1,
+    `the card must declare exactly ONE \`resolve\` handler inside ${APPROVAL_COMPONENT}, ` +
+      `found ${decls.length} — a second declaration makes it ambiguous which one this ` +
+      `guard is reading`,
+  )
+  const body = decls[0]
 
-  // Every operand of every early-return guard in the handler.
-  const operands: ts.Expression[] = []
-  const flatten = (e: ts.Expression): void => {
-    if (
-      ts.isBinaryExpression(e) &&
-      (e.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
-        e.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken)
-    ) {
-      flatten(e.left)
-      flatten(e.right)
-      return
+  // Only `||` is flattened. Conjoining the clauses instead — `(submitting ||
+  // resolved !== null) && elicitationIsUnactionable(blocked)` — yields the SAME
+  // operand set while making the re-entrancy guard dead, so a double-click POSTs
+  // twice to a single-use elicitation (FIX_ROUND-16).
+  const flatten = (e: ts.Expression): ts.Expression[] => {
+    if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.BarBarToken) {
+      return [...flatten(e.left), ...flatten(e.right)]
     }
-    operands.push(e)
+    if (ts.isParenthesizedExpression(e)) return flatten(e.expression)
+    return [e]
   }
+  /** Does this statement unconditionally leave the handler? */
+  const returns = (s: ts.Statement | undefined): boolean =>
+    !!s &&
+    (ts.isReturnStatement(s) ||
+      (ts.isBlock(s) && s.statements.length === 1 && ts.isReturnStatement(s.statements[0])))
+
+  const guards: ts.IfStatement[] = []
   const collect = (n: ts.Node): void => {
-    if (ts.isIfStatement(n)) flatten(n.expression)
+    if (ts.isIfStatement(n)) guards.push(n)
     ts.forEachChild(n, collect)
   }
   collect(body)
-  assert.ok(operands.length > 0, 'resolve() must keep an early-return guard')
+  const earlyReturns = guards.filter(g => returns(g.thenStatement))
+  assert.ok(earlyReturns.length > 0, 'resolve() must keep an early-return guard')
 
-  // Exactly one operand may be the seam predicate, and it must be the call
-  // itself — not a negation, not a wrapper.
-  const seamOperands = operands.filter(o => o.getText(sf).includes('elicitationIsUnactionable'))
+  // The seam predicate must appear in an `if` that actually RETURNS. Nothing
+  // checked the then-branch before, so `if (elicitationIsUnactionable(blocked) &&
+  // never) { setSubmitting(false) }` reduced the guard's whole subject to a no-op
+  // while reporting green (FIX_ROUND-16 — a regression this round introduced).
+  // Selected by `isExactCall` — the same AST predicate the JSX attribute uses, so
+  // hoisting the call into a `const` used by BOTH the control and the gate (a
+  // behaviour-preserving refactor that removes a duplicated call) stays green.
+  // FIX_ROUND-15 selected by substring here and by `isExactCall` there, so the
+  // two halves disagreed and the documented one-local-hop was accepted for the
+  // control and rejected for the gate.
+  const carriesSeam = (g: ts.IfStatement): boolean =>
+    flatten(g.expression).some(o => isExactCall(sf, scope, o, 'elicitationIsUnactionable'))
+  const seamGuards = earlyReturns.filter(carriesSeam)
   assert.equal(
-    seamOperands.length,
+    seamGuards.length,
     1,
-    `resolve() must gate on elicitationIsUnactionable exactly once, found ` +
-      `${seamOperands.length}: ${seamOperands.map(o => o.getText(sf)).join(' | ')}`,
+    `exactly ONE early-RETURN guard in resolve() must gate on ` +
+      `elicitationIsUnactionable, found ${seamGuards.length}. An \`if\` that mentions ` +
+      `the predicate but does not return gates nothing at all.`,
   )
-  assert.ok(
-    isExactCall(sf, seamOperands[0], 'elicitationIsUnactionable'),
-    `resolve()'s gate operand must BE elicitationIsUnactionable(<blocked reason>), ` +
-      `got \`${seamOperands[0].getText(sf)}\` — a negation returns early exactly when ` +
-      `the card IS actionable, so no decision ever POSTs`,
-  )
-
-  // No OTHER operand may re-derive the decision from the blocked reason or from
-  // the card's own failure/heal state — that latches the handler while the
-  // control still renders ENABLED, so the click silently no-ops.
-  for (const o of operands) {
-    if (o === seamOperands[0]) continue
-    const text = o.getText(sf).replace(/\s+/g, ' ')
-    assert.doesNotMatch(
-      text,
-      /\bblocked\b|\bresolveFailed\b|\bhealExhausted\b/,
-      `resolve()'s gate must not re-derive from the card's blocked/failure state, ` +
-        `got \`${text}\` — the control still renders enabled, so the click silently ` +
-        `no-ops with no signal at all`,
+  for (const g of guards) {
+    if (earlyReturns.includes(g)) continue
+    assert.ok(
+      !carriesSeam(g) && !g.expression.getText(sf).includes('elicitationIsUnactionable'),
+      `resolve() has an \`if\` on elicitationIsUnactionable whose body does NOT ` +
+        `return: \`${g.getText(sf).replace(/\s+/g, ' ').slice(0, 120)}\``,
     )
   }
+
+  // EVERY operand of EVERY early return must be one of exactly three permitted
+  // forms. Anything else — an alias, another seam call, a heal-budget check — is
+  // a latch, and latching here is worse than disabling: the control still renders
+  // ENABLED, the status text still invites the click, and the click no-ops.
+  let seamOperandCount = 0
+  for (const g of earlyReturns) {
+    assert.ok(
+      !g.getText(sf).includes('&&'),
+      `resolve()'s early-return guards must combine with \`||\` only, got ` +
+        `\`${g.expression.getText(sf).replace(/\s+/g, ' ')}\` — an \`&&\` keeps the same ` +
+        `operands while making the re-entrancy clauses dead, so a double-click POSTs twice`,
+    )
+    for (const o of flatten(g.expression)) {
+      const text = o.getText(sf).replace(/\s+/g, ' ')
+      if (isExactCall(sf, scope, o, 'elicitationIsUnactionable')) {
+        seamOperandCount += 1
+        continue
+      }
+      // The re-entrancy pair — identified by the names the CONTROLS themselves
+      // use, so a rename of either stays green while a new operand does not.
+      if (ts.isIdentifier(o) && text === loadingName) continue
+      if (
+        ts.isBinaryExpression(o) &&
+        o.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsEqualsToken &&
+        o.left.getText(sf) === resolvedName &&
+        o.right.kind === ts.SyntaxKind.NullKeyword
+      ) {
+        continue
+      }
+      assert.fail(
+        `resolve()'s early-return guard has an operand that is neither the seam ` +
+          `predicate nor the re-entrancy pair: \`${text}\`. Permitted operands are ` +
+          `exactly \`${loadingName}\`, \`${resolvedName} !== null\`, and ` +
+          `\`elicitationIsUnactionable(<blocked reason>)\` — anything else latches the ` +
+          `handler while the control still renders ENABLED, so the click silently no-ops.`,
+      )
+    }
+  }
+  assert.equal(
+    seamOperandCount,
+    1,
+    `the seam predicate must appear exactly once across resolve()'s early returns, ` +
+      `found ${seamOperandCount} — a negation or a wrapper returns early exactly when ` +
+      `the card IS actionable, so no decision ever POSTs`,
+  )
 })
 
 test('FIX_ROUND-11: the two extracted DECISIONS decide at their call sites', () => {
   const sf = parse(APPROVAL_SURFACE_WITH_CONTROLS)
+  const scope = componentBody(sf, APPROVAL_COMPONENT)
+  const { resolvedName } = approvalControlNames(sf, scope)
   for (const p of ['elicitationIsError', 'resolveDidFail']) {
     assert.ok(
       importedFromSeam(sf, p),
@@ -749,12 +1111,12 @@ test('FIX_ROUND-11: the two extracted DECISIONS decide at their call sites', () 
   assert.ok(
     ts.isBinaryExpression(tone.condition) &&
       tone.condition.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken &&
-      tone.condition.left.getText(sf) === '!resolved',
-    `the tone condition must read \`!resolved && <predicate>\`, got ` +
+      tone.condition.left.getText(sf) === `!${resolvedName}`,
+    `the tone condition must read \`!${resolvedName} && <predicate>\`, got ` +
       `\`${tone.condition.getText(sf)}\``,
   )
   assert.ok(
-    isExactCall(sf, (tone.condition as ts.BinaryExpression).right, 'elicitationIsError'),
+    isExactCall(sf, scope, (tone.condition as ts.BinaryExpression).right, 'elicitationIsError'),
     `the status tone must be decided by elicitationIsError(blocked), got ` +
       `\`${(tone.condition as ts.BinaryExpression).right.getText(sf)}\` — otherwise a ` +
       `transient, answerable state gets painted in the destructive red ` +
@@ -765,22 +1127,28 @@ test('FIX_ROUND-11: the two extracted DECISIONS decide at their call sites', () 
   // Every JUDGING call (anything but the `(false)` reset) must be the consequent
   // of an `if (resolveDidFail(...))`. Counting the literal `(true)` missed
   // `setResolveFailed(hadEntry === false)` sitting beside the conforming one.
+  const setter = resolveFailedSetter(sf, scope)
+  assert.ok(
+    setter,
+    'could not locate the useState setter paired with the classifier’s ' +
+      '`resolveFailed` signal — the card must still hold that state locally',
+  )
   const judging: ts.CallExpression[] = []
   const walk = (n: ts.Node): void => {
     if (
       ts.isCallExpression(n) &&
-      n.expression.getText(sf) === 'setResolveFailed' &&
+      n.expression.getText(sf) === setter &&
       n.arguments[0]?.getText(sf) !== 'false'
     ) {
       judging.push(n)
     }
     ts.forEachChild(n, walk)
   }
-  walk(sf)
+  walk(scope)
   assert.equal(
     judging.length,
     1,
-    `setResolveFailed must judge in exactly one place, found ${judging.length} ` +
+    `${setter} must judge in exactly one place, found ${judging.length} ` +
       `(${judging.map(c => c.getText(sf)).join(', ')}) — a second judgement beside the ` +
       `conforming one re-introduces the bug it replaced`,
   )

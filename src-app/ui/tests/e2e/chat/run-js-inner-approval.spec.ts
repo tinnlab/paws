@@ -68,9 +68,9 @@ test.describe('run_js inner-tool approval', () => {
     // FIX_ROUND-7: pin the ACCESSIBLE NAMES. This property flip-flopped across two
     // fix rounds with nothing guarding it: FIX_ROUND-5 added a `tooltip` to the
     // disabled state, and kit Button derives `aria-label` from a string tooltip
-    // UNCONDITIONALLY — so both controls announced identically and became
-    // indistinguishable to a screen reader (WCAG 2.5.3 / 4.1.2). Re-adding it
-    // turns this red.
+    // when no explicit `aria-label` is given — and these controls give none — so
+    // both controls announced identically and became indistinguishable to a
+    // screen reader (WCAG 2.5.3 / 4.1.2). Re-adding it turns this red.
     await expect(approve).toHaveAccessibleName(/approve/i)
     await expect(deny).toHaveAccessibleName(/deny/i)
     // Healthy transport -> both actionable, and no description pointing at an
