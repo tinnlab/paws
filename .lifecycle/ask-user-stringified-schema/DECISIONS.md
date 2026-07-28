@@ -239,10 +239,17 @@ difference between a real choice and a card that lies.
 ### DEC-21: How is TEST-38's "needs a real LLM" requirement expressed — a skip, or a failure?
 
 **Resolution:** An UNCONDITIONAL precondition —
-`expect(TEST_LLM, NO_LLM_SKIP).toBeTruthy()` inside the test — NOT the
-`test.skip(!TEST_LLM, NO_LLM_SKIP)` guard TESTS.md enumerated at phase 3. The
-spec always registers and always runs; on a box with no LLM configured at all it
+`expect(TEST_LLM, …).toBeTruthy()` in a **`test.beforeAll`** — NOT the
+conditional skip-on-`!TEST_LLM` guard TESTS.md enumerated at phase 3. The spec
+always registers and always runs; on a box with no LLM configured at all it
 FAILS, naming the exact env vars to set.
+
+`beforeAll` rather than the test body (moved there after the round-2 audit): a
+`beforeAll` cannot request the test-scoped `testInfra` fixture, so it runs BEFORE
+the per-test Postgres database, backend and Vite server are built. Asserting in
+the body paid for that whole boot just to fail on a condition already known.
+`retries` are likewise disabled when `TEST_LLM` is null, since three stack boots
+cannot change the verdict.
 
 **Basis:** convention + gate. The lifecycle rule is explicit and mechanical
 (`lifecycle-check.mjs::checkA3`, SKILL.md: "no diff-added `#[ignore]`/`.skip`/
@@ -266,6 +273,14 @@ rather than SKIPPED. That is intended — it is a true statement about coverage.
 The deterministic acceptance proof for the same surface (TEST-37) needs no LLM
 and is unaffected, so the feature never depends on a bridge being present to be
 verified at all.
+
+**Residual tradeoff, recorded rather than hidden** (round-3 audit finding 3): the
+leg asserts the wizard reports >= 2 steps, so a model that legitimately answers
+the prompt with ONE combined property fails it. Mitigated by `retries: 2` and a
+directive prompt naming both fields. The airtight alternative — comparing against
+the schema the backend actually decoded — has no seam reachable from the browser,
+because `ask_user` is intercepted before `McpSession::call_tool` and is therefore
+never written to `mcp_tool_calls`.
 
 **TESTS.md was amended in place** (the TEST-38 line records the amendment and
 points here) rather than left to disagree with the code. The test-ID, tier and
