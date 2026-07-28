@@ -89,3 +89,55 @@ construction — there is nothing to hand-merge.
 This session does not push, so the gitlink is left pointing at the local
 `7636ad6` rather than silently reverted to the base's pointer (which would make
 `check:testid-registry` red).
+
+---
+
+## Where the gate stands at hand-off (rounds 3-15)
+
+```
+✓ 1 PLAN  ✓ 2 PLAN_AUDIT  ✓ 3 TESTS  ✓ 4 DECISIONS  ✓ 5 IMPLEMENT+DRIFT
+✓ 6 BLIND_AUDIT  ✗ 7 FIX_LOOP  ✓ 8 TEST_RESULTS  ✓ 9 HUMAN_FEEDBACK
+```
+
+**8/9.** Phase 7 requires the FINAL fix round to record 0 new confirmed findings.
+`FIX_ROUND-15.md` records 5, so it correctly refuses to call the loop converged.
+
+### What the loop actually did
+
+Thirteen rounds beyond the FIX_ROUND-2 handoff. Each round was a fresh blind
+diff-only re-audit of the PREVIOUS round's own diff, by two auditors, and from
+round 8 onward every finding was mutation-proven (applied, run, reverted) rather
+than argued.
+
+| rounds | what they found |
+|---|---|
+| 3-9 | product defects — a latch that made an approval card unanswerable (three times), a successful approve reported as failed, a focus steal in a virtualized transcript, a silently-void SQL guard, an a11y regression that clobbered two controls' accessible names |
+| 10-15 | **no product defect.** Every finding was a GUARD that did not hold, or a comment that had gone false |
+
+The last product defect was found in round 9. Rounds 10 through 15 found only
+test-guard precision and comment accuracy — including three defects the rounds
+introduced themselves, each caught by the next round.
+
+### Why phase 7 has not closed, stated plainly
+
+The remaining findings are self-referential: guards guarding guards. Round 13
+addressed the root cause by rewriting them onto the TypeScript AST (the compiler
+is already a devDependency and two repo lint scripts already do this), which
+answered twelve accumulated evasions by construction. Rounds 14 and 15 then found
+that ONE new check had been written as a regex again, and closed it the same way.
+
+The trajectory is converging — 20, 15, 8, 7, 8, 5 confirmed findings across rounds
+10-15, with severity falling from HIGH-product to LOW-guard — but a round has not
+yet come back at zero, and **the gate is right to say so.** No finding was
+dismissed to reach a number.
+
+### What the next session should do
+
+Run one more blind round over `FIX_ROUND-15`'s diff (`2017b0e09`), which is 107
+lines and touches only `railIsolation.test.ts` plus one comment. If it returns 0,
+write `FIX_ROUND-16.md` with `**New confirmed findings:** 0` and phase 7 closes.
+
+Everything else is green and re-verified: `npm run check` exit 0 in BOTH
+workspaces, `cargo check --workspace` exit 0, 33 feature-scope integration tests,
+and **21/21 rail + run_js e2e against the live Qwen bridge**, re-run to green after
+every one of rounds 4-15.
