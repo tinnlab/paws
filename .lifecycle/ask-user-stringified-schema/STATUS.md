@@ -4,8 +4,13 @@ Written deliberately instead of a `TEST_RESULTS.md`, because a `TEST_RESULTS.md`
 asserts a phase-8 pass and phase 8 has **not** been run. Every line below is
 either an OBSERVED result with its log, or an explicit "not run".
 
-Lifecycle position: **phases 1-5 complete** (gates 1-4 re-run green after every
-amendment; phase 5's drift round closed at 0 unresolved). Phases 6-9 NOT started.
+Lifecycle position: **phases 1-9 attempted; 8 of 10 gates green** (gates 1-4 re-run green after every
+amendment; phase 5's drift round closed at 0 unresolved). Phase 6 was run
+SINGLE-HANDED (sub-agent quota exhausted — see FIX_ROUND-1's provenance note);
+phases 7 and 9 are green; **phase 8 legitimately FAILS** on two unwritten tests
+(TEST-24, TEST-38) and, until the run completes, the A7 canary. Those are
+recorded as gaps, not padded into passes. Phase 0 (A1) fails on the 17 inherited
+sibling `.lifecycle` dirs, exactly as sibling branches on this base do.
 
 ## Gates actually run
 
