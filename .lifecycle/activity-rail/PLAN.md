@@ -119,8 +119,12 @@ grouping simulation over the whole database, and a per-module contribution audit
   (`ConversationPage.tsx:761-782`) with no producer anywhere.
 - **ITEM-16**: Let a **non-admin** reach built-in servers' call history. Today `isEditable={!server.is_system}`
   (`user/McpServersSettings.tsx:191`) blocks the Calls tab for every built-in server.
-- **ITEM-17**: Decide + implement ONE canonical detail source. History is redacted; **the chat card
-  renders `tool_use.input` completely unredacted**. The detail view must not widen exposure.
+- **ITEM-17**: ONE canonical detail source, **redacted by default in both the step and the panel**,
+  with the denylist gaps closed (`cookie`, `credentials`, `x_auth_token`, `openai_api_key`,
+  `Bearer-Token` — all confirmed open today, `record.rs:40-61` matches keys exactly). Plus an
+  **admin-gated raw reveal** in the panel, gated on the existing `mcp_servers::manage` (DEC-1/DEC-2),
+  so no detail becomes permanently unreachable. The chat card renders `tool_use.input` completely
+  unredacted today; the detail view must not widen that exposure.
 
 ### C. Contributions (each module ships its own descriptor + detail)
 
