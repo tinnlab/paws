@@ -57,6 +57,40 @@ Guard before every commit:
 git diff --diff-filter=D --name-only origin/feat/agent-core...HEAD -- .lifecycle   # must be empty
 ```
 
+### A1 exception — base-carried, NOT a stray this branch added
+
+`lifecycle-check --phase 0` reports:
+
+> A1: `.lifecycle/` has 18 feature dirs (…) — a branch may carry exactly ONE.
+> Remove the stray(s) before pushing.
+
+**This A1 failure is unresolvable on this branch and must not be "fixed".** A1
+assumes a branch cut from `main`, where `.lifecycle/` is empty and every dir
+present is therefore one the branch added. This campaign's integration line
+carries 17 dirs of already-merged feature work, so the count is structurally
+18 for *any* branch cut from it. Removing the 17 would delete other features'
+committed lifecycle records — the exact destruction A1 exists to prevent.
+
+Evidence — the base already carries all 17, and this branch adds exactly one:
+
+```
+$ git ls-tree --name-only origin/feat/agent-core .lifecycle/ | wc -l
+17
+$ git ls-tree --name-only HEAD .lifecycle/ | wc -l
+18
+$ diff <(git ls-tree --name-only origin/feat/agent-core .lifecycle/) \
+       <(git ls-tree --name-only HEAD .lifecycle/)
+15a16
+> .lifecycle/voice-model-bad-magic
+$ git diff --diff-filter=D --name-only origin/feat/agent-core...HEAD -- .lifecycle
+(empty — no sibling record deleted)
+```
+
+The branch's own contribution to `.lifecycle/` is `voice-model-bad-magic` and
+nothing else, which is what A1 actually intends to enforce. Recorded as a
+**base-carried exception**; the remaining 8 phases pass on their own terms.
+A1 will pass unchanged once `feat/agent-core` itself lands and its dirs retire.
+
 ## Live-instance interaction
 
 The owner's live instance (`:1530` UI, `:29600` backend, app-data at
