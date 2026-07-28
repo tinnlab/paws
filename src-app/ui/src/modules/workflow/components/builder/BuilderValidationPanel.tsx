@@ -96,6 +96,10 @@ export function BuilderValidationPanel({ store }: BuilderValidationPanelProps) {
   // also writes here, and its message is the raw validator wire string (INV-1).
   const error = store.error
   const errorText = error ? humaniseInstallError(error, steps) : null
+  // WHICH act failed. A save failure and a check failure both land in `error`
+  // but mean opposite things about the findings below: after a failed CHECK they
+  // are stale; after a failed SAVE they are current (the check still ran).
+  const checkFailed = store.errorSource === 'validate'
 
   // Attribute + humanise ONCE, above any map, so the panel and the step list can
   // never disagree about which steps are broken — and so no store read happens
@@ -103,7 +107,29 @@ export function BuilderValidationPanel({ store }: BuilderValidationPanelProps) {
   const errors = attributeFindings(validation?.errors ?? [], steps)
   const warnings = attributeFindings(validation?.warnings ?? [], steps)
 
-  const onSelect = (stepId: string) => store.selectStep(stepId)
+  // INV-2 — a finding "can take the user to that step". Selecting alone only
+  // does that when the config panel is already on screen: the panel sits at the
+  // BOTTOM of the page and the layout stacks below `md`, so on a narrow viewport
+  // the newly-selected step's configuration is below the fold and the click has
+  // no visible effect at all. Bring it into view after the selection renders.
+  // (`block: 'nearest'` = no movement when it is already visible, so the wide
+  // layout is unchanged.)
+  const onSelect = (stepId: string) => {
+    store.selectStep(stepId)
+    requestAnimationFrame(() => {
+      const el = document.querySelector('[data-testid="wf-builder-step-config"]')
+      if (!el) return
+      // Only when the START of the configuration is off-screen: on a wide
+      // viewport it is already beside the list, and scrolling there would be an
+      // unasked-for jump. `block: 'start'` (not `nearest`) because the panel can
+      // be taller than the viewport, and `nearest` would then align its BOTTOM —
+      // leaving the author at the end of a form they were just sent to.
+      const top = el.getBoundingClientRect().top
+      if (top < 0 || top >= window.innerHeight) {
+        el.scrollIntoView({ block: 'start' })
+      }
+    })
+  }
 
   return (
     <div className="flex flex-col gap-3" data-testid="wf-builder-validation">
@@ -118,7 +144,7 @@ export function BuilderValidationPanel({ store }: BuilderValidationPanelProps) {
           tone="error"
           title={errorText}
           description={
-            validation
+            checkFailed && validation
               ? 'The results below are from an earlier check and may be out of date.'
               : undefined
           }
@@ -132,9 +158,10 @@ export function BuilderValidationPanel({ store }: BuilderValidationPanelProps) {
       )}
 
       {/* The green line is a CLAIM that the workflow is currently valid, so it
-          is suppressed while the last check is known to have failed — the
-          findings below it are stale and Save is computed from the same object. */}
-      {validation && errors.length === 0 && !errorText && (
+          is suppressed while the last CHECK is known to have failed — those
+          findings are stale and Save is computed from the same object. A failed
+          SAVE does not make it false (the check still ran), so it stays. */}
+      {validation && errors.length === 0 && !checkFailed && (
         <div className="flex items-center gap-2" data-testid="wf-builder-valid">
           <CheckCircle2 className="size-4 text-success" aria-hidden />
           <Text className="text-sm">No blocking errors.</Text>

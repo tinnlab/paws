@@ -8,7 +8,7 @@
 ## Summary
 
 - **339** surfaces carry at least one renderable-state signal.
-- **2084** signals total: 1634 branch, 138 empty, 119 error, 93 loading, 96 overlay, 4 panel.
+- **2091** signals total: 1641 branch, 138 empty, 119 error, 93 loading, 96 overlay, 4 panel.
 - **4** right-panel renderers registered (each a right-panel-open state).
 - **35** slot registrations (sidebar / settings / chat mount points).
 
@@ -4413,13 +4413,14 @@ Required states: `empty`
 | kind | condition | line |
 |---|---|---|
 | branch | `!finding.stepId` | 52 |
-| branch | `validating` | 112 |
-| branch | `errorText` | 115 |
-| branch | `!validation && !validating && !errorText` | 128 |
-| empty | `validation && errors.length === 0 && !errorText` | 137 |
-| branch | `errors.length > 0` | 144 |
-| branch | `warnings.length > 0` | 152 |
-| branch | `cost` | 160 |
+| branch | `!el` | 121 |
+| branch | `validating` | 138 |
+| branch | `errorText` | 141 |
+| branch | `!validation && !validating && !errorText` | 154 |
+| empty | `validation && errors.length === 0 && !checkFailed` | 164 |
+| branch | `errors.length > 0` | 171 |
+| branch | `warnings.length > 0` | 179 |
+| branch | `cost` | 187 |
 
 ### `modules/workflow/components/builder/RefInsertMenu`
 
@@ -4455,13 +4456,16 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `templated` | 138 |
-| branch | `canHoldTemplate` | 162 |
-| branch | `templated` | 188 |
-| branch | `v === undefined` | 221 |
-| branch | `!pendingNumberClear.current` | 229 |
-| branch | `templated` | 307 |
-| branch | `spec.overflowNames.length > 0` | 351 |
+| branch | `canHoldTemplate` | 112 |
+| branch | `isTemplateValue(value)` | 113 |
+| branch | `templated` | 158 |
+| branch | `canHoldTemplate` | 182 |
+| branch | `templated` | 217 |
+| branch | `v === undefined` | 251 |
+| branch | `!pendingNumberClear.current` | 259 |
+| branch | `(numberInput.current?.value ?? '').trim() !== ''` | 263 |
+| branch | `templated` | 350 |
+| branch | `spec.overflowNames.length > 0` | 399 |
 
 ### `modules/workflow/components/builder/ToolStepForm`
 
@@ -4469,13 +4473,16 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!serverId \|\| !step.server` | 207 |
-| branch | `blockingFailure` | 287 |
-| branch | `serverId && isRetryableFailure(blockingFailure)` | 295 |
-| branch | `usePicker` | 317 |
-| branch | `v === (step.tool ?? '')` | 328 |
-| branch | `useGenerated && spec` | 348 |
-| empty | `rows.length === 0` | 372 |
+| branch | `!step.server` | 230 |
+| branch | `serverId` | 231 |
+| branch | `!useGenerated \|\| !spec` | 304 |
+| branch | `!key \|\| !spec.fields.some(f => f.name === key)` | 306 |
+| branch | `blockingFailure` | 345 |
+| branch | `isRetryableFailure(blockingFailure)` | 355 |
+| branch | `usePicker` | 377 |
+| branch | `v === (step.tool ?? '')` | 388 |
+| branch | `useGenerated && spec` | 412 |
+| empty | `rows.length === 0` | 437 |
 
 ### `modules/workflow/components/builder/WorkflowBuilderPage`
 

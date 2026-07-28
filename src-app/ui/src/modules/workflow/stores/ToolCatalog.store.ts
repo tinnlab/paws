@@ -32,7 +32,14 @@ import { defineLocalStore } from '@ziee/framework/store-kit'
  *  copy (INV-6: the fallback is never silent). */
 export type CatalogFailure =
   | { kind: 'no-server' }
+  /** We do not KNOW yet whether this server exists — the accessible-server list
+   *  has not answered, or a by-name lookup is in flight. Never an accusation. */
+  | { kind: 'resolving-server'; serverName: string }
   | { kind: 'unknown-server'; serverName: string }
+  /** Registered and reachable in principle, but switched off. Not "unknown". */
+  | { kind: 'disabled-server'; serverName: string }
+  /** We could not even establish whether the server exists. Retryable. */
+  | { kind: 'server-lookup-failed'; serverName: string; detail: string }
   | { kind: 'no-permission' }
   | { kind: 'unreachable'; serverName: string; detail: string }
   /** Reached, answered, and served ZERO tools — a real state that used to render
@@ -47,6 +54,20 @@ export interface CatalogEntry {
 
 const EMPTY: CatalogEntry = { tools: [], loading: false, failure: null }
 
+/**
+ * What an authoritative by-NAME lookup found.
+ *
+ * `McpServer.servers` is a paginated SLICE (page size 10), so "not in that list"
+ * is not evidence of anything — the server may simply be on page 3, or the list
+ * may not have loaded yet. This is the verdict that IS evidence.
+ */
+export type ServerLookup =
+  | { status: 'pending' }
+  | { status: 'found'; id: string; enabled: boolean }
+  | { status: 'missing' }
+  | { status: 'failed'; detail: string }
+  | { status: 'no-permission' }
+
 // ---------------------------------------------------------------------------
 // Session-scoped cache (see the header note)
 // ---------------------------------------------------------------------------
@@ -54,15 +75,42 @@ const EMPTY: CatalogEntry = { tools: [], loading: false, failure: null }
 /** Opaque per-editing-session key. The caller passes its builder store. */
 export type CatalogScope = object
 
-const sessionCatalogs = new WeakMap<CatalogScope, Map<string, CatalogEntry>>()
+/**
+ * Everything that must be shared by every store INSTANCE of one editing session.
+ *
+ * The in-flight guard and the invalidation generation used to live in the
+ * action closure, which is rebuilt per component MOUNT while the cache is
+ * per-session — so two step forms mounted in the same session (or one step
+ * switched to and back mid-fetch) each saw an empty guard and each fired
+ * `tools/list`, which is precisely the stdio re-handshake the cache exists to
+ * prevent. `pending` holds the promise itself so a late joiner AWAITS the
+ * request already running instead of starting a second one.
+ */
+interface SessionState {
+  tools: Map<string, CatalogEntry>
+  toolsPending: Map<string, Promise<CatalogEntry>>
+  toolsGeneration: Map<string, number>
+  servers: Map<string, ServerLookup>
+  serversPending: Map<string, Promise<ServerLookup>>
+  serversGeneration: Map<string, number>
+}
 
-function sessionCatalog(scope: CatalogScope): Map<string, CatalogEntry> {
-  let cache = sessionCatalogs.get(scope)
-  if (!cache) {
-    cache = new Map()
-    sessionCatalogs.set(scope, cache)
+const sessions = new WeakMap<CatalogScope, SessionState>()
+
+function sessionState(scope: CatalogScope): SessionState {
+  let state = sessions.get(scope)
+  if (!state) {
+    state = {
+      tools: new Map(),
+      toolsPending: new Map(),
+      toolsGeneration: new Map(),
+      servers: new Map(),
+      serversPending: new Map(),
+      serversGeneration: new Map(),
+    }
+    sessions.set(scope, state)
   }
-  return cache
+  return state
 }
 
 /**
@@ -120,6 +168,16 @@ export function failureForToolList(
   return tools.length === 0 ? { kind: 'no-tools', serverName } : null
 }
 
+/**
+ * How many accessible servers one by-name lookup asks for.
+ *
+ * `search` is a server-side ILIKE over name / display_name / description, so an
+ * exact name is expected within the first page of matches; the caller still
+ * requires an EXACT name equality on the result, so a broad substring hit can
+ * never be mistaken for the server.
+ */
+const SERVER_LOOKUP_PAGE_SIZE = 100
+
 export const ToolCatalogStoreDef = defineLocalStore({
   immer: true,
   state: {
@@ -127,21 +185,31 @@ export const ToolCatalogStoreDef = defineLocalStore({
      *  name → id first; keying by id means two names for one server share a
      *  fetch and a rename does not orphan the cache. */
     byServerId: {} as Record<string, CatalogEntry>,
+    /** Authoritative name → server verdicts, for names the loaded (paginated)
+     *  accessible-server list cannot answer. */
+    serverByName: {} as Record<string, ServerLookup>,
   },
 
   actions: (set, get) => {
-    // In-flight guard: several fields (the picker + the arguments form) read the
-    // same server in one render pass, and each would otherwise start a fetch.
-    const inflight = new Set<string>()
-    // Bumped by `invalidate`, so a response that is already in flight when the
-    // author hits "Try again" is DISCARDED instead of overwriting the retry.
-    const generation = new Map<string, number>()
-
-    const publish = (serverId: string, scope: CatalogScope, entry: CatalogEntry) => {
-      sessionCatalog(scope).set(serverId, entry)
-      set(d => {
-        d.byServerId[serverId] = entry
-      })
+    const fetchTools = async (
+      serverId: string,
+      serverName: string,
+    ): Promise<CatalogEntry> => {
+      try {
+        const res = await ApiClient.McpServerRuntime.listTools({ id: serverId })
+        const tools = res.tools ?? []
+        return { tools, loading: false, failure: failureForToolList(tools, serverName) }
+      } catch (error) {
+        // An MCP server that cannot be reached is the COMMON case (a stdio
+        // server not installed, an http server down). It must produce a stated
+        // reason, never an empty tool list that reads as "this server has no
+        // tools".
+        return {
+          tools: [],
+          loading: false,
+          failure: classifyFetchFailure(error, serverName),
+        }
+      }
     }
 
     const load = async (
@@ -149,14 +217,14 @@ export const ToolCatalogStoreDef = defineLocalStore({
       serverName: string,
       scope: CatalogScope,
     ) => {
-      if (inflight.has(serverId)) return
+      const session = sessionState(scope)
       const existing = get().byServerId[serverId]
       // A COMPLETED fetch is terminal until `invalidate` — including one that
       // failed, so a server that is down is asked once per session rather than
       // re-probed on every step switch.
       if (existing && !existing.loading) return
 
-      const cached = sessionCatalog(scope).get(serverId)
+      const cached = session.tools.get(serverId)
       if (cached) {
         set(d => {
           d.byServerId[serverId] = cached
@@ -165,55 +233,130 @@ export const ToolCatalogStoreDef = defineLocalStore({
       }
 
       if (!hasPermissionNow(Permissions.McpServersRead)) {
-        publish(serverId, scope, {
+        const denied: CatalogEntry = {
           tools: [],
           loading: false,
           failure: { kind: 'no-permission' },
+        }
+        session.tools.set(serverId, denied)
+        set(d => {
+          d.byServerId[serverId] = denied
         })
         return
       }
 
-      const gen = generation.get(serverId) ?? 0
-      inflight.add(serverId)
+      const gen = session.toolsGeneration.get(serverId) ?? 0
+      let pending = session.toolsPending.get(serverId)
+      if (!pending) {
+        pending = fetchTools(serverId, serverName)
+        session.toolsPending.set(serverId, pending)
+      }
       set(d => {
         d.byServerId[serverId] = { tools: [], loading: true, failure: null }
       })
+      const entry = await pending
+      // Bumped by `invalidate`, so a response already in flight when the author
+      // hits "Try again" is DISCARDED instead of overwriting the retry.
+      if ((session.toolsGeneration.get(serverId) ?? 0) !== gen) return
+      session.toolsPending.delete(serverId)
+      session.tools.set(serverId, entry)
+      set(d => {
+        d.byServerId[serverId] = entry
+      })
+    }
+
+    const lookupServer = async (serverName: string): Promise<ServerLookup> => {
       try {
-        const res = await ApiClient.McpServerRuntime.listTools({ id: serverId })
-        if ((generation.get(serverId) ?? 0) !== gen) return
-        const tools = res.tools ?? []
-        publish(serverId, scope, {
-          tools,
-          loading: false,
-          failure: failureForToolList(tools, serverName),
+        const res = await ApiClient.McpServer.listAccessible({
+          page: 1,
+          per_page: SERVER_LOOKUP_PAGE_SIZE,
+          search: serverName,
         })
+        const match = (res.servers ?? []).find(s => s.name === serverName)
+        return match
+          ? { status: 'found', id: match.id, enabled: match.enabled }
+          : { status: 'missing' }
       } catch (error) {
-        if ((generation.get(serverId) ?? 0) !== gen) return
-        // An MCP server that cannot be reached is the COMMON case (a stdio
-        // server not installed, an http server down). It must produce a stated
-        // reason, never an empty tool list that reads as "this server has no
-        // tools".
-        publish(serverId, scope, {
-          tools: [],
-          loading: false,
-          failure: classifyFetchFailure(error, serverName),
-        })
-      } finally {
-        if ((generation.get(serverId) ?? 0) === gen) inflight.delete(serverId)
+        return { status: 'failed', detail: describeFetchError(error) }
       }
+    }
+
+    /**
+     * Establish, authoritatively, whether a server NAME is one this user can
+     * reach — for the names the loaded page cannot answer.
+     */
+    const resolveServer = async (serverName: string, scope: CatalogScope) => {
+      if (!serverName) return
+      const session = sessionState(scope)
+      const local = get().serverByName[serverName]
+      if (local && local.status !== 'pending') return
+
+      const cached = session.servers.get(serverName)
+      if (cached) {
+        set(d => {
+          d.serverByName[serverName] = cached
+        })
+        return
+      }
+
+      if (!hasPermissionNow(Permissions.McpServersRead)) {
+        const denied: ServerLookup = { status: 'no-permission' }
+        session.servers.set(serverName, denied)
+        set(d => {
+          d.serverByName[serverName] = denied
+        })
+        return
+      }
+
+      const gen = session.serversGeneration.get(serverName) ?? 0
+      let pending = session.serversPending.get(serverName)
+      if (!pending) {
+        pending = lookupServer(serverName)
+        session.serversPending.set(serverName, pending)
+      }
+      set(d => {
+        d.serverByName[serverName] = { status: 'pending' }
+      })
+      const result = await pending
+      if ((session.serversGeneration.get(serverName) ?? 0) !== gen) return
+      session.serversPending.delete(serverName)
+      session.servers.set(serverName, result)
+      set(d => {
+        d.serverByName[serverName] = result
+      })
     }
 
     return {
       load,
+      resolveServer,
 
       /** Drop a cached entry — session cache included — so the next read
        *  refetches. Wired to the "Try again" action on the failure Alert. */
       invalidate: (serverId: string, scope: CatalogScope) => {
-        generation.set(serverId, (generation.get(serverId) ?? 0) + 1)
-        inflight.delete(serverId)
-        sessionCatalog(scope).delete(serverId)
+        const session = sessionState(scope)
+        session.toolsGeneration.set(
+          serverId,
+          (session.toolsGeneration.get(serverId) ?? 0) + 1,
+        )
+        session.toolsPending.delete(serverId)
+        session.tools.delete(serverId)
         set(d => {
           delete d.byServerId[serverId]
+        })
+      },
+
+      /** The same, for a by-name verdict — so a lookup that failed (or found
+       *  nothing) can be asked again rather than standing for the session. */
+      invalidateServer: (serverName: string, scope: CatalogScope) => {
+        const session = sessionState(scope)
+        session.serversGeneration.set(
+          serverName,
+          (session.serversGeneration.get(serverName) ?? 0) + 1,
+        )
+        session.serversPending.delete(serverName)
+        session.servers.delete(serverName)
+        set(d => {
+          delete d.serverByName[serverName]
         })
       },
     }
@@ -222,40 +365,103 @@ export const ToolCatalogStoreDef = defineLocalStore({
 
 export type ToolCatalogStore = ReturnType<typeof ToolCatalogStoreDef.use>
 
+/** What `entryForServerName` needs beyond the loaded page, to tell "we do not
+ *  know yet" apart from "no such server". */
+export interface ServerResolutionContext {
+  /** Has the shared accessible-server list answered at least once (or failed)?
+   *  While it has not, its emptiness means nothing. */
+  listReady?: boolean
+  /** Authoritative by-name verdicts already obtained (`resolveServer`). */
+  lookups?: Record<string, ServerLookup>
+}
+
 /**
- * The catalog entry for a server NAME, given the accessible-server list.
+ * The catalog entry for a server NAME.
  *
- * Pure so the resolution rule is unit-testable without React. Note the known
- * limitation it inherits: `McpServer.servers` is a PAGINATED slice, so a server
- * beyond the loaded page resolves to `unknown-server` — which surfaces the
- * visible fallback rather than an empty picker. (The same limitation already
- * affects the Server picker itself; fixing pagination there is a separate
- * change in the mcp module.)
+ * Pure so the resolution rule is unit-testable without React.
+ *
+ * The loaded `servers` list is only ever EVIDENCE OF PRESENCE, never of absence:
+ * it is a paginated slice (page size 10) of a lazily-loaded store, so "not in
+ * it" covers three different situations — the list has not loaded yet, the
+ * server is on a later page, and the server genuinely is not available. Calling
+ * all three `unknown-server` told the author, in the very first frame of every
+ * saved tool step, that their server "isn't one of the servers available to
+ * you". That reason was FALSE, which INV-6 forbids more strongly than it
+ * forbids silence. Absence is now only ever asserted from an authoritative
+ * by-name lookup; until one exists the state is `resolving-server` and
+ * `needsLookup` asks the caller to run one.
  */
 export function entryForServerName(
   serverName: string | null | undefined,
-  servers: { id: string; name: string }[],
+  servers: { id: string; name: string; enabled?: boolean }[],
   byServerId: Record<string, CatalogEntry>,
-): { entry: CatalogEntry; serverId: string | null } {
-  if (!serverName) {
-    return { entry: { ...EMPTY, failure: { kind: 'no-server' } }, serverId: null }
-  }
+  context: ServerResolutionContext = {},
+): { entry: CatalogEntry; serverId: string | null; needsLookup: boolean } {
+  const { listReady = true, lookups = {} } = context
+  const unresolved = (failure: CatalogFailure, needsLookup = false) => ({
+    entry: { ...EMPTY, failure },
+    serverId: null,
+    needsLookup,
+  })
+
+  if (!serverName) return unresolved({ kind: 'no-server' })
+
   const match = servers.find(s => s.name === serverName)
-  if (!match) {
+  if (match) {
+    // A registered server that is switched OFF is not an unknown one, and
+    // hiding it behind an `enabled` filter (so it resolved as "no such server")
+    // accused the author of pointing at something that does not exist.
+    if (match.enabled === false) {
+      return unresolved({ kind: 'disabled-server', serverName })
+    }
     return {
-      entry: { ...EMPTY, failure: { kind: 'unknown-server', serverName } },
-      serverId: null,
+      entry: byServerId[match.id] ?? EMPTY,
+      serverId: match.id,
+      needsLookup: false,
     }
   }
-  return { entry: byServerId[match.id] ?? EMPTY, serverId: match.id }
+
+  const lookup = lookups[serverName]
+  if (!lookup) {
+    // Ask for a lookup only once the shared list has settled — while it is
+    // still loading it may yet answer for free.
+    return unresolved({ kind: 'resolving-server', serverName }, listReady)
+  }
+  switch (lookup.status) {
+    case 'pending':
+      return unresolved({ kind: 'resolving-server', serverName })
+    case 'no-permission':
+      return unresolved({ kind: 'no-permission' })
+    case 'failed':
+      return unresolved({
+        kind: 'server-lookup-failed',
+        serverName,
+        detail: lookup.detail,
+      })
+    case 'missing':
+      return unresolved({ kind: 'unknown-server', serverName })
+    case 'found':
+      return lookup.enabled
+        ? {
+            entry: byServerId[lookup.id] ?? EMPTY,
+            serverId: lookup.id,
+            needsLookup: false,
+          }
+        : unresolved({ kind: 'disabled-server', serverName })
+  }
 }
 
 /** Alert heading for a catalog failure — "unavailable" would misdescribe a
  *  server that answered perfectly well and simply has no tools. */
 export function failureTitle(failure: CatalogFailure): string {
-  return failure.kind === 'no-tools'
-    ? 'This server offers no tools'
-    : 'Tool list unavailable'
+  switch (failure.kind) {
+    case 'no-tools':
+      return 'This server offers no tools'
+    case 'disabled-server':
+      return 'This server is turned off'
+    default:
+      return 'Tool list unavailable'
+  }
 }
 
 /** Author-facing sentence for a catalog failure (INV-6 — always a stated reason). */
@@ -263,8 +469,14 @@ export function failureMessage(failure: CatalogFailure): string {
   switch (failure.kind) {
     case 'no-server':
       return 'Pick a server first to see the tools it offers.'
+    case 'resolving-server':
+      return `Still looking up "${failure.serverName}" among the servers available to you — the tool list will appear as soon as it answers.`
     case 'unknown-server':
       return `This step points at a server called "${failure.serverName}", which isn't one of the servers available to you — enter the tool name and arguments by hand, or pick a different server.`
+    case 'disabled-server':
+      return `"${failure.serverName}" is one of your servers but it is currently disabled, so its tools can't be listed — enable it, pick a different server, or enter the tool name and arguments by hand.`
+    case 'server-lookup-failed':
+      return `Couldn't check whether "${failure.serverName}" is available to you (${failure.detail}) — try again, or enter the tool name and arguments by hand.`
     case 'no-permission':
       return "You don't have permission to list this server's tools — enter the tool name and arguments by hand."
     case 'unreachable':
@@ -274,7 +486,19 @@ export function failureMessage(failure: CatalogFailure): string {
   }
 }
 
-/** Whether asking again could plausibly change the answer (drives "Try again"). */
+/**
+ * Whether asking again could plausibly change the answer (drives "Try again").
+ *
+ * `unknown-server` is retryable BECAUSE the verdict now comes from a lookup we
+ * ran: a server registered (or shared with this user) since then would resolve
+ * on the next ask, and without the button that verdict — right or wrong — stood
+ * for the whole editing session with no way out.
+ */
 export function isRetryableFailure(failure: CatalogFailure): boolean {
-  return failure.kind === 'unreachable' || failure.kind === 'no-tools'
+  return (
+    failure.kind === 'unreachable' ||
+    failure.kind === 'no-tools' ||
+    failure.kind === 'server-lookup-failed' ||
+    failure.kind === 'unknown-server'
+  )
 }

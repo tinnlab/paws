@@ -1952,6 +1952,18 @@ mod humanisation_contract {
         let desktop = manifest_dir().join("../desktop/tauri/src");
         if desktop.is_dir() {
             roots.push(desktop);
+        } else {
+            // The desktop crate is genuinely OPTIONAL (a server-only checkout has
+            // no `../desktop` at all), but "the crate is there and its source dir
+            // moved" must be LOUD: silently dropping the root would stop the guard
+            // seeing that crate's emit sites while still passing.
+            assert!(
+                !manifest_dir().join("../desktop").is_dir(),
+                "the desktop workspace exists but {} does not — the drift guard \
+                 would silently stop scanning the desktop crate's `ValidationError` \
+                 emit sites. Point `scan_roots` at the new source dir.",
+                desktop.display()
+            );
         }
         roots
     }
@@ -2214,6 +2226,13 @@ mod humanisation_contract {
             }
             if is_ident_char(c) && !c.is_ascii_digit() {
                 let word = read_ident(&ch, &mut i);
+                if word == "type" && test_body_from.is_none() {
+                    // `type VE = ValidationError;` — the OTHER way to name the
+                    // type something the scanner does not look for. Checked with
+                    // a non-committing lookahead, so the tokens are still scanned
+                    // normally afterwards.
+                    scan_type_alias(&ch, i, line, file, scan);
+                }
                 if word == "ValidationError" && test_body_from.is_none() {
                     scan_validation_error_use(
                         &ch, &mut i, &mut line, file, &prev_word, scan,
@@ -2223,6 +2242,83 @@ mod humanisation_contract {
                 continue;
             }
             i += 1;
+        }
+    }
+
+    /// A path (`a::b::ValidationError`) starting at `j`: returns its LAST
+    /// segment and leaves `j` just past it. Empty when `j` is not on an ident.
+    fn read_path_tail(ch: &[char], j: &mut usize) -> String {
+        let mut last = String::new();
+        loop {
+            skip_trivia_no_line(ch, j);
+            let seg = read_ident(ch, j);
+            if seg.is_empty() {
+                return last;
+            }
+            last = seg;
+            let mut k = *j;
+            skip_trivia_no_line(ch, &mut k);
+            if !(ch.get(k) == Some(&':') && ch.get(k + 1) == Some(&':')) {
+                return last;
+            }
+            *j = k + 2;
+        }
+    }
+
+    /// `skip_trivia` for lookaheads that must not disturb the caller's line
+    /// counter (nothing is committed, so the line number never changes).
+    fn skip_trivia_no_line(ch: &[char], i: &mut usize) {
+        let mut sink = 0usize;
+        skip_trivia(ch, i, &mut sink);
+    }
+
+    /// Called with `i` just past the keyword `type`. Reports
+    /// `type Alias = …::ValidationError;` — a second name for the type, under
+    /// which `Alias::err("semantic", "NEW_CODE", …)` is invisible to the scanner.
+    fn scan_type_alias(ch: &[char], i: usize, line: usize, file: &str, scan: &mut Scan) {
+        let mut j = i;
+        skip_trivia_no_line(ch, &mut j);
+        let alias = read_ident(ch, &mut j);
+        if alias.is_empty() {
+            return; // not `type <Name> = …` (e.g. the field `r#type: …`)
+        }
+        skip_trivia_no_line(ch, &mut j);
+        // Skip a generic parameter list so `type A<T> = …` is still seen.
+        if ch.get(j) == Some(&'<') {
+            let mut depth = 0usize;
+            while let Some(&c) = ch.get(j) {
+                match c {
+                    '<' => depth += 1,
+                    '>' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            j += 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                j += 1;
+            }
+            skip_trivia_no_line(ch, &mut j);
+        }
+        if ch.get(j) != Some(&'=') {
+            return;
+        }
+        j += 1;
+        // Only a BARE alias (`= …::ValidationError;`) renames the type. A
+        // wrapper (`= Result<(), ValidationError>;`) does not, and must not be
+        // reported — the guard's problems have to stay true.
+        let tail = read_path_tail(ch, &mut j);
+        skip_trivia_no_line(ch, &mut j);
+        if tail == "ValidationError" && ch.get(j) == Some(&';') {
+            scan.problems.push(format!(
+                "{file}:{line}: `type {alias} = …ValidationError;` aliases the type. \
+                 A finding built through the alias (`{alias}::err(\"semantic\", \"CODE\", …)`) \
+                 is invisible to this scanner, so its code escapes BOTH the registry and \
+                 the author-facing-copy check. Name the type `ValidationError` at the \
+                 construction site."
+            ));
         }
     }
 
@@ -2253,6 +2349,32 @@ mod humanisation_contract {
                 ));
             }
             return; // leave the brace to the caller's depth accounting
+        }
+
+        // `use …::ValidationError as VE;` (or `use …::{ValidationError as VE}`).
+        // Every later `VE::err("semantic", "NEW_CODE", …)` is invisible to this
+        // scanner — it keys on the `ValidationError` identifier — so the code
+        // would escape BOTH halves of the contract (the registry AND the
+        // author-facing copy) SILENTLY. Every other hole here is loud; this one
+        // was not.
+        {
+            let mut k = j;
+            let mut kline = jline;
+            let word = read_ident(ch, &mut k);
+            if word == "as" {
+                skip_trivia(ch, &mut k, &mut kline);
+                let alias = read_ident(ch, &mut k);
+                scan.problems.push(format!(
+                    "{file}:{line}: `ValidationError` is imported under the alias \
+                     '{alias}'. A finding built through it (`{alias}::err(\"semantic\", \
+                     \"CODE\", …)`) is invisible to this scanner, so its code escapes \
+                     BOTH the registry and the author-facing-copy check. Import the type \
+                     under its own name."
+                ));
+                *i = k;
+                *line = kline;
+                return;
+            }
         }
 
         if !(ch.get(j) == Some(&':') && ch.get(j + 1) == Some(&':')) {
@@ -2548,7 +2670,191 @@ mod humanisation_contract {
         Ok(keys)
     }
 
-    // ── the two tests ──────────────────────────────────────────────────────
+    // ── the tests ──────────────────────────────────────────────────────────
+
+    /// TEST-1b — the SCANNER itself, on the source shapes it has to survive.
+    ///
+    /// Why this exists: the two set-comparisons below are only meaningful while
+    /// the ~400-line hand-written Rust lexer above actually FINDS the emit sites.
+    /// An UNDER-SCAN of an existing code is loud (both directions of the
+    /// emitted-vs-registered comparison are asserted), but a NEW emit site the
+    /// lexer fails to reach is invisible to BOTH sets at once — they agree, no
+    /// copy is demanded, and a raw wire code ships green. So the lexer's
+    /// behaviour is pinned here directly, on the shapes most likely to desync it:
+    /// lifetimes vs char literals, raw/byte strings, and the `#[cfg(test)]` match.
+    #[test]
+    fn scanner_reads_awkward_source_shapes() {
+        fn scan_of(src: &str) -> Scan {
+            let mut scan = Scan {
+                codes: BTreeSet::new(),
+                problems: Vec::new(),
+            };
+            scan_rust_source("fixture.rs", src, &mut scan);
+            scan
+        }
+        fn codes(src: &str) -> Vec<String> {
+            scan_of(src).codes.into_iter().collect()
+        }
+
+        // 1. Lifetimes and char literals must not swallow the emit site that
+        //    follows them. `'}'` would break brace/depth accounting and `'"'`
+        //    would open a phantom string that eats the rest of the file.
+        let lifetimes = "\
+fn f<'a, 'b>(x: &'a str, y: &'b str) -> Vec<ValidationError> {
+    let brace = '}';
+    let quote = '\"';
+    let esc = '\\'';
+    let nl = '\\n';
+    let uni = '\\u{1f600}';
+    vec![ValidationError::err(\"semantic\", \"CODE_AFTER_CHAR_LITERALS\", \"m\")]
+}
+";
+        let scan = scan_of(lifetimes);
+        assert!(
+            scan.problems.is_empty(),
+            "char literals / lifetimes desynced the scanner: {:?}",
+            scan.problems
+        );
+        assert_eq!(
+            scan.codes.into_iter().collect::<Vec<_>>(),
+            vec!["CODE_AFTER_CHAR_LITERALS".to_string()],
+            "an emit site after a lifetime + char-literal run was not found"
+        );
+
+        // 2. Raw / raw-byte strings are SKIPPED (a code quoted inside one is not
+        //    an emit site) and do not swallow the real emit site after them.
+        let raws = concat!(
+            "fn g() -> ValidationError {\n",
+            "    let _sql = br#\"SELECT '\"' FROM t WHERE a = 1\"#;\n",
+            "    let _doc = r##\"ValidationError::err(\"semantic\", \"FAKE_IN_RAW\", \"x\")\"##;\n",
+            "    let _b = b\"bytes \\\" still bytes\";\n",
+            "    ValidationError::at(\"schema\", \"CODE_AFTER_RAW_STRINGS\", \"m\", \"loc\")\n",
+            "}\n",
+        );
+        let scan = scan_of(raws);
+        assert!(
+            scan.problems.is_empty(),
+            "raw/byte strings desynced the scanner: {:?}",
+            scan.problems
+        );
+        assert_eq!(
+            scan.codes.into_iter().collect::<Vec<_>>(),
+            vec!["CODE_AFTER_RAW_STRINGS".to_string()],
+            "a raw string either hid the emit site after it, or injected a phantom code"
+        );
+
+        // 3. `#[cfg(test)]` bodies are skipped — a fixture must not inject a
+        //    phantom code …
+        let cfg_test = "\
+#[cfg(test)]
+mod tests {
+    fn t() {
+        let _ = ValidationError::err(\"semantic\", \"PHANTOM_FROM_TEST\", \"m\");
+    }
+}
+";
+        assert!(
+            codes(cfg_test).is_empty(),
+            "a `#[cfg(test)]` fixture injected a phantom code"
+        );
+
+        // … but the match is the LITERAL `#[cfg(test)]`, so any other cfg shape
+        // is scanned as REAL code. That is the safe direction (the code shows up
+        // as emitted → the registry/copy checks demand an entry) and it is pinned
+        // here so a future "fix" cannot quietly turn it into a silent skip.
+        let cfg_all = "\
+#[cfg(all(test, feature = \"extra\"))]
+mod tests {
+    fn t() {
+        let _ = ValidationError::err(\"semantic\", \"CODE_IN_CFG_ALL_TEST\", \"m\");
+    }
+}
+";
+        assert_eq!(
+            codes(cfg_all),
+            vec!["CODE_IN_CFG_ALL_TEST".to_string()],
+            "`#[cfg(all(test, …))]` must not be treated as a silent skip — an emit \
+             site there has to reach the registry/copy checks"
+        );
+
+        // 4. ALIASES — the two ways to give the type another name, under which
+        //    every later `Alias::err(…)` is invisible to this scanner.
+        let use_alias = "use crate::modules::workflow::validate::ValidationError as VE;\n\
+                         fn h() { let _ = VE::err(\"semantic\", \"HIDDEN_CODE\", \"m\"); }\n";
+        let scan = scan_of(use_alias);
+        assert_eq!(
+            scan.problems.len(),
+            1,
+            "an aliased import must be reported, not silently skipped: {:?}",
+            scan.problems
+        );
+        assert!(
+            scan.problems[0].contains("alias") && scan.problems[0].contains("VE"),
+            "the alias problem must name the alias: {}",
+            scan.problems[0]
+        );
+        assert!(scan.codes.is_empty());
+
+        let type_alias = "type VE = crate::modules::workflow::validate::ValidationError;\n";
+        let scan = scan_of(type_alias);
+        assert_eq!(
+            scan.problems.len(),
+            1,
+            "a `type` alias must be reported: {:?}",
+            scan.problems
+        );
+        assert!(scan.problems[0].contains("VE"));
+
+        // Negative controls: a WRAPPER type is not a rename, and neither is a
+        // plain mention. Reporting those would make the guard cry wolf.
+        for benign in [
+            "type Findings = Vec<ValidationError>;\n",
+            "type Checked = Result<(), ValidationError>;\n",
+            "struct S { r#type: String, e: Vec<ValidationError> }\n",
+            "fn k(v: &[ValidationError]) -> Option<&ValidationError> { v.first() }\n",
+        ] {
+            let scan = scan_of(benign);
+            assert!(
+                scan.problems.is_empty(),
+                "benign source reported a problem ({benign:?}): {:?}",
+                scan.problems
+            );
+            assert!(scan.codes.is_empty());
+        }
+
+        // 5. The constructions the guard already refuses stay refused.
+        for (src, needle) in [
+            (
+                "fn a() { let _ = ValidationError { layer: \"semantic\".into(), code: \"X\".into() }; }\n",
+                "struct literal",
+            ),
+            (
+                "fn b() { let _ = ValidationError::other(\"semantic\", \"X\"); }\n",
+                "not one of the",
+            ),
+            (
+                "const C: &str = \"X\";\nfn c() { let _ = ValidationError::err(\"semantic\", C, \"m\"); }\n",
+                "2nd argument",
+            ),
+            (
+                "fn d() { let _ = ValidationError::err(\"runtime\", \"X\", \"m\"); }\n",
+                "UNKNOWN layer",
+            ),
+            (
+                "fn e() { let _ = ValidationError::err(\"semantic\", \"lower_case\", \"m\"); }\n",
+                "SCREAMING_SNAKE",
+            ),
+        ] {
+            let scan = scan_of(src);
+            assert!(
+                scan.problems.iter().any(|p| p.contains(needle)),
+                "expected a problem containing {needle:?} for {src:?}, got {:?}",
+                scan.problems
+            );
+        }
+    }
+
+    // ── the two set-comparison tests ───────────────────────────────────────
 
     /// TEST-15 — the registry itself is well-formed, so the set comparisons
     /// below actually mean something.

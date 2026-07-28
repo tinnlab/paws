@@ -121,23 +121,42 @@ export function ToolStepForm({ store, step }: Props) {
 
   const catalog = ToolCatalogStoreDef.use()
   const servers = McpServer.servers
+  // The accessible-server list is LAZY: it is empty on the first frames after a
+  // cold load. Until it has answered once (or failed trying), its emptiness is
+  // not evidence that a step's server does not exist.
+  //
+  // BOTH reads are hoisted and unconditional. A store-proxy read IS a hook
+  // (useEffect + useStore), so putting `McpServer.error` on the right of a `||`
+  // makes the hook count vary with `isInitialized` — React then crashes the
+  // frame that flips it. Read first, combine second.
+  const serversInitialized = McpServer.isInitialized
+  const serversError = McpServer.error
+  const serversSettled = serversInitialized || !!serversError
   const byServerId = catalog.byServerId
+  const serverByName = catalog.serverByName
 
   // A step stores the server NAME (`resolve_tool_server` resolves by name at run
   // time); the tools endpoint is keyed by id, so resolve name → id here.
-  // The candidate list is filtered to ENABLED servers, the same filter the
-  // sibling Server picker applies (`capabilities.tsx`) — otherwise a disabled
-  // server was blank in that picker but still resolved here, so the two controls
-  // disagreed about whether it existed.
-  const { entry, serverId } = useMemo(
+  // A DISABLED server is passed through rather than filtered out: dropping it
+  // made the step read as pointing at a server that does not exist, which is a
+  // different — and false — thing to tell the author.
+  const { entry, serverId, needsLookup } = useMemo(
     () =>
       entryForServerName(
         step.server,
-        (servers ?? []).filter(s => s.enabled).map(s => ({ id: s.id, name: s.name })),
+        (servers ?? []).map(s => ({ id: s.id, name: s.name, enabled: s.enabled })),
         byServerId,
+        { listReady: serversSettled, lookups: serverByName },
       ),
-    [step.server, servers, byServerId],
+    [step.server, servers, serversSettled, byServerId, serverByName],
   )
+
+  useEffect(() => {
+    // The loaded page can't answer for this name — ask the API about this ONE
+    // server rather than guessing from a paginated slice.
+    if (needsLookup && step.server) void catalog.resolveServer(step.server, store)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [needsLookup, step.server])
 
   useEffect(() => {
     // `store` is the SCOPE: the tool list is cached for this editing session, so
@@ -162,12 +181,15 @@ export function ToolStepForm({ store, step }: Props) {
   )
 
   // A catalog we could not read at all ⇒ the documented hand-entry escape hatch.
-  // `no-server` is NOT a failure to report in the Alert — it is the ordinary
-  // initial state — but it still gets said, on the Tool field itself (below).
-  const blockingFailure =
-    entry.failure && entry.failure.kind !== 'no-server' ? entry.failure : null
-  const usePicker =
-    !blockingFailure && !entry.loading && serverToolOptions.length > 0
+  // `no-server` and `resolving-server` are NOT failures to report in the Alert —
+  // one is the ordinary initial state, the other is a transient lookup — but
+  // both still get said, on the Tool field itself (below).
+  const transientKind =
+    entry.failure?.kind === 'no-server' || entry.failure?.kind === 'resolving-server'
+  const blockingFailure = entry.failure && !transientKind ? entry.failure : null
+  /** Nothing can be decided about the tool list yet. */
+  const busy = entry.loading || entry.failure?.kind === 'resolving-server'
+  const usePicker = !blockingFailure && !busy && serverToolOptions.length > 0
   // The generated form applies only when the chosen tool actually declared one.
   const useGenerated = !!spec
 
@@ -198,15 +220,21 @@ export function ToolStepForm({ store, step }: Props) {
     ? `"${storedTool}" is no longer in this server's tool list. Pick one of the tools it offers now, or choose a different server.`
     : usePicker
       ? 'Pick the tool this step should call.'
-      : entry.failure?.kind === 'no-server'
+      : transientKind && entry.failure
         ? failureMessage(entry.failure)
         : 'The exact name of the tool to call on that server.'
 
-  /** Forget this server's cached tools and ask again (a briefly-down server). */
+  /** Ask again — for whichever of the two questions we failed to answer: which
+   *  server this name is, or which tools that server offers. */
   const retryCatalog = () => {
-    if (!serverId || !step.server) return
-    catalog.invalidate(serverId, store)
-    void catalog.load(serverId, step.server, store)
+    if (!step.server) return
+    if (serverId) {
+      catalog.invalidate(serverId, store)
+      void catalog.load(serverId, step.server, store)
+      return
+    }
+    catalog.invalidateServer(step.server, store)
+    void catalog.resolveServer(step.server, store)
   }
 
   // ── Free key/value rows: the fallback editor, and the "Additional arguments"
@@ -232,6 +260,15 @@ export function ToolStepForm({ store, step }: Props) {
   // own commit and only resync the buffer for the former (FIX-F).
   const argsSnapshot = (a: unknown) =>
     JSON.stringify(a && typeof a === 'object' && !Array.isArray(a) ? a : {})
+  /** The snapshot of what the ROW BUFFER will read back after a commit. It must
+   *  be taken through the same `splitArguments` filter the effect below reads
+   *  through, or the two are not comparable: recording the whole row object
+   *  while the effect compared only the UNDECLARED half meant that the moment a
+   *  row's key finished spelling a declared property name, our own commit looked
+   *  like somebody else's edit and the row was rebuilt out from under the caret
+   *  — the row simply vanished mid-keystroke. */
+  const rowsPushedSnapshot = (rowObj: Record<string, unknown>) =>
+    argsSnapshot(useGenerated ? splitArguments(rowObj, spec).extra : rowObj)
   const lastPushed = useRef<string>(
     argsSnapshot(useGenerated ? extra : step.arguments),
   )
@@ -251,8 +288,23 @@ export function ToolStepForm({ store, step }: Props) {
   const commitRows = (next: ArgRow[]) => {
     setRows(next)
     const rowObj = rowsToArgs(next)
-    lastPushed.current = JSON.stringify(rowObj)
+    lastPushed.current = rowsPushedSnapshot(rowObj)
     patch({ arguments: useGenerated ? { ...known, ...rowObj } : rowObj })
+  }
+
+  /**
+   * A free row whose key has become a DECLARED property name is absorbed into
+   * that typed field — on BLUR, never mid-keystroke. Its value is already in
+   * `arguments` (and `known` therefore already carries it), so dropping the row
+   * hands the value to the generated control instead of leaving two editors
+   * writing the same key, where the row's copy would silently overwrite
+   * whatever the author typed into the typed field.
+   */
+  const absorbDeclaredRow = (row: ArgRow) => {
+    if (!useGenerated || !spec) return
+    const key = row.key.trim()
+    if (!key || !spec.fields.some(f => f.name === key)) return
+    commitRows(rows.filter(r => r.rowId !== row.rowId))
   }
 
   /** Commit one generated field, preserving every schema-undeclared key. */
@@ -260,7 +312,13 @@ export function ToolStepForm({ store, step }: Props) {
     const nextKnown = { ...known }
     if (value === undefined || value === '') delete nextKnown[name]
     else nextKnown[name] = value
-    patch({ arguments: { ...nextKnown, ...rowsToArgs(rows) } })
+    const rowObj = rowsToArgs(rows)
+    // In the brief window where a free row's key spells THIS field's name (until
+    // the row is left and absorbed), the row must not win: the rows are merged
+    // last, so without this the author's edit to the typed control was silently
+    // overwritten by the row's stale copy.
+    delete rowObj[name]
+    patch({ arguments: { ...nextKnown, ...rowObj } })
   }
 
   const addRow = () => {
@@ -292,7 +350,9 @@ export function ToolStepForm({ store, step }: Props) {
           title={failureTitle(blockingFailure)}
           description={failureMessage(blockingFailure)}
         >
-          {serverId && isRetryableFailure(blockingFailure) && (
+          {/* No `serverId &&` guard: the retryable failures now include the
+              ones where the server id is exactly what we could not establish. */}
+          {isRetryableFailure(blockingFailure) && (
             <div className="mt-2">
               <Button
                 type="button"
@@ -328,7 +388,7 @@ export function ToolStepForm({ store, step }: Props) {
               if (v === (step.tool ?? '')) return
               patch({ tool: v, arguments: {} })
             }}
-            loading={entry.loading}
+            loading={busy}
             placeholder="Search this server's tools…"
             emptyText="No tool matches"
           />
@@ -338,9 +398,13 @@ export function ToolStepForm({ store, step }: Props) {
             value={step.tool ?? ''}
             onChange={e => patch({ tool: e.target.value })}
             placeholder={
-              entry.loading ? 'Loading this server’s tools…' : 'e.g. search'
+              entry.failure?.kind === 'resolving-server'
+                ? 'Looking up this server…'
+                : entry.loading
+                  ? 'Loading this server’s tools…'
+                  : 'e.g. search'
             }
-            disabled={entry.loading}
+            disabled={busy}
           />
         )}
       </LabeledControl>
@@ -350,6 +414,7 @@ export function ToolStepForm({ store, step }: Props) {
           store={store}
           stepId={step.id}
           spec={spec}
+          toolKey={selectedTool?.name ?? storedTool}
           values={known}
           onChange={commitField}
         />
@@ -386,6 +451,7 @@ export function ToolStepForm({ store, step }: Props) {
                     ),
                   )
                 }
+                onBlur={() => absorbDeclaredRow(row)}
                 placeholder="name"
               />
               <Input

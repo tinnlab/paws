@@ -10,6 +10,7 @@ import {
   findingStepTitle,
   humaniseFinding,
   humaniseInstallError,
+  humaniseRequestError,
   indexFindingsByStep,
   parseInstallError,
   resolveFindingStep,
@@ -356,11 +357,111 @@ test('a save error that is not a validator finding is shown unchanged, never bla
   for (const raw of [
     "A workflow named 'triage' already exists — choose a different name",
     'Give the workflow a name before saving',
-    'HTTP error! status: 500 - upstream exploded',
     // A validator code with no human copy yet: fall back to the backend text
     // rather than to nothing (the Rust drift guard is what prevents this).
     '[semantic/WORKFLOW_SOMETHING_NEW] agent_1: a brand new problem',
   ]) {
     assert.equal(humaniseInstallError(raw, steps), raw)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// A save/validate failure that never reached the validator. The api-client
+// formats those as `HTTP error! status: <n> - <response body>` — an unbounded
+// machine string (routinely a whole HTML error page) that used to be shown
+// verbatim in the Alert TITLE and the save toast.
+// ---------------------------------------------------------------------------
+
+test('a transport failure never shows the author the api-client wire string', () => {
+  // THE LITERAL DEFECT: a gateway answers with an HTML page, and `core.ts`
+  // wraps the whole body into the Error message.
+  const raw =
+    'HTTP error! status: 502 - <!DOCTYPE html><html><head><title>502 Bad Gateway</title>' +
+    '</head><body bgcolor="white"><center><h1>502 Bad Gateway</h1></center>' +
+    '<hr><center>nginx/1.25.3</center></body></html>'
+  const shown = humaniseInstallError(raw, steps)
+
+  assert.doesNotMatch(shown, /HTTP error!/, 'the api-client wire string reached the author')
+  assert.doesNotMatch(shown, /[<>]/, 'markup reached the author')
+  assert.doesNotMatch(shown, /nginx|DOCTYPE/i)
+  assert.ok(
+    shown.length > 0 && shown.length <= 160,
+    `a machine string must be clipped, not unbounded (got ${shown.length} chars)`,
+  )
+  assert.match(shown, /server/i)
+})
+
+test('a status becomes a sentence, from the Error object or from the message', () => {
+  const cases: [number, RegExp][] = [
+    [401, /signed in/i],
+    [403, /permission/i],
+    [404, /no longer exists/i],
+    [409, /changed on the server/i],
+    [429, /busy/i],
+    [500, /internal error/i],
+    [503, /internal error/i],
+  ]
+  for (const [status, expected] of cases) {
+    const fromObject = humaniseRequestError(
+      Object.assign(new Error(`HTTP error! status: ${status} - <html>x</html>`), {
+        status,
+      }),
+      steps,
+    )
+    assert.match(fromObject, expected, `status ${status} from the Error object`)
+    // The store persists only the STRING, so the panel must reach the same
+    // sentence with the status read back out of the message.
+    assert.equal(
+      humaniseInstallError(`HTTP error! status: ${status} - <html>x</html>`, steps),
+      fromObject,
+      `status ${status} must read the same from the stored string`,
+    )
+  }
+})
+
+test('a validator finding still wins over the status sentence', () => {
+  // `validate_for_install` rejects with 400; flattening that into "the server
+  // rejected this change" would throw away the ONE actionable message.
+  const shown = humaniseRequestError(
+    Object.assign(
+      new Error(
+        '[semantic/WORKFLOW_PROMPT_MISSING] agent_1: step has neither prompt: nor prompt_file:',
+      ),
+      { status: 400 },
+    ),
+    steps,
+  )
+  assert.equal(
+    shown,
+    'Step 1 · Research the topic: This step needs a task description — say what the assistant should do.',
+  )
+})
+
+test('an unreadable failure falls back to the caller sentence, never to blank', () => {
+  for (const error of [
+    new Error('   '),
+    new Error('<html><body>   </body></html>'),
+    {},
+    null,
+    undefined,
+  ]) {
+    const shown = humaniseRequestError(error, steps, 'The workflow could not be saved — try again.')
+    assert.equal(shown, 'The workflow could not be saved — try again.')
+  }
+})
+
+test('a long non-HTTP machine string is clipped rather than pasted whole', () => {
+  const shown = humaniseRequestError(new Error('x'.repeat(500)), steps)
+  assert.ok(shown.length <= 160, `expected a clipped sentence, got ${shown.length} chars`)
+  assert.match(shown, /…$/)
+})
+
+test('humanising is idempotent — the store humanises, then the panel humanises again', () => {
+  for (const already of [
+    'The server reported an internal error — try again in a moment.',
+    'The workflow could not be saved — try again.',
+    'Step 1 · Research the topic: This step needs a task description — say what the assistant should do.',
+  ]) {
+    assert.equal(humaniseInstallError(already, steps), already)
   }
 })

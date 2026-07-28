@@ -369,18 +369,16 @@ export function parseInstallError(raw: string): ParsedInstallError | null {
 }
 
 /**
- * The person-facing sentence for a save/install failure.
- *
- * Falls back to `raw` — never to blank — when the string is not a validator
- * finding at all, or carries a code this module has no copy for.
+ * The humanised sentence for a raw string that IS a validator finding, else
+ * `null` (a network failure, a name collision, a code with no copy yet).
  */
-export function humaniseInstallError(
+function humaniseValidatorFinding(
   raw: string,
   steps: BuilderStep[],
-): string {
+): string | null {
   const parsed = parseInstallError(raw)
-  if (!parsed) return raw
-  if (!HUMANISED_CODES.includes(parsed.code)) return raw
+  if (!parsed) return null
+  if (!HUMANISED_CODES.includes(parsed.code)) return null
   const finding = {
     layer: parsed.layer,
     code: parsed.code,
@@ -391,4 +389,123 @@ export function humaniseInstallError(
   return attributed.stepId
     ? `${findingStepTitle(attributed)}: ${attributed.text}`
     : attributed.text
+}
+
+// ── the OTHER half of the save/validate boundary: transport failures ────────
+//
+// Not every save failure is a validator finding. When the request never reaches
+// the handler (a proxy, a gateway, a dead tunnel) the generated api-client
+// builds its message as
+//     `HTTP error! status: 502 - <the entire response body>`
+// (`sdk/packages/framework/src/api-client/core.ts`) — an unbounded machine
+// string, routinely a whole HTML error page. Rendering that in an Alert TITLE
+// and a toast is the same class of leak as the wire vocabulary above: a machine
+// artefact where a sentence belongs. So the same treatment the tool catalog
+// applies to a failed `tools/list` (`ToolCatalog.store.ts::describeFetchError` —
+// status → sentence, markup stripped, length clipped) is applied HERE, at the
+// save/validate boundary.
+
+/** Longest machine-derived text we will put in front of the author. */
+const MAX_ERROR_CHARS = 160
+
+/** The api-client's transport-failure message shape. */
+const HTTP_ERROR_RE = /^HTTP error!\s*status:\s*(\d{3})\b/i
+
+/** Neutral last resort. Used for BOTH surfaces, so it names neither. */
+const GENERIC_REQUEST_FAILURE = 'The server could not be reached — try again.'
+
+/** An HTTP status the author can act on, as a sentence. `null` ⇒ say nothing. */
+function statusSentence(status: number): string | null {
+  if (status === 401)
+    return 'You are no longer signed in — sign in again, then retry.'
+  if (status === 403)
+    return 'You do not have permission to make this change.'
+  if (status === 404) return 'This workflow no longer exists on the server.'
+  if (status === 408 || status === 504)
+    return 'The server took too long to answer — try again.'
+  if (status === 409)
+    return 'This workflow changed on the server — reload it, then retry.'
+  if (status === 413)
+    return 'This workflow is too large for the server to accept.'
+  if (status === 429)
+    return 'The server is busy right now — wait a moment, then retry.'
+  if (status >= 500)
+    return 'The server reported an internal error — try again in a moment.'
+  if (status >= 400) return 'The server rejected this change.'
+  return null
+}
+
+/** The api-client attaches the status to the thrown Error; use it when we have
+ *  the object, and fall back to the one it formatted into the message. */
+function statusOf(error: unknown): number | null {
+  const s = (error as { status?: unknown } | null)?.status
+  if (typeof s === 'number' && Number.isFinite(s)) return s
+  return null
+}
+
+/** Strip markup, collapse whitespace, clip. `''` when nothing readable is left. */
+function tidyMachineText(raw: string): string {
+  const oneLine = raw
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!oneLine) return ''
+  return oneLine.length > MAX_ERROR_CHARS
+    ? `${oneLine.slice(0, MAX_ERROR_CHARS - 1)}…`
+    : oneLine
+}
+
+/**
+ * The person-facing sentence for ANY save/validate failure.
+ *
+ * Order matters:
+ *  1. a validator finding wins — it is the actionable one, and a 400 that
+ *     carries one must not be flattened into "the server rejected this";
+ *  2. otherwise a status becomes a sentence;
+ *  3. otherwise the message itself, stripped of markup and clipped — never an
+ *     `HTTP error!` blob, and never blank.
+ *
+ * `fallback` lets the caller name the act that failed ("could not be saved" vs
+ * "could not be checked"); it is only reached when nothing else is readable.
+ */
+export function humaniseRequestError(
+  error: unknown,
+  steps: BuilderStep[],
+  fallback: string = GENERIC_REQUEST_FAILURE,
+): string {
+  const raw =
+    typeof error === 'string'
+      ? error
+      : error instanceof Error
+        ? error.message
+        : ''
+
+  const asFinding = humaniseValidatorFinding(raw, steps)
+  if (asFinding) return asFinding
+
+  const fromMessage = HTTP_ERROR_RE.exec(raw)?.[1]
+  const status = statusOf(error) ?? (fromMessage ? Number(fromMessage) : null)
+  if (status != null) {
+    const sentence = statusSentence(status)
+    if (sentence) return sentence
+  }
+
+  // An `HTTP error!` string whose status told us nothing is still a machine
+  // artefact wrapped around a response body — do not paste it.
+  if (HTTP_ERROR_RE.test(raw)) return fallback
+  return tidyMachineText(raw) || fallback
+}
+
+/**
+ * The person-facing sentence for a save/install failure STRING (the shape the
+ * store persists in `error`). Thin wrapper over `humaniseRequestError` so the
+ * panel, which only ever sees the stored string, gets the same treatment.
+ *
+ * Idempotent: an already-humanised sentence passes through unchanged.
+ */
+export function humaniseInstallError(
+  raw: string,
+  steps: BuilderStep[],
+): string {
+  return humaniseRequestError(raw, steps)
 }

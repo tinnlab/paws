@@ -15,7 +15,7 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 
-import type { WorkflowDef } from '@/api-client/types'
+import type { ValidateDefResponse, WorkflowDef } from '@/api-client/types'
 
 vi.mock('@/api-client', () => ({ ApiClient: {} }))
 vi.mock('@/core/permissions', () => ({ hasPermissionNow: () => true }))
@@ -23,6 +23,8 @@ vi.mock('@/core/permissions', () => ({ hasPermissionNow: () => true }))
 import { createStep } from '../components/builder/stepForms'
 import {
   type BuilderDef,
+  type ValidationSlice,
+  createValidateRunner,
   emptyDef,
   toBuilderDef,
   toWorkflowDef,
@@ -93,6 +95,137 @@ describe('toBuilderDef / toWorkflowDef round-trip', () => {
     const builder = toBuilderDef({} as WorkflowDef)
     expect(builder.inputs).toEqual([])
     expect(builder.steps).toEqual([])
+  })
+})
+
+describe('createValidateRunner — the two ordering rules of a validation run', () => {
+  const RESULT_A = { errors: [], warnings: [], cost_estimate: null } as unknown as ValidateDefResponse
+  const RESULT_B = { errors: [], warnings: [], cost_estimate: null } as unknown as ValidateDefResponse
+
+  function harness(request: (def: WorkflowDef) => Promise<ValidateDefResponse>) {
+    const slice: ValidationSlice = {
+      validating: false,
+      validation: null,
+      error: null,
+      errorSource: null,
+    }
+    const run = createValidateRunner({
+      getDef: () => emptyDef(),
+      request,
+      apply: mutate => mutate(slice),
+    })
+    return { slice, run }
+  }
+
+  /** A promise plus its resolve/reject, so a test can land responses out of order. */
+  function deferred<T>() {
+    let resolve!: (v: T) => void
+    let reject!: (e: unknown) => void
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res
+      reject = rej
+    })
+    return { promise, resolve, reject }
+  }
+
+  it('discards a STALE response: an older run may not overwrite a newer result', async () => {
+    // Validation is debounced AND fired directly (mount, save), so two requests
+    // are routinely in flight. The older one landing last used to win — and the
+    // result it wrote drives the panel, the step markers AND the Save gate.
+    const first = deferred<ValidateDefResponse>()
+    const second = deferred<ValidateDefResponse>()
+    const queue = [first.promise, second.promise]
+    const { slice, run } = harness(() => queue.shift() as Promise<ValidateDefResponse>)
+
+    const p1 = run()
+    const p2 = run()
+
+    second.resolve(RESULT_B)
+    await p2
+    expect(slice.validation).toBe(RESULT_B)
+    expect(slice.validating).toBe(false)
+
+    // …and now the OLDER response lands.
+    first.resolve(RESULT_A)
+    await p1
+    expect(slice.validation, 'the stale response overwrote the newer result').toBe(
+      RESULT_B,
+    )
+    expect(slice.validating, 'a stale response re-opened the spinner').toBe(false)
+  })
+
+  it('discards a stale FAILURE: an older rejection may not raise an error over a newer success', async () => {
+    const first = deferred<ValidateDefResponse>()
+    const second = deferred<ValidateDefResponse>()
+    const queue = [first.promise, second.promise]
+    const { slice, run } = harness(() => queue.shift() as Promise<ValidateDefResponse>)
+
+    const p1 = run()
+    const p2 = run()
+    second.resolve(RESULT_B)
+    await p2
+    first.reject(new Error('HTTP error! status: 502 - <html>gateway</html>'))
+    await p1
+
+    expect(slice.validation).toBe(RESULT_B)
+    expect(slice.error, 'a stale failure surfaced over a fresh success').toBeNull()
+  })
+
+  it('a successful check does NOT clear a save failure (which is still true)', async () => {
+    const { slice, run } = harness(async () => RESULT_A)
+    slice.error = 'The workflow could not be saved — try again.'
+    slice.errorSource = 'save'
+
+    await run()
+
+    expect(slice.validation).toBe(RESULT_A)
+    expect(
+      slice.error,
+      'the background check erased a save failure — the alert self-erased and the green ' +
+        '"No blocking errors." returned while the workflow was still unsaved',
+    ).toBe('The workflow could not be saved — try again.')
+    expect(slice.errorSource).toBe('save')
+  })
+
+  it('a successful check DOES clear the failure validation itself left', async () => {
+    const { slice, run } = harness(async () => RESULT_A)
+    slice.error = 'The workflow could not be checked — try again.'
+    slice.errorSource = 'validate'
+
+    await run()
+
+    expect(slice.error, 'a transient check failure latched forever').toBeNull()
+    expect(slice.errorSource).toBeNull()
+  })
+
+  it('a failed check surfaces a humanised reason — never the api-client wire string', async () => {
+    const { slice, run } = harness(async () => {
+      throw Object.assign(
+        new Error('HTTP error! status: 502 - <!DOCTYPE html><h1>502 Bad Gateway</h1>'),
+        { status: 502 },
+      )
+    })
+
+    await run()
+
+    expect(slice.errorSource).toBe('validate')
+    expect(slice.error).not.toBeNull()
+    expect(slice.error).not.toMatch(/HTTP error!/)
+    expect(slice.error).not.toMatch(/[<>]/)
+    expect(slice.validating).toBe(false)
+  })
+
+  it('a failed check does not clobber a save failure already on screen', async () => {
+    const { slice, run } = harness(async () => {
+      throw new Error('network down')
+    })
+    slice.error = 'The workflow could not be saved — try again.'
+    slice.errorSource = 'save'
+
+    await run()
+
+    expect(slice.error).toBe('The workflow could not be saved — try again.')
+    expect(slice.errorSource).toBe('save')
   })
 })
 

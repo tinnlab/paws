@@ -14,9 +14,16 @@ import {
  * The owner reported this visually ("it doesn't fit on a narrow window"); this
  * spec is the machine-checkable part of that report:
  *
- *   - at 390px / 768px / 1280px the page never scrolls HORIZONTALLY
- *     (`scrollWidth <= clientWidth`) — a horizontal page scrollbar means some
- *     child is wider than the viewport, which is a layout bug at any width;
+ *   - at 390px / 768px / 1280px nothing in the builder is wider than the space
+ *     it is given — measured on the axis that can actually MOVE. NOTE:
+ *     `document.scrollingElement.scrollWidth` is useless here: the builder
+ *     renders inside `SettingsPage`'s `flex-1 overflow-hidden` and
+ *     `SettingsPageContainer`'s `DivScrollY` (an OverlayScrollbars host), so the
+ *     document never scrolls horizontally no matter how wide a child is — a
+ *     900px step list at 390px would be CLIPPED and a document-level probe would
+ *     still read 0. So the probe walks the builder's own ancestor chain (every
+ *     clipping/scrolling box between the builder and the document) and each
+ *     builder region, and fails on any horizontal scrollable overflow;
  *   - the Validation findings stay READABLE at every width — each finding is
  *     visible, has a real box, and its right edge is inside the viewport (a
  *     finding clipped off-screen is the ITEM-3 fix silently undone at 390px);
@@ -48,6 +55,100 @@ async function settleLayout(page: Page) {
       new Promise<void>(resolve => {
         requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
       }),
+  )
+}
+
+/** The builder regions whose own width must never exceed the box they are in. */
+const BUILDER_REGIONS = [
+  'wf-builder-step-list',
+  'wf-builder-step-config',
+  'wf-builder-validation',
+] as const
+
+/**
+ * The largest horizontal overflow this spec tolerates, in px.
+ *
+ * It is NOT jitter slack — it is a bounded, named allowance for ONE pre-existing
+ * defect this probe uncovered the moment it started measuring the axis that can
+ * actually move: at 390px the kit combobox's `InputGroup` inline-end addon
+ * (`sdk/packages/kit/src/shadcn/{combobox,input-group}.tsx`, `role="group"
+ * data-slot="input-group-addon" data-align="inline-end"`) renders 4px past its
+ * own group, so the step-config panel reports `scrollWidth 370 / clientWidth
+ * 366`. It is in the KIT, not in this feature's files.
+ *
+ * Bounded at exactly that 4px so it cannot silently grow: a 5px regression, and
+ * anything that genuinely clips content, still fails. Lower this to 1 once the
+ * kit addon is fixed.
+ */
+const MAX_TOLERATED_OVERFLOW_PX = 4
+
+interface OverflowHit {
+  where: string
+  scrollWidth: number
+  clientWidth: number
+  over: number
+}
+
+/**
+ * Every horizontal scrollable overflow the builder is responsible for.
+ *
+ * Two families, both measured on boxes that CAN move:
+ *  - the ancestor chain from the builder up to `<html>` — an over-wide builder
+ *    child grows the scrollWidth of whichever box clips or scrolls it (that is
+ *    true for `overflow: hidden` too: the scrollable overflow region is still
+ *    reported), which is exactly the signal the document-level probe cannot see;
+ *  - each builder region itself.
+ */
+async function horizontalOverflow(
+  page: Page,
+  regions: readonly string[],
+): Promise<OverflowHit[]> {
+  return page.evaluate(
+    ({ regionIds, tolerance }) => {
+      const hits: {
+        where: string
+        scrollWidth: number
+        clientWidth: number
+        over: number
+      }[] = []
+      const label = (el: Element) => {
+        const testid = el.getAttribute('data-testid')
+        if (testid) return `[data-testid="${testid}"]`
+        const cls = (el.getAttribute('class') || '').split(/\s+/).slice(0, 4).join('.')
+        return `${el.tagName.toLowerCase()}${cls ? `.${cls}` : ''}`
+      }
+      const record = (el: Element, where: string) => {
+        const over = el.scrollWidth - el.clientWidth
+        if (over > tolerance) {
+          hits.push({
+            where,
+            scrollWidth: el.scrollWidth,
+            clientWidth: el.clientWidth,
+            over,
+          })
+        }
+      }
+
+      const anchor = document.querySelector('[data-testid="wf-builder-validation"]')
+      if (!anchor) return [{ where: 'builder not rendered', scrollWidth: 0, clientWidth: 0, over: 0 }]
+
+      // The chain that carries (or clips) the builder's width.
+      for (
+        let el: Element | null = anchor;
+        el && el !== document.documentElement;
+        el = el.parentElement
+      ) {
+        record(el, `ancestor ${label(el)}`)
+      }
+      record(document.documentElement, 'ancestor <html>')
+
+      for (const id of regionIds) {
+        const el = document.querySelector(`[data-testid="${id}"]`)
+        if (el) record(el, `region [data-testid="${id}"]`)
+      }
+      return hits
+    },
+    { regionIds: [...regions], tolerance: MAX_TOLERATED_OVERFLOW_PX },
   )
 }
 
@@ -135,12 +236,21 @@ test.describe('Workflows — builder responsive layout', () => {
       await expect(byTestId(page, 'wf-builder-page-title'), at).toBeVisible()
       await expect(byTestId(page, 'wf-builder-validation'), at).toBeVisible()
 
-      // ── No horizontal page overflow ────────────────────────────────────────
-      const overflow = await page.evaluate(() => {
+      // ── No horizontal overflow anywhere the builder can cause one ─────────
+      const hits = await horizontalOverflow(page, BUILDER_REGIONS)
+      expect(
+        hits,
+        `horizontal overflow ${at}: ${JSON.stringify(hits, null, 2)}`,
+      ).toEqual([])
+
+      // The document itself must not scroll horizontally either. (Kept for the
+      // case where the shell's clipping is ever removed — on its own it is NOT
+      // a sufficient probe; see the header note.)
+      const pageOverflow = await page.evaluate(() => {
         const el = document.scrollingElement || document.documentElement
         return el.scrollWidth - el.clientWidth
       })
-      expect(overflow, `horizontal page overflow ${at}`).toBeLessThanOrEqual(1)
+      expect(pageOverflow, `horizontal page overflow ${at}`).toBeLessThanOrEqual(1)
 
       // ── Findings stay readable (not clipped) ──────────────────────────────
       const findings = byTestId(page, 'wf-builder-finding')
@@ -218,5 +328,44 @@ test.describe('Workflows — builder responsive layout', () => {
         }
       }
     }
+
+    // ── INV-2 at phone width: a finding TAKES you to its step ───────────────
+    // The validation panel sits at the bottom of the page and the layout stacks
+    // below `md`, so at 390px the selected step's configuration is below the
+    // fold: selecting alone leaves the click with no visible effect.
+    await page.setViewportSize({ width: 390, height: 844 })
+    await settleLayout(page)
+
+    const config = byTestId(page, 'wf-builder-step-config')
+    const goto = page.locator('[data-testid^="wf-builder-finding-goto-"]').first()
+    await expect(goto, 'a finding offers a goto affordance at 390px').toBeVisible()
+    // Put the findings on screen — which is what pushes the config panel out of
+    // view, i.e. the situation the author is actually in when they read one.
+    await goto.scrollIntoViewIfNeeded()
+    await settleLayout(page)
+
+    // "In view" = the START of the configuration is on screen. A panel whose top
+    // edge is above the viewport is one the author was dropped into the middle
+    // of — not "taken to".
+    const startOnScreen = async () => {
+      const box = await config.boundingBox()
+      if (!box) return false
+      return box.y >= -TOLERANCE && box.y < 844
+    }
+    expect(
+      await startOnScreen(),
+      'precondition: with the findings on screen the step configuration must be scrolled off at 390px',
+    ).toBe(false)
+
+    await goto.click()
+    await settleLayout(page)
+    await expect
+      .poll(startOnScreen, {
+        message:
+          'clicking a finding selected the step but left its configuration off-screen — ' +
+          'at 390px the click had no visible effect (INV-2)',
+        timeout: 5000,
+      })
+      .toBe(true)
   })
 })

@@ -5,6 +5,7 @@ import {
   SCHEMA_BUDGET,
   coerceToDeclared,
   describeToolSchema,
+  fieldForValue,
   isTemplateValue,
   isWholeTemplateValue,
   optionKeyForValue,
@@ -359,6 +360,114 @@ test('a value stored by an older build as a string still selects its option', ()
     ['2'],
     'an unmatched entry is dropped rather than rendered as a phantom chip',
   )
+})
+
+test('an enum whose values COLLIDE as keys still commits the right type', () => {
+  // `optionKeyOf` is deliberately lossy so a legacy stringified value still
+  // matches its declared option — which meant `1` and `"1"` (and `null` and
+  // `"null"`) produced two options carrying the SAME control value. Every
+  // lookup is a `find`, so the second choice was unreachable: picking it
+  // committed the first one's type.
+  const spec = describeToolSchema({
+    type: 'object',
+    properties: {
+      mixed: { enum: [1, '1', null, 'null'] },
+      // A literal that could squat the disambiguated slot.
+      squatter: { enum: ['1#2', 1, '1'] },
+    },
+  })
+  assert.ok(spec)
+  const byName = Object.fromEntries(spec.fields.map(f => [f.name, f]))
+
+  const keys = byName.mixed.options?.map(o => o.value) ?? []
+  assert.equal(new Set(keys).size, keys.length, 'every option needs a unique key')
+  assert.equal(keys.length, 4)
+
+  // Each declared value resolves back to ITSELF, with its declared type.
+  // (`null` is excluded from the load direction on purpose: a stored `null`
+  //  means "nothing supplied" to `optionKeyForValue`, which is unrelated to
+  //  this fix. Its OPTION still has to be distinct from `"null"`'s, below.)
+  for (const raw of [1, '1', 'null']) {
+    const key = optionKeyForValue(byName.mixed, raw)
+    assert.ok(key !== undefined, `no option key for ${JSON.stringify(raw)}`)
+    assert.strictEqual(optionValueForKey(byName.mixed, key), raw)
+  }
+  const nullKey = byName.mixed.options!.find(o => o.raw === null)!.value
+  const nullStringKey = byName.mixed.options!.find(o => o.raw === 'null')!.value
+  assert.notEqual(nullKey, nullStringKey)
+  assert.strictEqual(optionValueForKey(byName.mixed, nullKey), null)
+  assert.strictEqual(optionValueForKey(byName.mixed, nullStringKey), 'null')
+
+  const squatKeys = byName.squatter.options?.map(o => o.value) ?? []
+  assert.equal(new Set(squatKeys).size, squatKeys.length)
+  for (const raw of ['1#2', 1, '1']) {
+    const key = optionKeyForValue(byName.squatter, raw)
+    assert.ok(key !== undefined)
+    assert.strictEqual(optionValueForKey(byName.squatter, key), raw)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// A stored value the schema no longer declares survives (DEC-6)
+// ---------------------------------------------------------------------------
+
+test('a select keeps a saved value the schema dropped, and says why it is there', () => {
+  // The Tool picker got this closure; enum ARGUMENTS did not — the control
+  // showed its placeholder while `arguments` still carried the value, so a
+  // configured step read as unconfigured and the required check could not see it.
+  const spec = describeToolSchema({
+    type: 'object',
+    properties: { mode: { type: 'string', enum: ['fast', 'thorough'] } },
+  })
+  assert.ok(spec)
+  const mode = spec.fields[0]
+
+  assert.equal(optionKeyForValue(mode, 'hybrid'), undefined, 'nothing declared matches')
+
+  const rendered = fieldForValue(mode, 'hybrid')
+  assert.deepEqual(rendered.options?.map(o => o.raw), ['hybrid', 'fast', 'thorough'])
+  assert.match(rendered.options![0].label, /hybrid/)
+  assert.match(rendered.options![0].label, /not one of this tool/)
+  const key = optionKeyForValue(rendered, 'hybrid')
+  assert.ok(key !== undefined)
+  assert.strictEqual(optionValueForKey(rendered, key), 'hybrid')
+
+  // A value that IS declared adds nothing (and keeps the same field object).
+  assert.equal(fieldForValue(mode, 'fast'), mode)
+  assert.equal(fieldForValue(mode, undefined), mode)
+})
+
+test('a multi-select does not ERASE the entries the schema dropped', () => {
+  // Worse than a display gap: the commit is rebuilt from the control's key
+  // list, so an entry with no option to bind to disappeared from `arguments`
+  // the first time the author toggled anything — real data loss, and a direct
+  // contradiction of `splitArguments`' own preserve-the-undeclared rule.
+  const spec = describeToolSchema({
+    type: 'object',
+    properties: { tags: { type: 'array', items: { enum: ['a', 'b'] } } },
+  })
+  assert.ok(spec)
+  const tags = spec.fields[0]
+  const stored = ['a', 'legacy', 'gone']
+
+  assert.deepEqual(
+    optionKeysForValues(tags, stored),
+    ['a'],
+    'the declared options alone cannot represent the stored value',
+  )
+
+  const rendered = fieldForValue(tags, stored)
+  const keys = optionKeysForValues(rendered, stored)
+  assert.equal(keys.length, 3)
+  assert.deepEqual(optionValuesForKeys(rendered, keys), stored)
+
+  // Removing one entry keeps the others, undeclared ones included.
+  assert.deepEqual(
+    optionValuesForKeys(rendered, keys.filter((_, i) => i !== 0)),
+    ['legacy', 'gone'],
+  )
+  // A non-array value is left alone rather than invented into options.
+  assert.equal(fieldForValue(tags, 'a'), tags)
 })
 
 test('string enums are untouched by the mapping (the common case stays trivial)', () => {

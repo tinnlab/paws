@@ -223,7 +223,15 @@ function normalizeSchema(
 // Field derivation
 // ---------------------------------------------------------------------------
 
-/** Stable control key for a declared enum value (strings map to themselves). */
+/**
+ * Stable control key for a declared enum value (strings map to themselves, so a
+ * derived option testid stays readable — `…-opt-hybrid`, not `…-opt-"hybrid"`).
+ *
+ * Deliberately LOSSY: the string `"1"` and the number `1` (and `"null"` and
+ * `null`) collapse to the same key. That is what lets a value an older build
+ * stored stringified still MATCH its declared option. It is also why it cannot
+ * be used as an identity on its own — see `assignKeys`.
+ */
 function optionKeyOf(raw: unknown): string {
   if (typeof raw === 'string') return raw
   try {
@@ -233,17 +241,47 @@ function optionKeyOf(raw: unknown): string {
   }
 }
 
+/**
+ * Give every declared value a control key that is UNIQUE within its option list.
+ *
+ * `optionKeyOf` alone is not injective, so `enum: [1, "1"]` (or
+ * `[null, "null"]`) produced TWO options carrying the value `"1"` — and
+ * `optionValueForKey`, which resolves a key by `find`, always returned the
+ * first. Picking the second choice therefore committed the wrong TYPE, silently.
+ *
+ * A collision is suffixed (`1`, `1#2`), and the loop keeps suffixing until the
+ * key is free so a literal `"1#2"` declared in the same enum cannot take the
+ * disambiguated slot either. A list with no collision — every real-world enum —
+ * is byte-identical to before, which keeps the option testids stable.
+ */
+function assignKeys(raws: unknown[]): string[] {
+  const used = new Set<string>()
+  return raws.map(raw => {
+    const base = optionKeyOf(raw)
+    let key = base
+    let n = 1
+    while (used.has(key)) {
+      n += 1
+      key = `${base}#${n}`
+    }
+    used.add(key)
+    return key
+  })
+}
+
 function choiceOptions(choices: TitledChoice[]): ToolOption[] {
-  return choices.map(c => ({
-    value: optionKeyOf(c.const),
+  const keys = assignKeys(choices.map(c => c.const))
+  return choices.map((c, i) => ({
+    value: keys[i],
     label: c.title ?? optionKeyOf(c.const),
     raw: c.const,
   }))
 }
 
 function enumOptions(values: unknown[], names?: string[]): ToolOption[] {
+  const keys = assignKeys(values)
   return values.map((v, i) => ({
-    value: optionKeyOf(v),
+    value: keys[i],
     label: names?.[i] ?? optionKeyOf(v),
     raw: v,
   }))
@@ -385,9 +423,17 @@ export function optionKeyForValue(field: ToolField, value: unknown): string | un
   return matchOption(field.options, value)?.value
 }
 
-/** The DECLARED value behind a control key (the key itself when unmatched). */
+/**
+ * The DECLARED value behind a control key (the key itself when unmatched).
+ *
+ * Written as an explicit match test rather than `?.raw ?? key`, because a
+ * schema may legitimately DECLARE `null` as a choice — and `??` reads that as
+ * "no such option" and hands back the key STRING, committing `"null"` for a
+ * value the tool declared as `null`.
+ */
 export function optionValueForKey(field: ToolField, key: string): unknown {
-  return field.options?.find(o => o.value === key)?.raw ?? key
+  const match = field.options?.find(o => o.value === key)
+  return match ? match.raw : key
 }
 
 /** Multi-select: stored values → control keys (unmatched entries are dropped). */
@@ -402,6 +448,65 @@ export function optionKeysForValues(field: ToolField, value: unknown): string[] 
 /** Multi-select: control keys → declared values. */
 export function optionValuesForKeys(field: ToolField, keys: string[]): unknown[] {
   return keys.map(k => optionValueForKey(field, k))
+}
+
+/** Copy naming the synthetic option built for a value the schema dropped. */
+const STALE_OPTION_SUFFIX = ' — not one of this tool’s choices'
+
+/**
+ * A synthetic option for a STORED value none of `options` declares, or null when
+ * one of them already covers it. Its key is disambiguated against the list it
+ * will join, so it can never shadow a declared choice.
+ */
+function staleOption(options: ToolOption[], value: unknown): ToolOption | null {
+  if (value === undefined || value === null) return null
+  if (matchOption(options, value)) return null
+  const base = optionKeyOf(value)
+  let key = base
+  let n = 1
+  while (options.some(o => o.value === key)) {
+    n += 1
+    key = `${base}#${n}`
+  }
+  return { value: key, label: `${valueToText(value)}${STALE_OPTION_SUFFIX}`, raw: value }
+}
+
+/**
+ * The field a picker should actually RENDER for a stored value: the declared
+ * choices, plus a synthetic entry for any stored value the schema no longer
+ * declares.
+ *
+ * Without it a picker silently DISCARDED the saved value — a `select` fell back
+ * to its placeholder while `arguments` still carried the old value (so the form
+ * showed "nothing chosen" for a step that was configured), and a `multiselect`
+ * went further and ERASED every undeclared entry on the next toggle, because
+ * the control's value list is what the commit is rebuilt from. Both contradict
+ * `splitArguments`' own rule that a value the current schema does not declare
+ * must survive editing (DEC-6). It is the same closure the Tool picker already
+ * has for a tool the server stopped offering: keep it in the list, and say why
+ * it is there.
+ */
+export function fieldForValue(field: ToolField, value: unknown): ToolField {
+  const declared = field.options
+  if (!declared) return field
+
+  const extras: ToolOption[] = []
+  const seen = [...declared]
+  const consider = (v: unknown) => {
+    const stale = staleOption(seen, v)
+    if (!stale) return
+    extras.push(stale)
+    seen.push(stale)
+  }
+
+  if (field.kind === 'multiselect') {
+    if (!Array.isArray(value)) return field
+    for (const v of value) consider(v)
+  } else {
+    consider(value)
+  }
+
+  return extras.length > 0 ? { ...field, options: [...extras, ...declared] } : field
 }
 
 // ---------------------------------------------------------------------------

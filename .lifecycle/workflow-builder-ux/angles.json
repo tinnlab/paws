@@ -1,6 +1,5 @@
 {
   "_comment": "Angles ACTUALLY reviewed per file group in the phase-6 blind audit. Each list is the union of the angles the blind agents assigned to that group (see ledger-*.jsonl, whose `angle` values are exactly these names). gen-coverage.mjs expands this across the real diff hunks; it does not invent coverage. Longest prefix wins.",
-
   "src-app/server/src/modules/workflow/validate.rs": [
     "correctness-logic",
     "security-authz",
@@ -13,7 +12,6 @@
     "design-conformance",
     "wired-and-behaving"
   ],
-
   "src-app/server/tests": [
     "test-quality",
     "correctness-logic",
@@ -21,7 +19,6 @@
     "api-contract",
     "error-handling"
   ],
-
   "src-app/ui/src/modules/workflow/components/builder/toolSchemaForm.ts": [
     "correctness-logic",
     "error-handling",
@@ -37,7 +34,6 @@
     "wired-and-behaving",
     "precedent-fidelity"
   ],
-
   "src-app/ui/src/modules/workflow/components/builder/validationCopy.ts": [
     "correctness-logic",
     "error-handling",
@@ -52,7 +48,6 @@
     "design-conformance",
     "wired-and-behaving"
   ],
-
   "src-app/ui/src/modules/workflow/components/builder": [
     "correctness-logic",
     "frontend-state",
@@ -69,7 +64,6 @@
     "design-in-context",
     "precedent-fidelity"
   ],
-
   "src-app/ui/src/modules/workflow/stores": [
     "correctness-logic",
     "error-handling",
@@ -84,7 +78,6 @@
     "design-conformance",
     "wired-and-behaving"
   ],
-
   "src-app/ui/src/modules/workflow/gallery.tsx": [
     "fixture-reality",
     "coverage-honesty",
@@ -97,7 +90,6 @@
     "design-in-context",
     "wired-and-behaving"
   ],
-
   "src-app/ui/src/dev/gallery": [
     "fixture-reality",
     "coverage-honesty",
@@ -107,12 +99,18 @@
     "dead-code",
     "gallery-fidelity"
   ],
-
   "src-app/ui/tests/e2e": [
     "test-quality",
     "test-reality",
     "wired-and-behaving",
     "plan-coverage",
     "correctness-logic"
-  ]
+  ],
+  "sdk": [
+    "ux-accessibility",
+    "patterns-conformance",
+    "test-reality",
+    "coverage-honesty"
+  ],
+  "_comment_sdk": "The `sdk` submodule pointer bump (22d48e1 -> 364925d) contains EXACTLY one mechanically-generated delta: six data-testid literals added to packages/kit/src/testIds.generated.ts by gen-testid-registry.mjs. It is the same class as openapi.json / api-client/types.ts (derived output the coverage law excludes) but is not on that exclude list, so it is recorded explicitly. The angles listed are the ones that genuinely reviewed those six ids at their STAMPING SITES: ux-accessibility (components agent \u2014 flagged the non-unique wf-builder-finding-goto id), patterns-conformance + coverage-honesty (gallery agent \u2014 verified testid uniqueness across surfaces), and test-reality (tests agent \u2014 the e2e specs select by these ids). The parent additionally verified the regen is byte-identical from BOTH npm workspaces and that the delta is exactly those six ids and nothing else."
 }

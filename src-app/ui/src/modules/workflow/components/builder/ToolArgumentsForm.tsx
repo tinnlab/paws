@@ -17,6 +17,7 @@ import {
   type ToolField,
   type ToolFormSpec,
   coerceToDeclared,
+  fieldForValue,
   isTemplateValue,
   optionKeyForValue,
   optionKeysForValues,
@@ -43,6 +44,10 @@ interface Props {
   store: WorkflowBuilderStore
   stepId: string
   spec: ToolFormSpec
+  /** Identity of the tool this spec came from. Part of each field's React key,
+   *  so choosing a DIFFERENT tool rebuilds the controls instead of handing a
+   *  same-named property the previous tool's per-field local state. */
+  toolKey: string
   /** Current values for the declared properties. */
   values: Record<string, unknown>
   /** Commit one property. `undefined` removes it. */
@@ -98,13 +103,28 @@ function GeneratedField({
   // non-reference, which flipped the control back to the typed one — whose value
   // guard rejects the corrupt string — so the field rendered EMPTY while the
   // corrupt value stayed in the definition and the "use a value instead" undo
-  // disappeared. A reference now LATCHES the mode (on mount for a loaded
-  // reference, on insert for a new one) and only the explicit button leaves it.
+  // disappeared. A reference therefore LATCHES the mode (on mount for a loaded
+  // reference, on insert for a new one).
   const [templateMode, setTemplateMode] = useState(
     () => !canHoldTemplate && isTemplateValue(value),
   )
   useEffect(() => {
-    if (!canHoldTemplate && isTemplateValue(value)) setTemplateMode(true)
+    if (canHoldTemplate) return
+    if (isTemplateValue(value)) {
+      setTemplateMode(true)
+      return
+    }
+    // …but the latch must not OUTLIVE the value it describes. Nothing used to
+    // clear it, so a value that went away underneath the field left the control
+    // stuck in free text over an empty typed property — and typing `5` into
+    // that box committed the STRING "5" for a declared `integer`. It happened
+    // whenever the value was emptied from outside this field: choosing a
+    // different tool that also declares this property name (the step's
+    // arguments are wiped, the field is NOT remounted for a same-named
+    // property), an external `arguments` refetch, or the undo below. Clearing
+    // on BLANK only — a half-typed `{{ inputs.limit` is neither a reference nor
+    // blank, so the partial-edit case above still holds the mode.
+    if (isBlank(value)) setTemplateMode(false)
   }, [value, canHoldTemplate])
   const templated = !canHoldTemplate && (templateMode || isTemplateValue(value))
 
@@ -179,9 +199,18 @@ function GeneratedField({
   // "this is a partial number I'm still typing" (`-`, `1e`, `1.`). Committing
   // that as a key DELETE fed a changed `value` back into the control, which
   // wiped its buffer mid-keystroke — so a negative number could never be typed
-  // over an existing one. The delete is therefore deferred to blur, where the
-  // two cases have collapsed into one.
+  // over an existing one. The delete is therefore deferred to blur.
+  //
+  // Blur alone is not enough, though: the two cases have NOT collapsed by then.
+  // The kit restores the previous value's text when an unparseable buffer is
+  // abandoned (`input-number.tsx` `handleBlur`) and reports nothing, so
+  // deleting here removed a perfectly good argument the control was still
+  // showing. Only an EMPTY box means "remove this argument", and the raw buffer
+  // is the only thing that distinguishes the two — the kit has already queued
+  // its own `setBuf` by the time our handler runs, but React has not flushed it,
+  // so the element still carries what the author actually typed.
   const pendingNumberClear = useRef(false)
+  const numberInput = useRef<HTMLInputElement>(null)
 
   const control = () => {
     // A reference is always edited as text, whatever the declared type.
@@ -213,6 +242,7 @@ function GeneratedField({
         return (
           <InputNumber
             data-testid={testid}
+            ref={numberInput}
             value={typeof value === 'number' ? value : null}
             step={field.kind === 'integer' ? 1 : undefined}
             min={field.schema.minimum}
@@ -228,39 +258,52 @@ function GeneratedField({
             onBlur={() => {
               if (!pendingNumberClear.current) return
               pendingNumberClear.current = false
+              // An abandoned partial buffer is not a clear — leave the argument
+              // exactly as it was (the kit has already put its text back).
+              if ((numberInput.current?.value ?? '').trim() !== '') return
               commit(undefined)
             }}
             placeholder={valueToText(field.default)}
           />
         )
-      case 'select':
+      case 'select': {
+        // `rendered` carries a synthetic option for a saved value this schema no
+        // longer declares, so the picker SHOWS it (and says why) instead of
+        // falling back to its placeholder over a value still in `arguments`.
+        const rendered = fieldForValue(field, value)
         return (
           <Select
             data-testid={testid}
             aria-label={field.label}
-            options={field.options ?? []}
+            options={rendered.options ?? []}
             // The control speaks strings; the DECLARED type is what gets stored,
             // so an integer enum round-trips as `2`, not `"2"`.
-            value={optionKeyForValue(field, value)}
-            onChange={v => commit(optionValueForKey(field, v))}
+            value={optionKeyForValue(rendered, value)}
+            onChange={v => commit(optionValueForKey(rendered, v))}
             placeholder="Choose a value"
             popupMatchSelectWidth={false}
           />
         )
-      case 'multiselect':
+      }
+      case 'multiselect': {
+        // Same closure, and here it is data loss rather than a display gap: the
+        // commit is rebuilt from the control's key list, so an undeclared entry
+        // with no option to bind to was ERASED on the next toggle.
+        const rendered = fieldForValue(field, value)
         return (
           <MultiSelect
             data-testid={testid}
             aria-label={field.label}
-            options={field.options ?? []}
-            value={optionKeysForValues(field, value)}
-            onChange={v => commit(optionValuesForKeys(field, v))}
+            options={rendered.options ?? []}
+            value={optionKeysForValues(rendered, value)}
+            onChange={v => commit(optionValuesForKeys(rendered, v))}
             placeholder="Choose values"
             searchPlaceholder="Search…"
             emptyText="No choices declared"
             removeLabel={v => `Remove ${v}`}
           />
         )
+      }
       case 'textarea':
       case 'json':
         return (
@@ -333,14 +376,19 @@ export function ToolArgumentsForm({
   store,
   stepId,
   spec,
+  toolKey,
   values,
   onChange,
 }: Props) {
   return (
     <div className="flex flex-col gap-4" data-testid="wf-builder-tool-args-generated">
       {spec.fields.map(field => (
+        // Keyed by TOOL + property. Keying by property alone let two different
+        // tools that happen to declare the same name share one field instance,
+        // so its local state (template latch, touched, pending number clear)
+        // described a value that no longer existed.
         <GeneratedField
-          key={field.name}
+          key={`${toolKey}::${field.name}`}
           store={store}
           stepId={stepId}
           field={field}

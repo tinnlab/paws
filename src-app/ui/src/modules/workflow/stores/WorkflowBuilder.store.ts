@@ -8,6 +8,7 @@ import {
   type StepKind,
   createStep,
 } from '../components/builder/stepForms'
+import { humaniseRequestError } from '../components/builder/validationCopy'
 
 // ---------------------------------------------------------------------------
 // PRIVATE, per-instance store backing ONE builder editing session (ITEM-6).
@@ -64,6 +65,85 @@ export function toWorkflowDef(def: BuilderDef): WorkflowDef {
 
 const VALIDATE_DEBOUNCE_MS = 400
 
+/** Which act owns the message currently in `error`. The two acts fail
+ *  independently and at different times, so a run of one must never retire —
+ *  or overwrite — the other's failure. */
+export type ErrorSource = 'save' | 'validate' | null
+
+const SAVE_FAILURE_FALLBACK = 'The workflow could not be saved — try again.'
+const VALIDATE_FAILURE_FALLBACK =
+  'The workflow could not be checked — try again.'
+
+/** The slice of builder state one validation run writes. */
+export interface ValidationSlice {
+  validating: boolean
+  validation: ValidateDefResponse | null
+  error: string | null
+  errorSource: ErrorSource
+}
+
+export interface ValidateRunnerDeps {
+  getDef: () => BuilderDef
+  request: (def: WorkflowDef) => Promise<ValidateDefResponse>
+  apply: (mutate: (d: ValidationSlice) => void) => void
+}
+
+/**
+ * The validation run, with its two ordering rules — extracted so both are
+ * directly testable (the store itself is a `defineLocalStore`, reachable only
+ * through a React hook).
+ *
+ * 1. **Only the newest run may write.** Validation is debounced AND fired
+ *    directly (mount, save), so two requests are routinely in flight; an older
+ *    response landing last used to overwrite the newer result — which drives
+ *    the findings panel, the step list's invalid markers AND the Save gate.
+ * 2. **A run clears only the error validation itself owns.** A successful
+ *    check says nothing about a failed SAVE, so blanking `error` wholesale made
+ *    the save/install failure self-erase (and the green "No blocking errors."
+ *    return) while the workflow was still unsaved. Symmetrically, a failed
+ *    check does not overwrite a save failure — that one is the author's
+ *    blocking problem until they retry the save.
+ */
+export function createValidateRunner(
+  deps: ValidateRunnerDeps,
+): () => Promise<void> {
+  let issued = 0
+  return async () => {
+    const seq = ++issued
+    const def = deps.getDef()
+    deps.apply(d => {
+      d.validating = true
+    })
+    try {
+      const result = await deps.request(toWorkflowDef(def))
+      if (seq !== issued) return // a newer run has already answered
+      deps.apply(d => {
+        d.validation = result
+        d.validating = false
+        if (d.errorSource === 'validate') {
+          d.error = null
+          d.errorSource = null
+        }
+      })
+    } catch (error) {
+      if (seq !== issued) return // a newer run has already answered
+      deps.apply(d => {
+        d.validating = false
+        // Keep the prior validation rather than blanking it on a transient
+        // failure; surface the error so Save isn't silently stuck — unless a
+        // save failure is already on screen, which outranks it.
+        if (d.errorSource === 'save') return
+        d.error = humaniseRequestError(
+          error,
+          def.steps,
+          VALIDATE_FAILURE_FALLBACK,
+        )
+        d.errorSource = 'validate'
+      })
+    }
+  }
+}
+
 export const WorkflowBuilderStoreDef = defineLocalStore({
   immer: true,
   state: {
@@ -80,6 +160,8 @@ export const WorkflowBuilderStoreDef = defineLocalStore({
     loading: false,
     loadError: null as string | null,
     error: null as string | null,
+    /** Which act `error` belongs to — see `createValidateRunner`. */
+    errorSource: null as ErrorSource,
     /** Flipped when the workflow being edited is deleted on another device. */
     deletedExternally: false,
   },
@@ -89,31 +171,11 @@ export const WorkflowBuilderStoreDef = defineLocalStore({
     // instance, so this timer never leaks across concurrent builders).
     let validateTimer: ReturnType<typeof setTimeout> | null = null
 
-    const runValidate = async () => {
-      const def = get().def
-      set(d => {
-        d.validating = true
-      })
-      try {
-        const result = await ApiClient.Workflow.validateDef(toWorkflowDef(def))
-        set(d => {
-          d.validation = result
-          d.validating = false
-          // A check that SUCCEEDED retires the previous failure. Without this
-          // the panel's error alert (and the green line it suppresses) would
-          // latch on a single transient blip and never recover.
-          d.error = null
-        })
-      } catch (error) {
-        set(d => {
-          d.validating = false
-          // Keep the prior validation rather than blanking it on a transient
-          // failure; surface the error so Save isn't silently stuck.
-          d.error =
-            error instanceof Error ? error.message : 'Failed to validate workflow'
-        })
-      }
-    }
+    const runValidate = createValidateRunner({
+      getDef: () => get().def,
+      request: def => ApiClient.Workflow.validateDef(def),
+      apply: set,
+    })
 
     const scheduleValidate = () => {
       if (validateTimer) clearTimeout(validateTimer)
@@ -155,6 +217,7 @@ export const WorkflowBuilderStoreDef = defineLocalStore({
           d.validation = null
           d.loadError = null
           d.error = null
+          d.errorSource = null
           d.deletedExternally = false
         })
       },
@@ -300,12 +363,14 @@ export const WorkflowBuilderStoreDef = defineLocalStore({
           const msg = 'Give the workflow a name before saving'
           set(d => {
             d.error = msg
+            d.errorSource = 'save'
           })
           throw new Error(msg)
         }
         set(d => {
           d.saving = true
           d.error = null
+          d.errorSource = null
         })
         try {
           const payload = toWorkflowDef(def)
@@ -337,14 +402,16 @@ export const WorkflowBuilderStoreDef = defineLocalStore({
               : {}
           const isNameCollision =
             errObj.error_code === 'WORKFLOW_NAME_EXISTS' || errObj.status === 409
+          // NEVER `error.message`: the api-client formats a transport failure as
+          // `HTTP error! status: 502 - <the whole response body>`, which would
+          // land verbatim in the Alert title AND the page toast.
           const msg = isNameCollision
             ? `A workflow named '${trimmedName || 'this'}' already exists — choose a different name`
-            : error instanceof Error
-              ? error.message
-              : 'Failed to save workflow'
+            : humaniseRequestError(error, def.steps, SAVE_FAILURE_FALLBACK)
           set(d => {
             d.saving = false
             d.error = msg
+            d.errorSource = 'save'
           })
           // Re-throw a friendly Error so the page toast shows the actionable
           // message (the page surfaces `e.message`).
