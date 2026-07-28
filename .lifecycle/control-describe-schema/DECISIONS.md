@@ -159,3 +159,41 @@ branch adds its own, and the sibling in-flight branch
 features' committed artifacts here would push those deletions into agent-core at
 merge — destroying another workstream's audit record to make a counter go green.
 Every PER-PHASE gate (1..9) is verified green independently.
+
+### DEC-14: DEC-6 reversed — fix the permission at the PRODUCER after all
+**Resolution:** `with_permission` now stamps an `x-required-permissions` OpenAPI
+extension, and the catalog resolves extension → 403 example → description marker.
+DEC-6's reader-only fix stands as the fallback, not the mechanism.
+**Basis:** codebase — the blind audit proved the reader-side fix is structurally
+unable to close the class: the 403 example is destroyed by a handler's own
+`.response_with::<403, …>` exactly as the description is destroyed by its own
+`.description(…)`, leaving 34 operations at `null` of which 18 are genuinely
+gated (including the admin-only `McpServerToolApprovals.set`). DEC-6 weighed
+blast radius against "zero additional information" — that premise was wrong.
+The measured cost of the reversal: `openapi.json` regenerates for both binaries,
+`types.ts` is UNCHANGED (the extension is not a TS-visible key) and
+`types_ts_parity` is green.
+
+### DEC-15: DEC-7 reversed — carry ALL permissions, not the first
+**Resolution:** `Operation` gains `required_permissions: Vec<String>`;
+`user_may_run` requires every one. `required_permission` remains as the
+first-of-set single label for display.
+**Basis:** convention — DEC-7 chose the first purely for parity with what the
+description parser could express. The extension carries the whole set, so the
+constraint that forced the compromise is gone, and gating on a strict subset
+under-gates: a user holding one permission of an ALL-of pair was offered an
+operation the real route then refuses.
+
+### DEC-16: How much of the audit backlog lands in THIS round?
+**Resolution:** Every HIGH, and every medium/low whose fix is contained within
+this feature's own surface. Explicitly deferred, each recorded in `LEDGER.jsonl`
+with `status: accepted` and a stated reason in `FIX_ROUND-1.md`: widening the
+secret-probe's traversal to match the walker's reach; extracting the digest
+renderer out of `handlers.rs`; unifying the SDK's duplicate `resolve_schema_ref`;
+per-operation memoization; a stub-engine deterministic tier for the guidance.
+**Basis:** convention — the deferred items are (a) changes to a SECURITY gate's
+blast radius across all 446 operations, which must not ride along on an unrelated
+fix, or (b) refactors that would churn the exact surface four blind reviewers
+just covered, invalidating the audit that justifies the merge. Every one has 0
+live instances or a bounded, measured cost. Deferring them is a recorded
+decision, not an omission.

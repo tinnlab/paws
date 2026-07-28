@@ -210,9 +210,19 @@ test.describe('control_mcp — an unpermitted operation is not offered', () => {
       'a user without projects::create must not be OFFERED Project.create',
     ).not.toContain('Project.create')
 
-    // ...and — the point of this test — invoking it anyway is still refused by
-    // the real route. A hidden operation is not a protected one; the gate must
-    // hold when the model addresses the operation_id directly.
+    // ...and — the point of this test — invoking it anyway is still refused.
+    // A hidden operation is not a protected one: the model can address any
+    // operation_id it likes, so the refusal must hold on the direct call.
+    //
+    // WHICH layer refuses changed with this feature, and that is the finding
+    // worth recording. Project.create's permission used to be unrecoverable, so
+    // the catalog could not filter it and the FORWARDED-JWT LOOPBACK dispatch
+    // was what refused (a 403 from the real route). Now that
+    // `x-required-permissions` makes the declaration unclobberable, `resolve_op`
+    // refuses in-band BEFORE any dispatch — strictly earlier and strictly
+    // tighter. So this asserts the refusal and the null effect, and accepts
+    // either layer's wording; the loopback layer remains the authority and is
+    // exercised by every permitted invoke in `tests/control_mcp/mod.rs`.
 
     const name = `ControlNoPerm_${Date.now()}`
     const invoke = await controlTool(page, apiURL, restrictedToken, 'invoke_capability', {
@@ -224,7 +234,11 @@ test.describe('control_mcp — an unpermitted operation is not offered', () => {
       invoke.body?.error !== undefined || invoke.body?.result?.structuredContent?.ok === false,
       `the loopback dispatch must be refused for a user without projects::create: ${payload.slice(0, 500)}`,
     ).toBeTruthy()
-    expect(payload, 'the refusal must be an authorization refusal').toMatch(/403|forbidden|permission/i)
+    expect(
+      payload,
+      'the refusal must be an authorization refusal — either the catalog filter ' +
+        '("not available to you") or the real route\'s 403',
+    ).toMatch(/403|forbidden|permission|not available to you/i)
 
     const after = await listJson(
       page,
