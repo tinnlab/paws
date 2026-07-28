@@ -338,6 +338,72 @@ fn default_expose_mode() -> ExposeMode {
 // Validation
 // ============================================================
 
+/// Every `ValidationError` code this module + `ref_check` can emit.
+///
+/// This is the REGISTRY half of the humanisation contract (ITEM-2). The
+/// validator's own `message` is written in the wire vocabulary on purpose —
+/// `validate_for_install` turns it into an `AppError` for install/import/run,
+/// and `workflow_mcp::validate_workflow` serializes it for the MODEL — so the
+/// author-facing rewording lives in the builder UI, keyed off these codes
+/// (`ui/src/modules/workflow/components/builder/validationCopy.ts`).
+///
+/// The `validation_codes_are_registered_and_humanised` test below keeps all
+/// three in lockstep: an emit site whose code is not listed here fails, and a
+/// listed code with no human copy in the UI fails. That is what makes "no raw
+/// schema language ever reaches the author" a checked property rather than a
+/// one-off fix.
+pub const VALIDATION_CODES: &[&str] = &[
+    // validate.rs — whole-workflow shape
+    "WORKFLOW_NO_STEPS",
+    "WORKFLOW_TOO_MANY_STEPS",
+    "WORKFLOW_SANDBOX_FLAVOR_REQUIRED",
+    "WORKFLOW_UNKNOWN_FLAVOR",
+    "WORKFLOW_CYCLE",
+    "WORKFLOW_DUPLICATE_OUTPUT_NAME",
+    // validate.rs — step identity
+    "WORKFLOW_BAD_STEP_ID",
+    "WORKFLOW_DUPLICATE_STEP_ID",
+    "WORKFLOW_STEP_DESCRIPTION_TOO_LONG",
+    // validate.rs — prompts
+    "WORKFLOW_PROMPT_MISSING",
+    "WORKFLOW_PROMPT_BOTH",
+    "WORKFLOW_PROMPT_FILE_MISSING",
+    "WORKFLOW_PROMPT_FILE_UNSAFE",
+    "WORKFLOW_PROMPT_FILE_ESCAPE",
+    // validate.rs — per-kind configuration
+    "WORKFLOW_DEAD_TOOLS_FIELD",
+    "WORKFLOW_SANDBOX_NO_RUN",
+    "WORKFLOW_TOOL_NO_SERVER",
+    "WORKFLOW_TOOL_NO_TOOL",
+    "WORKFLOW_ELICIT_NO_MESSAGE",
+    "WORKFLOW_ELICIT_TIMEOUT_CAP",
+    "WORKFLOW_PARALLEL_CAP",
+    "WORKFLOW_PARALLEL_ZERO",
+    "WORKFLOW_FOR_EACH_EMPTY",
+    "WORKFLOW_FOR_EACH_NOT_TEMPLATE",
+    "WORKFLOW_ITEM_VAR_EMPTY",
+    // validate.rs — dependencies
+    "WORKFLOW_UNKNOWN_DEPENDENCY",
+    "WORKFLOW_SELF_DEPENDENCY",
+    // validate.rs — references
+    "WORKFLOW_TEMPLATE_SYNTAX",
+    "WORKFLOW_UNKNOWN_INPUT_REF",
+    "WORKFLOW_UNKNOWN_STEP_REF",
+    "WORKFLOW_BAD_STEP_FIELD",
+    // validate.rs — security / publishing
+    "WORKFLOW_ARTIFACT_PATH_UNSAFE",
+    "WORKFLOW_MOCK_IN_PUBLISHED",
+    // ref_check.rs — type-aware reference checking
+    "WORKFLOW_FOR_EACH_TYPE_UNRESOLVED",
+    "WORKFLOW_FOR_EACH_NOT_ARRAY",
+    "WORKFLOW_PATH_ACCESS",
+    "WORKFLOW_REF_INDEX_UNRESOLVED",
+    "WORKFLOW_REF_INDEX_NON_ARRAY",
+    "WORKFLOW_REF_UNKNOWN_FIELD",
+    "WORKFLOW_REF_FIELD_UNRESOLVED",
+    "WORKFLOW_REF_FIELD_NON_OBJECT",
+];
+
 /// Severity of a validation finding. Errors BLOCK install; warnings are
 /// surfaced (e.g. via the `/validate` endpoint's `warnings` array) but do
 /// NOT fail install — they preserve the Phase-1 escape hatch for
@@ -1827,5 +1893,170 @@ steps:
             };
         }
         sr!("sr-review");
+    }
+}
+
+// ============================================================================
+// ITEM-2 / TEST-1 / TEST-15 — the humanisation drift guard.
+//
+// These live OUTSIDE the big `mod tests` above so they read as a distinct
+// contract: they do not test validation behaviour, they keep the validator's
+// machine-readable codes in lockstep with the AUTHOR-FACING copy the workflow
+// builder shows. The mechanism mirrors `openapi::emit_ts::tests::types_ts_parity`
+// — a backend test that reads a committed frontend file and fails when the two
+// drift apart.
+// ============================================================================
+#[cfg(test)]
+mod humanisation_contract {
+    use super::VALIDATION_CODES;
+    use std::collections::HashSet;
+
+    /// `validate.rs`'s own source, read back so the test sees every emit site
+    /// (including ones added after this test was written).
+    const VALIDATE_SRC: &str = include_str!("validate.rs");
+    const REF_CHECK_SRC: &str = include_str!("ref_check.rs");
+    /// The builder's author-facing copy map. Path is relative to the SERVER
+    /// crate root (`src-app/server`), so it resolves to `src-app/ui/...`.
+    const UI_COPY_SRC: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../ui/src/modules/workflow/components/builder/validationCopy.ts"
+    ));
+
+    /// Every code literal passed as the 2nd argument of
+    /// `ValidationError::{err,at,warn}("<layer>", "<CODE>", …)` in `src`.
+    fn emitted_codes(src: &str) -> HashSet<String> {
+        let mut out = HashSet::new();
+        for (idx, _) in src.match_indices("ValidationError::") {
+            let rest = &src[idx..];
+            // The call is `::err(` / `::at(` / `::warn(` — take the text up to a
+            // generous bound so a multi-line call still yields its first two
+            // string literals.
+            let window = &rest[..rest.len().min(400)];
+            let Some(open) = window.find('(') else { continue };
+            let mut literals = Vec::new();
+            let mut chars = window[open..].char_indices().peekable();
+            let mut in_str = false;
+            let mut cur = String::new();
+            while let Some((_, c)) = chars.next() {
+                match (in_str, c) {
+                    (false, '"') => {
+                        in_str = true;
+                        cur.clear();
+                    }
+                    (true, '"') => {
+                        in_str = false;
+                        literals.push(std::mem::take(&mut cur));
+                        if literals.len() == 2 {
+                            break;
+                        }
+                    }
+                    (true, '\\') => {
+                        // Skip the escaped char so `\"` doesn't close the literal.
+                        let _ = chars.next();
+                    }
+                    (true, _) => cur.push(c),
+                    (false, _) => {}
+                }
+            }
+            // literals[0] is the layer ("schema"/"semantic"/"security"),
+            // literals[1] is the code. A helper signature that doesn't match
+            // that shape contributes nothing rather than a false positive.
+            if literals.len() == 2
+                && matches!(literals[0].as_str(), "schema" | "semantic" | "security")
+                && literals[1].chars().all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
+                && !literals[1].is_empty()
+            {
+                out.insert(literals[1].clone());
+            }
+        }
+        out
+    }
+
+    /// TEST-15 — the registry itself is well-formed, so the set comparisons
+    /// below actually mean something.
+    #[test]
+    fn validation_codes_registry_is_well_formed() {
+        let mut seen = HashSet::new();
+        for code in VALIDATION_CODES {
+            assert!(
+                seen.insert(*code),
+                "VALIDATION_CODES lists '{code}' twice — remove the duplicate"
+            );
+            assert!(
+                !code.is_empty()
+                    && code
+                        .chars()
+                        .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit()),
+                "VALIDATION_CODES entry '{code}' is not SCREAMING_SNAKE"
+            );
+        }
+    }
+
+    /// TEST-1 (acceptance, INV-1) — no raw schema language can reach the author.
+    ///
+    /// Two directions, both required:
+    ///   1. every code the validator can EMIT is in `VALIDATION_CODES`;
+    ///   2. every registered code has AUTHOR-FACING copy in the builder's
+    ///      `validationCopy.ts`.
+    /// Adding a finding with a wire-vocabulary message is fine — shipping one
+    /// the builder cannot restate in human language is not.
+    #[test]
+    fn validation_codes_are_registered_and_humanised() {
+        let registered: HashSet<String> =
+            VALIDATION_CODES.iter().map(|s| s.to_string()).collect();
+
+        let mut emitted = emitted_codes(VALIDATE_SRC);
+        emitted.extend(emitted_codes(REF_CHECK_SRC));
+
+        assert!(
+            !emitted.is_empty(),
+            "the emit-site scanner found no codes at all — it has drifted from \
+             the `ValidationError::at(\"layer\", \"CODE\", …)` call shape and is \
+             no longer guarding anything"
+        );
+
+        let unregistered: Vec<_> = {
+            let mut v: Vec<_> = emitted.difference(&registered).cloned().collect();
+            v.sort();
+            v
+        };
+        assert!(
+            unregistered.is_empty(),
+            "these validation codes are emitted but NOT listed in \
+             `VALIDATION_CODES` (validate.rs): {unregistered:?}\n\
+             Add them there, then add author-facing copy for each in \
+             src-app/ui/src/modules/workflow/components/builder/validationCopy.ts"
+        );
+
+        let stale: Vec<_> = {
+            let mut v: Vec<_> = registered.difference(&emitted).cloned().collect();
+            v.sort();
+            v
+        };
+        assert!(
+            stale.is_empty(),
+            "these codes are listed in `VALIDATION_CODES` but no longer emitted \
+             anywhere: {stale:?} — remove them from the registry (and from \
+             validationCopy.ts) so the guard keeps meaning something"
+        );
+
+        let unhumanised: Vec<_> = {
+            let mut v: Vec<_> = registered
+                .iter()
+                .filter(|code| !UI_COPY_SRC.contains(&format!("\"{code}\"")))
+                .cloned()
+                .collect();
+            v.sort();
+            v
+        };
+        assert!(
+            unhumanised.is_empty(),
+            "these validation codes have NO author-facing copy: {unhumanised:?}\n\
+             The workflow builder would show the raw validator message (wire \
+             vocabulary such as \"step has neither prompt: nor prompt_file:\") to \
+             the person building the workflow. Add an entry for each to \
+             src-app/ui/src/modules/workflow/components/builder/validationCopy.ts \
+             (`HUMAN_COPY`), keyed by the quoted code literal."
+        );
     }
 }
