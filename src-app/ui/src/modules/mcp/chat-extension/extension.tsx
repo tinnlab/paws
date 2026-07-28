@@ -277,7 +277,7 @@ const mcpExtension: ChatExtension = createExtension({
         }
       },
       subscribe: onChange => useMcpComposerStore.subscribe(onChange),
-    })
+    }, 'mcp')
 
     // Bind the editing-message restore to the OWNING pane's chat store
     // (ctx.chatStore, ITEM-34/5) so editing in a non-focused pane restores that

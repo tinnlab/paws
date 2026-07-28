@@ -74,21 +74,27 @@ test('TEST-13: an IN-FLIGHT tool_use with no result yet is a running, single-blo
   assert.equal(resultBlockFor(ctxOf(blocks)), null)
 })
 
-test('an is_error result maps to failed; the scheduler skip markers map to CANCELLED (ITEM-22)', () => {
+test('an is_error result maps to failed', () => {
   const failed = [use('t1', 'x'), result('t1', { is_error: true })]
   assert.equal(railToolStepBase(ctxOf(failed))?.status, 'failed')
+})
 
+test('INV-1: core does NOT special-case the scheduler skip markers', () => {
+  // These markers belong to one backend surface, and core encoding their
+  // vocabulary would violate INV-1 just as surely as importing the module would
+  // ("never imports, NAMES, or special-cases any extension"). The neutral
+  // `cancelled` mapping lives in the scheduler contribution, which sits at
+  // order 20 — ahead of every tool family — so it is still the one decision
+  // point. Asserted from CORE's side: the base must NOT quietly re-map them.
   for (const marker of ['unattended_denied', 'admin_disabled']) {
-    // Both markers are stamped with is_error: true by the backend, so without
-    // the override a policy SKIP would render as a crash.
     const blocks = [
       use('t1', 'x'),
       result('t1', { is_error: true, structured_content: { [marker]: true, tool_name: 'x' } }),
     ]
     assert.equal(
       railToolStepBase(ctxOf(blocks))?.status,
-      'cancelled',
-      `${marker} must be neutral, never failed`,
+      'failed',
+      'core reports only what the block says; the OWNING module reinterprets it',
     )
   }
 })

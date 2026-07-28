@@ -80,6 +80,14 @@ export interface RailStepDescriptor {
    * offers the full-record detail panel (which joins `mcp_tool_calls`).
    */
   toolUseId?: string
+  /**
+   * The MCP server id that ran the step. The retired card rendered the server's
+   * display name beside every tool name; with ~13 built-in servers plus
+   * user-registered ones, "which server ran this" is a real disambiguation the
+   * user could previously read at a glance. The row resolves the id to a display
+   * name and renders it as a muted suffix.
+   */
+  serverId?: string
 }
 
 /**

@@ -142,7 +142,7 @@ pub struct CreateMcpToolCall {
 /// column, which was redacted before insert and therefore never held the raw
 /// value. When the transcript block no longer exists the recorded (redacted)
 /// arguments are returned instead, with `raw = false`.
-#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[derive(Clone, Serialize, JsonSchema)]
 pub struct McpToolCallReveal {
     /// The tool-call row this reveal is for.
     pub id: Uuid,
@@ -153,6 +153,24 @@ pub struct McpToolCallReveal {
     /// returned as a fallback.
     pub raw: bool,
 }
+/// Hand-written so the raw arguments can never reach a log.
+///
+/// `arguments_json` is BY CONSTRUCTION the unredacted `tool_use.input` — the
+/// exact value the rest of this feature exists to keep off surfaces. A derived
+/// `Debug` would reprint it into the long-retention log stream from any future
+/// `tracing::debug!(?reveal)`, `dbg!`, or panic message, defeating both the
+/// recorder's denylist and the deliberately value-free audit line in
+/// `handlers.rs`. Coding guidelines §3.
+impl std::fmt::Debug for McpToolCallReveal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("McpToolCallReveal")
+            .field("id", &self.id)
+            .field("raw", &self.raw)
+            .field("arguments_json", &"[redacted]")
+            .finish()
+    }
+}
+
 
 /// Paginated list response (mirrors `McpServerListResponse`).
 #[derive(Debug, Serialize, JsonSchema)]

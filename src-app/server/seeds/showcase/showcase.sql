@@ -902,11 +902,11 @@ SELECT pg_temp.blk('30000000-0000-0000-0000-000000000048', 1, 'tool_result',
 -- C16: MULTI-TOOL RUN — FIVE consecutive tool_use/tool_result pairs in ONE
 -- assistant message, across four different servers. This is the shape the rail
 -- exists for: without it a reader sees five stacked machinery cards.
-SELECT pg_temp.msg('30000000-0000-0000-0000-00000000004b', 'user', 25.7);
+SELECT pg_temp.msg('30000000-0000-0000-0000-00000000004b', 'user', 25.61);
 SELECT pg_temp.blk('30000000-0000-0000-0000-00000000004b', 0, 'text',
   jsonb_build_object('type','text','text', $u$Cross-check our internal notes against what's published on HNSW tuning, run the benchmark, and give me a citation.$u$));
 
-SELECT pg_temp.msg('30000000-0000-0000-0000-00000000004c', 'assistant', 25.8);
+SELECT pg_temp.msg('30000000-0000-0000-0000-00000000004c', 'assistant', 25.62);
 SELECT pg_temp.blk('30000000-0000-0000-0000-00000000004c', 0, 'text',
   jsonb_build_object('type','text','text', $md$Working through it — searching, reading, checking our files, benchmarking, then citing.$md$));
 -- step 1/5 — web_search
@@ -991,11 +991,11 @@ SELECT pg_temp.blk('30000000-0000-0000-0000-00000000004c', 11, 'text',
 
 -- C17: ARTIFACT-PRODUCING RUN — one quiet step whose result carries several
 -- `resource_links` (the rail's artifact strip). Same link shape as SECTION D.
-SELECT pg_temp.msg('30000000-0000-0000-0000-00000000004d', 'user', 25.9);
+SELECT pg_temp.msg('30000000-0000-0000-0000-00000000004d', 'user', 25.63);
 SELECT pg_temp.blk('30000000-0000-0000-0000-00000000004d', 0, 'text',
   jsonb_build_object('type','text','text', $u$Turn that benchmark into a report I can share.$u$));
 
-SELECT pg_temp.msg('30000000-0000-0000-0000-00000000004e', 'assistant', 25.10);
+SELECT pg_temp.msg('30000000-0000-0000-0000-00000000004e', 'assistant', 25.64);
 SELECT pg_temp.blk('30000000-0000-0000-0000-00000000004e', 0, 'tool_use',
   jsonb_build_object('type','tool_use','id','toolu_rail_artifacts','name','execute_command',
     'server_id','b4d4e17b-55eb-56ce-9bc5-cbc03fd597fd',
@@ -1019,11 +1019,11 @@ SELECT pg_temp.blk('30000000-0000-0000-0000-00000000004e', 2, 'text',
 -- fails (`is_error: true`), step 3 times out (mirrors `toolu_timeout` above:
 -- is_error true on the block, status='timeout' on the mcp_tool_calls row).
 -- INV-5: neither may be hidden inside a collapsed rail summary.
-SELECT pg_temp.msg('30000000-0000-0000-0000-00000000004f', 'user', 25.11);
+SELECT pg_temp.msg('30000000-0000-0000-0000-00000000004f', 'user', 25.65);
 SELECT pg_temp.blk('30000000-0000-0000-0000-00000000004f', 0, 'text',
   jsonb_build_object('type','text','text', $u$Pull the upstream changelog and re-run the long benchmark.$u$));
 
-SELECT pg_temp.msg('30000000-0000-0000-0000-000000000050', 'assistant', 25.12);
+SELECT pg_temp.msg('30000000-0000-0000-0000-000000000050', 'assistant', 25.66);
 SELECT pg_temp.blk('30000000-0000-0000-0000-000000000050', 0, 'text',
   jsonb_build_object('type','text','text', $md$Checking the workspace first, then fetching upstream.$md$));
 -- step 1/3 — succeeds
@@ -1074,11 +1074,11 @@ SELECT pg_temp.blk('30000000-0000-0000-0000-000000000050', 7, 'text',
 -- unlike files_mcp's lowercase `as_str()` above. Seeded truthfully, not uniformly.
 -- `indexing_incomplete.searchable < total` on purpose so the half-indexed banner
 -- renders (a rail step must not answer as if the corpus were complete).
-SELECT pg_temp.msg('30000000-0000-0000-0000-000000000051', 'user', 25.13);
+SELECT pg_temp.msg('30000000-0000-0000-0000-000000000051', 'user', 25.67);
 SELECT pg_temp.blk('30000000-0000-0000-0000-000000000051', 0, 'text',
   jsonb_build_object('type','text','text', $u$What does our knowledge base say about index build time vs query latency?$u$));
 
-SELECT pg_temp.msg('30000000-0000-0000-0000-000000000052', 'assistant', 25.14);
+SELECT pg_temp.msg('30000000-0000-0000-0000-000000000052', 'assistant', 25.68);
 SELECT pg_temp.blk('30000000-0000-0000-0000-000000000052', 0, 'tool_use',
   jsonb_build_object('type','tool_use','id','toolu_rail_kb_list','name','list_knowledge_bases',
     'server_id','70577fd2-afe1-52c7-a629-9464c01fb1e5',
@@ -1121,6 +1121,13 @@ report.pdf:p1: IVFFlat trains in under 4 minutes but gives up ~6 points of recal
 SELECT pg_temp.blk('30000000-0000-0000-0000-000000000052', 4, 'text',
   jsonb_build_object('type','text','text', $md$Build cost and query latency are **separate knobs**: `ef_construction` sets build time (41 min for 2.1M vectors — *report.pdf* p2), while `hnsw.ef_search` sets query latency at read time (*notes.md* p1). Note 2 of 9 documents are still indexing, so this may be incomplete.$md$));
 
+-- ORDINAL NOTE: `pg_temp.msg`'s `n` becomes `(n || ' seconds')::interval`, so it
+-- is a DECIMAL, not a dotted version. `25.10` is 25.1 seconds — it sorts BEFORE
+-- `25.7` and collides with the existing `25.1` turn. Every transcript read orders
+-- by `branch_messages.created_at`, so a collision renders the conversation
+-- scrambled (an assistant answer before its own question). Use strictly
+-- increasing decimals with a FIXED number of places (…61, …62, …63) and check the
+-- value is unused. `showcase_seed_rail_test.rs` asserts strict ordering.
 -- -- add more tool-call turns here (remember to add an mcp_tool_calls row) --
 
 -- ###########################################################################

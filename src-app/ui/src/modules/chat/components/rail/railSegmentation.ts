@@ -98,8 +98,27 @@ export function segmentRail(
       if (d) {
         // Clamp so a buggy contribution can neither stall the walk (0 / negative)
         // nor read past the end of the message.
-        const max = blocks.length - i
-        const consumed = Math.min(Math.max(1, Math.floor(d.consumed) || 1), max)
+        // Bound the span at the first EXCLUDED block after the anchor, not just
+        // at the end of the message. The exclusion set was applied only to the
+        // anchor, so a contribution returning `consumed: 3` over
+        // [tool_use, text, tool_result] would have swallowed the `text` — the
+        // answer itself — and the render loop would have advanced past it
+        // without drawing it. That is the INV-6 failure this set exists to
+        // prevent, arriving through the span rather than through the anchor.
+        //
+        // A BLOCKING step is additionally pinned to its anchor: the breakout
+        // renders exactly one block, so any larger span would silently drop the
+        // remainder (the "span says N, renders M" class ITEM-5 removes).
+        let max = blocks.length - i
+        for (let k = i + 1; k < blocks.length; k++) {
+          if (RAIL_EXCLUDED_TYPES.has(blocks[k].content_type)) {
+            max = k - i
+            break
+          }
+        }
+        const consumed = d.blocking
+          ? 1
+          : Math.min(Math.max(1, Math.floor(d.consumed) || 1), max)
         const key = seenKeys.has(d.key) ? `${d.key}#${i}` : d.key
         seenKeys.add(d.key)
         seenKeys.add(key)

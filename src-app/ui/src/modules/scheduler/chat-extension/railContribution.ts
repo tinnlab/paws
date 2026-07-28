@@ -33,10 +33,14 @@ import {
  * (`chat/core/tool-status.ts:20-25`). Painting a policy skip red would be the
  * round-1 bug this vocabulary was written to prevent.
  *
- * The status is NOT re-derived here: `railToolStepBase` already maps both markers
- * to `cancelled` (`chat/components/rail/railBlocks.ts:145-149`, verified), so
- * this contribution only supplies the label + detail on top of the base. That
- * keeps ONE place deciding the status.
+ * The `cancelled` status is set HERE, by the module that owns these markers.
+ * It briefly lived in core's `railToolStepBase` — which was convenient and wrong:
+ * INV-1 says the rail never SPECIAL-CASES an extension, not merely that it never
+ * imports one, and core encoding `unattended_denied` / `admin_disabled` is core
+ * encoding one backend surface's payload vocabulary. This contribution is at
+ * order 20, ahead of every tool family, so it is guaranteed to be the one that
+ * decides — the status still has exactly one decision point, it is just in the
+ * module that owns the meaning.
  *
  * These were UNOWNED steps before this contribution: `mcp`'s generic fallback
  * would render a bare title-cased tool name with a neutral icon and no
@@ -79,13 +83,15 @@ export function describeSchedulerSkip(
   return {
     ...base,
     label: MARKER_LABELS[marker],
+    // Neutral, never `failed`. The backend stamps these with `is_error: true` so
+    // the MODEL treats them as a failure and moves on, which would otherwise
+    // paint a policy skip with the red X that `failed` owns exclusively.
+    status: 'cancelled',
     // The tool that did NOT run — the single most useful thing to name here.
     ...(name ? { detail: titleCaseToolId(name) } : {}),
     // A skip is terminal and needs nothing from the user: it is a row, never a
     // breakout (INV-3 is about REQUESTS for input; this is a refusal).
     blocking: false,
-    // `status` is inherited from `base` — `cancelled` for both markers. Never
-    // overridden here, so the vocabulary has exactly one decision point.
   }
 }
 

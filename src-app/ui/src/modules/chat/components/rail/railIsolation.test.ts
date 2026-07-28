@@ -51,15 +51,59 @@ function importsOf(file: string): string[] {
  */
 const FORBIDDEN = /^@\/modules\/(?!chat\/)/
 
+/**
+ * Every location the rail OWNS. The first cut walked only `components/rail/`,
+ * which meant the guard could be defeated by putting the coupling one directory
+ * over — and three of these four directories were added by the same change.
+ */
+const RAIL_DIRS = [
+  'modules/chat/components/rail',
+  'modules/chat/core/rail',
+  'modules/chat/components/toolCallPanel',
+  'modules/chat/extensions/tool-call',
+]
+
+/** `railRegistryCore.ts` lives beside unrelated files, so it is named directly. */
+const RAIL_FILES = ['modules/chat/core/extensions/railRegistryCore.ts']
+
+/** Every rail-owned source file. */
+function railSources(): string[] {
+  const out: string[] = []
+  for (const d of RAIL_DIRS) out.push(...sourceFiles(join(SRC, d)))
+  for (const f of RAIL_FILES) out.push(join(SRC, f))
+  return out
+}
+
+/**
+ * Resolve a specifier to a repo-relative path when it points into `src/`, so a
+ * RELATIVE escape (`../../../mcp/foo`) is caught as well as an aliased one. The
+ * first cut tested the `@/` alias only.
+ */
+function resolvedModulePath(importer: string, spec: string): string | null {
+  // `@/modules/x` is already covered by FORBIDDEN; any other `@/` alias
+  // (`@/lib`, `@/api-client`, `@/core`) is shared infrastructure, not a module.
+  if (spec.startsWith('@/')) return null
+  if (!spec.startsWith('.')) return null
+  const abs = resolve(dirname(importer), spec)
+  return abs.startsWith(SRC) ? abs.slice(SRC.length + 1) : null
+}
+
 test('TEST-1 [acceptance][INV-1]: no rail module imports any extension module', () => {
-  const files = sourceFiles(join(SRC, 'modules/chat/components/rail'))
-  assert.ok(files.length >= 5, `expected the rail to have shipped files, found ${files.length}`)
+  const files = railSources()
+  assert.ok(files.length >= 8, `expected the rail to have shipped files, found ${files.length}`)
 
   const violations: string[] = []
   for (const f of files) {
     for (const spec of importsOf(f)) {
+      // Aliased escape…
       if (FORBIDDEN.test(spec)) {
         violations.push(`${f.replace(SRC + '/', '')} → ${spec}`)
+        continue
+      }
+      // …and a RELATIVE one, which the alias regex cannot see.
+      const rel = resolvedModulePath(f, spec)
+      if (rel && rel.startsWith('modules/') && !rel.startsWith('modules/chat/')) {
+        violations.push(`${f.replace(SRC + '/', '')} → ${spec} (resolves to ${rel})`)
       }
     }
   }
@@ -74,9 +118,14 @@ test('TEST-1 [acceptance][INV-1]: the rail source names no extension-specific to
   // A rail that avoided the IMPORT but hardcoded a tool name would violate the
   // invariant just as badly — that is exactly the shape of the map this feature
   // deletes (`workflow/.../activityDescriptors.ts` held nine modules' tools).
-  const files = sourceFiles(join(SRC, 'modules/chat/components/rail'))
+  const files = railSources()
   // Tool names drawn from the nine modules the deleted central map covered.
   const extensionTools = [
+    // …plus the structured-content keys that belong to ONE backend surface. The
+    // invariant forbids SPECIAL-CASING an extension, not merely importing one,
+    // and core briefly encoded these two scheduler markers.
+    'unattended_denied',
+    'admin_disabled',
     'web_search',
     'literature_search',
     'fetch_paper_fulltext',

@@ -16,6 +16,7 @@ import type {
 } from '@/modules/chat/components/rail/railTypes'
 import { RailContributionRegistry } from '@/modules/chat/core/extensions/railRegistryCore'
 import { RailStepDetail } from '@/modules/chat/components/rail/RailStepDetail'
+import { clearRailLiveSourceIfOwnedBy } from '@/modules/chat/core/rail/liveSteps'
 import React from 'react'
 import { createSlotRegistry } from '@ziee/framework/slots'
 
@@ -368,6 +369,14 @@ export class ChatExtensionRegistry {
 
     // Clear rail-contribution entries for this extension
     this.railContributions.unregister(name)
+
+    // …and the live-step source, if THIS extension installed it. Registration
+    // happens in an extension's `initialize`; without a matching clear the
+    // module-level source (and its store subscription) outlives the extension
+    // that owns it, so a disabled/HMR-torn-down extension keeps feeding live
+    // statuses to rails from a module the host believes it has disposed.
+    // Guarded by owner so unregistering a DIFFERENT extension cannot detach it.
+    clearRailLiveSourceIfOwnedBy(name)
 
     // Clear SSE event handler registry entries for this extension
     for (const [eventType, entries] of this.sseEventHandlerRegistry.entries()) {

@@ -152,6 +152,18 @@ export const STATE_COVERAGE = {
   "modules/auth/SessionSettingsPage:error": { via: 'page-state-mode' },
   "modules/chat/components/ChatInput:open": { skip: true, reason: "via surface — rendered within its page; 'open' branch proven by Part 2 runtime coverage" },
   "modules/chat/components/ChatMessage:empty": { skip: true, reason: "via surface — rendered within its page; 'empty' branch proven by Part 2 runtime coverage" },
+  // ── activity rail ────────────────────────────────────────────────────────
+  // Every rail surface is rendered INSIDE a ChatMessage inside ConversationPage
+  // — the same "via surface" shape as ChatMessage itself directly above, and
+  // covered by the same Part 2 runtime pass. The behavioural branches are
+  // additionally pinned by dedicated e2e specs, named per entry so a reader can
+  // check the claim rather than take it.
+  "modules/chat/components/rail/ActivityRail:empty": { skip: true, reason: "via surface — rendered within ChatMessage; the no-steps branch returns null by construction (ActivityRail returns null for an empty span) and the populated shapes are proven by tests/e2e/chat/activity-rail-seeded.spec.ts" },
+  "modules/chat/components/rail/RailStepDetail:error": { skip: true, reason: "via surface — the step's expanded body; the is_error branch is proven by tests/e2e/chat/activity-rail-failure.spec.ts" },
+  "modules/chat/components/toolCallPanel/ToolCallPanel:delayed": { skip: true, reason: "via surface — rendered inside ChatRightPanel (itself { via: 'overlay' }); the loading branch is a Skeleton on a single GET, exercised by tests/e2e/chat/activity-rail-detail.spec.ts" },
+  "modules/chat/components/toolCallPanel/ToolCallPanel:error": { skip: true, reason: "via surface — rendered inside ChatRightPanel; the fetch-error and no-stored-record branches are proven by Part 2 runtime coverage" },
+  "modules/chat/extensions/tool-call/extension:panel-open": { via: 'overlay' },
+  "modules/file/chat-extension/railContribution:empty": { skip: true, reason: "not a rendered surface — a rail contribution module (describeActivity + a detail body); its behaviour is unit-covered by modules/file/chat-extension/describeActivity.test.ts" },
   "modules/chat/components/ConversationCard:open": { skip: true, reason: "via surface — rendered within its page; 'open' branch proven by Part 2 runtime coverage" },
   "modules/chat/components/ConversationList:delayed": { skip: true, reason: "via surface — rendered within its page; 'delayed' branch proven by Part 2 runtime coverage" },
   "modules/chat/components/ConversationList:error": { skip: true, reason: "via surface — rendered within its page; 'error' branch proven by Part 2 runtime coverage" },

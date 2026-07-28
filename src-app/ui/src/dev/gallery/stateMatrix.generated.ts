@@ -4,7 +4,7 @@
 // renders + overlay triggers + panel/slot registrations) that the reconciliation
 // gate (scripts/reconcile-state-matrix.mjs) checks the gallery entries against.
 //
-// 338 surfaces carry renderable-state signals; 2067 signals total.
+// 349 surfaces carry renderable-state signals; 2105 signals total.
 
 /** A signal is one mechanically-detected render fork (a state the surface can be in). */
 export interface StateSignal {
@@ -253,7 +253,7 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/background/chat-extension/extension",
     requiredStates: ["panel-open"],
     signals: [
-      { kind: "panel", condition: "registerPanelRenderer('background')", line: 31 },
+      { kind: "panel", condition: "registerPanelRenderer('background')", line: 32 },
     ],
   },
   "modules/background/components/BackgroundRunCard": {
@@ -342,13 +342,14 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/chat/components/ChatMessage",
     requiredStates: ["empty"],
     signals: [
-      { kind: "branch", condition: "isStreaming || wasStreamingRef.current || isActiveMatch", line: 60 },
-      { kind: "empty", condition: "contents.length === 0 && !showEmptyCompletionNotice", line: 88 },
-      { kind: "branch", condition: "attachmentBlocks.length > 0", line: 189 },
-      { kind: "branch", condition: "bubbleBlocks.length > 0", line: 218 },
-      { kind: "branch", condition: "offerCollapse", line: 244 },
-      { kind: "branch", condition: "showEmptyCompletionNotice", line: 264 },
-      { kind: "branch", condition: "renderAsUser", line: 283 },
+      { kind: "branch", condition: "isStreaming || wasStreamingRef.current || isActiveMatch", line: 65 },
+      { kind: "empty", condition: "contents.length === 0 && !showEmptyCompletionNotice", line: 93 },
+      { kind: "branch", condition: "!resolved", line: 185 },
+      { kind: "branch", condition: "attachmentBlocks.length > 0", line: 263 },
+      { kind: "branch", condition: "bubbleBlocks.length > 0", line: 292 },
+      { kind: "branch", condition: "offerCollapse", line: 318 },
+      { kind: "branch", condition: "showEmptyCompletionNotice", line: 338 },
+      { kind: "branch", condition: "renderAsUser", line: 357 },
     ],
   },
   "modules/chat/components/CollapsibleBlock": {
@@ -559,6 +560,59 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
       { kind: "empty", condition: "items.length === 0", line: 49 },
     ],
   },
+  "modules/chat/components/rail/ActivityRail": {
+    surface: "modules/chat/components/rail/ActivityRail",
+    requiredStates: ["empty"],
+    signals: [
+      { kind: "empty", condition: "steps.length === 0", line: 77 },
+      { kind: "branch", condition: "quiet", line: 84 },
+      { kind: "branch", condition: "toggleable", line: 120 },
+      { kind: "branch", condition: "open", line: 155 },
+    ],
+  },
+  "modules/chat/components/rail/RailStep": {
+    surface: "modules/chat/components/rail/RailStep",
+    requiredStates: [],
+    signals: [
+      { kind: "branch", condition: "!running || !step.startedAt || step.durationMs != null", line: 67 },
+      { kind: "branch", condition: "!step.toolUseId", line: 81 },
+      { kind: "branch", condition: "showSpine", line: 100 },
+      { kind: "branch", condition: "hasDetail", line: 121 },
+      { kind: "branch", condition: "step.detail", line: 152 },
+      { kind: "branch", condition: "timing", line: 163 },
+      { kind: "branch", condition: "step.toolUseId", line: 173 },
+      { kind: "branch", condition: "shown.length > 0", line: 188 },
+      { kind: "branch", condition: "overflow > 0", line: 209 },
+      { kind: "branch", condition: "open && hasDetail", line: 225 },
+    ],
+  },
+  "modules/chat/components/rail/RailStepDetail": {
+    surface: "modules/chat/components/rail/RailStepDetail",
+    requiredStates: ["error"],
+    signals: [
+      { kind: "branch", condition: "!hasInput && !result", line: 42 },
+      { kind: "branch", condition: "hasInput", line: 52 },
+      { kind: "error", condition: "result && !isError", line: 66 },
+      { kind: "error", condition: "result && isError", line: 80 },
+    ],
+  },
+  "modules/chat/components/toolCallPanel/ToolCallPanel": {
+    surface: "modules/chat/components/toolCallPanel/ToolCallPanel",
+    requiredStates: ["delayed","error"],
+    signals: [
+      { kind: "branch", condition: "truncated", line: 77 },
+      { kind: "branch", condition: "!active", line: 122 },
+      { kind: "branch", condition: "!active", line: 126 },
+      { kind: "branch", condition: "!call || revealing", line: 141 },
+      { kind: "loading", condition: "loading", line: 156 },
+      { kind: "error", condition: "error", line: 158 },
+      { kind: "branch", condition: "!call", line: 169 },
+      { kind: "branch", condition: "call.error_message", line: 215 },
+      { kind: "branch", condition: "revealError", line: 248 },
+      { kind: "branch", condition: "raw !== undefined", line: 256 },
+      { kind: "branch", condition: "call.result_json !== undefined && call.result_json !== null", line: 266 },
+    ],
+  },
   "modules/chat/core/components/ChatRightPanel": {
     surface: "modules/chat/core/components/ChatRightPanel",
     requiredStates: ["empty","open"],
@@ -578,11 +632,11 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/chat/core/extensions/registry",
     requiredStates: ["empty"],
     signals: [
-      { kind: "branch", condition: "!state", line: 141 },
-      { kind: "branch", condition: "this.initialized", line: 432 },
-      { kind: "empty", condition: "extensions.length === 0", line: 610 },
-      { kind: "empty", condition: "extensions.length === 0", line: 643 },
-      { kind: "empty", condition: "!registered || registered.length === 0", line: 932 },
+      { kind: "branch", condition: "!state", line: 168 },
+      { kind: "branch", condition: "this.initialized", line: 488 },
+      { kind: "empty", condition: "extensions.length === 0", line: 666 },
+      { kind: "empty", condition: "extensions.length === 0", line: 699 },
+      { kind: "empty", condition: "!registered || registered.length === 0", line: 1075 },
     ],
   },
   "modules/chat/core/extensions/utils": {
@@ -771,6 +825,13 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     requiredStates: [],
     signals: [
       { kind: "branch", condition: "!currentConversation", line: 26 },
+    ],
+  },
+  "modules/chat/extensions/tool-call/extension": {
+    surface: "modules/chat/extensions/tool-call/extension",
+    requiredStates: ["panel-open"],
+    signals: [
+      { kind: "panel", condition: "registerPanelRenderer('tool_call')", line: 36 },
     ],
   },
   "modules/chat/extensions/voice/components/MicButton": {
@@ -1162,14 +1223,22 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/file/chat-extension/extension",
     requiredStates: ["empty","panel-open"],
     signals: [
-      { kind: "branch", condition: "!data.file_id", line: 40 },
-      { kind: "branch", condition: "data.source?.type !== 'file'", line: 61 },
-      { kind: "branch", condition: "!fileData?.file_id || !fileData?.filename", line: 115 },
-      { kind: "panel", condition: "registerPanelRenderer('file')", line: 156 },
-      { kind: "branch", condition: "!file", line: 161 },
-      { kind: "branch", condition: "!fileStore", line: 193 },
-      { kind: "empty", condition: "stubs.length === 0", line: 300 },
-      { kind: "branch", condition: "!fileStore", line: 303 },
+      { kind: "branch", condition: "!data.file_id", line: 41 },
+      { kind: "branch", condition: "data.source?.type !== 'file'", line: 62 },
+      { kind: "branch", condition: "!fileData?.file_id || !fileData?.filename", line: 116 },
+      { kind: "panel", condition: "registerPanelRenderer('file')", line: 157 },
+      { kind: "branch", condition: "!file", line: 162 },
+      { kind: "branch", condition: "!fileStore", line: 194 },
+      { kind: "empty", condition: "stubs.length === 0", line: 301 },
+      { kind: "branch", condition: "!fileStore", line: 304 },
+    ],
+  },
+  "modules/file/chat-extension/railContribution": {
+    surface: "modules/file/chat-extension/railContribution",
+    requiredStates: ["empty"],
+    signals: [
+      { kind: "branch", condition: "!result", line: 39 },
+      { kind: "empty", condition: "links.length === 0", line: 44 },
     ],
   },
   "modules/file/components/CanvasSelectionPopover": {
@@ -1885,6 +1954,25 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
       { kind: "branch", condition: "searchTerm || selectedTags.length > 0", line: 92 },
     ],
   },
+  "modules/js-tool/chat-extension/components/JsToolApprovalContent": {
+    surface: "modules/js-tool/chat-extension/components/JsToolApprovalContent",
+    requiredStates: [],
+    signals: [
+      { kind: "branch", condition: "submitting || resolved !== null", line: 39 },
+      { kind: "branch", condition: "resolved === 'approved'", line: 51 },
+      { kind: "branch", condition: "resolved === 'denied'", line: 51 },
+      { kind: "branch", condition: "mcpServerParenLabel(data.server)", line: 62 },
+      { kind: "branch", condition: "data.input !== undefined", line: 74 },
+      { kind: "branch", condition: "resolved === null", line: 84 },
+    ],
+  },
+  "modules/js-tool/chat-extension/extension": {
+    surface: "modules/js-tool/chat-extension/extension",
+    requiredStates: [],
+    signals: [
+      { kind: "branch", condition: "!base || base.label !== 'run_js'", line: 43 },
+    ],
+  },
   "modules/js-tool/components/JsToolSettingsSection": {
     surface: "modules/js-tool/components/JsToolSettingsSection",
     requiredStates: ["delayed","error"],
@@ -1925,20 +2013,27 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/knowledge-base/chat-extension/components/SearchKnowledgeToolResultCard",
     requiredStates: ["empty"],
     signals: [
-      { kind: "branch", condition: "!isSearchKnowledgeResult(content)", line: 32 },
-      { kind: "branch", condition: "!sc", line: 35 },
-      { kind: "branch", condition: "expanded", line: 68 },
-      { kind: "branch", condition: "incomplete", line: 83 },
-      { kind: "branch", condition: "!(!expanded)", line: 90 },
-      { kind: "empty", condition: "sc.hits.length === 0", line: 90 },
-      { kind: "branch", condition: "expanded", line: 126 },
+      { kind: "branch", condition: "!isSearchKnowledgeResult(content)", line: 39 },
+      { kind: "branch", condition: "!sc", line: 42 },
+      { kind: "branch", condition: "expanded", line: 75 },
+      { kind: "branch", condition: "incomplete", line: 90 },
+      { kind: "branch", condition: "!(!expanded)", line: 97 },
+      { kind: "empty", condition: "sc.hits.length === 0", line: 97 },
+      { kind: "branch", condition: "expanded", line: 133 },
     ],
   },
   "modules/knowledge-base/chat-extension/extension": {
     surface: "modules/knowledge-base/chat-extension/extension",
     requiredStates: ["panel-open"],
     signals: [
-      { kind: "panel", condition: "registerPanelRenderer('kb_source')", line: 52 },
+      { kind: "panel", condition: "registerPanelRenderer('kb_source')", line: 53 },
+    ],
+  },
+  "modules/knowledge-base/chat-extension/railContribution": {
+    surface: "modules/knowledge-base/chat-extension/railContribution",
+    requiredStates: [],
+    signals: [
+      { kind: "branch", condition: "!result", line: 39 },
     ],
   },
   "modules/knowledge-base/components/KnowledgeBaseCard": {
@@ -2067,7 +2162,14 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/literature/chat-extension/extension",
     requiredStates: ["panel-open"],
     signals: [
-      { kind: "panel", condition: "registerPanelRenderer('literature')", line: 27 },
+      { kind: "panel", condition: "registerPanelRenderer('literature')", line: 31 },
+    ],
+  },
+  "modules/literature/chat-extension/railContribution": {
+    surface: "modules/literature/chat-extension/railContribution",
+    requiredStates: [],
+    signals: [
+      { kind: "branch", condition: "!result", line: 33 },
     ],
   },
   "modules/literature/components/LiteratureScreeningPanel": {
@@ -2087,11 +2189,11 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/literature/components/LiteratureToolResultCard",
     requiredStates: ["empty"],
     signals: [
-      { kind: "branch", condition: "content.content_type !== 'tool_result'", line: 25 },
-      { kind: "branch", condition: "block.name !== 'literature_search'", line: 27 },
-      { kind: "branch", condition: "!sc || !Array.isArray(sc.records)", line: 29 },
-      { kind: "branch", condition: "sc.degraded_sources && sc.degraded_sources.length > 0", line: 62 },
-      { kind: "empty", condition: "sc.records.length === 0", line: 70 },
+      { kind: "branch", condition: "content.content_type !== 'tool_result'", line: 14 },
+      { kind: "branch", condition: "block.name !== LITERATURE_SEARCH", line: 16 },
+      { kind: "branch", condition: "!sc", line: 42 },
+      { kind: "branch", condition: "sc.degraded_sources && sc.degraded_sources.length > 0", line: 76 },
+      { kind: "empty", condition: "sc.records.length === 0", line: 84 },
     ],
   },
   "modules/literature/components/settings/LitSearchConnectorsSection": {
@@ -2536,18 +2638,6 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
       { kind: "branch", condition: "isRichAskUser", line: 302 },
     ],
   },
-  "modules/mcp/chat-extension/components/JsToolApprovalContent": {
-    surface: "modules/mcp/chat-extension/components/JsToolApprovalContent",
-    requiredStates: [],
-    signals: [
-      { kind: "branch", condition: "submitting || resolved !== null", line: 39 },
-      { kind: "branch", condition: "resolved === 'approved'", line: 51 },
-      { kind: "branch", condition: "resolved === 'denied'", line: 51 },
-      { kind: "branch", condition: "mcpServerParenLabel(data.server)", line: 62 },
-      { kind: "branch", condition: "data.input !== undefined", line: 74 },
-      { kind: "branch", condition: "resolved === null", line: 84 },
-    ],
-  },
   "modules/mcp/chat-extension/components/McpConfigModalMount": {
     surface: "modules/mcp/chat-extension/components/McpConfigModalMount",
     requiredStates: [],
@@ -2580,11 +2670,11 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/mcp/chat-extension/components/ToolCallPendingApprovalContent",
     requiredStates: [],
     signals: [
-      { kind: "branch", condition: "!isControlWrite", line: 289 },
-      { kind: "branch", condition: "mcpServerParenLabel(toolCall.server)", line: 308 },
-      { kind: "branch", condition: "toolCall.dest_host", line: 323 },
-      { kind: "branch", condition: "toolCall.description", line: 352 },
-      { kind: "branch", condition: "toolCall.input !== undefined", line: 360 },
+      { kind: "branch", condition: "!isControlWrite", line: 282 },
+      { kind: "branch", condition: "mcpServerParenLabel(toolCall.server)", line: 301 },
+      { kind: "branch", condition: "toolCall.dest_host", line: 316 },
+      { kind: "branch", condition: "toolCall.description", line: 345 },
+      { kind: "branch", condition: "toolCall.input !== undefined", line: 353 },
     ],
   },
   "modules/mcp/chat-extension/components/elicitationFields": {
@@ -2602,31 +2692,35 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/mcp/chat-extension/extension",
     requiredStates: ["error"],
     signals: [
-      { kind: "branch", condition: "toolCall.status === 'pending_approval'", line: 42 },
-      { kind: "branch", condition: "serverLabel", line: 58 },
-      { kind: "error", condition: "(toolCall.status === 'completed' || toolCall.status === 'error')", line: 66 },
-      { kind: "branch", condition: "toolCall.status === 'started' && toolCall.progress", line: 84 },
-      { kind: "branch", condition: "toolCall.progress.message", line: 86 },
-      { kind: "branch", condition: "isExpanded", line: 109 },
-      { kind: "branch", condition: "toolCall.input !== undefined", line: 111 },
-      { kind: "branch", condition: "toolCall.result !== undefined", line: 120 },
-      { kind: "error", condition: "toolCall.error", line: 129 },
-      { kind: "branch", condition: "!toolUseData.id", line: 160 },
-      { kind: "branch", condition: "toolCall", line: 167 },
-      { kind: "branch", condition: "mcpServerParenLabel(server?.display_name)", line: 193 },
-      { kind: "branch", condition: "toolResultData", line: 198 },
-      { kind: "branch", condition: "hasDetails", line: 206 },
-      { kind: "branch", condition: "isExpanded", line: 217 },
-      { kind: "branch", condition: "!!toolUseData.input", line: 219 },
-      { kind: "branch", condition: "toolResultData", line: 227 },
-      { kind: "branch", condition: "toolResultData.is_error", line: 230 },
-      { kind: "branch", condition: "singleUse", line: 338 },
-      { kind: "branch", condition: "singleServerLabel", line: 343 },
-      { kind: "branch", condition: "isExpanded", line: 362 },
-      { kind: "branch", condition: "!run || !shouldWrapRun(run)", line: 395 },
-      { kind: "branch", condition: "!mcpStore", line: 436 },
-      { kind: "branch", condition: "!streamingMessage", line: 890 },
-      { kind: "branch", condition: "!toolUseId", line: 902 },
+      { kind: "branch", condition: "toolCall.status === 'pending_approval'", line: 36 },
+      { kind: "branch", condition: "serverLabel", line: 52 },
+      { kind: "error", condition: "(toolCall.status === 'completed' || toolCall.status === 'error')", line: 60 },
+      { kind: "branch", condition: "toolCall.status === 'started' && toolCall.progress", line: 78 },
+      { kind: "branch", condition: "toolCall.progress.message", line: 80 },
+      { kind: "branch", condition: "isExpanded", line: 103 },
+      { kind: "branch", condition: "toolCall.input !== undefined", line: 105 },
+      { kind: "branch", condition: "toolCall.result !== undefined", line: 121 },
+      { kind: "error", condition: "toolCall.error", line: 130 },
+      { kind: "branch", condition: "!toolUseData.id", line: 161 },
+      { kind: "branch", condition: "toolCall", line: 168 },
+      { kind: "branch", condition: "mcpServerParenLabel(server?.display_name)", line: 194 },
+      { kind: "branch", condition: "toolResultData", line: 199 },
+      { kind: "branch", condition: "hasDetails", line: 207 },
+      { kind: "branch", condition: "isExpanded", line: 218 },
+      { kind: "branch", condition: "!!toolUseData.input", line: 220 },
+      { kind: "branch", condition: "toolResultData", line: 229 },
+      { kind: "branch", condition: "toolResultData.is_error", line: 232 },
+      { kind: "branch", condition: "!call", line: 272 },
+      { kind: "branch", condition: "!mcpStore", line: 293 },
+      { kind: "branch", condition: "!streamingMessage", line: 670 },
+      { kind: "branch", condition: "!toolUseId", line: 682 },
+    ],
+  },
+  "modules/mcp/chat-extension/railContribution": {
+    surface: "modules/mcp/chat-extension/railContribution",
+    requiredStates: [],
+    signals: [
+      { kind: "branch", condition: "!base", line: 30 },
     ],
   },
   "modules/mcp/components/McpConfigModal": {
@@ -2661,58 +2755,60 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/mcp/components/common/McpServerCard",
     requiredStates: [],
     signals: [
-      { kind: "branch", condition: "!isEditable && server.is_system", line: 151 },
-      { kind: "branch", condition: "server.supports_sampling", line: 166 },
-      { kind: "branch", condition: "server.usage_mode === 'always'", line: 171 },
-      { kind: "branch", condition: "status === 'unhealthy'", line: 183 },
-      { kind: "branch", condition: "status === 'healthy'", line: 206 },
-      { kind: "branch", condition: "isEditable", line: 230 },
-      { kind: "branch", condition: "canEdit", line: 232 },
-      { kind: "branch", condition: "canTest", line: 245 },
-      { kind: "branch", condition: "canEdit", line: 261 },
-      { kind: "branch", condition: "canDelete && !server.is_built_in", line: 273 },
-      { kind: "branch", condition: "server.last_health_check_status === 'unhealthy'", line: 317 },
-      { kind: "branch", condition: "server.url", line: 340 },
-      { kind: "branch", condition: "server.command", line: 357 },
-      { kind: "branch", condition: "Array.isArray(server.args) && server.args.length > 0", line: 361 },
-      { kind: "branch", condition: "bordered", line: 377 },
+      { kind: "branch", condition: "!isEditable && server.is_system", line: 171 },
+      { kind: "branch", condition: "server.supports_sampling", line: 186 },
+      { kind: "branch", condition: "server.usage_mode === 'always'", line: 191 },
+      { kind: "branch", condition: "status === 'unhealthy'", line: 203 },
+      { kind: "branch", condition: "status === 'healthy'", line: 226 },
+      { kind: "branch", condition: "canViewHistory", line: 254 },
+      { kind: "branch", condition: "isEditable", line: 270 },
+      { kind: "branch", condition: "canEdit", line: 272 },
+      { kind: "branch", condition: "canTest", line: 285 },
+      { kind: "branch", condition: "canEdit", line: 301 },
+      { kind: "branch", condition: "canDelete && !server.is_built_in", line: 313 },
+      { kind: "branch", condition: "server.last_health_check_status === 'unhealthy'", line: 357 },
+      { kind: "branch", condition: "server.url", line: 380 },
+      { kind: "branch", condition: "server.command", line: 397 },
+      { kind: "branch", condition: "Array.isArray(server.args) && server.args.length > 0", line: 401 },
+      { kind: "branch", condition: "bordered", line: 417 },
     ],
   },
   "modules/mcp/components/common/McpServerDrawer": {
     surface: "modules/mcp/components/common/McpServerDrawer",
     requiredStates: ["error","open"],
     signals: [
-      { kind: "branch", condition: "cancelled", line: 185 },
-      { kind: "branch", condition: "!Array.isArray(parsed)", line: 359 },
-      { kind: "error", condition: "hasError", line: 471 },
-      { kind: "branch", condition: "args === null", line: 474 },
-      { kind: "branch", condition: "clientId && !clientSecret && !hasExistingOAuth", line: 602 },
-      { kind: "branch", condition: "!saved", line: 633 },
-      { kind: "branch", condition: "!saved", line: 698 },
-      { kind: "branch", condition: "!open", line: 841 },
-      { kind: "branch", condition: "mode === 'create' || mode === 'create-system'", line: 883 },
-      { kind: "branch", condition: "v === false", line: 884 },
-      { kind: "branch", condition: "missingRequired", line: 899 },
-      { kind: "branch", condition: "!editingServer", line: 956 },
-      { kind: "branch", condition: "v === false", line: 960 },
-      { kind: "branch", condition: "!saved", line: 985 },
-      { kind: "branch", condition: "(mode === 'edit' || mode === 'edit-system') && editingServer?.last_health_check_status === 'unhealthy'", line: 1055 },
-      { kind: "branch", condition: "(mode === 'create' || mode === 'create-system')", line: 1080 },
-      { kind: "branch", condition: "(!!editingServer || mode === 'create' || mode === 'create-system')", line: 1103 },
-      { kind: "branch", condition: "prefillTransportSwapped", line: 1135 },
-      { kind: "branch", condition: "transportType === 'stdio'", line: 1170 },
-      { kind: "branch", condition: "(transportType === 'http' || transportType === 'sse')", line: 1216 },
-      { kind: "branch", condition: "transportType === 'http' && isUserMode", line: 1242 },
-      { kind: "branch", condition: "oauthEnabled", line: 1262 },
-      { kind: "branch", condition: "supportsSampling", line: 1320 },
-      { kind: "branch", condition: "transportType === 'stdio' && (mode === 'create-system' || mode === 'edit-system')", line: 1351 },
-      { kind: "branch", condition: "runInSandbox", line: 1372 },
-      { kind: "branch", condition: "isUserMode && transportType === 'stdio'", line: 1386 },
-      { kind: "overlay", condition: "<Drawer open>", line: 1414 },
-      { kind: "branch", condition: "canManage && !!transportType", line: 1422 },
-      { kind: "branch", condition: "canManage", line: 1438 },
-      { kind: "branch", condition: "isEditMode && editingServer", line: 1452 },
-      { kind: "branch", condition: "isSystemMode", line: 1466 },
+      { kind: "branch", condition: "cancelled", line: 194 },
+      { kind: "branch", condition: "!Array.isArray(parsed)", line: 368 },
+      { kind: "error", condition: "hasError", line: 480 },
+      { kind: "branch", condition: "args === null", line: 483 },
+      { kind: "branch", condition: "clientId && !clientSecret && !hasExistingOAuth", line: 611 },
+      { kind: "branch", condition: "!saved", line: 642 },
+      { kind: "branch", condition: "!saved", line: 707 },
+      { kind: "branch", condition: "!open", line: 854 },
+      { kind: "branch", condition: "mode === 'create' || mode === 'create-system'", line: 896 },
+      { kind: "branch", condition: "v === false", line: 897 },
+      { kind: "branch", condition: "missingRequired", line: 912 },
+      { kind: "branch", condition: "!editingServer", line: 969 },
+      { kind: "branch", condition: "v === false", line: 973 },
+      { kind: "branch", condition: "!saved", line: 998 },
+      { kind: "branch", condition: "(mode === 'edit' || mode === 'edit-system') && editingServer?.last_health_check_status === 'unhealthy'", line: 1068 },
+      { kind: "branch", condition: "(mode === 'create' || mode === 'create-system')", line: 1093 },
+      { kind: "branch", condition: "(!!editingServer || mode === 'create' || mode === 'create-system')", line: 1116 },
+      { kind: "branch", condition: "prefillTransportSwapped", line: 1148 },
+      { kind: "branch", condition: "transportType === 'stdio'", line: 1183 },
+      { kind: "branch", condition: "(transportType === 'http' || transportType === 'sse')", line: 1229 },
+      { kind: "branch", condition: "transportType === 'http' && isUserMode", line: 1255 },
+      { kind: "branch", condition: "oauthEnabled", line: 1275 },
+      { kind: "branch", condition: "supportsSampling", line: 1333 },
+      { kind: "branch", condition: "transportType === 'stdio' && (mode === 'create-system' || mode === 'edit-system')", line: 1364 },
+      { kind: "branch", condition: "runInSandbox", line: 1385 },
+      { kind: "branch", condition: "isUserMode && transportType === 'stdio'", line: 1399 },
+      { kind: "overlay", condition: "<Drawer open>", line: 1429 },
+      { kind: "branch", condition: "canManage && !!transportType", line: 1437 },
+      { kind: "branch", condition: "canManage", line: 1453 },
+      { kind: "branch", condition: "isHistoryMode && editingServer", line: 1467 },
+      { kind: "branch", condition: "isEditMode && editingServer", line: 1471 },
+      { kind: "branch", condition: "isSystemMode", line: 1485 },
     ],
   },
   "modules/mcp/components/common/McpToolApprovalsTab": {
@@ -3809,12 +3905,20 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/workflow/chat-extension/components/WorkflowWorkspaceRunCard",
     requiredStates: [],
     signals: [
-      { kind: "branch", condition: "content.content_type !== 'tool_result'", line: 18 },
-      { kind: "branch", condition: "!dir || !conversationId", line: 54 },
-      { kind: "branch", condition: "!dir || !conversationId", line: 68 },
-      { kind: "branch", condition: "canGraduate", line: 99 },
-      { kind: "branch", condition: "canSave", line: 101 },
-      { kind: "branch", condition: "canDownload", line: 114 },
+      { kind: "branch", condition: "content.content_type !== 'tool_result'", line: 17 },
+      { kind: "branch", condition: "!dir || !conversationId", line: 58 },
+      { kind: "branch", condition: "!dir || !conversationId", line: 72 },
+      { kind: "branch", condition: "canGraduate", line: 102 },
+      { kind: "branch", condition: "canSave", line: 104 },
+      { kind: "branch", condition: "canDownload", line: 117 },
+    ],
+  },
+  "modules/workflow/chat-extension/railContribution": {
+    surface: "modules/workflow/chat-extension/railContribution",
+    requiredStates: [],
+    signals: [
+      { kind: "branch", condition: "!result", line: 24 },
+      { kind: "branch", condition: "data?.is_error === true || !sc?.workspace_dir", line: 31 },
     ],
   },
   "modules/workflow/components/DryRunPreviewDialog": {
@@ -4113,13 +4217,13 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/workflow/components/run/AgentActivityTimeline",
     requiredStates: [],
     signals: [
-      { kind: "branch", condition: "hasDetails", line: 80 },
-      { kind: "branch", condition: "tool", line: 97 },
-      { kind: "branch", condition: "detail", line: 102 },
-      { kind: "branch", condition: "elicitation && onSubmitElicitation", line: 162 },
-      { kind: "branch", condition: "overflow > 0 && !showAll", line: 177 },
-      { kind: "branch", condition: "isGateAnchor", line: 199 },
-      { kind: "branch", condition: "showGateForm && !gateRendered", line: 204 },
+      { kind: "branch", condition: "hasDetails", line: 95 },
+      { kind: "branch", condition: "tool", line: 112 },
+      { kind: "branch", condition: "detail", line: 117 },
+      { kind: "branch", condition: "elicitation && onSubmitElicitation", line: 177 },
+      { kind: "branch", condition: "overflow > 0 && !showAll", line: 192 },
+      { kind: "branch", condition: "isGateAnchor", line: 214 },
+      { kind: "branch", condition: "showGateForm && !gateRendered", line: 219 },
     ],
   },
   "modules/workflow/widgets/GroupSystemWorkflowsAssignmentDrawer": {
@@ -4135,10 +4239,11 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
 
 /** Right-panel renderers — each is a distinct right-panel-open state to render. */
 export const PANEL_RENDERERS: PanelRegistration[] = [
-  { type: "background", surface: "modules/background/chat-extension/extension", line: 31 },
-  { type: "file", surface: "modules/file/chat-extension/extension", line: 156 },
-  { type: "kb_source", surface: "modules/knowledge-base/chat-extension/extension", line: 52 },
-  { type: "literature", surface: "modules/literature/chat-extension/extension", line: 27 },
+  { type: "background", surface: "modules/background/chat-extension/extension", line: 32 },
+  { type: "file", surface: "modules/file/chat-extension/extension", line: 157 },
+  { type: "kb_source", surface: "modules/knowledge-base/chat-extension/extension", line: 53 },
+  { type: "literature", surface: "modules/literature/chat-extension/extension", line: 31 },
+  { type: "tool_call", surface: "modules/chat/extensions/tool-call/extension", line: 36 },
 ]
 
 /** Slot registrations (discoverability map for sidebar/settings/panel mount points). */
@@ -4188,7 +4293,7 @@ export type StateMatrixSurface = keyof typeof STATE_MATRIX
  * `STATE_COVERAGE satisfies Record<RequiredState, StateCoverageEntry>`, so a
  * newly-extracted state with no entry is a compile error (mirrors how
  * galleryCoverage.generated.ts's `GallerySurface` gates coverage.ts).
- * 374 keys.
+ * 380 keys.
  */
 export type RequiredState =
   | "modules/agent/components/AgentSettingsSection:delayed"
@@ -4238,6 +4343,10 @@ export type RequiredState =
   | "modules/chat/components/PaneManagerDrawer:open"
   | "modules/chat/components/agent-activity/SubAgentActivityCard:empty"
   | "modules/chat/components/agent-activity/TaskListChecklist:empty"
+  | "modules/chat/components/rail/ActivityRail:empty"
+  | "modules/chat/components/rail/RailStepDetail:error"
+  | "modules/chat/components/toolCallPanel/ToolCallPanel:delayed"
+  | "modules/chat/components/toolCallPanel/ToolCallPanel:error"
   | "modules/chat/core/components/ChatRightPanel:empty"
   | "modules/chat/core/components/ChatRightPanel:open"
   | "modules/chat/core/extensions/registry:empty"
@@ -4246,6 +4355,7 @@ export type RequiredState =
   | "modules/chat/extensions/export/extension:empty"
   | "modules/chat/extensions/schedule/components/ScheduleLoopButton:open"
   | "modules/chat/extensions/schedule/components/ScheduleLoopDialog:open"
+  | "modules/chat/extensions/tool-call/extension:panel-open"
   | "modules/chat/extensions/voice/components/MicButton:open"
   | "modules/chat/pages/ChatHistoryPage:delayed"
   | "modules/chat/pages/ChatHistoryPage:error"
@@ -4286,6 +4396,7 @@ export type RequiredState =
   | "modules/file/chat-extension/components/MessageFilesView:empty"
   | "modules/file/chat-extension/extension:empty"
   | "modules/file/chat-extension/extension:panel-open"
+  | "modules/file/chat-extension/railContribution:empty"
   | "modules/file/components/CanvasSelectionPopover:empty"
   | "modules/file/components/FileCard:error"
   | "modules/file/components/FileCard:open"
@@ -4615,6 +4726,10 @@ export const REQUIRED_STATE_KEYS = [
   "modules/chat/components/PaneManagerDrawer:open",
   "modules/chat/components/agent-activity/SubAgentActivityCard:empty",
   "modules/chat/components/agent-activity/TaskListChecklist:empty",
+  "modules/chat/components/rail/ActivityRail:empty",
+  "modules/chat/components/rail/RailStepDetail:error",
+  "modules/chat/components/toolCallPanel/ToolCallPanel:delayed",
+  "modules/chat/components/toolCallPanel/ToolCallPanel:error",
   "modules/chat/core/components/ChatRightPanel:empty",
   "modules/chat/core/components/ChatRightPanel:open",
   "modules/chat/core/extensions/registry:empty",
@@ -4623,6 +4738,7 @@ export const REQUIRED_STATE_KEYS = [
   "modules/chat/extensions/export/extension:empty",
   "modules/chat/extensions/schedule/components/ScheduleLoopButton:open",
   "modules/chat/extensions/schedule/components/ScheduleLoopDialog:open",
+  "modules/chat/extensions/tool-call/extension:panel-open",
   "modules/chat/extensions/voice/components/MicButton:open",
   "modules/chat/pages/ChatHistoryPage:delayed",
   "modules/chat/pages/ChatHistoryPage:error",
@@ -4663,6 +4779,7 @@ export const REQUIRED_STATE_KEYS = [
   "modules/file/chat-extension/components/MessageFilesView:empty",
   "modules/file/chat-extension/extension:empty",
   "modules/file/chat-extension/extension:panel-open",
+  "modules/file/chat-extension/railContribution:empty",
   "modules/file/components/CanvasSelectionPopover:empty",
   "modules/file/components/FileCard:error",
   "modules/file/components/FileCard:open",

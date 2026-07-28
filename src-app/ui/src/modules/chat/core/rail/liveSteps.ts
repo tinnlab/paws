@@ -36,6 +36,8 @@ export interface RailLiveSource {
 }
 
 let source: RailLiveSource | null = null
+/** Which extension installed the current source, so teardown can be owner-scoped. */
+let sourceOwner: string | null = null
 let unsubscribeSource: (() => void) | null = null
 let version = 0
 const listeners = new Set<() => void>()
@@ -50,13 +52,26 @@ function bump(): void {
  * re-registration-safe: registering a second source detaches the first, so an
  * HMR reload or a re-mounted pane cannot leak subscriptions.
  */
-export function setRailLiveSource(next: RailLiveSource | null): void {
+export function setRailLiveSource(next: RailLiveSource | null, owner?: string): void {
   if (source === next) return
   unsubscribeSource?.()
   unsubscribeSource = null
   source = next
+  sourceOwner = next ? owner ?? null : null
   if (source) unsubscribeSource = source.subscribe(bump)
   bump()
+}
+
+/**
+ * Detach the source IFF `owner` installed it. Called by the extension registry
+ * on unregister, so teardown is symmetric with the `initialize`-time
+ * registration — without it a disabled or HMR-torn-down extension leaves a live
+ * store subscription bound to a module the host believes it has disposed.
+ * Owner-scoped so unregistering a DIFFERENT extension cannot detach it.
+ */
+export function clearRailLiveSourceIfOwnedBy(owner: string): void {
+  if (sourceOwner !== owner) return
+  setRailLiveSource(null)
 }
 
 /** Live state for a step, or `null`. Safe to call anywhere (no hook). */
@@ -87,6 +102,7 @@ export function __resetRailLiveSourceForTests(): void {
   unsubscribeSource?.()
   unsubscribeSource = null
   source = null
+  sourceOwner = null
   version = 0
   listeners.clear()
 }

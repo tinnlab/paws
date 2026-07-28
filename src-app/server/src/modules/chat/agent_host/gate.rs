@@ -565,11 +565,30 @@ impl HumanGate for ChatHumanGate {
         // the rest of this frame's best-effort disclosure fields use, and never
         // loosens the GATE itself (that decision was already made).
         let admin_override_map = match server_id {
-            Some(id) => crate::core::Repos
+            Some(id) => match crate::core::Repos
                 .mcp
                 .get_tool_approval_overrides_for_servers(&[id])
                 .await
-                .unwrap_or_default(),
+            {
+                Ok(m) => m,
+                Err(e) => {
+                    // Degrading here is deliberate — the GATE decision was already
+                    // made above and is not affected — but it must be LOUD.
+                    // Silently defaulting picks the answer that shows the user
+                    // "Approve for this conversation" on a tool that will re-prompt
+                    // anyway, i.e. it reintroduces the exact misleading affordance
+                    // ITEM-25/AP-3 removes, through a transient DB error instead of
+                    // a hardcoded UUID. Coding guidelines §6: never swallow.
+                    tracing::error!(
+                        error = %e,
+                        server_id = ?id,
+                        "mcp: failed to read tool-approval overrides for the \
+                         approval frame; always_reprompt falls back to the \
+                         classification-only answer"
+                    );
+                    Default::default()
+                }
+            },
             None => Default::default(),
         };
         let always_reprompt =

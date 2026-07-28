@@ -183,11 +183,6 @@ function computeToolStepBase(ctx: RailActivityContext): RailStepDescriptor | nul
       : resData.is_error === true
         ? 'failed'
         : 'success'
-    // A scheduler skip marker is a neutral CANCEL, never a failure (ITEM-22).
-    const sc = resData.structured_content as Record<string, unknown> | undefined
-    if (sc && (sc.unattended_denied === true || sc.admin_disabled === true)) {
-      status = 'cancelled'
-    }
   } else if (live?.status) {
     status = toolStatusKey(live.status)
   } else {
@@ -211,6 +206,7 @@ function computeToolStepBase(ctx: RailActivityContext): RailStepDescriptor | nul
     startedAt: live?.startedAt,
     durationMs: live?.durationMs,
     toolUseId: toolUseId ?? undefined,
+    serverId: use?.server_id || resData?.server_id || undefined,
   }
 }
 

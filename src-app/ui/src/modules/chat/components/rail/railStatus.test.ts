@@ -79,6 +79,11 @@ test('TEST-9 [acceptance][INV-9]: the rail source declares no status string of i
     const code = readFileSync(f, 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .replace(/^\s*\/\/.*$/gm, '')
+      // A kit `tone=` is the DESIGN-SYSTEM's semantic-color vocabulary
+      // (`success|error|warning|default|primary`), not a tool-status vocabulary —
+      // `TOOL_STATUS` itself maps each status ONTO one of those tones. Scanning
+      // it would flag the very indirection INV-9 asks for.
+      .replace(/\btone=("[^"]*"|\{[^}]*\})/g, 'tone=…')
     // Any string literal that LOOKS like a status but is not a canonical member.
     for (const m of code.matchAll(/['"]([a-z][a-z-]{2,20})['"]/g)) {
       const lit = m[1]
