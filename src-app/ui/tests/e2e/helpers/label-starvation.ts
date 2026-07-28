@@ -41,7 +41,7 @@
  * agent-kit `live-ui-audit` rig, so the gated gallery check and the 24/7 live
  * check agree by construction.
  */
-import type { Locator, Page } from '@playwright/test'
+import type { Page } from '@playwright/test'
 
 export interface LabelMetrics {
   /** The label's trimmed text. */
@@ -164,15 +164,4 @@ export async function measureLabels(page: Page): Promise<LabelMetrics[]> {
 /** Measure, then keep only the starved ones. */
 export async function collectStarvedLabels(page: Page): Promise<LabelMetrics[]> {
   return (await measureLabels(page)).filter(isStarvedLabel)
-}
-
-/** Scoped variant — measure only inside `root` (used by the fixture leg). */
-export async function collectStarvedLabelsIn(root: Locator): Promise<LabelMetrics[]> {
-  const all = await measureLabels(root.page())
-  const texts = new Set(
-    (await root.locator('[data-slot="field-label"], label, legend').allTextContents()).map(t =>
-      t.trim(),
-    ),
-  )
-  return all.filter(m => texts.has(m.text)).filter(isStarvedLabel)
 }

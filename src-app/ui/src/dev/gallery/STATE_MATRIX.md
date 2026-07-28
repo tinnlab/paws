@@ -3590,9 +3590,9 @@ Required states: `delayed`, `error`
 
 | kind | condition | line |
 |---|---|---|
-| loading | `loading && !settings` | 94 |
-| error | `error && !settings` | 107 |
-| branch | `!canManage` | 146 |
+| error | `error && !settings` | 98 |
+| loading | `isLoading` | 129 |
+| branch | `!canManage` | 163 |
 
 ### `modules/server-update/AboutSettings`
 

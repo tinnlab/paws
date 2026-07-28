@@ -3281,9 +3281,9 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/scheduler/pages/SchedulerAdminPage",
     requiredStates: ["delayed","error"],
     signals: [
-      { kind: "loading", condition: "loading && !settings", line: 94 },
-      { kind: "error", condition: "error && !settings", line: 107 },
-      { kind: "branch", condition: "!canManage", line: 146 },
+      { kind: "error", condition: "error && !settings", line: 98 },
+      { kind: "loading", condition: "isLoading", line: 129 },
+      { kind: "branch", condition: "!canManage", line: 163 },
     ],
   },
   "modules/server-update/AboutSettings": {

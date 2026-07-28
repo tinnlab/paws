@@ -41,7 +41,7 @@ const SUBTITLE = 'Deployment-wide scheduling limits.'
  * `auth/SessionSettingsPage` (Spin → ErrorState → read-only Alert → card).
  */
 export function SchedulerAdminPage() {
-  const { settings, loading, saving, error } = SchedulerAdmin
+  const { settings, saving, error } = SchedulerAdmin
   const canManage = usePermission(Permissions.SchedulerAdminManage)
 
   // `defaultValues` is REQUIRED, not decorative: with none, react-hook-form
@@ -91,19 +91,10 @@ export function SchedulerAdminPage() {
     }
   }
 
-  if (loading && !settings) {
-    return (
-      <SettingsPageContainer title="Scheduler" subtitle={SUBTITLE}>
-        <div className="flex justify-center py-12">
-          <Spin size="lg" label="Loading scheduler settings" />
-        </div>
-      </SettingsPageContainer>
-    )
-  }
-
   // Primary load failed (nothing to show) → a persistent, retryable ErrorState
   // instead of an empty card. A later SAVE failure keeps `settings` and is
-  // surfaced by the toast in onSubmit, not here.
+  // surfaced by the toast in onSubmit, not here. Checked BEFORE the no-row
+  // branch below, or a failed load would sit on a spinner forever.
   if (error && !settings) {
     return (
       <SettingsPageContainer title="Scheduler" subtitle={SUBTITLE}>
@@ -115,6 +106,32 @@ export function SchedulerAdminPage() {
           onRetry={() => void SchedulerAdmin.loadSettings()}
           data-testid="scheduler-admin-error"
         />
+      </SettingsPageContainer>
+    )
+  }
+
+  // No row yet IS the loading state — gate on the DATA, not on the store's
+  // in-flight flag. The stakes are specific to this page: `defaultValues` above
+  // are the server's OWN defaults, so a render without a row shows five
+  // plausible, authoritative-looking numbers the page does not actually have,
+  // and one edit + Save would PUT the other four over the real row.
+  // `loading && !settings` is not enough to rule that out, because "no row" and
+  // "a fetch is in flight" are not the same condition: `schedulerAdminState`
+  // starts `loading:false`, and `loadSettings` early-returns WITHOUT setting it
+  // when `hasPermissionNow(SchedulerAdminRead)` is false. (Measured: with the
+  // weaker guard the gallery's `delayed` mode still renders the Spin — React
+  // flushes the mount effect before paint — so this is hardening against a
+  // reachable *state*, not a reproduced flash. See LEDGER AUD-1.) Gating on the
+  // row is also the sibling shape: `RetrievalLimitsSection` does
+  // `if (!settings) return <status/>`. Checked after the `error` branch, so a
+  // failed load shows the retryable ErrorState rather than an endless spinner.
+  const isLoading = settings == null
+  if (isLoading) {
+    return (
+      <SettingsPageContainer title="Scheduler" subtitle={SUBTITLE}>
+        <div className="flex justify-center py-12">
+          <Spin size="lg" label="Loading scheduler settings" />
+        </div>
       </SettingsPageContainer>
     )
   }
@@ -183,7 +200,7 @@ export function SchedulerAdminPage() {
           <FormField
             name="min_interval_seconds"
             label="Minimum interval"
-            description="The fastest cadence any schedule may fire at. A cron expression that would run more often than this is rejected."
+            description="The fastest cadence, in seconds, that any schedule may fire at. A cron expression that would run more often than this is rejected."
           >
             <InputNumber
               data-testid="scheduler-min-interval"
@@ -197,7 +214,7 @@ export function SchedulerAdminPage() {
           <FormField
             name="max_horizon_days"
             label="Self-paced loop horizon"
-            description="How far ahead a self-paced (goal-seeking) loop may schedule its next check before it must stop."
+            description="How far ahead, in days, a self-paced (goal-seeking) loop may schedule its next check before it must stop."
           >
             <InputNumber
               data-testid="scheduler-max-horizon"
@@ -225,7 +242,7 @@ export function SchedulerAdminPage() {
           <FormField
             name="notification_retention_days"
             label="Notification retention"
-            description="How long run notifications are kept before they are pruned. Set 0 to keep them forever."
+            description="How long, in days, run notifications are kept before they are pruned. Set 0 to keep them forever."
           >
             <InputNumber
               data-testid="scheduler-retention"

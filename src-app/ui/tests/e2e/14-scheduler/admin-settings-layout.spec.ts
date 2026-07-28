@@ -32,6 +32,15 @@ const SCHEDULER_TESTIDS = [
   'scheduler-retention',
 ] as const
 
+/** The five Limits labels, verbatim — the units live in the control `suffix`. */
+const LIMIT_LABELS = [
+  'Max active tasks per user',
+  'Minimum interval',
+  'Self-paced loop horizon',
+  'Auto-pause after',
+  'Notification retention',
+] as const
+
 async function openSettings(page: import('@playwright/test').Page, baseURL: string) {
   await page.goto(`${baseURL}/settings/scheduler`)
   await expect(byTestId(page, 'scheduler-admin-page')).toBeVisible({ timeout: 20000 })
@@ -57,11 +66,15 @@ test('TEST-5a: desktop — labels are not starved and numeric controls are bound
     'the Limits form must not starve its label column',
   ).toEqual([])
 
-  // …and specifically: every Limits label fits on ONE or TWO lines.
-  const labels = (await measureLabels(page)).filter(m => m.words >= 2)
-  expect(labels.length, 'the Limits form renders multi-word labels').toBeGreaterThanOrEqual(5)
-  for (const m of labels) {
-    expect(m.lines, `"${m.text}" wrapped to ${m.lines} lines`).toBeLessThanOrEqual(2)
+  // …and specifically: each of the FIVE Limits labels is present and fits on ONE
+  // or TWO lines. Scoped to the five known texts on purpose — a page-wide "every
+  // multi-word label" assertion would blame this page for an unrelated label in
+  // the shared settings chrome.
+  const measured = await measureLabels(page)
+  for (const text of LIMIT_LABELS) {
+    const m = measured.find(x => x.text === text)
+    expect(m, `the Limits form renders the "${text}" label`).toBeTruthy()
+    expect(m!.lines, `"${text}" wrapped to ${m!.lines} lines`).toBeLessThanOrEqual(2)
   }
 
   // (b) a two-digit limit does not sit in a full-bleed box — the house numeric
@@ -143,6 +156,41 @@ test('TEST-5c: mobile (390px) — the form stacks, nothing is starved, no h-over
     () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
   )
   expect(overflow, 'no horizontal page overflow at 390px').toBeLessThanOrEqual(1)
+})
+
+test('TEST-5e: the pre-data window shows a loading state, never fabricated defaults', async ({
+  page,
+  testInfra,
+}) => {
+  const { baseURL } = testInfra
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await loginAsAdmin(page, baseURL)
+
+  // THROTTLE, not mock: the REAL backend still serves the real body (route.continue),
+  // we only hold it long enough to observe what the page renders meanwhile. This is
+  // the window the store's `loading:false` initial state leaves open — `useForm`'s
+  // `defaultValues` are the server's own defaults (20/300/7/5/30), so a form painted
+  // here would show plausible, authoritative-looking numbers it does not have, and a
+  // single edit + Save would PUT the other four over the real row.
+  await page.route(/\/api\/scheduler\/admin-settings$/, async route => {
+    if (route.request().method() === 'GET') await new Promise(r => setTimeout(r, 4000))
+    await route.continue()
+  })
+
+  await page.goto(`${baseURL}/settings/scheduler`)
+
+  // While the GET is held: a loading state, and NO form/inputs/Save. (The
+  // loading branch renders the page shell WITHOUT `scheduler-admin-page` — that
+  // testid marks the loaded page — so assert on the Spin's accessible name.)
+  await expect(page.getByRole('status', { name: 'Loading scheduler settings' })).toBeVisible({
+    timeout: 20000,
+  })
+  await expect(byTestId(page, 'scheduler-max-active')).toHaveCount(0)
+  await expect(byTestId(page, 'scheduler-admin-save')).toHaveCount(0)
+
+  // …and once it lands, the real row renders.
+  await expect(byTestId(page, 'scheduler-max-active')).toBeVisible({ timeout: 20000 })
+  await expect(byTestId(page, 'scheduler-max-active')).not.toHaveValue('')
 })
 
 test('TEST-5d: editing a limit saves and survives a reload', async ({ page, testInfra }) => {
