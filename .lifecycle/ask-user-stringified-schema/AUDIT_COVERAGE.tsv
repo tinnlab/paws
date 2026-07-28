@@ -69,5 +69,8 @@ src-app/ui/src/modules/mcp/chat-extension/components/elicitationOptions.test.ts	
 src-app/ui/src/modules/mcp/chat-extension/components/elicitationOptions.test.ts	225	330	tests-quality,correctness,error-handling
 src-app/ui/src/modules/mcp/chat-extension/components/elicitationOptions.ts	298	400	correctness,design-conformance,a11y,i18n-copy,state-management,error-handling
 src-app/ui/tests/e2e/chat/ask-user-degraded-schema.spec.ts	1	188	tests-quality,correctness,patterns-conformance,maintainability
-src-app/ui/tests/e2e/chat/ask-user-stringified-schema.spec.ts	1	156	tests-quality,correctness,patterns-conformance,maintainability
+src-app/ui/tests/e2e/chat/ask-user-stringified-schema.spec.ts	1	295	tests-quality,correctness,patterns-conformance,error-handling,maintainability
 src-app/ui/tests/e2e/helpers/oai-stub-server.ts	1	172	tests-quality,correctness,patterns-conformance,maintainability
+src-app/server/tests/control_mcp/mod.rs	9	13	tests-quality,patterns-conformance,maintainability,modularity
+src-app/server/tests/control_mcp/mod.rs	16	16	tests-quality,patterns-conformance,maintainability,modularity
+src-app/server/tests/control_mcp/stringified_args_test.rs	1	365	tests-quality,correctness,patterns-conformance,error-handling,maintainability

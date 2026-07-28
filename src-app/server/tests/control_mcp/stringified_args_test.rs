@@ -59,6 +59,35 @@ async fn assistant_count(pool: &sqlx::PgPool, name: &str) -> i64 {
         .unwrap_or(0)
 }
 
+/// The total `assistants` count, once it has stopped moving.
+///
+/// User registration clones default template assistants on a DETACHED task, so a
+/// count sampled immediately after `create_user_with_permissions` may still be
+/// rising. Two equal consecutive reads is enough here: the only writer is that
+/// one clone task, and it completes in a single burst.
+async fn settled_assistant_total(pool: &sqlx::PgPool) -> i64 {
+    let total = |p: &sqlx::PgPool| {
+        let p = p.clone();
+        async move {
+            sqlx::query_scalar!("SELECT COUNT(*) FROM assistants")
+                .fetch_one(&p)
+                .await
+                .unwrap()
+                .unwrap_or(0)
+        }
+    };
+    let mut last = total(pool).await;
+    for _ in 0..40 {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let now = total(pool).await;
+        if now == last {
+            return now;
+        }
+        last = now;
+    }
+    last
+}
+
 /// Create an assistant through the ordinary (well-formed) control path.
 async fn create_assistant(server: &TestServer, token: &str, name: &str) -> Value {
     call_tool(
@@ -165,6 +194,20 @@ async fn triple_stringified_body_is_refused_at_the_bound() {
     assert!(
         res["error"].is_object(),
         "a body encoded past the unwrap bound must be refused: {res}"
+    );
+    // Pin WHICH refusal this is. `validate_body`'s widened scalar-reject also
+    // refuses a string body, and it fires even with the decode fully reverted —
+    // so a bare "an error happened" assertion would stay green against exactly
+    // the partial revert this file exists to catch. Only `coerce_value`'s
+    // bound-exhausted arm names the unwrap limit.
+    // The exact text of `coerce_value`'s bound-exhausted arm ("`<arg>` arrived
+    // JSON-encoded more than 2 times (a string inside a string)"). No other
+    // refusal says this.
+    let msg = res["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        msg.contains("JSON-encoded more than"),
+        "the refusal must come from the UNWRAP BOUND, naming the limit, not from \
+         the generic scalar-reject that fires even with the decode reverted: {msg}"
     );
     assert_eq!(
         assistant_count(&pool, &name).await,
@@ -296,11 +339,13 @@ async fn undecodable_body_is_refused_actionably_and_creates_nothing() {
     let admin = create_user_with_permissions(&server, "ctl_strbody_bad", &["*"]).await;
     let pool = pool(&server).await;
 
-    let before = sqlx::query_scalar!("SELECT COUNT(*) FROM assistants")
-        .fetch_one(&pool)
-        .await
-        .unwrap()
-        .unwrap_or(0);
+    // SETTLE before sampling. `create_user_with_permissions` registers via the
+    // real /auth/register, whose UserCreated event fires a DETACHED handler that
+    // clones the default template assistant. If that clone lands between the two
+    // samples below, a strict equality assertion fails spuriously — a flake that
+    // has nothing to do with the behaviour under test. Poll until the total stops
+    // moving, then sample.
+    let before = settled_assistant_total(&pool).await;
 
     // A string that is not JSON at all. The tolerance must NOT extend to
     // inventing a body (INV-2): without this, "decode everything, somehow" would

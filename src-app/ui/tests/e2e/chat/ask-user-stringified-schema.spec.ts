@@ -259,20 +259,38 @@ test.describe('ask_user — a real model still gets a real form (no regression)'
 
       // …and it must have kept ALL of them. "At least one field" cannot tell a
       // preserved schema from one mangled down to a single surviving property —
-      // exactly the partial-corruption regression this leg exists to catch. The
-      // prompt asks for two things (name + description), and the rich wizard
-      // renders one STEP per property, so either signal proves both survived.
-      // Accept either, because a model may legitimately render the fields inline
-      // rather than as a wizard.
-      const cardText = ((await pending.textContent()) ?? '').toLowerCase()
-      const stepCount = /step\s+1\s+of\s+(\d+)/.exec(cardText)
-      const renderedFields = await fields.count()
+      // exactly the partial-corruption regression this leg exists to catch.
+      //
+      // The authoritative signal is the WIZARD STEP TOTAL, not a field count.
+      // `ask_user` always takes the rich wizard (the marker is stamped
+      // unconditionally), and the wizard renders exactly one step per schema
+      // property, so "Step 1 of N" reports N = the decoded property count
+      // directly.
+      //
+      // Deliberately NOT `fields.count()`: the `elicitation-field-` prefix also
+      // matches every choice OPTION (`…-opt-<value>`), its `-recommended` badge,
+      // its `-preview`, and `-other-input`. On a schema mangled to ONE enum
+      // property that count is >= 2 from the options alone, so a field-count
+      // assertion passes vacuously in precisely the regression case it is meant
+      // to catch.
+      //
+      // The indicator is suppressed when `total === 1` (AskUserWizardContent
+      // renders it only for `total > 1`), so its ABSENCE is itself the failure
+      // signal: it means the model's schema arrived with a single property.
+      const stepIndicator = pending.locator('[data-testid="elicitation-wizard-step"]')
+      await expect(
+        stepIndicator,
+        'the wizard step indicator must be present — it is suppressed only when ' +
+          'the decoded schema has exactly ONE property, which for this prompt ' +
+          '(it asks for a name AND a description) is the partial-mangling regression',
+      ).toBeVisible({ timeout: 30000 })
+      const stepText = (await stepIndicator.textContent()) ?? ''
+      const stepTotal = Number(/of\s+(\d+)/.exec(stepText)?.[1] ?? 0)
       expect(
-        stepCount ? Number(stepCount[1]) : renderedFields,
-        'the decode path must preserve EVERY property the model asked for — the ' +
-          'prompt requested a name AND a description, so exactly one surviving ' +
-          `field is the partial-mangling regression (fields=${renderedFields}, ` +
-          `steps=${stepCount?.[1] ?? 'none'})`,
+        stepTotal,
+        `the decode path must preserve the properties the model asked for — the ` +
+          `prompt requested a name AND a description, so a total below 2 means ` +
+          `properties were lost between the model and the form (indicator: "${stepText}")`,
       ).toBeGreaterThanOrEqual(2)
 
       // The degraded card is correct ONLY for a schema that genuinely renders
