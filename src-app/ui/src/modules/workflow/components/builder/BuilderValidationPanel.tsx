@@ -1,5 +1,5 @@
 import { AlertTriangle, CheckCircle2, XCircle } from 'lucide-react'
-import { Spinner, Text } from '@ziee/kit'
+import { Button, Spinner, Text } from '@ziee/kit'
 import type { WorkflowBuilderStore } from '../../stores/WorkflowBuilder.store'
 import {
   type AttributedFinding,
@@ -53,14 +53,15 @@ function Finding({
 
   return (
     <li data-testid="wf-builder-finding" data-step-id={finding.stepId}>
-      <button
+      <Button
         type="button"
+        variant="ghost"
         data-testid={`wf-builder-finding-goto-${finding.stepId}`}
-        className="flex w-full items-start gap-2 rounded-md p-1 text-start hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="flex h-auto w-full items-start justify-start gap-2 whitespace-normal py-1 text-start"
         onClick={() => onSelect(finding.stepId as string)}
       >
         {body}
-      </button>
+      </Button>
     </li>
   )
 }

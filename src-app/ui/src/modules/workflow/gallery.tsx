@@ -244,6 +244,53 @@ const agentStepFixture = {
   output_format: 'text',
 }
 
+/** A tool step whose arguments were entered through the GENERATED form: a
+ *  literal for `query`, a `{{ }}` reference in a NUMBER field (the case a typed
+ *  control cannot hold, so it renders as template text), and a schema-undeclared
+ *  key that must survive editing. */
+const toolStepFixture = {
+  id: 'tool_1',
+  kind: 'tool',
+  description: 'Look up the trial registry',
+  depends_on: ['agent_1'],
+  server: 'literature_search',
+  tool: 'search_trials',
+  arguments: {
+    query: 'CRISPR base editing',
+    limit: '{{ inputs.since_year }}',
+    legacy_flag: true,
+  },
+}
+
+/** The declared input schema of `search_trials`, as a real MCP server returns
+ *  it — a required string, an optional integer with a default, a boolean, and a
+ *  closed enum — so the generated form shows one typed control per kind. */
+const toolInputSchema = {
+  type: 'object',
+  required: ['query'],
+  properties: {
+    query: {
+      type: 'string',
+      title: 'Search terms',
+      description: 'Free-text query run against the trial registry.',
+    },
+    limit: {
+      type: 'integer',
+      description: 'How many trials to return.',
+      default: 20,
+    },
+    include_completed: {
+      type: 'boolean',
+      description: 'Include trials that have already finished.',
+    },
+    phase: {
+      type: 'string',
+      enum: ['1', '2', '3', '4'],
+      description: 'Restrict to a single trial phase.',
+    },
+  },
+}
+
 /** A representative 4-step workflow (agent → llm → elicit → sandbox) so the
  *  populated builder shows real-data master/detail layout. */
 const builderFourStepDef = {
@@ -288,6 +335,7 @@ const builderFourStepDef = {
       stdin: null,
       timeout_ms: 30_000,
     },
+    toolStepFixture,
   ],
 } as unknown as BuilderDef
 
@@ -300,24 +348,39 @@ const cleanValidation: ValidateDefResponse = {
 }
 
 /** A validation with ≥1 error + ≥1 warning + a cost estimate — the panel's
- *  error/warning/cost branches all lit. */
+ *  error/warning/cost branches all lit.
+ *
+ *  These are REAL backend findings: the `code`/`layer`/`message` triples are
+ *  copied verbatim from `validate.rs` + `ref_check.rs`, so what the design
+ *  review sees here is what the server actually produces. (This fixture
+ *  previously carried invented codes — `unresolved_reference`, layer `graph` —
+ *  and prose that was ALREADY humanised, which is precisely why a design pass
+ *  over the gallery never saw the raw "step has neither prompt: nor
+ *  prompt_file:" the live app was showing. A fixture that flatters the product
+ *  hides the defect it was built to catch.) */
 const errorValidation: ValidateDefResponse = {
   errors: [
     {
-      code: 'unresolved_reference',
-      layer: 'graph',
-      location: 'summarize',
-      message:
-        'Step "Summarise the findings" references {{ agent_1.output }}, but the agent step produces no named output — give the agent a Structured output or reference its text result.',
+      code: 'WORKFLOW_PROMPT_MISSING',
+      layer: 'semantic',
+      location: 'agent_1',
+      message: 'step has neither prompt: nor prompt_file:',
+    },
+    {
+      code: 'WORKFLOW_TOOL_NO_TOOL',
+      layer: 'semantic',
+      location: 'tool_1',
+      message: 'tool step has empty tool:',
     },
   ],
   warnings: [
     {
-      code: 'long_prompt',
-      layer: 'lint',
-      location: 'agent_1',
+      code: 'WORKFLOW_REF_FIELD_UNRESOLVED',
+      layer: 'semantic',
+      location: 'summarize.prompt',
       message:
-        'This task prompt is long; consider splitting it into two steps for clearer run progress.',
+        "'agent_1.output' accesses field '.title' but the object shape is unknown; cannot type-check (ensure the field exists at runtime)",
+      severity: 'warning',
     },
   ],
   cost_estimate: cannedDryRunResult,
@@ -387,6 +450,77 @@ const populatedBuilderSurface = lazy(async () => {
             </div>
           </div>
           <BuilderValidationPanel store={store} />
+        </div>
+      )
+    },
+  }
+})
+
+/** The tool step with a schema-driven arguments form (INV-3 + INV-4): the Tool
+ *  field is a picker over the server's real tools, and each declared property
+ *  gets its own typed control. Seeded through the tool CATALOG store so no
+ *  network call is made — the same shape `listTools` returns. */
+const toolStepSchemaSurface = lazy(async () => {
+  const { WorkflowBuilderStoreDef } = await import(
+    '@/modules/workflow/stores/WorkflowBuilder.store'
+  )
+  const { ToolArgumentsForm } = await import(
+    '@/modules/workflow/components/builder/ToolArgumentsForm'
+  )
+  const { describeToolSchema, splitArguments } = await import(
+    '@/modules/workflow/components/builder/toolSchemaForm'
+  )
+  return {
+    default: () => {
+      const store = WorkflowBuilderStoreDef.use({
+        def: {
+          inputs: [{ name: 'since_year', required: false, default: 2023 }],
+          steps: [agentStepFixture, toolStepFixture],
+        } as unknown as BuilderDef,
+        selectedStepId: 'tool_1',
+      })
+      const spec = describeToolSchema(toolInputSchema)
+      const { known } = splitArguments(toolStepFixture.arguments, spec)
+      if (!spec) return null
+      return (
+        <div className="max-w-xl p-4">
+          <ToolArgumentsForm
+            store={store}
+            stepId="tool_1"
+            spec={spec}
+            values={known}
+            onChange={noop}
+          />
+        </div>
+      )
+    },
+  }
+})
+
+/** The tool step's documented FALLBACK (INV-6): the server could not be
+ *  reached, so the tool name + arguments are entered by hand — with a stated
+ *  reason, never a silently empty picker. Renders the real `ToolStepForm` with
+ *  an unresolvable server name. */
+const toolStepFallbackSurface = lazy(async () => {
+  const { WorkflowBuilderStoreDef } = await import(
+    '@/modules/workflow/stores/WorkflowBuilder.store'
+  )
+  const { ToolStepForm } = await import(
+    '@/modules/workflow/components/builder/ToolStepForm'
+  )
+  const unreachableStep = {
+    ...toolStepFixture,
+    server: 'a_server_that_is_not_available',
+  }
+  return {
+    default: () => {
+      const store = WorkflowBuilderStoreDef.use({
+        def: { inputs: [], steps: [unreachableStep] } as unknown as BuilderDef,
+        selectedStepId: 'tool_1',
+      })
+      return (
+        <div className="max-w-xl p-4">
+          <ToolStepForm store={store} step={unreachableStep as any} />
         </div>
       )
     },
@@ -726,6 +860,26 @@ export const gallery: ModuleGallery = {
       initialPath: '/',
       fullHeight: true,
       component: populatedBuilderSurface,
+    },
+    // ── Builder — tool step: schema-driven arguments (INV-4). ─────────────────
+    {
+      slug: 'seeded-wf-builder-tool-schema-form',
+      title: 'Workflow builder — tool arguments from the tool schema',
+      note: 'one typed control per declared property: required string, integer with a default, boolean, enum — plus a {{ }} reference held in the NUMBER field',
+      path: '/',
+      initialPath: '/',
+      fullHeight: true,
+      component: toolStepSchemaSurface,
+    },
+    // ── Builder — tool step: hand-entry fallback (INV-6). ─────────────────────
+    {
+      slug: 'seeded-wf-builder-tool-fallback',
+      title: 'Workflow builder — tool step, server unreachable',
+      note: 'the documented escape hatch: a stated reason + free-text tool name + key/value arguments, never a silently empty picker',
+      path: '/',
+      initialPath: '/',
+      fullHeight: true,
+      component: toolStepFallbackSurface,
     },
     // ── Builder — validation panel with errors + warnings + cost. ──────────────
     {

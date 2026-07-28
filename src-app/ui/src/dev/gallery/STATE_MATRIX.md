@@ -7,8 +7,8 @@
 
 ## Summary
 
-- **338** surfaces carry at least one renderable-state signal.
-- **2067** signals total: 1618 branch, 137 empty, 119 error, 93 loading, 96 overlay, 4 panel.
+- **339** surfaces carry at least one renderable-state signal.
+- **2076** signals total: 1626 branch, 138 empty, 119 error, 93 loading, 96 overlay, 4 panel.
 - **4** right-panel renderers registered (each a right-panel-open state).
 - **35** slot registrations (sidebar / settings / chat mount points).
 
@@ -4412,13 +4412,13 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `finding.location` | 24 |
-| branch | `validating` | 47 |
-| branch | `!validation && !validating` | 50 |
-| empty | `validation && errors.length === 0` | 56 |
-| branch | `errors.length > 0` | 63 |
-| branch | `warnings.length > 0` | 71 |
-| branch | `cost` | 79 |
+| branch | `!finding.stepId` | 46 |
+| branch | `validating` | 90 |
+| branch | `!validation && !validating` | 93 |
+| empty | `validation && errors.length === 0` | 99 |
+| branch | `errors.length > 0` | 106 |
+| branch | `warnings.length > 0` | 114 |
+| branch | `cost` | 122 |
 
 ### `modules/workflow/components/builder/RefInsertMenu`
 
@@ -4442,8 +4442,21 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `from == null` | 26 |
-| empty | `steps.length === 0` | 38 |
+| branch | `from == null` | 47 |
+| empty | `steps.length === 0` | 59 |
+| branch | `problems > 0` | 111 |
+| empty | `problems === 0 && cautions > 0` | 121 |
+
+### `modules/workflow/components/builder/ToolArgumentsForm`
+
+Required states: _(branch-only — proven via dynamic coverage)_
+
+| kind | condition | line |
+|---|---|---|
+| branch | `templated` | 83 |
+| branch | `templated` | 107 |
+| branch | `templated` | 199 |
+| branch | `spec.overflowNames.length > 0` | 238 |
 
 ### `modules/workflow/components/builder/ToolStepForm`
 
@@ -4451,7 +4464,10 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| empty | `rows.length === 0` | 175 |
+| branch | `blockingFailure` | 239 |
+| branch | `usePicker` | 258 |
+| branch | `useGenerated && spec` | 282 |
+| empty | `rows.length === 0` | 301 |
 
 ### `modules/workflow/components/builder/WorkflowBuilderPage`
 

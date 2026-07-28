@@ -4,7 +4,7 @@
 // renders + overlay triggers + panel/slot registrations) that the reconciliation
 // gate (scripts/reconcile-state-matrix.mjs) checks the gallery entries against.
 //
-// 338 surfaces carry renderable-state signals; 2067 signals total.
+// 339 surfaces carry renderable-state signals; 2076 signals total.
 
 /** A signal is one mechanically-detected render fork (a state the surface can be in). */
 export interface StateSignal {
@@ -4041,13 +4041,13 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/workflow/components/builder/BuilderValidationPanel",
     requiredStates: ["empty"],
     signals: [
-      { kind: "branch", condition: "finding.location", line: 24 },
-      { kind: "branch", condition: "validating", line: 47 },
-      { kind: "branch", condition: "!validation && !validating", line: 50 },
-      { kind: "empty", condition: "validation && errors.length === 0", line: 56 },
-      { kind: "branch", condition: "errors.length > 0", line: 63 },
-      { kind: "branch", condition: "warnings.length > 0", line: 71 },
-      { kind: "branch", condition: "cost", line: 79 },
+      { kind: "branch", condition: "!finding.stepId", line: 46 },
+      { kind: "branch", condition: "validating", line: 90 },
+      { kind: "branch", condition: "!validation && !validating", line: 93 },
+      { kind: "empty", condition: "validation && errors.length === 0", line: 99 },
+      { kind: "branch", condition: "errors.length > 0", line: 106 },
+      { kind: "branch", condition: "warnings.length > 0", line: 114 },
+      { kind: "branch", condition: "cost", line: 122 },
     ],
   },
   "modules/workflow/components/builder/RefInsertMenu": {
@@ -4068,15 +4068,30 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/workflow/components/builder/StepList",
     requiredStates: ["empty"],
     signals: [
-      { kind: "branch", condition: "from == null", line: 26 },
-      { kind: "empty", condition: "steps.length === 0", line: 38 },
+      { kind: "branch", condition: "from == null", line: 47 },
+      { kind: "empty", condition: "steps.length === 0", line: 59 },
+      { kind: "branch", condition: "problems > 0", line: 111 },
+      { kind: "empty", condition: "problems === 0 && cautions > 0", line: 121 },
+    ],
+  },
+  "modules/workflow/components/builder/ToolArgumentsForm": {
+    surface: "modules/workflow/components/builder/ToolArgumentsForm",
+    requiredStates: [],
+    signals: [
+      { kind: "branch", condition: "templated", line: 83 },
+      { kind: "branch", condition: "templated", line: 107 },
+      { kind: "branch", condition: "templated", line: 199 },
+      { kind: "branch", condition: "spec.overflowNames.length > 0", line: 238 },
     ],
   },
   "modules/workflow/components/builder/ToolStepForm": {
     surface: "modules/workflow/components/builder/ToolStepForm",
     requiredStates: ["empty"],
     signals: [
-      { kind: "empty", condition: "rows.length === 0", line: 175 },
+      { kind: "branch", condition: "blockingFailure", line: 239 },
+      { kind: "branch", condition: "usePicker", line: 258 },
+      { kind: "branch", condition: "useGenerated && spec", line: 282 },
+      { kind: "empty", condition: "rows.length === 0", line: 301 },
     ],
   },
   "modules/workflow/components/builder/WorkflowBuilderPage": {
