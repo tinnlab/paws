@@ -10,6 +10,7 @@ import {
   buildStepZodSchema,
   configErrors,
   createStep,
+  promptSuppliedByFile,
 } from './stepForms.ts'
 
 // TEST-13 — the per-kind zod-schema builder / `createStep` / `configErrors`.
@@ -370,6 +371,64 @@ test('clearing the prompt box saves an ABSENT prompt, not an empty one', () => {
       src,
       /patch\(\{ prompt: v \|\| null \}\)/,
       `${file}: a cleared prompt must be normalised to absent`,
+    )
+  }
+})
+
+// TEST-5 (ITEM-5) — the client's file-backed predicate must mirror the
+// backend's ONE prompt-source rule, `validate.rs::prompt_source`, EXACTLY.
+//
+// The backend normalises an EMPTY `prompt_file:` to "absent" (an empty path
+// resolves to the bundle DIRECTORY, which can never be read) and reports such a
+// step `WORKFLOW_PROMPT_MISSING`. It uses `is_empty()`, NOT `trim()`, so a
+// whitespace-only path is still a path — reported `WORKFLOW_PROMPT_FILE_MISSING`
+// rather than "no prompt". Accepting `''` here, or trimming, would lift the
+// prompt requirement on a step the backend calls incomplete: the client-side
+// twin of the validate/dispatch disagreement.
+test('promptSuppliedByFile mirrors the backend emptiness rule exactly', () => {
+  assert.equal(
+    promptSuppliedByFile({ prompt_file: 'prompts/task.md' }),
+    true,
+    'a real bundle-relative path IS a file',
+  )
+  assert.equal(
+    promptSuppliedByFile({ prompt_file: '' }),
+    false,
+    "an empty prompt_file resolves to the bundle directory — the backend calls it MISSING, so the builder must keep asking for a prompt",
+  )
+  assert.equal(
+    promptSuppliedByFile({ prompt_file: '   ' }),
+    true,
+    'the backend filters on is_empty(), NOT trim() — a whitespace path is a path (it reports PROMPT_FILE_MISSING, not PROMPT_MISSING)',
+  )
+  for (const pf of [null, undefined, 0, false, {}, []]) {
+    assert.equal(
+      promptSuppliedByFile({ prompt_file: pf }),
+      false,
+      `prompt_file ${JSON.stringify(pf)} is not a string the backend would read as a file`,
+    )
+  }
+  assert.equal(promptSuppliedByFile({}), false)
+  assert.equal(promptSuppliedByFile(undefined), false)
+})
+
+test('an EMPTY prompt_file leaves the prompt requirement in force', () => {
+  // The consequence of the predicate above, through the real `configErrors` —
+  // the same surface the builder renders. `prompt_file: ''` must read exactly
+  // like an absent one, because that is what the backend does.
+  for (const [kind, message] of PROMPT_XOR_KINDS) {
+    const base = createStep(kind, []) as unknown as Record<string, unknown>
+    const absent = { ...base }
+    delete absent.prompt
+    assert.equal(
+      configErrors({ ...absent, prompt_file: '' } as never).prompt,
+      message,
+      `${kind}: an empty prompt_file is no prompt source, so the original required message must stand`,
+    )
+    // …and a real path still lifts it, so the assertion above is not vacuous.
+    assert.ok(
+      !('prompt' in configErrors({ ...absent, prompt_file: 'p.md' } as never)),
+      `${kind}: a real prompt_file must still lift the requirement`,
     )
   }
 })

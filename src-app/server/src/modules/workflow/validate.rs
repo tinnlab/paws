@@ -668,6 +668,12 @@ fn check_steps_shape(workflow: &WorkflowDef) -> Vec<ValidationError> {
         }
         // Prompt vs prompt_file mutual exclusion (defense in depth on
         // top of #[serde(flatten)] which doesn't enforce oneOf).
+        //
+        // Decided by `prompt_source` — the SAME rule `dispatch.rs::load_raw_prompt`
+        // uses — so a definition this check passes cannot fail the run for a
+        // prompt reason, and one it rejects cannot quietly run (INV-1). The two
+        // codes and their exact messages are unchanged: the builder's
+        // author-facing copy is keyed off them.
         if let StepConfig::Llm {
             prompt, prompt_file, ..
         }
@@ -678,23 +684,20 @@ fn check_steps_shape(workflow: &WorkflowDef) -> Vec<ValidationError> {
             prompt, prompt_file, ..
         } = &s.config
         {
-            let has_prompt = prompt.as_ref().filter(|s| !s.is_empty()).is_some();
-            let has_file = prompt_file.is_some();
-            if has_prompt && has_file {
-                out.push(ValidationError::at(
+            match prompt_source(prompt, prompt_file) {
+                PromptSource::Both => out.push(ValidationError::at(
                     "semantic",
                     "WORKFLOW_PROMPT_BOTH",
                     "step has both prompt: and prompt_file: (mutually exclusive)",
                     &s.id,
-                ));
-            }
-            if !has_prompt && !has_file {
-                out.push(ValidationError::at(
+                )),
+                PromptSource::Missing => out.push(ValidationError::at(
                     "semantic",
                     "WORKFLOW_PROMPT_MISSING",
                     "step has neither prompt: nor prompt_file:",
                     &s.id,
-                ));
+                )),
+                PromptSource::Inline(_) | PromptSource::File(_) => {}
             }
         }
         // E6: the `tools:` field on llm/llm_map is dead (never read — the
@@ -1041,6 +1044,66 @@ fn collect_template_strings(v: &serde_json::Value) -> Vec<&str> {
     out
 }
 
+/// Where a step's wording comes from.
+///
+/// See [`prompt_source`] — this is the vocabulary of the ONE rule that both the
+/// validator and the runner use to answer that question.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptSource<'a> {
+    /// An inline `prompt:`.
+    Inline(&'a str),
+    /// A bundle-relative `prompt_file:`.
+    File(&'a str),
+    /// Neither — the step has no wording at all.
+    Missing,
+    /// Both — `prompt:` and `prompt_file:` are mutually exclusive.
+    Both,
+}
+
+/// The SINGLE source of truth for "where does this step's prompt come from".
+///
+/// `validate.rs` (which turns the answer into `WORKFLOW_PROMPT_BOTH` /
+/// `WORKFLOW_PROMPT_MISSING`) and `dispatch.rs::load_raw_prompt` (which turns it
+/// into the string actually sent to the model) MUST both go through here.
+/// They used not to: the validator normalised an empty `prompt:` to "absent"
+/// while the runner matched `(Option, Option)` raw, so a step carrying
+/// `prompt: ""` beside a `prompt_file:` validated GREEN and then failed the RUN
+/// with `has invalid prompt config`
+/// (`.lifecycle/workflow-builder-ux/FIX_ROUND-8.md`). Deriving both from this one
+/// function is what makes that class of disagreement unrepresentable rather than
+/// merely fixed.
+///
+/// **An EMPTY string is ABSENT, for both fields.** `prompt: ""` is how the
+/// builder's own `WORKFLOW_PROMPT_BOTH` remedy ("clear the prompt box here to use
+/// the file") used to reach the wire, and an empty `prompt_file:` names the bundle
+/// directory itself, which can never be read. Whitespace is deliberately NOT
+/// trimmed: `prompt: "   "` is a real (if odd) prompt, both sides already agreed
+/// on it, and trimming would be an unforced behaviour change (DEC-3).
+pub fn prompt_source<'a>(
+    prompt: &'a Option<String>,
+    prompt_file: &'a Option<String>,
+) -> PromptSource<'a> {
+    let inline = prompt.as_deref().filter(|s| !s.is_empty());
+    let file = prompt_file_ref(prompt_file);
+    match (inline, file) {
+        (Some(p), None) => PromptSource::Inline(p),
+        (None, Some(f)) => PromptSource::File(f),
+        (Some(_), Some(_)) => PromptSource::Both,
+        (None, None) => PromptSource::Missing,
+    }
+}
+
+/// The `prompt_file:` half of [`prompt_source`], for the one caller that needs
+/// the PATH regardless of whether the step also carries an inline `prompt:`
+/// (`check_prompt_files`, which reports on the file even in a both-state).
+///
+/// Kept as the single definition of "is there a file here" so the emptiness rule
+/// is not written twice: an empty path is ABSENT, because it resolves to the
+/// bundle directory itself, which is never readable.
+pub fn prompt_file_ref(prompt_file: &Option<String>) -> Option<&str> {
+    prompt_file.as_deref().filter(|s| !s.is_empty())
+}
+
 /// `prompt_file:` checks.
 ///
 /// Two DIFFERENT kinds of check live here, and only one of them needs a bundle:
@@ -1071,10 +1134,16 @@ fn check_prompt_files(workflow: &WorkflowDef, bundle_root: &Path) -> Vec<Validat
     let mut out = Vec::new();
     let bundle_present = bundle_root.is_dir();
     for s in &workflow.steps {
+        // Filtered through the SAME emptiness rule the XOR check and the runner
+        // use: an empty `prompt_file:` is ABSENT, not a path. Left unfiltered it
+        // resolved to `bundle_root.join("")` — i.e. the bundle directory, which
+        // always exists — so the step validated GREEN and then failed the run
+        // with "Is a directory". Absent here, it is reported by the XOR check as
+        // `WORKFLOW_PROMPT_MISSING`, which is what it actually is.
         let pf = match &s.config {
-            StepConfig::Llm { prompt_file, .. } => prompt_file.as_deref(),
-            StepConfig::LlmMap { prompt_file, .. } => prompt_file.as_deref(),
-            StepConfig::Agent { prompt_file, .. } => prompt_file.as_deref(),
+            StepConfig::Llm { prompt_file, .. }
+            | StepConfig::LlmMap { prompt_file, .. }
+            | StepConfig::Agent { prompt_file, .. } => prompt_file_ref(prompt_file),
             _ => None,
         };
         if let Some(p) = pf {
@@ -1101,6 +1170,20 @@ fn check_prompt_files(workflow: &WorkflowDef, bundle_root: &Path) -> Vec<Validat
                             "security",
                             "WORKFLOW_PROMPT_FILE_ESCAPE",
                             format!("prompt_file '{p}' resolves outside bundle"),
+                            &s.id,
+                        ));
+                    } else if !canon.is_file() {
+                        // Existence alone is not the question the runner asks —
+                        // it asks whether the path can be READ. A `prompt_file:`
+                        // naming a directory passed this check and then failed
+                        // the run with "Is a directory" (INV-1). Checked on the
+                        // CANONICAL path, so a symlink to a real file still
+                        // passes. Reuses the existing code, so the builder's
+                        // author-facing copy needs no new entry.
+                        out.push(ValidationError::at(
+                            "semantic",
+                            "WORKFLOW_PROMPT_FILE_MISSING",
+                            format!("prompt_file '{p}' is not a file in the bundle"),
                             &s.id,
                         ));
                     }
@@ -1698,6 +1781,102 @@ steps:
         let tmp = tempdir().unwrap();
         let errs = validate_collecting(&wf, tmp.path(), false);
         assert!(errs.iter().any(|e| e.code == "WORKFLOW_PROMPT_FILE_UNSAFE"));
+    }
+
+    /// **TEST-2** — the shared rule's normalisation table, asserted directly.
+    ///
+    /// This is the single point both the validator and
+    /// `dispatch.rs::load_raw_prompt` consult, so its boundaries ARE the
+    /// contract; DEC-3's deliberate non-trimming is pinned here so a later
+    /// "tidy-up" to `trim()` shows up as a red test rather than a silent
+    /// behaviour change.
+    #[test]
+    fn prompt_source_treats_empty_as_absent_but_not_whitespace() {
+        let some = |s: &str| Some(s.to_string());
+        let none: Option<String> = None;
+
+        // Empty is ABSENT — on either field.
+        assert_eq!(
+            prompt_source(&some(""), &some("p.md")),
+            PromptSource::File("p.md"),
+            "a cleared prompt box beside a prompt_file: must resolve to the FILE"
+        );
+        assert_eq!(
+            prompt_source(&some(""), &none),
+            PromptSource::Missing,
+            "a cleared prompt box with no prompt_file: is a step with no wording"
+        );
+        assert_eq!(
+            prompt_source(&none, &some("")),
+            PromptSource::Missing,
+            "an empty prompt_file: names the bundle dir, not a prompt"
+        );
+        assert_eq!(prompt_source(&some(""), &some("")), PromptSource::Missing);
+
+        // Whitespace is NOT trimmed (DEC-3) — it stays a real prompt.
+        assert_eq!(prompt_source(&some("   "), &none), PromptSource::Inline("   "));
+        assert_eq!(prompt_source(&some("   "), &some("p.md")), PromptSource::Both);
+
+        // The ordinary cases are unchanged.
+        assert_eq!(prompt_source(&some("hi"), &none), PromptSource::Inline("hi"));
+        assert_eq!(prompt_source(&none, &some("p.md")), PromptSource::File("p.md"));
+        assert_eq!(prompt_source(&some("hi"), &some("p.md")), PromptSource::Both);
+        assert_eq!(prompt_source(&none, &none), PromptSource::Missing);
+    }
+
+    /// **TEST-3** — the validator's verdicts on the states that used to validate
+    /// GREEN and then fail the run, plus a guard that the pre-existing verdicts
+    /// did not move.
+    #[test]
+    fn validator_verdicts_on_the_empty_and_directory_prompt_states() {
+        let tmp = tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("prompts")).unwrap();
+        std::fs::write(tmp.path().join("prompts/real.md"), "body").unwrap();
+        std::fs::create_dir_all(tmp.path().join("prompts/adir")).unwrap();
+
+        let codes = |yaml: &str| -> Vec<&'static str> {
+            let wf = parse_workflow_yaml(yaml).unwrap();
+            validate_collecting(&wf, tmp.path(), false)
+                .into_iter()
+                .map(|e| e.code)
+                .collect()
+        };
+
+        // A cleared prompt box beside a real prompt_file: is a COMPLETE step.
+        let c = codes(
+            "steps:\n  - id: g\n    kind: llm\n    prompt: \"\"\n    prompt_file: \"prompts/real.md\"\n",
+        );
+        assert!(
+            !c.contains(&"WORKFLOW_PROMPT_BOTH") && !c.contains(&"WORKFLOW_PROMPT_MISSING"),
+            "an empty prompt beside a prompt_file: is neither 'both' nor 'missing': {c:?}"
+        );
+        assert!(!c.contains(&"WORKFLOW_PROMPT_FILE_MISSING"), "{c:?}");
+
+        // An empty prompt_file: is no prompt source at all.
+        let c = codes("steps:\n  - id: g\n    kind: llm\n    prompt_file: \"\"\n");
+        assert!(
+            c.contains(&"WORKFLOW_PROMPT_MISSING"),
+            "an empty prompt_file: must be reported as a missing prompt, not accepted: {c:?}"
+        );
+
+        // A prompt_file: naming a DIRECTORY cannot be read at run time.
+        let c = codes("steps:\n  - id: g\n    kind: llm\n    prompt_file: \"prompts/adir\"\n");
+        assert!(
+            c.contains(&"WORKFLOW_PROMPT_FILE_MISSING"),
+            "a prompt_file: naming a directory must be rejected: {c:?}"
+        );
+
+        // Pre-existing verdicts unmoved.
+        let c = codes(
+            "steps:\n  - id: g\n    kind: llm\n    prompt: \"inline\"\n    prompt_file: \"prompts/real.md\"\n",
+        );
+        assert!(c.contains(&"WORKFLOW_PROMPT_BOTH"), "{c:?}");
+        let c = codes("steps:\n  - id: g\n    kind: llm\n");
+        assert!(c.contains(&"WORKFLOW_PROMPT_MISSING"), "{c:?}");
+        let c = codes("steps:\n  - id: g\n    kind: llm\n    prompt_file: \"prompts/nope.md\"\n");
+        assert!(c.contains(&"WORKFLOW_PROMPT_FILE_MISSING"), "{c:?}");
+        let c = codes("steps:\n  - id: g\n    kind: llm\n    prompt_file: \"../../etc/passwd\"\n");
+        assert!(c.contains(&"WORKFLOW_PROMPT_FILE_UNSAFE"), "{c:?}");
     }
 
     #[test]

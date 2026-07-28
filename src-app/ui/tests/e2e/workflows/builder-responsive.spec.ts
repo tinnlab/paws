@@ -66,21 +66,26 @@ const BUILDER_REGIONS = [
 ] as const
 
 /**
- * The largest horizontal overflow this spec tolerates, in px.
+ * The largest horizontal overflow this spec tolerates, in px — now pure
+ * sub-pixel jitter slack, with NO defect allowance folded into it.
  *
- * It is NOT jitter slack — it is a bounded, named allowance for ONE pre-existing
- * defect this probe uncovered the moment it started measuring the axis that can
- * actually move: at 390px the kit combobox's `InputGroup` inline-end addon
- * (`sdk/packages/kit/src/shadcn/{combobox,input-group}.tsx`, `role="group"
- * data-slot="input-group-addon" data-align="inline-end"`) renders 4px past its
- * own group, so the step-config panel reports `scrollWidth 370 / clientWidth
- * 366`. It is in the KIT, not in this feature's files.
+ * It used to be 4. When this probe was rewritten to measure the axis that can
+ * actually move, the first thing it found was a KIT defect: the combobox's
+ * `InputGroup` inline-end addon rendered ~4px past its own group, because the
+ * addon variant carried `has-[>button]:mr-[-0.3rem]` and a negative margin on a
+ * flex child puts its border box outside the container's content box. That was
+ * in the kit, not in this feature's files, so it was carried here as a bounded,
+ * named allowance and reported onward.
  *
- * Bounded at exactly that 4px so it cannot silently grow: a 5px regression, and
- * anything that genuinely clips content, still fails. Lower this to 1 once the
- * kit addon is fixed.
+ * It has since been fixed at the source — `sdk/packages/kit/src/shadcn/
+ * input-group.tsx` now uses grid-aligned logical padding
+ * (`pe-2 has-[>button]:pe-1`) instead of a negative margin — so the allowance is
+ * discharged and the constant returns to 1. The kit property itself is guarded
+ * directly by `tests/e2e/visual/input-group-overflow.spec.ts` (backend-free,
+ * 390px + 1280px, with a falsifiability control), which is what stops the
+ * defect coming back without this full-stack spec having to tolerate it again.
  */
-const MAX_TOLERATED_OVERFLOW_PX = 4
+const MAX_TOLERATED_OVERFLOW_PX = 1
 
 interface OverflowHit {
   where: string

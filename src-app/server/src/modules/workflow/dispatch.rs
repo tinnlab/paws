@@ -11,6 +11,7 @@
 //! in the runner (one place, transactional with status updates).
 
 
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -39,7 +40,7 @@ use crate::modules::workflow::types::{
     ItemProgress, ParsedAs, RunContext, StepKindTag, StepResult,
 };
 use crate::modules::workflow::validate::{
-    OnError, OutputFormat, StepConfig, StepDef,
+    OnError, OutputFormat, PromptSource, StepConfig, StepDef, prompt_source,
 };
 
 /// Per-call LLM token cap (plan §4.5).
@@ -88,7 +89,7 @@ pub(crate) async fn resolve_prompt(
     prompt: &Option<String>,
     prompt_file: &Option<String>,
 ) -> Result<String, String> {
-    let raw = load_raw_prompt(step, ctx, prompt, prompt_file).await?;
+    let raw = load_raw_prompt(&step.id, &ctx.extracted_path, prompt, prompt_file).await?;
     crate::modules::workflow::template::render(&raw, ctx).map_err(|e| e.to_string())
 }
 
@@ -97,21 +98,36 @@ pub(crate) async fn resolve_prompt(
 /// `{{ <item_var> }}` binding that does NOT exist in `ctx` — so it must be
 /// rendered per-item via `render_with_bindings` (H4), never pre-rendered
 /// against `ctx` alone.
+///
+/// Takes `step_id` + `bundle_root` rather than the whole `RunContext`: those are
+/// the only two things it needs, and the narrower signature is what lets the
+/// validate↔dispatch agreement matrix (INV-1) drive this function for real
+/// against a real bundle directory instead of a stand-in.
+///
+/// **Which arm is taken is NOT decided here.** It is decided by
+/// `validate::prompt_source`, the ONE rule the validator also uses — so a
+/// definition the validator reports green cannot fail here, and one it reports
+/// red cannot quietly succeed here. Before that rule existed this function
+/// matched `(Option, Option)` raw, which read `Some("")` beside a `prompt_file:`
+/// as "both" and failed the run on a workflow that had just validated clean
+/// (`.lifecycle/workflow-builder-ux/FIX_ROUND-8.md`).
 async fn load_raw_prompt(
-    step: &StepDef,
-    ctx: &RunContext,
+    step_id: &str,
+    bundle_root: &Path,
     prompt: &Option<String>,
     prompt_file: &Option<String>,
 ) -> Result<String, String> {
-    match (prompt, prompt_file) {
-        (Some(p), None) => Ok(p.clone()),
-        (None, Some(rel)) => {
-            let path = ctx.extracted_path.join(rel);
+    match prompt_source(prompt, prompt_file) {
+        PromptSource::Inline(p) => Ok(p.to_string()),
+        PromptSource::File(rel) => {
+            let path = bundle_root.join(rel);
             tokio::fs::read_to_string(&path)
                 .await
                 .map_err(|e| format!("read prompt_file '{rel}': {e}"))
         }
-        _ => Err(format!("step '{}' has invalid prompt config", step.id)),
+        PromptSource::Missing | PromptSource::Both => {
+            Err(format!("step '{step_id}' has invalid prompt config"))
+        }
     }
 }
 
@@ -353,7 +369,9 @@ impl StepDispatcher for LlmMapDispatcher {
         // item as a resolvable variable so `{{ <item_var>.field }}` /
         // `{{ <item_var>[N] }}` work when items are objects/arrays. The
         // finished string is moved into the spawned task.
-        let raw_prompt = match load_raw_prompt(step, ctx, &prompt, &prompt_file).await {
+        let raw_prompt = match load_raw_prompt(&step.id, &ctx.extracted_path, &prompt, &prompt_file)
+            .await
+        {
             Ok(p) => p,
             Err(e) => {
                 return StepResult::Failed {
@@ -1858,6 +1876,179 @@ mod tests {
         )
         .unwrap();
         assert_eq!(s, "say hello");
+    }
+
+    // ───────────────────────── INV-1: validate ⇔ dispatch ─────────────────────
+    //
+    // The validator and the runner must answer "where does this step's prompt
+    // come from" the SAME way. They did not: a step carrying `prompt: ""` beside
+    // a `prompt_file:` validated GREEN (the validator normalises an empty prompt
+    // to "absent") and then failed the RUN with `has invalid prompt config` (the
+    // runner matched `(Option, Option)` raw). See
+    // `.lifecycle/workflow-builder-ux/FIX_ROUND-8.md`.
+
+    /// A bundle with the three kinds of `prompt_file:` target a definition can
+    /// name: a real file, a directory, and nothing at all.
+    fn prompt_bundle() -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("prompts")).unwrap();
+        std::fs::write(tmp.path().join("prompts/real.md"), "FILE PROMPT BODY").unwrap();
+        std::fs::create_dir_all(tmp.path().join("prompts/adir")).unwrap();
+        tmp
+    }
+
+    /// Every finding code that answers "is this step's prompt configuration
+    /// acceptable". These are the verdicts INV-1 binds to the run outcome; any
+    /// other finding (a bad ref, a missing output) is a different question.
+    const PROMPT_CODES: &[&str] = &[
+        "WORKFLOW_PROMPT_BOTH",
+        "WORKFLOW_PROMPT_MISSING",
+        "WORKFLOW_PROMPT_FILE_MISSING",
+        "WORKFLOW_PROMPT_FILE_UNSAFE",
+        "WORKFLOW_PROMPT_FILE_ESCAPE",
+    ];
+
+    /// Render one YAML step of `kind` carrying the given prompt fields.
+    /// `None` = the key is ABSENT (not empty) — the distinction the whole
+    /// defect turns on.
+    fn step_yaml(kind: &str, prompt: Option<&str>, prompt_file: Option<&str>) -> String {
+        let mut y = format!("steps:\n  - id: s\n    kind: {kind}\n");
+        if kind == "llm_map" {
+            y.push_str("    for_each: \"{{ inputs.xs }}\"\n    item_var: it\n");
+        }
+        if let Some(p) = prompt {
+            y.push_str(&format!("    prompt: \"{p}\"\n"));
+        }
+        if let Some(f) = prompt_file {
+            y.push_str(&format!("    prompt_file: \"{f}\"\n"));
+        }
+        y
+    }
+
+    /// Pull the two prompt fields back off the PARSED definition, so the
+    /// dispatch side is driven by exactly what serde produced for the validator
+    /// — not by the test's own idea of the values.
+    fn prompt_fields(cfg: &StepConfig) -> (Option<String>, Option<String>) {
+        match cfg {
+            StepConfig::Llm {
+                prompt, prompt_file, ..
+            }
+            | StepConfig::LlmMap {
+                prompt, prompt_file, ..
+            }
+            | StepConfig::Agent {
+                prompt, prompt_file, ..
+            } => (prompt.clone(), prompt_file.clone()),
+            _ => (None, None),
+        }
+    }
+
+    /// **TEST-1 — INV-1 acceptance.**
+    ///
+    /// Over the whole authorable state space, the REAL validator
+    /// (`validate_collecting`, against a REAL materialized bundle) and the REAL
+    /// runner (`load_raw_prompt`, against the same bundle) must AGREE:
+    ///
+    /// * no prompt finding  ⇒ the run resolves a prompt, and
+    /// * a prompt finding   ⇒ the run refuses to resolve one.
+    ///
+    /// This asserts the design's promise, not either side's behaviour: it goes
+    /// red if EITHER the validator or the runner changes its rule unilaterally.
+    #[tokio::test]
+    async fn validate_and_dispatch_agree_on_every_prompt_state() {
+        let tmp = prompt_bundle();
+        let prompts: [Option<&str>; 4] = [None, Some(""), Some("   "), Some("hi")];
+        let files: [Option<&str>; 5] = [
+            None,
+            Some(""),
+            Some("prompts/real.md"),
+            Some("prompts/adir"),
+            Some("prompts/nope.md"),
+        ];
+
+        let mut checked = 0usize;
+        for kind in ["llm", "llm_map", "agent"] {
+            for prompt in prompts {
+                for file in files {
+                    let yaml = step_yaml(kind, prompt, file);
+                    let wf = crate::modules::workflow::validate::parse_workflow_yaml(&yaml)
+                        .unwrap_or_else(|e| panic!("parse {kind} {prompt:?} {file:?}: {e:?}"));
+
+                    let findings =
+                        crate::modules::workflow::validate::validate_collecting(
+                            &wf,
+                            tmp.path(),
+                            false,
+                        );
+                    let prompt_findings: Vec<&str> = findings
+                        .iter()
+                        .filter(|e| PROMPT_CODES.contains(&e.code))
+                        .map(|e| e.code)
+                        .collect();
+
+                    let (p, f) = prompt_fields(&wf.steps[0].config);
+                    let run = load_raw_prompt("s", tmp.path(), &p, &f).await;
+
+                    assert_eq!(
+                        prompt_findings.is_empty(),
+                        run.is_ok(),
+                        "kind={kind} prompt={prompt:?} prompt_file={file:?}: validator said \
+                         {} but the run said {} — a definition that validates clean must run, \
+                         and one the validator rejects must not quietly run (INV-1). \
+                         findings={prompt_findings:?} run={run:?}",
+                        if prompt_findings.is_empty() { "OK" } else { "REJECTED" },
+                        if run.is_ok() { "OK" } else { "REJECTED" },
+                    );
+                    checked += 1;
+                }
+            }
+        }
+        assert_eq!(checked, 60, "the matrix must actually have been walked");
+    }
+
+    /// **TEST-6** — the individual cells FIX_ROUND-8 named, with their exact
+    /// outcomes, so a silently-different failure cannot pass TEST-1's
+    /// implication by failing on both sides for the wrong reason.
+    #[tokio::test]
+    async fn load_raw_prompt_reads_the_file_when_the_prompt_box_was_cleared() {
+        let tmp = prompt_bundle();
+
+        // The exact state the builder's own WORKFLOW_PROMPT_BOTH remedy produced.
+        let body = load_raw_prompt(
+            "llm_1",
+            tmp.path(),
+            &Some(String::new()),
+            &Some("prompts/real.md".into()),
+        )
+        .await
+        .expect("an empty prompt beside a prompt_file must resolve to the FILE");
+        assert_eq!(body, "FILE PROMPT BODY");
+
+        // An empty prompt with NO file is `WORKFLOW_PROMPT_MISSING` at validate,
+        // so the run must refuse rather than send an empty prompt to the model.
+        let err = load_raw_prompt("llm_1", tmp.path(), &Some(String::new()), &None)
+            .await
+            .expect_err("an empty prompt with no prompt_file must not resolve");
+        assert_eq!(err, "step 'llm_1' has invalid prompt config");
+
+        // A genuine both-state is still rejected, unchanged.
+        let err = load_raw_prompt(
+            "llm_1",
+            tmp.path(),
+            &Some("inline".into()),
+            &Some("prompts/real.md".into()),
+        )
+        .await
+        .expect_err("prompt: and prompt_file: remain mutually exclusive");
+        assert_eq!(err, "step 'llm_1' has invalid prompt config");
+
+        // An inline prompt still wins when there is no file.
+        assert_eq!(
+            load_raw_prompt("llm_1", tmp.path(), &Some("inline".into()), &None)
+                .await
+                .unwrap(),
+            "inline"
+        );
     }
 }
 

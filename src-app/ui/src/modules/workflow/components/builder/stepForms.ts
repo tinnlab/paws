@@ -211,8 +211,15 @@ const promptField = (label: string, suppliedByFile: boolean) => {
 }
 
 /** Whether a step supplies its wording from a file, by the backend's rule
- *  (`prompt_file: Option<String>` → `is_some()`; anything serde would not
- *  deserialize into `Some(String)` is not a file). */
+ *  (`validate.rs::prompt_source` — a NON-EMPTY `prompt_file:` string; anything
+ *  serde would not deserialize into `Some(String)`, and the empty string, are
+ *  not a file).
+ *
+ *  The emptiness half matters: `prompt_file: ""` resolves to the bundle
+ *  DIRECTORY, which can never be read, so the backend calls such a step
+ *  `WORKFLOW_PROMPT_MISSING`. Accepting it here would lift the prompt
+ *  requirement on a step the backend reports incomplete — the client-side twin
+ *  of the validate/dispatch disagreement this rule exists to prevent. */
 /**
  * What the author is told when a step's wording comes from `prompt_file:`.
  *
@@ -227,7 +234,8 @@ export const PROMPT_FROM_FILE_NOTE =
   'remove the file, since a step cannot use both.'
 
 export function promptSuppliedByFile(step: unknown): boolean {
-  return typeof (step as { prompt_file?: unknown })?.prompt_file === 'string'
+  const pf = (step as { prompt_file?: unknown })?.prompt_file
+  return typeof pf === 'string' && pf.length > 0
 }
 
 const NOT_A_NUMBER = 'Enter a number'
