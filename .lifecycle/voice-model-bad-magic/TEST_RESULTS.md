@@ -306,3 +306,50 @@ git diff --diff-filter=D --name-only origin/feat/agent-core...HEAD -- .lifecycle
 Nothing was deleted. Every per-phase gate (`--phase 1..9`) passes on its own.
 Recorded as DEC-8, following the precedent set by the sibling
 `hook-lint-guardrails` branch on this same base.
+
+---
+
+## Independent re-verification (second agent, fresh context)
+
+A separate agent with no prior context re-ran a representative subset of the
+PASS lines above to check they reproduce. Every figure below was observed in
+this session, not copied from the rows it verifies.
+
+| Recorded claim | Re-run result | Matches? |
+|---|---|---|
+| Rust unit `cargo test --lib -p ziee voice::` → `ok. 63 passed; 0 failed … 1338 filtered out`, EXIT=0 | `ok. 63 passed; 0 failed; 0 ignored; 0 measured; 1338 filtered out`, EXIT=0 | ✅ exact |
+| TEST-8/13/14 present by name | `accepts_the_real_on_disk_whisper_ggml_magic … ok`, `magic_constants_are_derived_from_one_source … ok`, `a_failed_publish_leaves_neither_a_partial_model_nor_a_temp … ok` | ✅ |
+| Rust integration `voice:: --test-threads=6` → `ok. 51 passed; 0 failed … 2321 filtered out` (27.10s) | `ok. 51 passed; 0 failed; 0 ignored; 0 measured; 2321 filtered out` (27.72s, and 40.53s on a second run) | ✅ exact counts |
+| TEST-3/4/7/9/10 present by name | all five `… ok` (`bad_magic_fix_failures_are_distinct_and_leave_no_artifact`, `bad_magic_fix_real_format_catalog_install_succeeds`, `bad_magic_fix_upload_rejected_at_ingest_with_clear_message`, `not_installed_models_never_report_a_file_validation_error`, `fixture_faithfulness::shared_fixtures_use_the_real_on_disk_ggml_magic`) | ✅ |
+| TEST-6 under node:test → `tests 10  pass 10  fail 0`, EXIT=0 | `tests 10  suites 0  pass 10  fail 0`, EXIT=0 | ✅ exact |
+| E2E `voice-model-mgmt` + `voice-model-permissions --workers=1` → `10 passed (3.1m)`, EXIT=0 | `10 passed (3.1m)`, EXIT=0 | ✅ exact |
+| `npx tsc --noEmit` EXIT=0 | EXIT=0 | ✅ |
+
+**The RED claim was re-verified, not taken on trust.** The strongest assertion in
+this file is the row at the top: that with `has_whisper_magic` reverted to the
+pre-fix accept-set the suite goes `FAILED. 12 passed; 3 failed`. Reproduced by
+temporarily dropping `GGML_MAGIC_LE` from the `matches!` arm:
+
+```
+test result: FAILED. 12 passed; 3 failed; 0 ignored; 0 measured; 1386 filtered out
+  accepts_the_real_on_disk_whisper_ggml_magic ... FAILED
+  rejection_classify_distinguishes_empty_truncated_and_bad_magic ... FAILED
+  whisper_magic_accepts_ggml_and_gguf_rejects_junk ... FAILED
+EXIT=101
+```
+
+Identical counts and identical test names to the recorded row. `model.rs` was
+restored immediately (`git diff` against HEAD empty). This is the evidence that
+TEST-8 is a genuine format-derived regression test rather than a tautology —
+the specific defect the ledger's `cosmetic-assertions` angle flagged elsewhere.
+
+Also checked in passing:
+- Node's `test:unit` script globs `src/**/*.test.ts`, so TEST-6's
+  `downloadProgress.helpers.test.ts` is genuinely wired into the suite and not
+  an orphan. (It is correctly NOT matched by `vitest.config.ts`'s
+  `src/**/*.store.test.ts` include — the two runners deliberately don't overlap.)
+- The branch diff adds no `#[ignore]`, `.skip(`, `.only(`, or `todo!` anywhere.
+- The branch touches no chat file, corroborating the pre-existing-visual-failure
+  finding above.
+- `routeVoice` (the SSE/API mocking helper) pre-existed on the base at
+  `voice-helpers.ts:488`; this branch only extended it additively.
