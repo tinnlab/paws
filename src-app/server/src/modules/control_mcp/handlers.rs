@@ -201,10 +201,12 @@ pub fn user_may_run(user: &User, groups: &[Group], op: &Operation) -> bool {
     if user.is_admin {
         return true;
     }
-    match op.required_permission.as_deref() {
-        Some(perm) => check_permission_union(user, groups, perm),
-        None => true,
-    }
+    // ALL of them — `RequirePermissions` enforces the whole tuple, so holding
+    // one permission of an ALL-of pair is not authorization. Gating on the first
+    // alone would offer the model an operation the real route then refuses.
+    op.required_permissions
+        .iter()
+        .all(|perm| check_permission_union(user, groups, perm))
 }
 
 /// An op is offered to the model only when it is not policy-denied AND the user
@@ -638,6 +640,9 @@ fn describe_capability(
         "method": op.method,
         "path_template": op.path_template,
         "required_permission": op.required_permission,
+        // EVERY permission the route requires. `required_permission` is the
+        // first of these, kept as a single label; an ALL-of operation needs all.
+        "required_permissions": op.required_permissions,
         "mutating": policy::is_mutating(&op.method),
         "requires_approval": policy::is_mutating(&op.method),
         "path_params": op.path_params,
@@ -660,10 +665,20 @@ fn describe_capability(
 
 // ── describe_capability: the model-facing digest ─────────────────────────────
 
-/// How deep the digest walks nested objects. Beyond this the fields are still in
-/// the JSON Schema block below the digest — the digest is a reading aid, the
-/// schema is the contract.
+/// How many levels of nesting the digest walks (root properties are level 1).
+/// Beyond this the fields are still in the JSON Schema block below the digest —
+/// the digest is a reading aid, the schema is the contract — and the digest says
+/// so explicitly rather than trailing off silently.
 const DIGEST_MAX_DEPTH: usize = 4;
+/// Cap on digest LINES. The depth cap alone does not bound a wide schema, and
+/// this text goes into the model's context on a tool it is told to call before
+/// every invoke.
+const DIGEST_MAX_FIELDS: usize = 200;
+/// Cap on the whole describe text. The schema block is `to_string_pretty`, ~2x
+/// its compact size, so the schema budget alone does not bound what is emitted
+/// here. Deliberately far below `MAX_RESULT_BYTES` (1 MiB): that cap exists to
+/// stop a runaway response, this one exists to keep a routine call cheap.
+const DIGEST_MAX_TEXT_BYTES: usize = 96 * 1024;
 /// Enum options listed inline before eliding the tail.
 const DIGEST_MAX_ENUM: usize = 12;
 /// Per-field description length in the digest (the full text is in the schema).
@@ -713,10 +728,18 @@ fn render_describe_digest(
     if !op.summary.is_empty() {
         out.push_str(&format!("{}\n", op.summary));
     }
-    out.push_str(&format!(
-        "Required permission: {}\n",
-        op.required_permission.as_deref().unwrap_or("(none declared)")
-    ));
+    out.push_str(&match op.required_permissions.len() {
+        // "(none detected)", not "(none declared)": a handful of routes are
+        // genuinely public, but a missing declaration can also mean we could not
+        // recover one — the model must not read this as "guaranteed allowed".
+        0 => "Required permission: (none detected — this operation may still be refused)\n"
+            .to_string(),
+        1 => format!("Required permission: {}\n", op.required_permissions[0]),
+        _ => format!(
+            "Required permissions (ALL of): {}\n",
+            op.required_permissions.join(", ")
+        ),
+    });
     let mutating = policy::is_mutating(&op.method);
     out.push_str(&format!(
         "Requires approval: {}\n",
@@ -765,10 +788,36 @@ fn render_describe_digest(
                 );
             }
             out.push_str("\nJSON Schema (exact — use this to build the body):\n");
-            out.push_str(&serde_json::to_string_pretty(&i.schema).unwrap_or_default());
+            match serde_json::to_string_pretty(&i.schema) {
+                Ok(pretty) => out.push_str(&pretty),
+                Err(e) => {
+                    // Never leave the header asserting an exact contract follows
+                    // and then supply nothing.
+                    tracing::warn!(error = %e, "control_mcp: could not render the schema block");
+                    out.push_str("(unavailable — read `structuredContent.request_schema`)");
+                }
+            }
             out.push('\n');
         }
     }
+    clamp_digest(out)
+}
+
+/// Bound the whole describe text. The schema budget measures COMPACT bytes while
+/// this channel emits pretty-printed JSON, so without this the one thing the
+/// design requires to be bounded — what actually enters the model's context — is
+/// the one thing unmeasured. Cuts at a line boundary and says that it did.
+fn clamp_digest(text: String) -> String {
+    if text.len() <= DIGEST_MAX_TEXT_BYTES {
+        return text;
+    }
+    let cut = text[..DIGEST_MAX_TEXT_BYTES]
+        .rfind('\n')
+        .unwrap_or(DIGEST_MAX_TEXT_BYTES);
+    let mut out = text[..cut].to_string();
+    out.push_str(
+        "\n… (this description was truncated for size;          read `structuredContent.request_schema` for the exact, complete schema)\n",
+    );
     out
 }
 
@@ -793,7 +842,12 @@ fn render_query_params(parameters: &[Value]) -> String {
         let opts = enum_options(schema)
             .map(|o| format!(" one of: {o}"))
             .unwrap_or_default();
-        parts.push(format!("{name} ({ty}){req}{opts}"));
+        // Same reasoning as for body fields: a bound the model does not see is a
+        // 400 it cannot avoid.
+        let cons = constraint_label(schema)
+            .map(|c| format!(" [{c}]"))
+            .unwrap_or_default();
+        parts.push(format!("{name} ({ty}){req}{cons}{opts}"));
     }
     parts.join(", ")
 }
@@ -812,7 +866,13 @@ fn collect_fields(
     defs: Option<&serde_json::Map<String, Value>>,
     out: &mut Vec<String>,
 ) {
-    if depth > DIGEST_MAX_DEPTH {
+    if depth >= DIGEST_MAX_DEPTH || out.len() >= DIGEST_MAX_FIELDS {
+        // Say so, once, rather than trailing off silently: a model that cannot
+        // tell "no more fields" from "not shown" will build an incomplete body.
+        let marker = "  … (deeper fields omitted from this summary — see the JSON Schema below)";
+        if !out.iter().any(|l| l == marker) {
+            out.push(marker.to_string());
+        }
         return;
     }
     let resolved = follow_defs(schema, defs);
@@ -842,8 +902,17 @@ fn collect_fields(
         if let Some(c) = constraint_label(&field) {
             line.push_str(&format!(" {c}"));
         }
-        if let Some(d) = field.get("default") {
-            line.push_str(&format!(" default={d}"));
+        match field.get("default") {
+            // A default that VIOLATES the field's own constraints is worse than
+            // no default: it re-supplies the "I may omit this" conclusion the
+            // constraint was added to remove, and hands the model an invalid
+            // value to send. `CreateProjectRequest.name` is exactly this shape
+            // (`default: ""` with `minLength: 1`).
+            Some(d) if default_violates_constraints(d, &field) => {
+                line.push_str(" (no usable default — a value is required)");
+            }
+            Some(d) => line.push_str(&format!(" default={d}")),
+            None => {}
         }
         if let Some(opts) = enum_options(&field) {
             line.push_str(&format!(" one of: {opts}"));
@@ -954,19 +1023,40 @@ fn schema_type_label(schema: &Value) -> String {
 /// mandatory in practice. Without the constraint the model reads
 /// `name (string) default=""` and reasonably concludes it may omit it.
 fn constraint_label(schema: &Value) -> Option<String> {
-    let num = |k: &str| schema.get(k).and_then(|v| v.as_i64());
+    // `as_f64`, not `as_i64`: schemars emits FLOAT bounds for f64 fields
+    // (`minimum: 0.0` on temperature/top_p), which an integer read drops
+    // silently — exactly the information loss this label exists to prevent.
+    let num = |k: &str| schema.get(k).and_then(|v| v.as_f64());
+    let fmt = |x: f64| {
+        if x.fract() == 0.0 && x.abs() < 1e15 {
+            format!("{}", x as i64)
+        } else {
+            format!("{x}")
+        }
+    };
     let mut parts = Vec::new();
     match (num("minLength"), num("maxLength")) {
-        (Some(lo), Some(hi)) => parts.push(format!("len {lo}..{hi}")),
-        (Some(lo), None) => parts.push(format!("len {lo}..")),
-        (None, Some(hi)) => parts.push(format!("len ..{hi}")),
+        (Some(lo), Some(hi)) => parts.push(format!("len {}..{}", fmt(lo), fmt(hi))),
+        (Some(lo), None) => parts.push(format!("len {}..", fmt(lo))),
+        (None, Some(hi)) => parts.push(format!("len ..{}", fmt(hi))),
+        (None, None) => {}
+    }
+    match (num("minItems"), num("maxItems")) {
+        (Some(lo), Some(hi)) => parts.push(format!("{}..{} items", fmt(lo), fmt(hi))),
+        (Some(lo), None) => parts.push(format!(">={} items", fmt(lo))),
+        (None, Some(hi)) => parts.push(format!("<={} items", fmt(hi))),
         (None, None) => {}
     }
     match (num("minimum"), num("maximum")) {
-        (Some(lo), Some(hi)) => parts.push(format!("{lo}..{hi}")),
-        (Some(lo), None) => parts.push(format!(">={lo}")),
-        (None, Some(hi)) => parts.push(format!("<={hi}")),
+        (Some(lo), Some(hi)) => parts.push(format!("{}..{}", fmt(lo), fmt(hi))),
+        (Some(lo), None) => parts.push(format!(">={}", fmt(lo))),
+        (None, Some(hi)) => parts.push(format!("<={}", fmt(hi))),
         (None, None) => {}
+    }
+    if let Some(p) = schema.get("pattern").and_then(|v| v.as_str()) {
+        // The constraint most likely to decide whether the value the model (or
+        // an `ask_user` form) produces is accepted at all.
+        parts.push(format!("pattern={p}"));
     }
     if let Some(f) = schema.get("format").and_then(|v| v.as_str()) {
         parts.push(format!("format={f}"));
@@ -975,6 +1065,43 @@ fn constraint_label(schema: &Value) -> Option<String> {
         None
     } else {
         Some(parts.join(", "))
+    }
+}
+
+/// True when a declared `default` cannot actually satisfy the field's own
+/// constraints — the serde-default-plus-`minLength` shape that makes a field
+/// mandatory in practice while the JSON Schema `required` array stays silent.
+fn default_violates_constraints(default: &Value, schema: &Value) -> bool {
+    match default {
+        Value::String(s) => {
+            let n = s.chars().count() as i64;
+            let too_short = schema
+                .get("minLength")
+                .and_then(|v| v.as_i64())
+                .is_some_and(|min| n < min);
+            let bad_enum = schema
+                .get("enum")
+                .and_then(|e| e.as_array())
+                .is_some_and(|vals| !vals.iter().any(|v| v == default));
+            too_short || bad_enum
+        }
+        Value::Array(a) => schema
+            .get("minItems")
+            .and_then(|v| v.as_i64())
+            .is_some_and(|min| (a.len() as i64) < min),
+        Value::Number(n) => {
+            let x = n.as_f64().unwrap_or_default();
+            let below = schema
+                .get("minimum")
+                .and_then(|v| v.as_f64())
+                .is_some_and(|min| x < min);
+            let above = schema
+                .get("maximum")
+                .and_then(|v| v.as_f64())
+                .is_some_and(|max| x > max);
+            below || above
+        }
+        _ => false,
     }
 }
 
@@ -1823,6 +1950,7 @@ mod tests {
             tags: vec!["Projects".into()],
             summary: "Create a personal chat project".into(),
             required_permission: Some("projects::create".into()),
+            required_permissions: vec!["projects::create".into()],
             path_params: vec![],
             request_schema: schema,
             json_body: true,

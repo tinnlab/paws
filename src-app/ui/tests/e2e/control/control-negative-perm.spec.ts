@@ -29,13 +29,14 @@ import {
  *   (a) NOT OFFERED — an operation whose route declares a required permission is
  *       filtered out of `list_capabilities` / refused by `describe_capability`,
  *       so the model never even sees it.
- *   (b) DENIED — an operation whose route declares no permission in its docs is
- *       still offered, but the invoke is dispatched over loopback carrying the
- *       CALLER's JWT, so the real route refuses it and nothing is created.
+ *   (b) DENIED ANYWAY — even when the model addresses an unpermitted operation
+ *       by id, the invoke is dispatched over loopback carrying the CALLER's JWT,
+ *       so the real route refuses it and nothing is created.
  *
- * Both halves are needed: asserting only (a) would silently pass for every
- * operation the catalog cannot filter, and asserting only (b) would skip the
- * layer the control surface itself implements.
+ * Both halves are needed, and (b) is the load-bearing one: the visibility filter
+ * is best-effort (it can only hide what it can recover a permission for), so
+ * asserting only (a) would prove nothing about an operation it failed to filter.
+ * Asserting only (b) would skip the layer the control surface itself implements.
  */
 
 const MODEL_DISPLAY_NAME = 'Control Negative Perm Model'
@@ -174,14 +175,23 @@ test.describe('control_mcp — an unpermitted operation is not offered', () => {
   /**
    * TEST-17(b1) — DENIED, deterministically.
    *
-   * `Project.create` reaches the catalog with `required_permission: null` (the
-   * KNOWN GAP above), so it IS offered to any `control::use` holder even though
-   * its route requires `projects::create`. The real gate is the forwarded-JWT
-   * loopback dispatch: the route re-authorizes and refuses. Driven straight at
-   * the JSON-RPC surface so the authorization proof does not depend on a model
-   * choosing to call the tool (and so it runs on a box with no LLM at all).
+   * The catalog's per-user filter is a VISIBILITY filter, not the gate. The gate
+   * is the forwarded-JWT loopback dispatch: the real route re-authorizes and
+   * refuses. This test drives `invoke_capability` straight at the JSON-RPC
+   * surface for an operation the restricted user may not run, so the
+   * authorization proof does not depend on the filter having hidden it — nor on
+   * a model choosing to call the tool (it runs on a box with no LLM at all).
+   *
+   * NOTE this test used to assert the opposite of what it now asserts about
+   * VISIBILITY. `Project.create` used to reach the catalog with
+   * `required_permission: null` — its permission lived only in a description
+   * that the handler's own `.description(…)` overwrote — so it was offered to
+   * every `control::use` holder. That gap is closed: `with_permission` now
+   * stamps an unclobberable `x-required-permissions` extension, so the operation
+   * is correctly HIDDEN from a user without `projects::create`. The loopback
+   * refusal below is unchanged and is still the thing being proven.
    */
-  test('an offered-but-unpermitted write is REFUSED by the real route and creates nothing', async ({
+  test('an unpermitted write is REFUSED by the real route and creates nothing', async ({
     page,
     testInfra,
   }) => {
@@ -190,15 +200,19 @@ test.describe('control_mcp — an unpermitted operation is not offered', () => {
     const adminToken = await getAdminToken(apiURL)
     const { token: restrictedToken } = await seedRestrictedUser(page, apiURL, adminToken)
 
-    // It really is OFFERED — otherwise this would be a not-offered test wearing
-    // the wrong name, and the loopback gate would go unexercised.
+    // Defence in depth: the operation is correctly HIDDEN from this user now
+    // that its permission is recoverable...
     const offered = await controlTool(page, apiURL, restrictedToken, 'list_capabilities', {
       query: 'create project',
     })
     expect(
       operationIds(offered.body),
-      'Project.create declares no permission, so it must still be OFFERED',
-    ).toContain('Project.create')
+      'a user without projects::create must not be OFFERED Project.create',
+    ).not.toContain('Project.create')
+
+    // ...and — the point of this test — invoking it anyway is still refused by
+    // the real route. A hidden operation is not a protected one; the gate must
+    // hold when the model addresses the operation_id directly.
 
     const name = `ControlNoPerm_${Date.now()}`
     const invoke = await controlTool(page, apiURL, restrictedToken, 'invoke_capability', {
@@ -267,10 +281,11 @@ test.describe('control_mcp — a user lacking the permission cannot drive the op
   /**
    * TEST-17(b) — DENIED, through the real chat UI.
    *
-   * `Project.create` declares no permission in its handler docs, so the catalog
-   * cannot filter it — it IS offered. The real gate is the forwarded-JWT
-   * loopback dispatch: the route's own `projects::create` check refuses, and no
-   * project is created even if the human approves.
+   * The real gate is the forwarded-JWT loopback dispatch: whatever the model is
+   * shown, the route's own `projects::create` check refuses, and no project is
+   * created even if the human approves. (The catalog now also hides the
+   * operation from this user — see TEST-17(b1) — but this test deliberately
+   * does not depend on that: the model can address any operation_id it likes.)
    */
   test('the restricted user drives the control tools in a real chat and still ends with nothing created', async ({
     page,

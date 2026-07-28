@@ -37,7 +37,7 @@
 //! and wrong for a schema we EMIT — a silent truncation there would reproduce
 //! the very defect this module fixes.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use serde_json::{Map, Value, json};
 
@@ -133,22 +133,27 @@ pub fn inline_schema_with(schema: &Value, components: &Value, budget: &Budget) -
         expansions: 0,
     };
     let mut root = w.walk(schema, 0);
+    let expanded_any = w.expansions > 0;
     let defs = close_defs(components, w.deferred);
 
+    // Derived from what was actually DEFERRED, not from "the root has a `$defs`
+    // key": a source schema may carry its own `$defs` with nothing deferred, and
+    // reporting that as `defs` would tell the model shared/recursive types live
+    // there when none do.
+    let form = if defs.is_empty() {
+        SchemaForm::Inline
+    } else {
+        SchemaForm::Defs
+    };
     if !defs.is_empty() {
         attach_defs(&mut root, defs);
     }
-    let form = if root
-        .as_object()
-        .map(|o| o.contains_key("$defs"))
-        .unwrap_or(false)
-    {
-        SchemaForm::Defs
-    } else {
-        SchemaForm::Inline
-    };
 
-    if serialized_len(&root) <= budget.max_bytes {
+    if serialized_len(&root) <= budget.max_bytes || !expanded_any {
+        // `!expanded_any`: a ref-free schema is the operation's own declared
+        // shape. Nothing was expanded, so there is nothing for the compact form
+        // to compact — falling through would relabel it `defs` and emit an empty
+        // `$defs`. The budget bounds EXPANSION, not what we were handed.
         return InlinedSchema {
             schema: root,
             form,
@@ -250,9 +255,18 @@ impl Walker<'_> {
         let raw = obj.get("$ref").and_then(|r| r.as_str()).unwrap_or_default();
         let Some(name) = raw.strip_prefix(COMPONENT_PREFIX) else {
             // Not a local component pointer (an external URL, a `#/$defs/…`
-            // already in the source). Leave it exactly as we found it rather
-            // than corrupting a pointer we do not own.
-            return Value::Object(obj.clone());
+            // already in the source). Leave the POINTER exactly as we found it —
+            // it is not ours to rewrite — but still walk everything beside it,
+            // which may carry component refs of its own.
+            let mut out = Map::new();
+            for (k, v) in obj {
+                if k == "$ref" {
+                    out.insert(k.clone(), v.clone());
+                } else {
+                    out.insert(k.clone(), self.walk_keyword(k, v, depth));
+                }
+            }
+            return Value::Object(out);
         };
 
         if component(self.components, name).is_none() {
@@ -268,7 +282,16 @@ impl Walker<'_> {
             || self.expansions >= self.budget.max_expansions;
         if must_defer {
             self.deferred.insert(name.to_string());
-            return json!({ "$ref": format!("{DEFS_PREFIX}{name}") });
+            // Keep the per-use annotations here too — whether a field keeps its
+            // `description` must not depend on which side of the budget it fell.
+            let mut out = Map::new();
+            out.insert("$ref".into(), json!(format!("{DEFS_PREFIX}{name}")));
+            for (k, v) in obj {
+                if k != "$ref" {
+                    out.insert(k.clone(), self.walk_keyword(k, v, depth));
+                }
+            }
+            return Value::Object(out);
         }
 
         self.expansions += 1;
@@ -281,12 +304,18 @@ impl Walker<'_> {
         // `description`/`title`/`default`), which OpenAPI allows and which carry
         // exactly the "what is this field for" text the model needs. The
         // referenced schema's own keys win on conflict.
-        if obj.len() > 1
-            && let Some(target_obj) = expanded.as_object_mut()
-        {
-            for (k, v) in obj {
-                if k != "$ref" && !target_obj.contains_key(k) {
-                    target_obj.insert(k.clone(), v.clone());
+        if obj.len() > 1 {
+            // Walk each sibling rather than cloning it: a sibling is legal
+            // JSON Schema and may itself be subschema-bearing, in which case a
+            // verbatim copy would smuggle a `#/components/…` pointer through.
+            let walked: Vec<(String, Value)> = obj
+                .iter()
+                .filter(|(k, _)| k.as_str() != "$ref")
+                .map(|(k, v)| (k.clone(), self.walk_keyword(k, v, depth)))
+                .collect();
+            if let Some(target_obj) = expanded.as_object_mut() {
+                for (k, v) in walked {
+                    target_obj.entry(k).or_insert(v);
                 }
             }
         }
@@ -400,20 +429,25 @@ fn compact_form(schema: &Value, components: &Value, budget: &Budget) -> InlinedS
         // Largest first; ties broken by name so the elision set is stable.
         sizes.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
 
-        let mut probe = root.clone();
-        attach_defs(&mut probe, defs.clone());
-        let mut total = serialized_len(&probe);
-        let mut elided: BTreeMap<String, ()> = BTreeMap::new();
         for (size, name) in sizes {
-            if total <= budget.hard_max_bytes {
+            // Re-measure the ACTUAL document each round rather than tracking an
+            // estimate: the estimate ignored the `"Name":` key + comma overhead,
+            // and once the loop reached entries smaller than a placeholder it
+            // would have GROWN the document while believing it was shrinking it.
+            let mut probe = root.clone();
+            attach_defs(&mut probe, defs.clone());
+            if serialized_len(&probe) <= budget.hard_max_bytes {
                 break;
             }
             let placeholder = json!({
                 "$comment": format!("schema \"{name}\" omitted for size"),
             });
-            total = total.saturating_sub(size).saturating_add(serialized_len(&placeholder));
+            // Eliding an entry SMALLER than its own placeholder cannot help; the
+            // list is size-descending, so nothing after it can either.
+            if size <= serialized_len(&placeholder) {
+                break;
+            }
             defs.insert(name.clone(), placeholder);
-            elided.insert(name, ());
             truncated = true;
         }
     }
@@ -442,8 +476,18 @@ fn component<'a>(components: &'a Value, name: &str) -> Option<&'a Value> {
     components.get("schemas").and_then(|s| s.get(name))
 }
 
+/// Serialized byte length, or 0 on the (practically unreachable) serialization
+/// failure. 0 — not `usize::MAX` — so a failure degrades toward "leave it
+/// alone" rather than toward "elide everything": `usize::MAX` would both force
+/// the compact path and, via `saturating_sub`, break the elision accounting.
 fn serialized_len(v: &Value) -> usize {
-    serde_json::to_string(v).map(|s| s.len()).unwrap_or(usize::MAX)
+    match serde_json::to_string(v) {
+        Ok(s) => s.len(),
+        Err(e) => {
+            tracing::warn!(error = %e, "control_mcp: schema serialization failed while measuring");
+            0
+        }
+    }
 }
 
 #[cfg(test)]

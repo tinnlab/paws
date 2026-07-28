@@ -1051,3 +1051,137 @@ async fn restored_permission_actually_filters_a_limited_user() {
         "describing an unpermitted operation must be refused: {res}"
     );
 }
+
+/// TEST-26 — the catalog-wide invariant behind INV-4, which the per-operation
+/// tests above cannot express: **no operation the spec declares a permission for
+/// may report `required_permission: null`.**
+///
+/// This is the test that would have caught the residual class. The first fix
+/// read the permission out of the 403 example, which closed the
+/// `.description("…")` clobber — but a handler that attaches its OWN
+/// `.response_with::<403, …>` replaces that response wholesale and takes the
+/// example with it, leaving 18 genuinely-gated operations (Skill.delete,
+/// Workflow.update, McpServerToolApprovals.set, …) still reporting null, and
+/// `user_may_run` reads null as "anyone may run it". Every per-operation test
+/// stayed green throughout. This one does not.
+#[tokio::test]
+async fn every_permission_gated_operation_reports_its_permission() {
+    let server = TestServer::start().await;
+    let admin = create_user_with_permissions(&server, "ctl_permsweep", &["*"]).await;
+
+    // Sweep broadly (the same union the schema sweep uses — `list_capabilities`
+    // caps a single call well below the catalog size).
+    let mut ids: std::collections::BTreeSet<String> = Default::default();
+    let mut queries: Vec<Value> = vec![json!({})];
+    for q in [
+        "create", "update", "delete", "settings", "project", "assistant", "mcp", "model",
+        "workflow", "user", "file", "memory", "conversation", "provider", "skill", "hub",
+    ] {
+        queries.push(json!({ "query": q }));
+    }
+    for args in queries {
+        let res = call_tool(&server, &admin.token, "list_capabilities", args).await;
+        for op in structured(&res)["operations"].as_array().unwrap_or(&vec![]) {
+            if let Some(id) = op["operation_id"].as_str() {
+                ids.insert(id.to_string());
+            }
+        }
+    }
+    assert!(ids.len() >= 250, "sweep too narrow: {}", ids.len());
+
+    // The routes that genuinely require NO permission: unauthenticated auth /
+    // first-run setup / health / liveness, plus the local-LLM proxy and the
+    // token-bearing download, which carry their own credential rather than a
+    // permission. Anything NOT on this list that reports null is a regression —
+    // either a route lost its declaration or a new unauthenticated route was
+    // added without being considered here.
+    const GENUINELY_PUBLIC: &[&str] = &[
+        "Auth.register",
+        "Auth.login",
+        "Auth.refresh",
+        "Auth.logout",
+        "Auth.me",
+        "Auth.listProviders",
+        "Auth.linkAccount",
+        "App.getSetupStatus",
+        "App.setupAdmin",
+        "Health.check",
+        "Onboarding.getProgress",
+        "Hub.getInstalled",
+        "File.downloadWithToken",
+        "LocalLlmProxy.chatCompletions",
+        "LocalLlmProxy.embeddings",
+        "LocalLlmProxy.rerank",
+        "LocalLlmProxy.listModels",
+    ];
+
+    let mut unexplained = Vec::new();
+    for id in &ids {
+        let res = call_tool(
+            &server,
+            &admin.token,
+            "describe_capability",
+            json!({ "operation_id": id }),
+        )
+        .await;
+        let sc = structured(&res);
+        if sc["required_permission"].is_null() && !GENUINELY_PUBLIC.contains(&id.as_str()) {
+            unexplained.push(id.clone());
+        }
+    }
+    assert!(
+        unexplained.is_empty(),
+        "these operations report no required permission, so the per-user filter \
+         offers them to EVERY user: {unexplained:?}"
+    );
+}
+
+/// TEST-27 — an ALL-of operation advertises EVERY permission it requires, and
+/// the filter demands all of them. Reporting only the first under-gates: a user
+/// holding one of the pair is offered an operation the real route refuses, and
+/// is shown a contract that is incomplete.
+#[tokio::test]
+async fn multi_permission_operation_reports_and_requires_all() {
+    let server = TestServer::start().await;
+    let admin = create_user_with_permissions(&server, "ctl_multi", &["*"]).await;
+    let res = call_tool(
+        &server,
+        &admin.token,
+        "describe_capability",
+        // Declares BOTH projects::create and projects::read.
+        json!({ "operation_id": "Project.duplicate" }),
+    )
+    .await;
+    let sc = structured(&res);
+    let perms: Vec<String> = sc["required_permissions"]
+        .as_array()
+        .expect("required_permissions array")
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        perms.len() >= 2 && perms.contains(&"projects::create".to_string())
+            && perms.contains(&"projects::read".to_string()),
+        "Project.duplicate must advertise BOTH permissions, got {perms:?}"
+    );
+
+    // Holding only ONE of them is not enough to be offered the operation.
+    let partial = create_user_with_only_permissions(
+        &server,
+        "ctl_multi_partial",
+        &["control::use", "projects::read"],
+    )
+    .await;
+    let res = call_tool(
+        &server,
+        &partial.token,
+        "describe_capability",
+        json!({ "operation_id": "Project.duplicate" }),
+    )
+    .await;
+    assert!(
+        res["error"].is_object(),
+        "holding one permission of an ALL-of pair must not unlock the operation: {res}"
+    );
+    assert!(res["result"].is_null(), "and nothing may leak alongside the error: {res}");
+}
