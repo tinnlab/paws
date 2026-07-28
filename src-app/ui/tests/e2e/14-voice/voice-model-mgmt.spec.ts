@@ -320,4 +320,47 @@ test.describe('Voice — failed install presentation', () => {
     await expect(failure).toBeVisible({ timeout: 15000 })
     await expect(failure).toContainText(/install failed/i)
   })
+
+  test('TEST-11b: the runtime-VERSIONS card on the same page presents a failed install identically', async ({
+    page,
+    testInfra,
+  }) => {
+    // INV-2 is a statement about the PAGE. `AvailableVersionsCard` renders
+    // directly above the models card on `/settings/voice` and carried the
+    // byte-identical defect (a bare `<Text type="secondary">{error}</Text>` plus
+    // an unlabelled zero), so the shared `DownloadFailureRow` has to be asserted
+    // on both cards — otherwise the twin silently keeps the incoherence one card
+    // higher. See `.lifecycle/voice-model-bad-magic/` (ITEM-12).
+    const { baseURL } = testInfra
+    await installVoiceBrowserMocks(page)
+    const state = defaultVoiceState()
+    state.failVersionDownloadWith =
+      'the downloaded file is empty (0 bytes). Expected a whisper runtime binary. The source returned no data — check the release URL, then try the download again.'
+    await routeVoice(page, state)
+
+    await loginAsAdmin(page, baseURL)
+    await page.goto(`${baseURL}/settings/voice`)
+    await expect(byTestId(page, 'voice-settings-page-title')).toBeVisible({
+      timeout: 30000,
+    })
+    await expect(byTestId(page, 'voice-version-row-v1.1.0')).toBeVisible({
+      timeout: 15000,
+    })
+
+    await byTestId(page, 'voice-version-install-v1.1.0').click()
+
+    const failure = byTestId(page, 'voice-version-failed-v1.1.0')
+    await expect(failure).toBeVisible({ timeout: 15000 })
+    await expect(failure).toContainText(/install failed/i)
+    await expect(failure).toContainText(/empty \(0 bytes\)/i)
+    await expect(failure).toHaveAttribute('role', 'alert')
+    await expect(
+      byTestId(page, 'voice-version-failed-v1.1.0-retry'),
+    ).toBeEnabled()
+
+    // INV-6 on this card too: a failure that transferred nothing renders no
+    // byte count at all, so no naked "0 Bytes" sits under the row's real size.
+    const row = byTestId(page, 'voice-version-row-v1.1.0')
+    expect(await row.innerText()).not.toMatch(/\b0 Bytes\b/)
+  })
 })

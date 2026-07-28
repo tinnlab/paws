@@ -104,6 +104,17 @@ impl AppModule for VoiceModule {
             return Ok(());
         }
 
+        // Reclaim `*.tmp` orphans under `voice-models/`. Every failure exit of a
+        // download/upload deletes its own temp, but a SIGKILL / OOM-kill mid
+        // transfer cannot — and nothing else ever would, so an orphan is both
+        // invisible (the library list is DB-backed) and permanent, at up to
+        // 5 GiB each. See `model::sweep_stale_temps`.
+        let reclaimed =
+            model::sweep_stale_temps(&model::models_dir(), model::STALE_TEMP_MIN_AGE);
+        if reclaimed > 0 {
+            tracing::info!("voice: reclaimed {reclaimed} stale model temp file(s)");
+        }
+
         // Spawn the idle-unload + health-monitor reaper (uses the global
         // Repos.pool()). The whisper-server instance itself is lazily started on
         // the first transcribe request (auto_start::ensure_running).

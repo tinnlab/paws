@@ -692,16 +692,73 @@ pub fn discard_temp(tmp: &Path) {
 }
 
 /// Rename the verified temp file into place (best-effort cross-device fallback).
+///
+/// Publishing is the LAST failure exit of an acquisition, and it is the one that
+/// can leave a **partial destination** behind: `std::fs::copy` that dies part-way
+/// (ENOSPC, EIO) leaves a truncated `ggml-<name>.bin`, which
+/// [`installed_model_path`] — an exists + non-empty check — would then report as
+/// an installed model, and the runtime would try to load it. That is the
+/// "a failed acquisition left a broken artifact behind" class this branch exists
+/// to close (INV-3), so BOTH sides are removed before the error propagates.
 fn finalize_download(tmp: &Path, dest: &Path) -> Result<(), AppError> {
     match std::fs::rename(tmp, dest) {
         Ok(()) => Ok(()),
-        Err(_) => {
-            std::fs::copy(tmp, dest)
-                .map_err(|e| AppError::internal_error(format!("publish model file: {e}")))?;
-            let _ = std::fs::remove_file(tmp);
-            Ok(())
+        Err(_) => match std::fs::copy(tmp, dest) {
+            Ok(_) => {
+                let _ = std::fs::remove_file(tmp);
+                Ok(())
+            }
+            Err(e) => {
+                // Never leave a partial `dest` that would read as installed,
+                // and never leak the temp.
+                let _ = std::fs::remove_file(dest);
+                let _ = std::fs::remove_file(tmp);
+                Err(AppError::internal_error(format!("publish model file: {e}")))
+            }
+        },
+    }
+}
+
+/// A `*.tmp` under `voice-models/` is only reclaimed by its own writer's error
+/// path. A SIGKILL / OOM-kill / power loss mid-download (or mid-upload) leaves
+/// one behind forever — up to 5 GiB of dead bytes per orphan, since the cap is
+/// enforced as they arrive. Nothing else ever deletes them: the library list
+/// comes from the DB, and [`installed_model_path`] only looks at
+/// `ggml-<name>.{bin,gguf}`, so an orphan is invisible as well as permanent.
+///
+/// Swept at module init (see `voice::VoiceModule::init`). `min_age` guards the
+/// case of another process sharing the data dir with a download genuinely in
+/// flight — a `.tmp` younger than that is left alone.
+pub const STALE_TEMP_MIN_AGE: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
+
+/// Remove `*.tmp` files under `dir` last modified more than `min_age` ago.
+/// Returns how many were reclaimed. Never fails the caller: an unreadable dir
+/// (not created yet on a fresh install) or an undeletable entry is a no-op.
+pub fn sweep_stale_temps(dir: &Path, min_age: std::time::Duration) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let now = std::time::SystemTime::now();
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("tmp") {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else { continue };
+        if !meta.is_file() {
+            continue;
+        }
+        let old_enough = meta
+            .modified()
+            .ok()
+            .and_then(|m| now.duration_since(m).ok())
+            .is_some_and(|age| age >= min_age);
+        if old_enough && std::fs::remove_file(&path).is_ok() {
+            removed += 1;
         }
     }
+    removed
 }
 
 /// Strip any `user:pass@` userinfo from a URL before it lands in a log line or an
@@ -940,6 +997,81 @@ mod tests {
     fn installed_path_prefers_bin_then_gguf_naming() {
         // Pure naming contract (no filesystem): the resolver looks for these two.
         assert_eq!(model_filename("large-v3"), "ggml-large-v3.bin");
+    }
+
+    // TEST-14 [acceptance][INV-3] — publishing is the last failure exit of an
+    // acquisition and the only one that can leave a PARTIAL destination. A
+    // truncated `ggml-<name>.bin` would satisfy `installed_model_path`'s
+    // exists + non-empty check and be served to the runtime as an installed
+    // model — the "a failed acquisition left a broken artifact behind" class.
+    #[test]
+    fn a_failed_publish_leaves_neither_a_partial_model_nor_a_temp() {
+        let dir = tempfile::tempdir().unwrap();
+        let tmp = dir.path().join("ggml-x.bin.deadbeef.tmp");
+        std::fs::write(&tmp, ggml_head_and_filler()).unwrap();
+        // Publishing into a directory that does not exist fails BOTH the rename
+        // and the copy fallback — the observable stand-in for an ENOSPC/EIO
+        // copy, which is not directly inducible in a unit test.
+        let dest = dir.path().join("no-such-subdir").join("ggml-x.bin");
+
+        let err = finalize_download(&tmp, &dest).expect_err("publish must fail");
+        assert!(
+            format!("{err:?}").contains("publish model file"),
+            "the failure must preserve context, got: {err:?}"
+        );
+        assert!(!dest.exists(), "no partial destination may survive a failed publish");
+        assert!(!tmp.exists(), "the temp must not leak on a failed publish");
+
+        // …and the success path still moves the file and clears the temp.
+        let tmp2 = dir.path().join("ggml-y.bin.cafe.tmp");
+        std::fs::write(&tmp2, ggml_head_and_filler()).unwrap();
+        let dest2 = dir.path().join("ggml-y.bin");
+        finalize_download(&tmp2, &dest2).expect("publish must succeed");
+        assert!(dest2.exists() && !tmp2.exists());
+    }
+
+    // TEST-15 [acceptance][INV-3] — orphan reclamation. Every failure exit
+    // deletes its own temp, but a SIGKILL mid-transfer cannot; nothing else ever
+    // would, so without this sweep an orphan is permanent AND invisible.
+    #[test]
+    fn sweep_reclaims_orphan_temps_and_never_touches_a_model_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let download_orphan = dir.path().join("ggml-base.bin.0f0f.tmp");
+        let upload_orphan = dir.path().join(".upload-1234.tmp");
+        let real_model = dir.path().join("ggml-base.bin");
+        for p in [&download_orphan, &upload_orphan, &real_model] {
+            std::fs::write(p, ggml_head_and_filler()).unwrap();
+        }
+
+        // A temp younger than the guard is left alone — a download may be in
+        // flight in another process sharing the data dir.
+        assert_eq!(
+            sweep_stale_temps(dir.path(), STALE_TEMP_MIN_AGE),
+            0,
+            "a fresh temp must not be reclaimed"
+        );
+        assert!(download_orphan.exists() && upload_orphan.exists());
+
+        // Past the guard, BOTH shapes of orphan go (the download path's
+        // `<filename>.<uuid>.tmp` and the upload path's `.upload-<uuid>.tmp`).
+        assert_eq!(sweep_stale_temps(dir.path(), std::time::Duration::ZERO), 2);
+        assert!(!download_orphan.exists(), "download temp must be reclaimed");
+        assert!(!upload_orphan.exists(), "upload temp must be reclaimed");
+        assert!(real_model.exists(), "an installed model file must NEVER be swept");
+
+        // A missing directory (fresh install) is a no-op, not an error.
+        assert_eq!(
+            sweep_stale_temps(&dir.path().join("nope"), std::time::Duration::ZERO),
+            0
+        );
+    }
+
+    /// Plausible model bytes for the filesystem tests — the REAL on-disk magic
+    /// plus filler, so no fixture in this module spells a magic by hand.
+    fn ggml_head_and_filler() -> Vec<u8> {
+        let mut v = GGML_MAGIC_LE.to_vec();
+        v.extend_from_slice(b"filler-bytes");
+        v
     }
 
     // TEST-3: the SSRF boundary the arbitrary-URL download path enforces
