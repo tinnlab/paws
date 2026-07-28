@@ -106,7 +106,7 @@ Recorded as each item landed, not reconstructed afterwards.
   parent beyond a single ` m sdk` line.
 
   **Action required by the orchestrator at merge:** the SDK commit
-  (`22270e4`, on branch `sdk/agent-core-and-perf`) is LOCAL and UNPUSHED. It must
+  (`22270e4`) sits in DETACHED HEAD, one commit ahead of `origin/sdk/agent-core-and-perf`, and is LOCAL and UNPUSHED. It must
   be pushed before (or with) the ziee branch, or the submodule pointer is
   unresolvable for anyone else. Same handling the sibling
   `control-describe-schema` round documented for its own SDK commit.
