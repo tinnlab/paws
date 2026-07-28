@@ -30,6 +30,8 @@ const SHOWCASE_SQL: &str = include_str!("../../seeds/showcase/showcase.sql");
 /// The gallery's guarded fixture conversation. Its presence — and the presence
 /// of its existing content — is a hard constraint on every future seed edit.
 const SHOWCASE_CONVERSATION_ID: &str = "11111111-1111-1111-1111-111111111111";
+/// The showcase conversation's MAIN branch — the one `pg_temp.msg` hardcodes.
+const SHOWCASE_MAIN_BRANCH_ID: &str = "22222222-2222-2222-2222-222222222222";
 
 /// `tool_use` blocks that deliberately have NO `mcp_tool_calls` row: nothing is
 /// recorded until a call returns, so an in-flight call and a call still awaiting
@@ -187,14 +189,19 @@ async fn showcase_seed_message_ordering_is_strict_and_collision_free() {
     ensure_builtin_server_rows(&pool).await;
     load_seed(&pool, &owner.user_id).await;
 
+    // Scoped to ONE branch on purpose. The showcase conversation has several
+    // branches and a message may be linked to more than one of them, so a
+    // conversation-wide query returns the same message twice with the same
+    // timestamp — which is correct data, not a collision. The invariant that
+    // actually matters is per-BRANCH, because that is the unit a transcript read
+    // orders (`ORDER BY bm.created_at` within a branch).
     let rows: Vec<(uuid::Uuid, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
         "SELECT bm.message_id, bm.created_at
            FROM branch_messages bm
-           JOIN branches b ON b.id = bm.branch_id
-          WHERE b.conversation_id = $1::uuid
+          WHERE bm.branch_id = $1::uuid
           ORDER BY bm.created_at ASC, bm.message_id ASC",
     )
-    .bind(SHOWCASE_CONVERSATION_ID)
+    .bind(SHOWCASE_MAIN_BRANCH_ID)
     .fetch_all(&pool)
     .await
     .expect("read showcase branch messages");
@@ -209,6 +216,7 @@ async fn showcase_seed_message_ordering_is_strict_and_collision_free() {
         std::collections::HashMap::new();
     for (id, at) in &rows {
         if let Some(other) = seen.insert(*at, *id) {
+            assert_ne!(other, *id, "the same message must not be linked twice to one branch");
             panic!(
                 "two showcase messages share created_at {at}: {other} and {id}. \
                  The ordinal passed to pg_temp.msg is a DECIMAL — `25.10` is 25.1 \
