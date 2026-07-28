@@ -24,6 +24,21 @@ async fn pool(server: &crate::common::TestServer) -> sqlx::PgPool {
         .unwrap()
 }
 
+/// `mcp_tool_calls.message_id` is an FK to `messages`, so a chat-path row needs a
+/// real message to point at. Create one and return its id.
+async fn seed_message(pool: &sqlx::PgPool) -> Uuid {
+    let id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO messages (id, role, originated_from_id, created_at) \
+         VALUES ($1, 'assistant', $1, NOW())",
+    )
+    .bind(id)
+    .execute(pool)
+    .await
+    .unwrap();
+    id
+}
+
 /// Insert one owner-scoped `mcp_tool_calls` row with the chat-path columns set.
 #[allow(clippy::too_many_arguments)]
 async fn insert_call(
@@ -87,8 +102,8 @@ async fn tool_use_id_and_message_id_filters_select_the_matching_rows() {
     let uid = Uuid::parse_str(&user.user_id).unwrap();
 
     let pool = pool(&server).await;
-    let msg_a = Uuid::new_v4();
-    let msg_b = Uuid::new_v4();
+    let msg_a = seed_message(&pool).await;
+    let msg_b = seed_message(&pool).await;
     // Two calls under message A (one rail), one under message B.
     insert_call(&pool, uid, "search", Some(msg_a), Some("toolu_a1")).await;
     insert_call(&pool, uid, "read_file", Some(msg_a), Some("toolu_a2")).await;
@@ -153,7 +168,7 @@ async fn lookup_filters_are_owner_scoped() {
     let owner_uid = Uuid::parse_str(&owner.user_id).unwrap();
 
     let pool = pool(&server).await;
-    let msg = Uuid::new_v4();
+    let msg = seed_message(&pool).await;
     insert_call(&pool, owner_uid, "secret_tool", Some(msg), Some("toolu_secret")).await;
     pool.close().await;
 
@@ -194,7 +209,7 @@ async fn per_page_is_clamped_and_the_filters_still_apply() {
     let uid = Uuid::parse_str(&user.user_id).unwrap();
 
     let pool = pool(&server).await;
-    let msg = Uuid::new_v4();
+    let msg = seed_message(&pool).await;
     for i in 0..3 {
         insert_call(
             &pool,

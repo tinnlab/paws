@@ -336,8 +336,9 @@ async fn showcase_seed_is_idempotent_and_every_tool_use_is_paired() {
     }
 
     // The artifact-producing run really carries resource_links.
+    // `jsonb_array_length` returns INT4; cast so the decode matches the binding.
     let artifact_links: i64 = sqlx::query_scalar(
-        "SELECT jsonb_array_length(content->'resource_links') FROM message_contents \
+        "SELECT jsonb_array_length(content->'resource_links')::bigint FROM message_contents \
          WHERE content_type = 'tool_result' AND content->>'tool_use_id' = 'toolu_rail_artifacts'",
     )
     .fetch_one(&pool)

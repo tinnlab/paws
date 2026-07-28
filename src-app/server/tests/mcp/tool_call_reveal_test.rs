@@ -45,13 +45,16 @@ async fn seed_call_with_transcript(
     let msg_id = Uuid::new_v4();
     let call_id = Uuid::new_v4();
 
+    // `conversations.active_branch_id` is an FK to `branches`, so the branch must
+    // exist BEFORE it is pointed at. Insert the conversation with NULL, create the
+    // branch, then adopt it — the same order `showcase.sql`'s `pg_temp.conv` and
+    // every other integration test use.
     sqlx::query(
         "INSERT INTO conversations (id, user_id, title, active_branch_id, created_at, updated_at) \
-         VALUES ($1, $2, 'reveal', $3, NOW(), NOW())",
+         VALUES ($1, $2, 'reveal', NULL, NOW(), NOW())",
     )
     .bind(conv_id)
     .bind(user_id)
-    .bind(branch_id)
     .execute(pool)
     .await
     .unwrap();
@@ -63,6 +66,12 @@ async fn seed_call_with_transcript(
     .execute(pool)
     .await
     .unwrap();
+    sqlx::query("UPDATE conversations SET active_branch_id = $1 WHERE id = $2")
+        .bind(branch_id)
+        .bind(conv_id)
+        .execute(pool)
+        .await
+        .unwrap();
     sqlx::query(
         "INSERT INTO messages (id, role, originated_from_id, created_at) \
          VALUES ($1, 'assistant', $1, NOW())",
