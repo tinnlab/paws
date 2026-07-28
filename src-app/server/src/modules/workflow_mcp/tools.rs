@@ -377,14 +377,25 @@ pub async fn call_tool(
     .await
 }
 
+/// Copyable literal-JSON example carried by every workflow-inputs refusal.
+const WORKFLOW_INPUTS_EXAMPLE: &str = r#"{"topic":"quarterly sales","limit":10}"#;
+
 /// Parse a workflow inputs object; NULL is tolerated (no inputs).
+///
+/// Despite its name this function used only to VALIDATE — a model that
+/// JSON-encoded its inputs object (which they routinely do) got
+/// `WORKFLOW_INPUTS_NOT_OBJECT` from a function called `coerce_inputs`. It now
+/// actually coerces, and refuses with a message the model can act on.
 fn coerce_inputs(arguments: &Value) -> Result<Value, AppError> {
     match arguments {
         Value::Object(_) | Value::Null => Ok(arguments.clone()),
-        _ => Err(AppError::bad_request(
-            "WORKFLOW_INPUTS_NOT_OBJECT",
-            "tool arguments must be a JSON object",
-        )),
+        other => crate::common::tool_args::coerce_value(
+            other.clone(),
+            crate::common::tool_args::ArgShape::Object,
+            "inputs",
+            WORKFLOW_INPUTS_EXAMPLE,
+        )
+        .map_err(|e| AppError::bad_request("WORKFLOW_INPUTS_NOT_OBJECT", e.into_message())),
     }
 }
 
@@ -1782,5 +1793,53 @@ mod tests {
             !h_dis.is_cancelled(),
             "a DISARMED guard (terminal reached normally) must NOT signal cancel"
         );
+    }
+}
+
+#[cfg(test)]
+mod stringified_arg_tests {
+    use super::*;
+    use crate::common::tool_args::conformance::{assert_arg_conformance, ArgSite};
+    use crate::common::tool_args::ArgShape;
+    use serde_json::json;
+
+    /// The function named `coerce_inputs` now actually coerces. Its pre-existing
+    /// test asserted `coerce_inputs(&json!("nope")).is_err()` — a correct
+    /// statement that also pinned a non-coercing coercer as the contract, the
+    /// same ratification pattern as the ask_user marker test. That case is still
+    /// an error (it is not decodable JSON), now with an actionable message.
+    /// (TEST-30)
+    #[test]
+    fn workflow_coerce_inputs_actually_coerces() {
+        assert_eq!(
+            coerce_inputs(&json!(r#"{"topic":"sales"}"#)).unwrap(),
+            json!({ "topic": "sales" })
+        );
+        // No regression on the shapes that already worked.
+        assert_eq!(coerce_inputs(&json!({ "a": 1 })).unwrap(), json!({ "a": 1 }));
+        assert_eq!(coerce_inputs(&serde_json::Value::Null).unwrap(), serde_json::Value::Null);
+
+        let err = coerce_inputs(&json!("nope")).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("inputs") && msg.contains("JSON object"), "got: {msg}");
+        assert!(msg.contains(WORKFLOW_INPUTS_EXAMPLE), "must show inputs to copy: {msg}");
+    }
+
+    /// The shared conformance battery, applied to the WHOLE arguments object —
+    /// which is how `wf_<slug>` tools consume it. (TEST-41)
+    #[test]
+    fn workflow_inputs_pass_the_shared_argument_conformance_battery() {
+        assert_arg_conformance(ArgSite {
+            site: "workflow.inputs",
+            arg: "inputs",
+            shape: ArgShape::Object,
+            canonical: json!({ "topic": "sales" }),
+            example: WORKFLOW_INPUTS_EXAMPLE,
+            absent_yields: None,
+            extract: |args: serde_json::Value| match args.get("inputs") {
+                None | Some(serde_json::Value::Null) => Ok(None),
+                Some(v) => coerce_inputs(v).map(Some).map_err(|e| format!("{e}")),
+            },
+        });
     }
 }
