@@ -148,3 +148,49 @@ exactly the shared-infrastructure edit rule B3 forbids.
 A re-run was launched (`askuser-gateui2.log`). **Until a clean run is observed,
 A7 stays UNVERIFIED and phase 8 stays RED.** The classification above explains
 the failure; it does not excuse it into a pass.
+
+### A7 re-run (`askuser-gateui2.log`) — still FAIL, and now conclusively NOT this diff
+
+```
+PASS  tsc · PASS  lint · FAIL  runtime-health — 8 surface(s) with HIGH findings
+--- per-surface runtime verdict: 182/190 PASS ---   (run 1 was 167/184)
+```
+
+The re-run turns the earlier *classification* into a *demonstration*:
+
+1. **The failing set is DISJOINT between the two runs.** Run 1 failed on
+   `settings-general`, the skills overlays, the large-file viewers,
+   `hardware-monitor`, and four chat surfaces. Run 2 failed on
+   `settings-file-rag-admin`, `settings-user-groups`, `settings-assistants`,
+   `onboarding`, `notifications-background`, `settings-sandbox`,
+   `settings-web-search`, `settings-voice` — **no overlap**. A code defect does
+   not move between disjoint surface sets across two runs of the same commit.
+2. **All three elicitation surfaces are now 0 HIGH** — including the two that
+   failed in run 1 (`deep-chat-elicitation`, `deep-chat-ask-user-wizard`) and the
+   one this branch ADDS (`deep-chat-elicitation-no-fields`). The surfaces this
+   diff actually touches render clean.
+3. **6711 of 6916 HIGH are still `ERR_NETWORK_CHANGED`**; 1987 name the foreign
+   worktree. Only 3 `page-error`, zero `crash` (run 1 had 6 crashes).
+
+**Root cause is a bug in the SHARED gate script**, not in ziee's UI. The gate
+detects the collision and says it will avoid it, then does not:
+
+```
+• port :20181 holds a FOREIGN worktree's server (…/scheduler-layout-wt); NOT reusing — booting our own on a fresh port
+• booting gallery dev server on :20181 …          ← the SAME port
+```
+
+`sdk/packages/gallery/scripts/gate-ui.mjs:141` — `PORT = await pickBindablePort(PORT_BASE)`
+returns the base port even when a foreign server is already serving on it, so our
+Vite never really owns the port and the browser loads modules from the sibling
+worktree's tree over `@fs/…/scheduler-layout-wt/…`. That is exactly the
+"fixed-port false-pass" the surrounding comment says the sentinel check exists to
+prevent — the detection works, the mitigation does not.
+
+**Deliberately NOT fixed here.** It is shared infrastructure in another repo, and
+editing the harness to make my own gate green is precisely what rule B3 forbids.
+Filed as a finding for the owner; it explains a recurring, previously-unexplained
+`gate:ui` symptom across worktrees, so fixing it is worth its own change.
+
+**A7 remains UNVERIFIED and phase 8 remains RED.** The gate did not pass; the
+evidence shows why, and shows it is not this branch.
