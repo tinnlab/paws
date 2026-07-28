@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import ts from 'typescript'
 
 // TEST-1 [acceptance] [invariant: INV-1] + TEST-36 (ITEM-24 / ITEM-25).
 //
@@ -371,8 +372,10 @@ test('FIX_ROUND-5: ChatMessage re-resolves rail steps THROUGH withSegmentationSh
  * side; it did not deserve an exception here.
  */
 
-/** The files whose approve/deny controls this guards. A rename must FAIL. */
-/** The surface whose approve/deny controls carry the disable decision. */
+/**
+ * The files whose approve/deny controls these guards cover. A rename must FAIL,
+ * not silently pass.
+ */
 const APPROVAL_SURFACE_WITH_CONTROLS =
   'modules/js-tool/chat-extension/components/JsToolApprovalContent.tsx'
 
@@ -381,92 +384,144 @@ const APPROVAL_SURFACES = [
   'modules/mcp/chat-extension/components/ToolCallPendingApprovalContent.tsx',
 ]
 
-/** Source with comments stripped. */
-function codeOf(rel: string): string {
-  return readFileSync(join(SRC, rel), 'utf8')
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .split(/\r?\n/)
-    .map(l => l.replace(/\/\/.*$/, ''))
-    .join('\n')
+/**
+ * These guards parse a real TYPESCRIPT AST, not text.
+ *
+ * FIX_ROUND-13: rounds 8 through 12 each hardened a regex scanner and each
+ * subsequent blind audit found another spelling that walked past it — boolean
+ * shorthand, a spread, a `>` in a quoted attribute, `!!x`, `x != null`,
+ * `Boolean(x)`, `|| latch`, a `let` reassigned later, a second ternary branch, a
+ * non-literal argument, an apostrophe in JSX text, a `}` inside a string. Each
+ * fix enumerated one more case, which is the unbounded-enumeration mistake these
+ * very guards were rewritten to stop making.
+ *
+ * The cause was parsing TypeScript with regexes. The compiler is already a
+ * dependency (it runs on every `npm run check`), so the guards ask IT what the
+ * code says. Every one of the twelve evasions above is answered by construction:
+ * an AST knows a JSX attribute from prose, a spread from a prop, and an
+ * expression's exact shape from a substring of it.
+ */
+function parse(rel: string): ts.SourceFile {
+  return ts.createSourceFile(
+    rel,
+    readFileSync(join(SRC, rel), 'utf8'),
+    ts.ScriptTarget.Latest,
+    /* setParentNodes */ true,
+    ts.ScriptKind.TSX,
+  )
 }
 
-/**
- * Every `<Button …>` opening tag's props.
- *
- * The tag ends at the first `>` that is outside BOTH braces and quotes. A lazy
- * `/<Button[\s\S]*?>/` stops at the `>` of a nested element in a prop
- * (`icon={<Check />}`); tracking only braces still stops at a `>` inside a quoted
- * attribute value. Both were verified to blind the guard.
- */
-function buttonProps(code: string): string[] {
-  const out: string[] = []
-  let from = 0
-  for (;;) {
-    const open = code.indexOf('<Button', from)
-    if (open === -1) break
-    // Exact element, not a prefix (FIX_ROUND-12): `<ButtonGroup` / `<ButtonLink`
-    // are different components and were being scanned as if they were Buttons.
-    if (/[\w$]/.test(code[open + '<Button'.length] ?? '')) {
-      from = open + '<Button'.length
-      continue
+/** Every JSX opening element named `tag` (exactly). */
+function elements(sf: ts.SourceFile, tag: string): ts.JsxOpeningLikeElement[] {
+  const out: ts.JsxOpeningLikeElement[] = []
+  const walk = (n: ts.Node): void => {
+    if (
+      (ts.isJsxOpeningElement(n) || ts.isJsxSelfClosingElement(n)) &&
+      n.tagName.getText(sf) === tag
+    ) {
+      out.push(n)
     }
-    let depth = 0
-    let quote: string | null = null
-    let lastAngle = '<'
-    let i = open + '<Button'.length
-    for (; i < code.length; i++) {
-      const ch = code[i]
-      if (quote) {
-        if (ch === quote) quote = null
-        continue
-      }
-      // Quotes are tracked at EVERY depth — a `}` inside a string inside a prop
-      // expression would otherwise decrement `depth` early and truncate the
-      // window, silently missing a violation (FIX_ROUND-11; the previous cut only
-      // tracked at depth 0 and traded a false positive for a false negative).
-      //
-      // The apostrophe problem that motivated that cut is handled precisely
-      // instead: inside a prop expression, `'` opens a string only in EXPRESSION
-      // position. In `icon={<span>Don't…}` it follows a letter, so it is JSX text.
-      // Inside a prop expression, a `'` opens a string only in EXPRESSION
-      // position. JSX TEXT lives between a `>` and the next `<`, so an
-      // apostrophe there is prose — `Don't`, `'til`, `'90s` alike. Keying on
-      // "follows a letter" (FIX_ROUND-11) missed the leading-apostrophe forms;
-      // keying on the enclosing region handles all of them (FIX_ROUND-12).
-      const inJsxText = depth > 0 && lastAngle === '>'
-      if (ch === '<' || ch === '>') lastAngle = ch
-      if ((ch === '"' || ch === '`' || ch === "'") && !inJsxText) quote = ch
-      else if (ch === '{') depth++
-      else if (ch === '}') depth--
-      else if (ch === '>' && depth === 0) break
-    }
-    out.push(code.slice(open + '<Button'.length, i))
-    from = i + 1
+    ts.forEachChild(n, walk)
   }
+  walk(sf)
   return out
 }
 
+/** The attribute named `name` on an element, or `undefined`. */
+function attr(el: ts.JsxOpeningLikeElement, name: string): ts.JsxAttribute | undefined {
+  return el.attributes.properties.find(
+    (a): a is ts.JsxAttribute => ts.isJsxAttribute(a) && a.name.getText() === name,
+  )
+}
+
+/** Does the element carry a spread that could supply `name`? */
+function hasSpread(el: ts.JsxOpeningLikeElement): boolean {
+  return el.attributes.properties.some(ts.isJsxSpreadAttribute)
+}
+
+/** The expression of `name={…}`, or `undefined` (absent, or a string literal). */
+function attrExpr(el: ts.JsxOpeningLikeElement, name: string): ts.Expression | undefined {
+  const a = attr(el, name)
+  if (!a?.initializer) return undefined
+  return ts.isJsxExpression(a.initializer) ? a.initializer.expression : undefined
+}
+
+/**
+ * Is `expr` EXACTLY a call to `predicate`, with the given argument identifier —
+ * directly, or through a `const` whose sole initializer is that call and which is
+ * never reassigned?
+ *
+ * "Exactly" is enforced on the AST: the node must BE a CallExpression, so
+ * `!p(x)`, `p(x) || latch`, `p(x) === false`, `p(x) ? a : b` are all rejected
+ * because they are Prefix/Binary/Conditional expressions. The argument is checked
+ * too, so `p(blocked ?? 'no-transport')` and `p(f ? 'no-transport' : blocked)`
+ * are rejected — the previous text guard pinned the callee and ignored the
+ * argument entirely.
+ */
+function isExactCall(
+  sf: ts.SourceFile,
+  expr: ts.Expression | undefined,
+  predicate: string,
+  argument: string,
+): boolean {
+  if (!expr) return false
+  const callOf = (e: ts.Expression): boolean =>
+    ts.isCallExpression(e) &&
+    e.expression.getText(sf) === predicate &&
+    e.arguments.length === 1 &&
+    ts.isIdentifier(e.arguments[0]) &&
+    e.arguments[0].getText(sf) === argument
+  if (callOf(expr)) return true
+  // One local hop: a `const` initialised to exactly that call, never reassigned.
+  if (!ts.isIdentifier(expr)) return false
+  const ident = expr.getText(sf)
+  let ok = false
+  let reassigned = false
+  const walk = (n: ts.Node): void => {
+    if (
+      ts.isVariableDeclaration(n) &&
+      ts.isIdentifier(n.name) &&
+      n.name.getText(sf) === ident
+    ) {
+      const isConst =
+        ts.isVariableDeclarationList(n.parent) &&
+        (n.parent.flags & ts.NodeFlags.Const) !== 0
+      if (isConst && n.initializer && callOf(n.initializer)) ok = true
+      else reassigned = true
+    }
+    if (
+      ts.isBinaryExpression(n) &&
+      n.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      n.left.getText(sf) === ident
+    ) {
+      reassigned = true
+    }
+    ts.forEachChild(n, walk)
+  }
+  walk(sf)
+  return ok && !reassigned
+}
+
 test('FIX_ROUND-8: no `tooltip` on a Button that can be disabled (kit clobbers aria-label)', () => {
+  // Two mechanical facts about the kit make this a defect, not a style choice:
+  // `Button` derives `aria-label` from a STRING `tooltip` unconditionally (so a
+  // tooltip silently REPLACES the visible label — FIX_ROUND-5 shipped exactly
+  // that and made Approve and Deny announce identically, WCAG 2.5.3 / 4.1.2), and
+  // `disabled` becomes the native attribute under `disabled:pointer-events-none`,
+  // so the trigger can never fire anyway.
   const violations: string[] = []
   for (const rel of APPROVAL_SURFACES) {
-    // No `catch { continue }` — a renamed file must fail, not silently pass.
-    const all = buttonProps(codeOf(rel))
-    // NON-VACUITY (FIX_ROUND-10): the scan keys on the literal `<Button`, so a
-    // surface that spells its control anything else would find zero elements and
-    // pass with the defect present — proven by renaming the element.
+    // No try/catch: a renamed file must fail, not silently pass.
+    const sf = parse(rel)
+    const buttons = elements(sf, 'Button')
     assert.ok(
-      all.length > 0,
+      buttons.length > 0,
       `${rel} renders no <Button> — this guard would be vacuous for it. Either the ` +
         `control was renamed (update the scanner) or the surface no longer belongs here.`,
     )
-    for (const props of all) {
-      // `disabled` as an assignment, as BOOLEAN SHORTHAND, or via a spread —
-      // all three reach `nativeDisabled`, and the first cut only saw the first.
-      const canDisable =
-        /\bdisabled\s*=/.test(props) ||
-        /(^|[\s{])disabled(\s|$|\/)/.test(props) ||
-        /\{\s*\.\.\..*\bdisabled\b/.test(props)
-      if (canDisable && /\btooltip\s*=/.test(props)) {
+    for (const el of buttons) {
+      const canDisable = attr(el, 'disabled') !== undefined || hasSpread(el)
+      if (canDisable && attr(el, 'tooltip') !== undefined) {
         violations.push(`${rel}: a <Button> takes BOTH \`disabled\` and \`tooltip\``)
       }
     }
@@ -479,116 +534,110 @@ test('FIX_ROUND-8: no `tooltip` on a Button that can be disabled (kit clobbers a
   )
 })
 
-/**
- * Is `expr` EXACTLY a call to `predicate` — directly, or via a local whose SOLE
- * initializer is that call?
- *
- * FIX_ROUND-12: the previous version asked only whether the call was PRESENT,
- * which is not the same as whether it DECIDES. Appending `|| blocked !== null` —
- * the cheapest possible revert shape — reintroduced the latch and passed, as did
- * a full inversion (`!elicitationIsUnactionable(blocked)`), which disables the
- * card in every recoverable state. Both were mutation-proven green.
- *
- * So: the whole expression must be the call. Any `||`, `&&`, `?` or leading `!`
- * means something else is participating in the decision, and the guard cannot
- * know what — so it refuses rather than guesses.
- */
-function isExactly(code: string, expr: string, predicate: string): boolean {
-  const call = new RegExp(`^${predicate}\\s*\\([^()]*\\)$`)
-  const e = expr.trim()
-  if (call.test(e)) return true
-  const ident = /^[A-Za-z_$][\w$]*$/.exec(e)?.[0]
-  if (!ident) return false
-  // One local hop. Matched on whitespace-COLLAPSED source so a Prettier-wrapped
-  // initializer counts — a long name is exactly why one hoists, and this repo
-  // omits semicolons, so an end-of-statement anchor cannot be `;`. The negative
-  // lookahead is the real check: nothing may follow the call that would make it
-  // one operand of a larger decision.
-  const flat = code.replace(/\s+/g, ' ')
-  return new RegExp(
-    `\\b(?:const|let) ${ident} = ${predicate}\\s*\\([^()]*\\)(?![\\s]*[|&?+\\-*/.])`,
-  ).test(flat)
-}
-
-/** The props of the element carrying `data-testid={statusId}` (the status region). */
-function statusRegionProps(code: string): string {
-  const at = code.indexOf('data-testid={statusId}')
-  assert.notEqual(at, -1, 'the status region must be identifiable by data-testid={statusId}')
-  const open = code.lastIndexOf('<', at)
-  let depth = 0
-  let i = open
-  for (; i < code.length; i++) {
-    if (code[i] === '{') depth++
-    else if (code[i] === '}') depth--
-    else if (code[i] === '>' && depth === 0) break
-  }
-  return code.slice(open, i)
-}
-
 test('FIX_ROUND-9: the approval controls disable ONLY through the seam predicate', () => {
-  const rel = APPROVAL_SURFACE_WITH_CONTROLS
-  const code = codeOf(rel)
-  const props = buttonProps(code)
-  const disabling = props.filter(
-    p => /\bdisabled\s*=/.test(p) || /\{\s*\.\.\..*\bdisabled\b/.test(p),
-  )
+  const sf = parse(APPROVAL_SURFACE_WITH_CONTROLS)
+  const buttons = elements(sf, 'Button')
+  const disabling = buttons.filter(el => attr(el, 'disabled') !== undefined || hasSpread(el))
   assert.ok(disabling.length >= 2, `expected the approve/deny controls, found ${disabling.length}`)
 
-  for (const p of props) {
-    assert.doesNotMatch(
-      p.replace(/\s+/g, ' '),
-      /\{\s*\.\.\..*\bdisabled\b/,
-      'an approval control must not take `disabled` through a spread — a later ' +
-        'spread silently overrides the checked prop',
-    )
-    const expr = /\bdisabled\s*=\s*\{([^}]*)\}/.exec(p)?.[1]
-    if (expr === undefined) continue
+  for (const el of buttons) {
     assert.ok(
-      isExactly(code, expr, 'elicitationIsUnactionable'),
-      `an approval control's \`disabled\` must BE elicitationIsUnactionable(...) ` +
-        `(or a local whose sole initializer is that call), got \`${expr.trim()}\`. ` +
-        `Anything combined with it — \`|| blocked !== null\`, a negation — changes ` +
-        `which states disable, and every time a state the user could still act ` +
-        `through was disabled, the card became unanswerable (FIX_ROUND-4, -6, -7).`,
+      !hasSpread(el),
+      'an approval control must not take props through a spread — a spread can ' +
+        'supply or override `disabled` and the guard cannot see through it',
+    )
+    if (attr(el, 'disabled') === undefined) continue
+    const expr = attrExpr(el, 'disabled')
+    assert.ok(
+      isExactCall(sf, expr, 'elicitationIsUnactionable', 'blocked'),
+      `an approval control's \`disabled\` must BE elicitationIsUnactionable(blocked) ` +
+        `(or a const whose sole initializer is that call), got ` +
+        `\`${expr?.getText(sf) ?? '<boolean shorthand>'}\`. Anything combined with it — ` +
+        `\`|| blocked !== null\`, a negation, a different argument — changes which ` +
+        `states disable, and every time a state the user could still act through was ` +
+        `disabled, the card became unanswerable (FIX_ROUND-4, -6, -7).`,
     )
   }
 })
 
 test('FIX_ROUND-11: the two extracted DECISIONS decide at their call sites', () => {
-  // FIX_ROUND-10 extracted these because "reverting the fix left every test
-  // green", then pinned only the functions. FIX_ROUND-11 pinned the call sites by
-  // PRESENCE, which a sibling `|| <latch>` or a second `setResolveFailed` beside
-  // the conforming call defeated. These pin that the predicate DECIDES.
-  const rel = APPROVAL_SURFACE_WITH_CONTROLS
-  const code = codeOf(rel)
+  const sf = parse(APPROVAL_SURFACE_WITH_CONTROLS)
 
-  // Anchored to the status region itself, not the file's first `type={…}` — that
-  // was satisfiable by any earlier element and false-RED on an unrelated one.
-  const tone = /\btype=\{([^}]*)\}/.exec(statusRegionProps(code))?.[1]
-  assert.ok(tone !== undefined, 'the status region must set a tone')
-  const toneDecision = /^!resolved\s*&&\s*(.+?)\s*\?/.exec(tone.trim())?.[1] ?? tone
-  assert.ok(
-    isExactly(code, toneDecision, 'elicitationIsError'),
-    `the status tone must be decided by elicitationIsError(...), got ` +
-      `\`${toneDecision.trim()}\` — otherwise a transient, answerable state gets ` +
-      `painted in the destructive red DESIGN_SYSTEM.md reserves for errors`,
+  // ── the status tone ────────────────────────────────────────────────────────
+  // Located by the element whose own attributes carry `data-testid={statusId}`,
+  // so an element-valued prop before it cannot mis-anchor the search.
+  const status = elements(sf, 'Text').find(
+    el => attrExpr(el, 'data-testid')?.getText(sf) === 'statusId',
   )
+  assert.ok(status, 'the status region must be identifiable by data-testid={statusId}')
+  const tone = attrExpr(status, 'type')
+  assert.ok(tone, 'the status region must set a tone')
 
-  // `setResolveFailed(true)` must happen exactly ONCE, and only as the consequent
-  // of the `resolveDidFail(...)` condition. Presence of the good call said
-  // nothing about a second, inline judgement sitting beside it.
-  const sets = [...code.matchAll(/setResolveFailed\(true\)/g)]
+  // The WHOLE expression: `!resolved && <predicate> ? 'danger' : 'secondary'`.
+  // Checking only the condition let a second `: blocked ? 'danger'` branch paint
+  // every recoverable state destructive-red while passing.
+  assert.ok(ts.isConditionalExpression(tone), `the tone must be a ternary, got \`${tone.getText(sf)}\``)
   assert.equal(
-    sets.length,
-    1,
-    `setResolveFailed(true) must appear exactly once, found ${sets.length} — a second ` +
-      `judgement beside the conforming one re-introduces the bug it replaced`,
+    tone.whenTrue.getText(sf),
+    "'danger'",
+    'the tone ternary must yield danger on its TRUE branch',
   )
-  assert.match(
-    code.replace(/\s+/g, ' '),
-    /if \(resolveDidFail\(\{[^}]*\}\)\) setResolveFailed\(true\)/,
-    'the failure judgement must be the DIRECT consequent of resolveDidFail — ' +
-      'judging it inline marked a SUCCESSFUL approve as failed whenever the ' +
-      'provider held no entry',
+  assert.equal(
+    tone.whenFalse.getText(sf),
+    "'secondary'",
+    `the tone's false branch must be plain 'secondary' — another branch reaching ` +
+      `'danger' re-paints the recoverable states, got \`${tone.whenFalse.getText(sf)}\``,
+  )
+  assert.ok(
+    ts.isBinaryExpression(tone.condition) &&
+      tone.condition.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken &&
+      tone.condition.left.getText(sf) === '!resolved',
+    `the tone condition must read \`!resolved && <predicate>\`, got ` +
+      `\`${tone.condition.getText(sf)}\``,
+  )
+  assert.ok(
+    isExactCall(sf, (tone.condition as ts.BinaryExpression).right, 'elicitationIsError', 'blocked'),
+    `the status tone must be decided by elicitationIsError(blocked), got ` +
+      `\`${(tone.condition as ts.BinaryExpression).right.getText(sf)}\` — otherwise a ` +
+      `transient, answerable state gets painted in the destructive red ` +
+      `DESIGN_SYSTEM.md reserves for errors`,
+  )
+
+  // ── the failure judgement ──────────────────────────────────────────────────
+  // Every JUDGING call (anything but the `(false)` reset) must be the consequent
+  // of an `if (resolveDidFail(...))`. Counting the literal `(true)` missed
+  // `setResolveFailed(hadEntry === false)` sitting beside the conforming one.
+  const judging: ts.CallExpression[] = []
+  const walk = (n: ts.Node): void => {
+    if (
+      ts.isCallExpression(n) &&
+      n.expression.getText(sf) === 'setResolveFailed' &&
+      n.arguments[0]?.getText(sf) !== 'false'
+    ) {
+      judging.push(n)
+    }
+    ts.forEachChild(n, walk)
+  }
+  walk(sf)
+  assert.equal(
+    judging.length,
+    1,
+    `setResolveFailed must judge in exactly one place, found ${judging.length} ` +
+      `(${judging.map(c => c.getText(sf)).join(', ')}) — a second judgement beside the ` +
+      `conforming one re-introduces the bug it replaced`,
+  )
+
+  // …and that one call must be governed by the predicate. Walk up to the
+  // enclosing `if`, tolerating a braced consequent, so a `curly` lint rule cannot
+  // break the suite.
+  let guard: ts.Node | undefined = judging[0].parent
+  while (guard && !ts.isIfStatement(guard)) guard = guard.parent
+  assert.ok(guard && ts.isIfStatement(guard), 'the judgement must sit inside an `if`')
+  assert.ok(
+    ts.isCallExpression(guard.expression) &&
+      guard.expression.expression.getText(sf) === 'resolveDidFail',
+    `the failure judgement must be governed by resolveDidFail(...), got ` +
+      `\`${guard.expression.getText(sf)}\` — judging it inline marked a SUCCESSFUL ` +
+      `approve as failed whenever the provider held no entry`,
   )
 })

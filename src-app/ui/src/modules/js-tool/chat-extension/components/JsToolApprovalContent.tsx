@@ -69,11 +69,16 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
    * chance for a transient failure to have cleared.
    */
   const HEAL_BUDGET = 3
-  // STATE, not a ref (FIX_ROUND-11). A ref mutated inside the effect is invisible
-  // to the render that reads it, so the "budget spent" copy was stale by one pass
-  // — and in the terminal case never appeared at all, because the only thing that
-  // would have re-rendered it is the retry that just stopped. The one state
-  // update per attempt is bounded by the budget.
+  // The count is carried TWICE, on purpose (FIX_ROUND-12/13).
+  //
+  // A ref alone was invisible to the render that reads it, so the "budget spent"
+  // copy was stale by a pass and in the terminal case never appeared at all
+  // (FIX_ROUND-11). State alone, listed as an effect dep, made every attempt
+  // re-enter the effect and burned the whole budget in one tick at mount, killing
+  // the seam-change retry FIX_ROUND-8 exists for (FIX_ROUND-12). So: the REF is
+  // the effect's input (no dep, cadence intact) and the STATE is the render's
+  // (copy observable). They cannot diverge — the same object is stored in both,
+  // in adjacent statements.
   const [healAttempts, setHealAttempts] = useState<{ id: string; n: number }>({
     id: data.elicitation_id,
     n: 0,
@@ -145,10 +150,9 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
     // cadence, because every set allocates a new object, so the effect re-ran
     // itself and burned the whole budget in one tick at mount — after which no
     // later seam change could retry at all, the opposite of what FIX_ROUND-8
-    // added the seam trigger for. And the register call stays OUT of the state
-    // updater, which React may invoke twice under StrictMode; an updater must be
-    // pure. The ref carries the count for the effect, the state carries it for
-    // the render (which is what makes the "budget spent" copy observable at all).
+    // added the seam trigger for. The register call is a plain statement, not part
+    // of a state updater — React may invoke an updater twice under StrictMode, and
+    // an updater must be pure.
     const spent = healCount.current.id === data.elicitation_id ? healCount.current.n : 0
     if (spent >= HEAL_BUDGET) return
     healCount.current = { id: data.elicitation_id, n: spent + 1 }
@@ -163,12 +167,11 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
     // stale claim FIX_ROUND-10 fixed in the sibling test file and missed here.)
     // FIX_ROUND-6 routed the failure through `resolveFailed` instead, which
     // reports a resolve the user never attempted, and latched.
-    registerElicitation(runJsElicitationInit(data))
     // `seamVersion` is a dep so a FAILED register is retried on the next seam
     // change (FIX_ROUND-8). A failed register bumps nothing itself, so without a
     // trigger tied to the seam the effect never re-ran and the state it produced
     // could not clear — the latch this card has now grown three times.
-  }, [hasTransport, resolved, data, seamVersion, healAttempts])
+  }, [hasTransport, resolved, data, seamVersion])
 
   /**
    * Focus the outcome when the buttons unmount. Without this, resolving destroys
