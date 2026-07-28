@@ -8,7 +8,7 @@
 ## Summary
 
 - **338** surfaces carry at least one renderable-state signal.
-- **2067** signals total: 1618 branch, 137 empty, 119 error, 93 loading, 96 overlay, 4 panel.
+- **2064** signals total: 1615 branch, 137 empty, 119 error, 93 loading, 96 overlay, 4 panel.
 - **4** right-panel renderers registered (each a right-panel-open state).
 - **35** slot registrations (sidebar / settings / chat mount points).
 
@@ -3590,12 +3590,9 @@ Required states: `delayed`, `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!f` | 51 |
-| loading | `loading && !settings` | 60 |
-| branch | `!canManage` | 80 |
-| error | `error` | 89 |
-| branch | `f` | 98 |
-| branch | `canManage` | 186 |
+| loading | `loading && !settings` | 94 |
+| error | `error && !settings` | 107 |
+| branch | `!canManage` | 146 |
 
 ### `modules/server-update/AboutSettings`
 

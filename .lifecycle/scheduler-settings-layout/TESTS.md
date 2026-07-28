@@ -1,0 +1,32 @@
+# TESTS — scheduler-settings-layout
+
+No new permission is introduced (the page already gates on the existing
+`scheduler_admin::{read,manage}`), so no `[negative-perm]` spec is required by
+A10. The diff is frontend-only ⇒ the e2e tier is mandatory and supplied.
+
+## Acceptance tests for the PLAN invariants
+
+- **TEST-1** (tier: unit) [acceptance] [invariant: INV-1] [covers: ITEM-8] file: `sdk/packages/config/src/lint/settings-field.test.mjs` — asserts: the new rule-2 AST check FIRES on a settings-scoped file whose stretching control (`Input`/`InputNumber`/`InputPassword`/`Textarea`) sits inside a hand-composed `<Field orientation="horizontal">`/`"responsive"` outside a `FormField`, and does NOT fire on (a) the same control inside a `<FormField>`, (b) an intrinsic-width control (`Switch`/`Segmented`/`Select`) inside a horizontal/responsive `Field` — the legal shadcn row pattern `ThemeSettings`/`McpToolApprovalsTab` use, (c) a vertical `<Field>`, (d) a non-settings-scoped file, (e) an element carrying the `data-standalone-control` opt-out. This is INV-1 made executable.
+- **TEST-2** (tier: unit) [acceptance] [invariant: INV-2] [covers: ITEM-9, ITEM-10] file: `src-app/ui/scripts/lib/label-starvation.test.mjs` — asserts: `isStarvedLabel()` returns true for each of the five REAL measured Scheduler metrics (e.g. `{lines:5, boxW:43, naturalW:162, rowW:840}`) and false for every real measured sibling-page label (single-line labels, a legitimately 2-line label in a narrow drawer, a label in a row with no slack) — i.e. the threshold has zero false positives on the measured corpus. This is INV-2 made executable, and is the SHARED predicate the gating visual spec and the live-ui-audit rig detector both use.
+- **TEST-3** (tier: e2e) [acceptance] [invariant: INV-2, INV-5] [covers: ITEM-1, ITEM-2, ITEM-5, ITEM-7, ITEM-9] file: `src-app/ui/tests/e2e/visual/form-label-starvation.spec.ts` — asserts: across EVERY gallery page surface (loaded state) at BOTH 1280×900 and 390×844, zero field labels are starved. Fails today on `settings-scheduler` (5 labels) and passes after ITEM-1; also closes the gap that Layer A only ever inspected the 72 `gallery-section-*` kit stories and never a page surface. Registered in `gallery.config.json → visualSpecs` so `gate:ui` runs it.
+- **TEST-4** (tier: e2e) [covers: ITEM-9, ITEM-10] file: `src-app/ui/tests/e2e/visual/form-label-starvation.spec.ts` — asserts: (detector-acceptance leg) a deliberately-starved fixture row injected into the live gallery DOM — the EXACT pre-fix markup (`Field orientation=horizontal` › `FieldContent` › label + a sibling `w-full` input) — IS flagged by the probe, and a correctly-composed control row in the same container is NOT. Proves the check is not vacuously green.
+- **TEST-5** (tier: e2e) [acceptance] [invariant: INV-3, INV-5, INV-6] [covers: ITEM-1, ITEM-2, ITEM-3, ITEM-4, ITEM-5, ITEM-11] file: `src-app/ui/tests/e2e/14-scheduler/admin-settings-layout.spec.ts` — asserts: against the REAL backend, an admin at `/settings/scheduler` sees the POPULATED Limits card where (a) every field label renders on ≤2 lines and is not squeezed below half its natural width at 1280, (b) each numeric control is ≤260px wide (not full-bleed), (c) Save and Cancel are in the card footer and Save is disabled until the form is dirty, (d) at 390px the form stacks label-above-control with no starved label and no horizontal document overflow, (e) editing a limit and saving persists it (re-read after reload).
+- **TEST-6** (tier: e2e) [covers: ITEM-1, ITEM-3] file: `src-app/ui/tests/e2e/14-scheduler/admin-settings.spec.ts` — asserts: (pre-existing, must stay green) the rebuild preserves the whole `data-testid` contract — `scheduler-admin-page`, `scheduler-max-active`, `scheduler-retention`, `scheduler-admin-save` still resolve and the edit→save round-trip still persists.
+- **TEST-7** (tier: unit) [acceptance] [invariant: INV-1, INV-4] [covers: ITEM-6, ITEM-8] file: `src-app/ui/package.json` (`npm run check`) — asserts: the whole static frontend contract on the changed page — `tsc` clean, `lint:colors` (no raw hue / arbitrary colour / inline style colour → INV-4), `lint:logical-direction` (no physical `pl/pr`/`ml/mr` → INV-4), `lint:settings-field` INCLUDING the new rule 2 (INV-1), `check:testid-registry`, `check:state-matrix`, `check:design-spec`.
+- **TEST-8** (tier: e2e) [acceptance] [invariant: INV-6] [covers: ITEM-9] file: `src-app/ui/scripts/gate-ui.mjs` (`npm run gate:ui`) — asserts: the A7 boot/runtime canary — the gallery renders every surface with zero HIGH runtime findings AND the visual layer (now including TEST-3/TEST-4) is green, i.e. the new gating spec actually runs inside the gate rather than only when invoked by hand.
+
+## Coverage map (every ITEM → ≥1 TEST)
+
+| ITEM | covered by |
+|---|---|
+| ITEM-1 rebuild on Form/FormField | TEST-3, TEST-5, TEST-6 |
+| ITEM-2 numeric width + suffix | TEST-3, TEST-5 |
+| ITEM-3 SettingsFormActions footer | TEST-5, TEST-6 |
+| ITEM-4 shell parity (Spin/ErrorState/readonly/descriptions) | TEST-5 |
+| ITEM-5 responsive 390/768/1280 populated | TEST-3, TEST-5 |
+| ITEM-6 DESIGN_SYSTEM conformance | TEST-7 |
+| ITEM-7 repo-wide sweep | TEST-3 |
+| ITEM-8 static lint (the CAUSE) | TEST-1, TEST-7 |
+| ITEM-9 gating visual spec (the SYMPTOM) | TEST-2, TEST-3, TEST-4, TEST-8 |
+| ITEM-10 live-ui-audit rig detector | TEST-2, TEST-4 |
+| ITEM-11 real-backend e2e | TEST-5 |

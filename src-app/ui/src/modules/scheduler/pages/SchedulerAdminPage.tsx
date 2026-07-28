@@ -1,26 +1,24 @@
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 
 import { Permissions } from '@/api-client/permissions'
 import {
   Alert,
-  Button,
   Card,
-  Flex,
+  ErrorState,
+  Form,
+  FormField,
   InputNumber,
+  Paragraph,
   Spin,
   message,
+  useForm,
 } from '@ziee/kit'
-import {
-  Field,
-  FieldContent,
-  FieldGroup,
-  FieldTitle,
-} from '@ziee/kit/shadcn/field'
 import { usePermission } from '@/core/permissions'
+import { SettingsFormActions } from '@/modules/settings/components/SettingsFormActions'
 import { SettingsPageContainer } from '@/modules/settings/components/SettingsPageContainer'
 import { SchedulerAdmin } from '@/modules/scheduler/stores/schedulerAdmin'
 
-interface Form {
+type FormValues = {
   max_active_tasks_per_user: number
   min_interval_seconds: number
   max_horizon_days: number
@@ -28,44 +26,95 @@ interface Form {
   notification_retention_days: number
 }
 
+const SUBTITLE = 'Deployment-wide scheduling limits.'
+
+/**
+ * Admin "Scheduler" settings page — the deployment-wide guard-rails every
+ * scheduled task is bound by: how many tasks one user may keep active, how often
+ * a task may fire, how far ahead a self-paced loop may look, when a failing task
+ * auto-pauses, and how long run notifications are kept.
+ *
+ * Composition mirrors the two canonical siblings rather than free-styling:
+ * the form is `file-rag`'s `RetrievalLimitsSection` (an admin card of numeric
+ * caps — `Form layout="horizontal"` + `FormField` + `InputNumber className="w-40"`,
+ * actions in the Card `footer` via `SettingsFormActions`), and the page shell is
+ * `auth/SessionSettingsPage` (Spin → ErrorState → read-only Alert → card).
+ */
 export function SchedulerAdminPage() {
   const { settings, loading, saving, error } = SchedulerAdmin
   const canManage = usePermission(Permissions.SchedulerAdminManage)
-  const [f, setF] = useState<Form | null>(null)
+
+  // `defaultValues` is REQUIRED, not decorative: with none, react-hook-form
+  // compares `_formValues` (which gains an `undefined` entry per field the
+  // moment the Controllers register) against an EMPTY `_defaultValues`, so
+  // `isDirty` latches TRUE on the very first render — before the settings row
+  // arrives — and the `!isDirty` re-seed guard below then blocks the reset
+  // forever, leaving every input blank and unsavable. These are the server's
+  // own defaults (mirrors RetrievalLimitsSection).
+  const form = useForm<FormValues>({
+    defaultValues: {
+      max_active_tasks_per_user: 20,
+      min_interval_seconds: 300,
+      max_horizon_days: 7,
+      max_consecutive_failures: 5,
+      notification_retention_days: 30,
+    },
+  })
 
   useEffect(() => {
     void SchedulerAdmin.loadSettings()
   }, [])
+
+  // Re-seed from the store ONLY while the form has no unsaved edits, so a
+  // sync-driven refetch can't clobber values the admin is typing.
   useEffect(() => {
-    if (settings)
-      setF({
+    if (settings && !form.formState.isDirty) {
+      form.reset({
         max_active_tasks_per_user: settings.max_active_tasks_per_user,
         min_interval_seconds: settings.min_interval_seconds,
         max_horizon_days: settings.max_horizon_days,
         max_consecutive_failures: settings.max_consecutive_failures,
         notification_retention_days: settings.notification_retention_days,
       })
-  }, [settings])
+    }
+  }, [settings, form])
 
-  const save = async () => {
-    if (!f) return
+  const onSubmit = async (v: FormValues) => {
     try {
-      await SchedulerAdmin.updateSettings(f)
+      await SchedulerAdmin.updateSettings(v)
+      form.reset(v) // saved → let the next store update re-seed again
       message.success('Scheduler settings saved')
     } catch (e) {
-      message.error(e instanceof Error ? e.message : 'Failed to save')
+      message.error(
+        e instanceof Error ? e.message : 'Failed to save scheduler settings',
+      )
     }
   }
 
   if (loading && !settings) {
     return (
-      <SettingsPageContainer
-        title="Scheduler"
-        subtitle="Deployment-wide scheduling limits."
-      >
-        <Flex className="justify-center py-12">
+      <SettingsPageContainer title="Scheduler" subtitle={SUBTITLE}>
+        <div className="flex justify-center py-12">
           <Spin size="lg" label="Loading scheduler settings" />
-        </Flex>
+        </div>
+      </SettingsPageContainer>
+    )
+  }
+
+  // Primary load failed (nothing to show) → a persistent, retryable ErrorState
+  // instead of an empty card. A later SAVE failure keeps `settings` and is
+  // surfaced by the toast in onSubmit, not here.
+  if (error && !settings) {
+    return (
+      <SettingsPageContainer title="Scheduler" subtitle={SUBTITLE}>
+        <ErrorState
+          variant="page"
+          resource="scheduler settings"
+          description="The scheduler limits couldn't be loaded. Check your connection and try again."
+          details={error}
+          onRetry={() => void SchedulerAdmin.loadSettings()}
+          data-testid="scheduler-admin-error"
+        />
       </SettingsPageContainer>
     )
   }
@@ -73,10 +122,27 @@ export function SchedulerAdminPage() {
   return (
     <SettingsPageContainer
       title="Scheduler"
-      subtitle="Deployment-wide scheduling limits."
+      subtitle={SUBTITLE}
       data-testid="scheduler-admin-page"
     >
-      <Card data-testid="scheduler-admin-card" title="Limits">
+      <Card
+        data-testid="scheduler-admin-card"
+        title="Limits"
+        footer={
+          <SettingsFormActions
+            onSave={form.handleSubmit(onSubmit)}
+            onCancel={() => form.reset()}
+            saving={saving}
+            saveDisabled={!canManage || !form.formState.isDirty}
+            cancelDisabled={!canManage}
+            saveDisabledReason={
+              canManage ? undefined : 'You need scheduler admin rights to change these.'
+            }
+            saveTestid="scheduler-admin-save"
+            cancelTestid="scheduler-admin-cancel"
+          />
+        }
+      >
         {!canManage && (
           <Alert
             tone="info"
@@ -86,116 +152,90 @@ export function SchedulerAdminPage() {
             className="mb-3"
           />
         )}
-        {error && (
-          <Alert
-            tone="error"
-            title="Error"
-            description={error}
-            className="mb-3"
-            data-testid="scheduler-admin-error"
-          />
-        )}
-        {f && (
-          <Flex className="flex-col gap-3">
-            <FieldGroup>
-              <Field orientation="horizontal">
-                <FieldContent>
-                  <FieldTitle>Max active tasks per user</FieldTitle>
-                </FieldContent>
-                <InputNumber
-                  data-testid="scheduler-max-active"
-                  aria-label="Max active tasks per user"
-                  min={1}
-                  max={1000}
-                  value={f.max_active_tasks_per_user}
-                  disabled={!canManage}
-                  onChange={v =>
-                    setF({ ...f, max_active_tasks_per_user: Number(v ?? 1) })
-                  }
-                />
-              </Field>
-              <Field orientation="horizontal">
-                <FieldContent>
-                  <FieldTitle>Minimum interval (seconds)</FieldTitle>
-                </FieldContent>
-                <InputNumber
-                  data-testid="scheduler-min-interval"
-                  aria-label="Minimum interval (seconds)"
-                  min={60}
-                  max={86400}
-                  value={f.min_interval_seconds}
-                  disabled={!canManage}
-                  onChange={v =>
-                    setF({ ...f, min_interval_seconds: Number(v ?? 300) })
-                  }
-                />
-              </Field>
-              <Field orientation="horizontal">
-                <FieldContent>
-                  <FieldTitle>Self-paced loop horizon (days)</FieldTitle>
-                </FieldContent>
-                <InputNumber
-                  data-testid="scheduler-max-horizon"
-                  aria-label="Self-paced loop horizon (days)"
-                  min={1}
-                  max={365}
-                  value={f.max_horizon_days}
-                  disabled={!canManage}
-                  onChange={v =>
-                    setF({ ...f, max_horizon_days: Number(v ?? 7) })
-                  }
-                />
-              </Field>
-              <Field orientation="horizontal">
-                <FieldContent>
-                  <FieldTitle>
-                    Auto-pause after N consecutive failures
-                  </FieldTitle>
-                </FieldContent>
-                <InputNumber
-                  data-testid="scheduler-max-failures"
-                  aria-label="Auto-pause after N consecutive failures"
-                  min={1}
-                  max={100}
-                  value={f.max_consecutive_failures}
-                  disabled={!canManage}
-                  onChange={v =>
-                    setF({ ...f, max_consecutive_failures: Number(v ?? 5) })
-                  }
-                />
-              </Field>
-              <Field orientation="horizontal">
-                <FieldContent>
-                  <FieldTitle>
-                    Notification retention (days, 0 = forever)
-                  </FieldTitle>
-                </FieldContent>
-                <InputNumber
-                  data-testid="scheduler-retention"
-                  aria-label="Notification retention (days)"
-                  min={0}
-                  max={3650}
-                  value={f.notification_retention_days}
-                  disabled={!canManage}
-                  onChange={v =>
-                    setF({ ...f, notification_retention_days: Number(v ?? 30) })
-                  }
-                />
-              </Field>
-            </FieldGroup>
-            {canManage && (
-              <Flex className="justify-end">
-                <Button
-                  data-testid="scheduler-admin-save"
-                  onClick={save}
-                  loading={saving}
-                >
-                  Save
-                </Button>
-              </Flex>
-            )}
-          </Flex>
-        )}
+
+        <Paragraph type="secondary" className="!mb-3 text-sm">
+          Guard-rails applied deployment-wide to every user's scheduled tasks. A
+          task that would exceed a limit is rejected when it is created or
+          updated; a running task is clamped to the limit in force at that moment.
+        </Paragraph>
+
+        <Form
+          data-testid="scheduler-admin-form"
+          name="scheduler-admin-limits-form"
+          form={form}
+          layout="horizontal"
+          disabled={!canManage}
+          onSubmit={onSubmit}
+        >
+          <FormField
+            name="max_active_tasks_per_user"
+            label="Max active tasks per user"
+            description="How many enabled tasks one user may keep at once. Creating another is rejected until one is paused or deleted."
+          >
+            <InputNumber
+              data-testid="scheduler-max-active"
+              min={1}
+              max={1000}
+              className="w-40"
+            />
+          </FormField>
+
+          <FormField
+            name="min_interval_seconds"
+            label="Minimum interval"
+            description="The fastest cadence any schedule may fire at. A cron expression that would run more often than this is rejected."
+          >
+            <InputNumber
+              data-testid="scheduler-min-interval"
+              min={60}
+              max={86400}
+              suffix="seconds"
+              className="w-40"
+            />
+          </FormField>
+
+          <FormField
+            name="max_horizon_days"
+            label="Self-paced loop horizon"
+            description="How far ahead a self-paced (goal-seeking) loop may schedule its next check before it must stop."
+          >
+            <InputNumber
+              data-testid="scheduler-max-horizon"
+              min={1}
+              max={365}
+              suffix="days"
+              className="w-40"
+            />
+          </FormField>
+
+          <FormField
+            name="max_consecutive_failures"
+            label="Auto-pause after"
+            description="A task that fails this many times in a row is paused automatically, so a broken task stops burning runs."
+          >
+            <InputNumber
+              data-testid="scheduler-max-failures"
+              min={1}
+              max={100}
+              suffix="failures"
+              className="w-40"
+            />
+          </FormField>
+
+          <FormField
+            name="notification_retention_days"
+            label="Notification retention"
+            description="How long run notifications are kept before they are pruned. Set 0 to keep them forever."
+          >
+            <InputNumber
+              data-testid="scheduler-retention"
+              min={0}
+              max={3650}
+              suffix="days"
+              className="w-40"
+            />
+          </FormField>
+        </Form>
       </Card>
     </SettingsPageContainer>
   )
