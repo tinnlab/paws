@@ -172,6 +172,8 @@ is not touched here. Backend scope is `-p ziee`, which is clean. See BASE.md.
 | 3 | branch | :21601 isolated | 145/151 | the same 6 |
 | 4 | **base UI** (`origin/feat/agent-core`) | :21800 isolated | **177/182** | 5 — **disjoint** from runs 2/3 |
 | 5 | branch | :22000 isolated | 161/171 | 3 — **disjoint from both** |
+| 6 | branch | :22200 isolated | 193/194 | 1 — `settings-user-groups`, **disjoint again** |
+| 7 | branch | :22402 isolated | 184/188 | 4 — hardware/download surfaces, **disjoint again** |
 
 Three independent facts, each measured:
 
@@ -180,8 +182,12 @@ Three independent facts, each measured:
    worktree). A7 is therefore a pre-existing base condition, not a regression
    introduced here.
 2. **The failing set is non-deterministic across runs of the same commit** —
-   runs 2/3 and run 5 share no surface at all. A code defect does not migrate
-   between disjoint surface sets.
+   runs 2/3, run 5, run 6 and run 7 produce FOUR mutually disjoint failing sets,
+   and the count wanders 6 → 3 → 1 → 4 with no code change between them. A code
+   defect does not migrate between disjoint surface sets, nor does the enumerated
+   surface COUNT move (151 → 171 → 194 → 188) when the gallery is identical —
+   that drift is the runtime-health pass losing surfaces as the dev server
+   struggles, which is the same underlying instability.
 3. **Every finding is a network-class dev-server failure** —
    `net::ERR_NETWORK_CHANGED` / `ERR_CONNECTION_REFUSED` and the
    `Failed to fetch dynamically imported module` errors downstream of them. Zero
