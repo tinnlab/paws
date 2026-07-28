@@ -1,6 +1,5 @@
 import type { ValidationError } from '@/api-client/types'
-import type { BuilderStep, StepKind } from './stepForms'
-import { STEP_KIND_LABELS } from './stepForms'
+import type { BuilderStep } from './stepForms'
 
 // ---------------------------------------------------------------------------
 // The PRESENTATION boundary for workflow validation findings (ITEM-1, INV-1).
@@ -252,9 +251,4 @@ export function indexFindingsByStep(
 export function findingStepTitle(a: AttributedFinding): string {
   if (a.stepIndex == null || a.stepLabel == null) return 'Whole workflow'
   return `Step ${a.stepIndex} · ${a.stepLabel}`
-}
-
-/** Human label for a step's kind, reused by the panel's grouping. */
-export function stepKindLabel(step: BuilderStep): string {
-  return STEP_KIND_LABELS[step.kind as StepKind] ?? step.kind
 }
