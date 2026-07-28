@@ -14,6 +14,7 @@
   "visualConfig": "playwright.visual.config.ts",
   "visualSpecs": [
     "layout.spec.ts",
+    "form-label-starvation.spec.ts",
     "states.spec.ts",
     "overlays.spec.ts",
     "chat-collapse-borders.spec.ts"
