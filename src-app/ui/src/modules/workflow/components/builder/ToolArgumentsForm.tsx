@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react'
 import { Braces, Undo2 } from 'lucide-react'
 import {
   Button,
@@ -17,6 +18,10 @@ import {
   type ToolFormSpec,
   coerceToDeclared,
   isTemplateValue,
+  optionKeyForValue,
+  optionKeysForValues,
+  optionValueForKey,
+  optionValuesForKeys,
   valueToText,
 } from './toolSchemaForm'
 
@@ -48,6 +53,19 @@ function testidFor(name: string) {
   return `wf-builder-tool-arg-field-${name}`
 }
 
+/** Nothing has been supplied for this field (an empty multi-select included). */
+function isBlank(value: unknown): boolean {
+  if (value === undefined || value === null || value === '') return true
+  return Array.isArray(value) && value.length === 0
+}
+
+/** Would committing `next` actually change anything? Used to keep a plain blur
+ *  from patching the definition (and marking the workflow dirty) for free. */
+function sameValue(a: unknown, b: unknown): boolean {
+  if (isBlank(a) && isBlank(b)) return true
+  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
+}
+
 /** One generated control. Split out so each field owns its template/typed mode. */
 function GeneratedField({
   store,
@@ -63,10 +81,45 @@ function GeneratedField({
   onChange: (value: unknown) => void
 }) {
   const testid = testidFor(field.name)
-  // A field is in template mode iff its CURRENT value is a reference. That is
-  // derived, not stored: inserting a `{{ … }}` switches it, and "use a value
-  // instead" clears it back — no extra state to get out of sync with the def.
-  const templated = isTemplateValue(value)
+
+  // A control that is ALREADY free text can hold `{{ … }}` natively, so it never
+  // switches modes. DEC-5's mode switch exists only for the controls that
+  // physically cannot hold a reference (number / switch / select / multi-select)
+  // — and applying it to a text control was actively harmful: authoring
+  // `{"userId": "{{ inputs.user }}"}` in a JSON textarea made the value "contain
+  // a reference", which collapsed the 4-row textarea into a one-line Input
+  // mid-keystroke.
+  const canHoldTemplate =
+    field.kind === 'text' || field.kind === 'textarea' || field.kind === 'json'
+
+  // For the rest, template mode is STICKY rather than re-derived from the value
+  // on every keystroke. Deriving it made a partial edit self-destruct:
+  // backspacing the closing `}}` of `{{ inputs.limit }}` turned the value into a
+  // non-reference, which flipped the control back to the typed one — whose value
+  // guard rejects the corrupt string — so the field rendered EMPTY while the
+  // corrupt value stayed in the definition and the "use a value instead" undo
+  // disappeared. A reference now LATCHES the mode (on mount for a loaded
+  // reference, on insert for a new one) and only the explicit button leaves it.
+  const [templateMode, setTemplateMode] = useState(
+    () => !canHoldTemplate && isTemplateValue(value),
+  )
+  useEffect(() => {
+    if (!canHoldTemplate && isTemplateValue(value)) setTemplateMode(true)
+  }, [value, canHoldTemplate])
+  const templated = !canHoldTemplate && (templateMode || isTemplateValue(value))
+
+  // A required field only complains once the author has actually touched it —
+  // a freshly chosen tool should not paint every required row red — but after
+  // that the `*` is real rather than decorative.
+  const [touched, setTouched] = useState(false)
+  const commit = (next: unknown) => {
+    setTouched(true)
+    onChange(next)
+  }
+  const error =
+    field.required && touched && isBlank(value)
+      ? 'This argument is required.'
+      : null
 
   const description = [
     field.description,
@@ -78,8 +131,10 @@ function GeneratedField({
   // Label-row actions: insert a reference into this field, and — once it holds
   // one — get BACK to the typed control. The switch to template mode must be
   // reversible or the author is trapped in a text box (DEC-5).
+  // `shrink-0` so a long schema `title` shrinks the LABEL rather than squeezing
+  // these buttons out of the row at 390px.
   const refAction = (
-    <div className="flex items-center gap-1">
+    <div className="flex items-center gap-1 shrink-0">
       {templated && (
         <Button
           type="button"
@@ -89,15 +144,29 @@ function GeneratedField({
           aria-label="Use a value instead of a reference"
           tooltip="Use a value instead"
           data-testid={`${testid}-clear-ref`}
-          onClick={() => onChange('')}
+          onClick={() => {
+            setTemplateMode(false)
+            commit('')
+          }}
         />
       )}
       <RefInsertMenu
         store={store}
         stepId={stepId}
-        // A typed field REPLACES rather than appends: half a number plus a
-        // reference is not a value the backend could resolve.
-        onInsert={token => onChange(token)}
+        // A TYPED field replaces: half a number plus a reference is not a value
+        // the backend could resolve, and the replacement is undoable through the
+        // button above. A text/JSON field APPENDS instead (the `PromptField`
+        // behaviour) — it has no such undo, so replacing would silently destroy
+        // a body the author had already written.
+        onInsert={token => {
+          if (canHoldTemplate) {
+            const current = valueToText(value)
+            commit(current ? `${current}${token}` : token)
+            return
+          }
+          setTemplateMode(true)
+          commit(token)
+        }}
         testid={`${testid}-ref`}
         // Icon-only: this menu repeats once per generated field, and a labelled
         // trigger on every row overflows the label row at 390px.
@@ -106,6 +175,14 @@ function GeneratedField({
     </div>
   )
 
+  // The kit's InputNumber emits `undefined` for BOTH "the field was cleared" and
+  // "this is a partial number I'm still typing" (`-`, `1e`, `1.`). Committing
+  // that as a key DELETE fed a changed `value` back into the control, which
+  // wiped its buffer mid-keystroke — so a negative number could never be typed
+  // over an existing one. The delete is therefore deferred to blur, where the
+  // two cases have collapsed into one.
+  const pendingNumberClear = useRef(false)
+
   const control = () => {
     // A reference is always edited as text, whatever the declared type.
     if (templated) {
@@ -113,7 +190,7 @@ function GeneratedField({
         <Input
           data-testid={testid}
           value={valueToText(value)}
-          onChange={e => onChange(e.target.value)}
+          onChange={e => commit(e.target.value)}
           placeholder="{{ inputs.query }}"
         />
       )
@@ -124,8 +201,11 @@ function GeneratedField({
           <Switch
             data-testid={testid}
             aria-label={field.label}
-            checked={value === true}
-            onChange={v => onChange(v)}
+            // An absent key means the tool applies its DECLARED default, so the
+            // control must show that default rather than a flat "off" while the
+            // description says "Defaults to true."
+            checked={typeof value === 'boolean' ? value : field.default === true}
+            onChange={v => commit(v)}
           />
         )
       case 'number':
@@ -137,7 +217,19 @@ function GeneratedField({
             step={field.kind === 'integer' ? 1 : undefined}
             min={field.schema.minimum}
             max={field.schema.maximum}
-            onChange={v => onChange(v ?? '')}
+            onChange={v => {
+              if (v === undefined) {
+                pendingNumberClear.current = true
+                return
+              }
+              pendingNumberClear.current = false
+              commit(v)
+            }}
+            onBlur={() => {
+              if (!pendingNumberClear.current) return
+              pendingNumberClear.current = false
+              commit(undefined)
+            }}
             placeholder={valueToText(field.default)}
           />
         )
@@ -147,8 +239,10 @@ function GeneratedField({
             data-testid={testid}
             aria-label={field.label}
             options={field.options ?? []}
-            value={typeof value === 'string' && value ? value : undefined}
-            onChange={v => onChange(v)}
+            // The control speaks strings; the DECLARED type is what gets stored,
+            // so an integer enum round-trips as `2`, not `"2"`.
+            value={optionKeyForValue(field, value)}
+            onChange={v => commit(optionValueForKey(field, v))}
             placeholder="Choose a value"
             popupMatchSelectWidth={false}
           />
@@ -159,8 +253,8 @@ function GeneratedField({
             data-testid={testid}
             aria-label={field.label}
             options={field.options ?? []}
-            value={Array.isArray(value) ? value.map(String) : []}
-            onChange={v => onChange(v)}
+            value={optionKeysForValues(field, value)}
+            onChange={v => commit(optionValuesForKeys(field, v))}
             placeholder="Choose values"
             searchPlaceholder="Search…"
             emptyText="No choices declared"
@@ -174,7 +268,14 @@ function GeneratedField({
             data-testid={testid}
             rows={field.kind === 'json' ? 4 : 3}
             value={valueToText(value)}
-            onChange={e => onChange(coerceToDeclared(e.target.value, field))}
+            // Hold the author's EXACT text while they type; coerce to the
+            // declared type only on commit. Coercing per keystroke re-serialized
+            // `{ "a": 1 }` to `{"a":1}` under the caret.
+            onChange={e => commit(e.target.value)}
+            onBlur={e => {
+              const next = coerceToDeclared(e.target.value, field)
+              if (!sameValue(next, value)) commit(next)
+            }}
             placeholder={
               field.kind === 'json'
                 ? valueToText(field.default) || '{ "key": "value" }'
@@ -187,7 +288,7 @@ function GeneratedField({
           <Input
             data-testid={testid}
             value={valueToText(value)}
-            onChange={e => onChange(e.target.value)}
+            onChange={e => commit(e.target.value)}
             placeholder={valueToText(field.default)}
           />
         )
@@ -196,9 +297,12 @@ function GeneratedField({
 
   return (
     <LabeledControl
-      label={field.label}
+      // `wrap-anywhere` + `min-w-0`: a long declared `title` wraps inside the
+      // label instead of pushing the row past the viewport at 390px.
+      label={<span className="block min-w-0 wrap-anywhere">{field.label}</span>}
       required={field.required}
       action={refAction}
+      error={error}
       description={
         templated ? (
           // `items-start` + a nudge keeps the marker on the FIRST line when the
@@ -246,8 +350,11 @@ export function ToolArgumentsForm({
       ))}
       {spec.overflowNames.length > 0 && (
         <Text type="secondary" className="text-xs" data-testid="wf-builder-tool-args-overflow">
+          {/* The spilled property NAMES are listed, not just counted: the free
+              rows below only pre-fill keys that already carry a value, so
+              without this the author would have to know the hidden names. */}
           Showing {spec.fields.length} of {spec.declaredCount} arguments this tool
-          accepts — the rest can be set below.
+          accepts. Add any of the rest below, by name: {spec.overflowNames.join(', ')}.
         </Text>
       )}
     </div>

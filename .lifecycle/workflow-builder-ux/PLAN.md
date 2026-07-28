@@ -44,7 +44,9 @@ Companion artifact (the owner's second, equally-weighted deliverable):
   prompt." Unmapped code ⇒ fall back to the backend `message` verbatim (never
   blank). Backend messages/codes/severities are UNCHANGED.
 - **ITEM-2**: Make an unmapped code a build-time defect. Add
-  `pub const VALIDATION_CODES: &[&str]` to `validate.rs` as the single registry,
+  `#[cfg(test)] const VALIDATION_CODES: &[&str]` to `validate.rs` as the single
+  registry (test-only visibility — it has no production consumer, so `pub` would
+  merely suppress the dead_code lint; see FIX_ROUND-1 finding C5),
   plus a Rust test that (a) every `ValidationError::{err,at,warn}` code literal in
   `validate.rs` + `ref_check.rs` is registered, and (b) every registered code has
   human copy in the UI's `validationCopy.ts` (cross-file `include_str!` guard,

@@ -61,6 +61,20 @@ export type ToolFieldKind =
   | 'multiselect'
   | 'json'
 
+/**
+ * One choice of a `select` / `multiselect`.
+ *
+ * `value` is what the CONTROL binds to — the kit's `Select`/`MultiSelect` speak
+ * strings — while `raw` is the value the schema actually DECLARED. Committing
+ * `raw` is what keeps `{"level": {"type": "integer", "enum": [1, 2, 3]}}`
+ * storing the number `2` rather than the string `"2"` the control handed us.
+ */
+export interface ToolOption {
+  value: string
+  label: string
+  raw: unknown
+}
+
 export interface ToolField {
   /** The argument key this field writes. */
   name: string
@@ -72,7 +86,7 @@ export interface ToolField {
   /** The schema's declared default, shown as the placeholder. */
   default?: unknown
   /** Options for `select` / `multiselect`. */
-  options?: { value: string; label: string }[]
+  options?: ToolOption[]
   /** The resolved property schema, for callers that need more detail. */
   schema: FieldSchema
 }
@@ -86,7 +100,7 @@ export interface ToolFormSpec {
 }
 
 // ---------------------------------------------------------------------------
-// $ref resolution (bounded + cycle-safe)
+// $ref / allOf / nullable normalisation (bounded + cycle-safe)
 // ---------------------------------------------------------------------------
 
 const DEFS_PREFIXES = ['#/$defs/', '#/definitions/'] as const
@@ -101,57 +115,146 @@ function isRecord(v: unknown): v is Record<string, unknown> {
  * `#/components/…` we have no access to) is UNRESOLVABLE and returns null — the
  * caller then renders a JSON field, which is honest, rather than pretending the
  * property is a string.
+ *
+ * Membership is checked with `hasOwnProperty`, NOT `in`: `in` walks the
+ * prototype chain, so `#/$defs/__proto__` (or `/toString`) would "resolve"
+ * against `Object.prototype` on a schema that never declared it.
  */
 function lookupRef(root: Record<string, unknown>, ref: string): unknown {
   for (const prefix of DEFS_PREFIXES) {
     if (!ref.startsWith(prefix)) continue
     const name = ref.slice(prefix.length)
     const bucket = root[prefix === '#/$defs/' ? '$defs' : 'definitions']
-    if (isRecord(bucket) && name in bucket) return bucket[name]
+    if (isRecord(bucket) && Object.prototype.hasOwnProperty.call(bucket, name)) {
+      return bucket[name]
+    }
   }
   return null
 }
 
+/** A branch that only says "this may be null" (the other half of `Optional[T]`). */
+function isNullBranch(node: unknown): boolean {
+  return isRecord(node) && node['type'] === 'null' && !('enum' in node)
+}
+
 /**
- * Follow `$ref` chains to the concrete schema. `stack` carries the refs already
- * being resolved on THIS path, so a self-referential or mutually recursive
- * schema is cut rather than looped — the explicit-stack approach borrowed from
- * `schema_inline`, not a blind depth counter.
+ * Reduce a declared property to ONE concrete schema the field derivation can
+ * read, resolving the four spellings real MCP servers emit:
+ *
+ *   - `{"$ref": "#/$defs/X", "title": …, "default": …}` — the referencing
+ *     node's OWN keywords are merged OVER the target, so a per-use title /
+ *     description / default is not lost (JSON Schema 2020-12 allows siblings).
+ *   - `{"allOf": [{"$ref": …}], "default": …}` — pydantic v1's wrapper.
+ *   - `{"type": ["string", "null"]}` — the type-as-array nullable spelling.
+ *   - `{"anyOf": [{"type": "string"}, {"type": "null"}]}` — what
+ *     FastMCP/pydantic v2 emit for `Optional[str]`, and by far the most common
+ *     shape in the wild. Left alone when the branches are a titled `const` set,
+ *     because that IS an enum picker rather than a nullable wrapper.
+ *
+ * `stack` carries the refs already being resolved on THIS path, so a
+ * self-referential or mutually recursive schema is cut rather than looped — the
+ * explicit-stack approach borrowed from `schema_inline`, not a blind depth
+ * counter. Returns null when nothing concrete can be reached, and the caller
+ * renders a JSON field.
  */
-function resolveSchema(
+function normalizeSchema(
   node: unknown,
   root: Record<string, unknown>,
   stack: string[] = [],
 ): FieldSchema | null {
   if (!isRecord(node)) return null
-  const ref = node['$ref']
+  let current: Record<string, unknown> = node
+
+  const ref = current['$ref']
   if (typeof ref === 'string') {
     if (stack.includes(ref) || stack.length >= SCHEMA_BUDGET.maxRefDepth) return null
-    const target = lookupRef(root, ref)
-    if (target == null) return null
-    return resolveSchema(target, root, [...stack, ref])
+    const target = normalizeSchema(lookupRef(root, ref), root, [...stack, ref])
+    if (!target) return null
+    const { $ref: _ref, ...siblings } = current
+    current = { ...(target as unknown as Record<string, unknown>), ...siblings }
   }
-  return node as FieldSchema
+
+  const allOf = current['allOf']
+  if (Array.isArray(allOf) && allOf.length > 0) {
+    let merged: Record<string, unknown> = {}
+    for (const branch of allOf) {
+      const resolved = normalizeSchema(branch, root, stack)
+      if (resolved) merged = { ...merged, ...(resolved as unknown as Record<string, unknown>) }
+    }
+    const { allOf: _all, ...siblings } = current
+    current = { ...merged, ...siblings }
+  }
+
+  const declaredType = current['type']
+  if (Array.isArray(declaredType)) {
+    const concrete = declaredType.filter(
+      (t): t is string => typeof t === 'string' && t !== 'null',
+    )
+    const { type: _t, ...rest } = current
+    current = concrete.length === 1 ? { ...rest, type: concrete[0] } : rest
+  }
+
+  for (const key of ['anyOf', 'oneOf'] as const) {
+    const branches = current[key]
+    if (!Array.isArray(branches) || branches.length === 0) continue
+    // A titled `const` set is a closed value set, not a nullable wrapper.
+    if (branches.every(b => isRecord(b) && 'const' in b)) continue
+    const concrete = branches.filter(b => !isNullBranch(b))
+    if (concrete.length !== 1) continue
+    const resolved = normalizeSchema(concrete[0], root, stack)
+    if (!resolved) continue
+    const siblings: Record<string, unknown> = { ...current }
+    delete siblings[key]
+    current = { ...(resolved as unknown as Record<string, unknown>), ...siblings }
+  }
+
+  // An array's `items` carries the multi-select choices, so it gets the same
+  // treatment (a `$ref`'d or `allOf`-wrapped enum still renders as a picker).
+  const items = current['items']
+  if (isRecord(items)) {
+    const resolvedItems = normalizeSchema(items, root, stack)
+    if (resolvedItems) current = { ...current, items: resolvedItems }
+  }
+
+  return current as FieldSchema
 }
 
 // ---------------------------------------------------------------------------
 // Field derivation
 // ---------------------------------------------------------------------------
 
-function choiceOptions(choices: TitledChoice[]): { value: string; label: string }[] {
-  return choices.map(c => ({ value: String(c.const), label: c.title ?? String(c.const) }))
+/** Stable control key for a declared enum value (strings map to themselves). */
+function optionKeyOf(raw: unknown): string {
+  if (typeof raw === 'string') return raw
+  try {
+    return JSON.stringify(raw) ?? String(raw)
+  } catch {
+    return String(raw)
+  }
 }
 
-function enumOptions(values: unknown[], names?: string[]): { value: string; label: string }[] {
-  return values.map((v, i) => ({ value: String(v), label: names?.[i] ?? String(v) }))
+function choiceOptions(choices: TitledChoice[]): ToolOption[] {
+  return choices.map(c => ({
+    value: optionKeyOf(c.const),
+    label: c.title ?? optionKeyOf(c.const),
+    raw: c.const,
+  }))
 }
 
-/** Longest single-line string before the field becomes a textarea. */
+function enumOptions(values: unknown[], names?: string[]): ToolOption[] {
+  return values.map((v, i) => ({
+    value: optionKeyOf(v),
+    label: names?.[i] ?? optionKeyOf(v),
+    raw: v,
+  }))
+}
+
+/** Longest declared string length before the field becomes a textarea. */
 const TEXTAREA_HINT_LENGTH = 120
 
 function fieldKind(field: FieldSchema): {
   kind: ToolFieldKind
-  options?: { value: string; label: string }[]
+  options?: ToolOption[]
 } {
   // Enumerations first — a closed value set is ALWAYS a picker, never typed.
   if (Array.isArray(field.enum) && field.enum.length > 0) {
@@ -180,9 +283,12 @@ function fieldKind(field: FieldSchema): {
     case 'number':
       return { kind: 'number' }
     case 'string': {
+      // Promote on the declared VALUE length only. Keying off the description
+      // made a 40-character `name` render as a 3-row Textarea purely because
+      // its prose was long — the description says nothing about the value.
       const long =
         (field.maxLength ?? 0) > TEXTAREA_HINT_LENGTH ||
-        (field.description?.length ?? 0) > 160
+        (field.minLength ?? 0) > TEXTAREA_HINT_LENGTH
       return { kind: long ? 'textarea' : 'text' }
     }
     case 'object':
@@ -202,16 +308,24 @@ function fieldKind(field: FieldSchema): {
  * wire type is `unknown` (`Tool.input_schema` is `serde_json::Value` on the
  * Rust side), so every narrowing here is defensive: a malformed schema must
  * degrade to the documented escape hatch, never throw.
+ *
+ * The ROOT is normalised too, so a schema that is itself a `$ref`/`allOf` into
+ * its own `$defs` (`{"$ref": "#/$defs/SearchArgs", "$defs": {…}}`) still yields
+ * generated fields instead of collapsing to hand-typed pairs.
  */
 export function describeToolSchema(inputSchema: unknown): ToolFormSpec | null {
   if (!isRecord(inputSchema)) return null
-  const props = inputSchema['properties']
+  const root = normalizeSchema(inputSchema, inputSchema) as unknown as
+    | Record<string, unknown>
+    | null
+  if (!root) return null
+  const props = root['properties']
   if (!isRecord(props)) return null
 
   const names = Object.keys(props)
   if (names.length === 0) return null
 
-  const requiredRaw = inputSchema['required']
+  const requiredRaw = root['required']
   const required = new Set(
     Array.isArray(requiredRaw) ? requiredRaw.filter((r): r is string => typeof r === 'string') : [],
   )
@@ -227,7 +341,7 @@ export function describeToolSchema(inputSchema: unknown): ToolFormSpec | null {
   const overflowNames = ordered.slice(SCHEMA_BUDGET.maxFields)
 
   const fields: ToolField[] = kept.map(name => {
-    const resolved = resolveSchema(props[name], inputSchema)
+    const resolved = normalizeSchema(props[name], inputSchema)
     // An unresolvable property still gets a field — as JSON — rather than
     // disappearing from the form.
     const schema: FieldSchema = resolved ?? {}
@@ -248,13 +362,57 @@ export function describeToolSchema(inputSchema: unknown): ToolFormSpec | null {
 }
 
 // ---------------------------------------------------------------------------
+// Option ↔ declared-value mapping
+// ---------------------------------------------------------------------------
+
+function matchOption(options: ToolOption[], value: unknown): ToolOption | undefined {
+  return (
+    options.find(o => o.raw === value) ??
+    options.find(o => optionKeyOf(o.raw) === optionKeyOf(value))
+  )
+}
+
+/**
+ * The control key for a stored value — `undefined` when nothing matches, so the
+ * picker shows its placeholder rather than a phantom selection.
+ *
+ * The lenient second pass (compare by option KEY) is deliberate: it re-selects a
+ * value that an earlier build stored stringified (`"2"` where `2` is declared),
+ * and the next commit writes the declared type back.
+ */
+export function optionKeyForValue(field: ToolField, value: unknown): string | undefined {
+  if (value === undefined || value === null || !field.options) return undefined
+  return matchOption(field.options, value)?.value
+}
+
+/** The DECLARED value behind a control key (the key itself when unmatched). */
+export function optionValueForKey(field: ToolField, key: string): unknown {
+  return field.options?.find(o => o.value === key)?.raw ?? key
+}
+
+/** Multi-select: stored values → control keys (unmatched entries are dropped). */
+export function optionKeysForValues(field: ToolField, value: unknown): string[] {
+  if (!Array.isArray(value) || !field.options) return []
+  const options = field.options
+  return value
+    .map(v => matchOption(options, v)?.value)
+    .filter((v): v is string => v !== undefined)
+}
+
+/** Multi-select: control keys → declared values. */
+export function optionValuesForKeys(field: ToolField, keys: string[]): unknown[] {
+  return keys.map(k => optionValueForKey(field, k))
+}
+
+// ---------------------------------------------------------------------------
 // Values
 // ---------------------------------------------------------------------------
 
 const TEMPLATE_RE = /\{\{[\s\S]*?\}\}/
+const WHOLE_TEMPLATE_RE = /^\s*\{\{[\s\S]*?\}\}\s*$/
 
 /**
- * True when a value carries a `{{ … }}` reference (INV-5). A typed control
+ * True when a value CARRIES a `{{ … }}` reference (INV-5). A typed control
  * cannot hold one — an `InputNumber` will not accept `{{ inputs.limit }}` — so
  * the form renders that ONE field as template text instead, reversibly.
  * Recognised on a value of ANY declared type, because an author may reference a
@@ -262,6 +420,25 @@ const TEMPLATE_RE = /\{\{[\s\S]*?\}\}/
  */
 export function isTemplateValue(value: unknown): boolean {
   return typeof value === 'string' && TEMPLATE_RE.test(value)
+}
+
+/**
+ * True when the value is NOTHING BUT one reference.
+ *
+ * This is the distinction the commit path needs, and it mirrors the backend's
+ * own rule exactly (`dispatch.rs::render_tool_arguments`: trimmed, starts `{{`,
+ * ends `}}`, exactly one `{{`). Only a whole-value reference resolves to a
+ * NATIVE JSON type at run time; a reference EMBEDDED in a larger string — or in
+ * a JSON object such as `{"userId": "{{ inputs.user }}"}` — is interpolated in
+ * place, and the backend recurses into objects, so that object must be stored as
+ * an object rather than smuggled through as a raw string.
+ */
+export function isWholeTemplateValue(value: unknown): boolean {
+  return (
+    typeof value === 'string' &&
+    WHOLE_TEMPLATE_RE.test(value) &&
+    (value.match(/\{\{/g)?.length ?? 0) === 1
+  )
 }
 
 /**
@@ -289,37 +466,32 @@ export function splitArguments(
 }
 
 /**
- * Coerce a raw editor string to the field's DECLARED type on commit.
+ * Coerce a TEXT-EDITED field's buffer to its declared type on commit.
  *
- * A template value is passed through untouched (INV-5) — it is resolved server
- * side at run time, and coercing it here would destroy it. Anything that cannot
- * be coerced is kept as the raw string rather than silently becoming `null`, so
- * the author sees what they typed and the backend reports the real problem.
+ * Scope note: only the `json` / `textarea` / plain-`text` kinds are edited as
+ * text. Every other kind (`integer`, `number`, `switch`, `select`,
+ * `multiselect`) is bound to a control that already emits its declared type, so
+ * an arm here for those kinds would be unreachable — and an unreachable arm is
+ * exactly what hid the enum-stringification defect behind a green unit test.
+ *
+ * A WHOLE-value reference is passed through untouched (INV-5): it resolves to a
+ * native JSON type server side, and parsing it here would destroy it. A
+ * reference merely CONTAINED in the text is not special-cased — the backend
+ * recurses into objects and interpolates nested strings, so
+ * `{"userId": "{{ inputs.user }}"}` must be stored as a real object. Anything
+ * that cannot be parsed is kept as the raw string rather than silently becoming
+ * `null`, so the author sees what they typed and the backend reports the real
+ * problem.
  */
 export function coerceToDeclared(raw: string, field: ToolField): unknown {
-  if (isTemplateValue(raw)) return raw
+  if (isWholeTemplateValue(raw)) return raw
   const trimmed = raw.trim()
   if (trimmed === '') return ''
-  switch (field.kind) {
-    case 'integer': {
-      const n = Number(trimmed)
-      return Number.isInteger(n) ? n : raw
-    }
-    case 'number': {
-      const n = Number(trimmed)
-      return Number.isFinite(n) ? n : raw
-    }
-    case 'switch':
-      return trimmed === 'true'
-    case 'json':
-    case 'multiselect':
-      try {
-        return JSON.parse(trimmed)
-      } catch {
-        return raw
-      }
-    default:
-      return raw
+  if (field.kind !== 'json') return raw
+  try {
+    return JSON.parse(trimmed)
+  } catch {
+    return raw
   }
 }
 

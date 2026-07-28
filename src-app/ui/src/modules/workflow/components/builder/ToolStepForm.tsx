@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Plus, Trash2 } from 'lucide-react'
+import { Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { Alert, Button, Combobox, Input } from '@ziee/kit'
 import { McpServer } from '@/modules/mcp/stores/mcpServer'
 import type { WorkflowBuilderStore } from '../../stores/WorkflowBuilder.store'
@@ -7,6 +7,8 @@ import {
   ToolCatalogStoreDef,
   entryForServerName,
   failureMessage,
+  failureTitle,
+  isRetryableFailure,
 } from '../../stores/ToolCatalog.store'
 import { type BuilderStep, configErrors } from './stepForms'
 import { LabeledControl } from './builderFields'
@@ -123,22 +125,28 @@ export function ToolStepForm({ store, step }: Props) {
 
   // A step stores the server NAME (`resolve_tool_server` resolves by name at run
   // time); the tools endpoint is keyed by id, so resolve name → id here.
+  // The candidate list is filtered to ENABLED servers, the same filter the
+  // sibling Server picker applies (`capabilities.tsx`) — otherwise a disabled
+  // server was blank in that picker but still resolved here, so the two controls
+  // disagreed about whether it existed.
   const { entry, serverId } = useMemo(
     () =>
       entryForServerName(
         step.server,
-        (servers ?? []).map(s => ({ id: s.id, name: s.name })),
+        (servers ?? []).filter(s => s.enabled).map(s => ({ id: s.id, name: s.name })),
         byServerId,
       ),
     [step.server, servers, byServerId],
   )
 
   useEffect(() => {
-    if (serverId && step.server) void catalog.load(serverId, step.server)
+    // `store` is the SCOPE: the tool list is cached for this editing session, so
+    // clicking between steps doesn't refetch (and re-handshake a stdio server).
+    if (serverId && step.server) void catalog.load(serverId, step.server, store)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serverId, step.server])
 
-  const toolOptions = useMemo(
+  const serverToolOptions = useMemo(
     () =>
       entry.tools.map(t => ({
         value: t.name,
@@ -154,12 +162,52 @@ export function ToolStepForm({ store, step }: Props) {
   )
 
   // A catalog we could not read at all ⇒ the documented hand-entry escape hatch.
-  // `no-server` is NOT a failure to report — it is the ordinary initial state.
+  // `no-server` is NOT a failure to report in the Alert — it is the ordinary
+  // initial state — but it still gets said, on the Tool field itself (below).
   const blockingFailure =
     entry.failure && entry.failure.kind !== 'no-server' ? entry.failure : null
-  const usePicker = !blockingFailure && !entry.loading && toolOptions.length > 0
+  const usePicker =
+    !blockingFailure && !entry.loading && serverToolOptions.length > 0
   // The generated form applies only when the chosen tool actually declared one.
   const useGenerated = !!spec
+
+  // A saved tool the server no longer offers would render as an EMPTY picker
+  // (the kit Combobox maps an unknown value to null), so a renamed upstream tool
+  // vanished from view while the definition still carried it — and the required
+  // check can't catch it, because the value is present. Keep it in the list, and
+  // say why it is there.
+  const storedTool = step.tool ?? ''
+  const storedToolMissing =
+    usePicker && !!storedTool && !entry.tools.some(t => t.name === storedTool)
+  // Memoized: the kit Combobox rebuilds its item index from `options` identity.
+  const toolOptions = useMemo(
+    () =>
+      storedToolMissing
+        ? [
+            {
+              value: storedTool,
+              label: `${storedTool} — not offered by this server any more`,
+            },
+            ...serverToolOptions,
+          ]
+        : serverToolOptions,
+    [storedToolMissing, storedTool, serverToolOptions],
+  )
+
+  const toolDescription = storedToolMissing
+    ? `"${storedTool}" is no longer in this server's tool list. Pick one of the tools it offers now, or choose a different server.`
+    : usePicker
+      ? 'Pick the tool this step should call.'
+      : entry.failure?.kind === 'no-server'
+        ? failureMessage(entry.failure)
+        : 'The exact name of the tool to call on that server.'
+
+  /** Forget this server's cached tools and ask again (a briefly-down server). */
+  const retryCatalog = () => {
+    if (!serverId || !step.server) return
+    catalog.invalidate(serverId, store)
+    void catalog.load(serverId, step.server, store)
+  }
 
   // ── Free key/value rows: the fallback editor, and the "Additional arguments"
   // section that keeps schema-undeclared keys alive (DEC-6). The round-trip
@@ -239,19 +287,30 @@ export function ToolStepForm({ store, step }: Props) {
       {blockingFailure && (
         <Alert
           data-testid="wf-builder-tool-catalog-error"
-          tone="warning"
-          title="Tool list unavailable"
+          // A server that answered and simply has no tools is not a warning.
+          tone={blockingFailure.kind === 'no-tools' ? 'info' : 'warning'}
+          title={failureTitle(blockingFailure)}
           description={failureMessage(blockingFailure)}
-        />
+        >
+          {serverId && isRetryableFailure(blockingFailure) && (
+            <div className="mt-2">
+              <Button
+                type="button"
+                variant="outline"
+                icon={<RefreshCw />}
+                data-testid="wf-builder-tool-catalog-retry"
+                onClick={retryCatalog}
+              >
+                Try again
+              </Button>
+            </div>
+          )}
+        </Alert>
       )}
 
       <LabeledControl
         label="Tool"
-        description={
-          usePicker
-            ? 'Pick the tool this step should call.'
-            : 'The exact name of the tool to call on that server.'
-        }
+        description={toolDescription}
         required
         error={errors.tool}
       >
@@ -261,7 +320,14 @@ export function ToolStepForm({ store, step }: Props) {
             aria-label="Tool"
             options={toolOptions}
             value={step.tool ?? ''}
-            onChange={v => patch({ tool: v, arguments: {} })}
+            // Base UI fires `onChange` on EVERY item press, including a re-select
+            // of the row that is already highlighted. Without this guard, opening
+            // the picker to re-read a description and clicking the selected row
+            // wiped every argument the author had filled in.
+            onChange={v => {
+              if (v === (step.tool ?? '')) return
+              patch({ tool: v, arguments: {} })
+            }}
             loading={entry.loading}
             placeholder="Search this server's tools…"
             emptyText="No tool matches"
@@ -294,7 +360,12 @@ export function ToolStepForm({ store, step }: Props) {
         description={
           useGenerated
             ? 'Extra values this tool did not declare. Usually empty.'
-            : 'Key/value pairs passed to the tool. A value may reference an input or prior step, e.g. {{ inputs.query }}.'
+            : selectedTool
+              ? // §2.5 — the tool WAS found, it just publishes no input schema.
+                // Falling back to key/value rows with the generic blurb left the
+                // author guessing why no typed fields appeared.
+                `"${selectedTool.name}" doesn't publish a list of the arguments it accepts, so enter them as key/value pairs. A value may reference an input or prior step, e.g. {{ inputs.query }}.`
+              : 'Key/value pairs passed to the tool. A value may reference an input or prior step, e.g. {{ inputs.query }}.'
         }
       >
         <div className="flex flex-col gap-2">

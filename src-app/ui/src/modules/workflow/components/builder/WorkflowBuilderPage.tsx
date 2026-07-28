@@ -13,6 +13,7 @@ import { StepConfigPanel } from './StepConfigPanel'
 import { WorkflowInputsEditor } from './WorkflowInputsEditor'
 import { BuilderValidationPanel } from './BuilderValidationPanel'
 import { LabeledControl } from './builderFields'
+import { humaniseInstallError } from './validationCopy'
 import { Workflow } from '@/modules/workflow/stores/workflow'
 
 const WORKFLOWS_PATH = '/settings/workflows'
@@ -80,7 +81,17 @@ export function WorkflowBuilderPage() {
         navigate(`${WORKFLOWS_PATH}/${workflow.id}/edit`, { replace: true })
       }
     } catch (e) {
-      message.error(e instanceof Error ? e.message : 'Failed to save workflow')
+      // INV-1 also holds HERE. Save runs the backend's `validate_for_install`,
+      // which collapses the first blocking finding into the wire string
+      // `[semantic/CODE] step_id: message` — reachable whenever the panel's
+      // validation is absent or stale. `humaniseInstallError` rewrites it into
+      // the SAME author-facing sentence the panel shows (naming the step), and
+      // falls back to the raw text only for a save error that never went
+      // through the validator.
+      const raw = e instanceof Error ? e.message.trim() : ''
+      message.error(
+        raw ? humaniseInstallError(raw, def.steps) : 'Failed to save workflow',
+      )
     }
   }
 

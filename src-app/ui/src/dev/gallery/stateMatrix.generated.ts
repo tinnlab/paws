@@ -4,7 +4,7 @@
 // renders + overlay triggers + panel/slot registrations) that the reconciliation
 // gate (scripts/reconcile-state-matrix.mjs) checks the gallery entries against.
 //
-// 339 surfaces carry renderable-state signals; 2077 signals total.
+// 339 surfaces carry renderable-state signals; 2084 signals total.
 
 /** A signal is one mechanically-detected render fork (a state the surface can be in). */
 export interface StateSignal {
@@ -4041,13 +4041,14 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/workflow/components/builder/BuilderValidationPanel",
     requiredStates: ["empty"],
     signals: [
-      { kind: "branch", condition: "!finding.stepId", line: 46 },
-      { kind: "branch", condition: "validating", line: 90 },
-      { kind: "branch", condition: "!validation && !validating", line: 93 },
-      { kind: "empty", condition: "validation && errors.length === 0", line: 99 },
-      { kind: "branch", condition: "errors.length > 0", line: 106 },
-      { kind: "branch", condition: "warnings.length > 0", line: 114 },
-      { kind: "branch", condition: "cost", line: 122 },
+      { kind: "branch", condition: "!finding.stepId", line: 52 },
+      { kind: "branch", condition: "validating", line: 112 },
+      { kind: "branch", condition: "errorText", line: 115 },
+      { kind: "branch", condition: "!validation && !validating && !errorText", line: 128 },
+      { kind: "empty", condition: "validation && errors.length === 0 && !errorText", line: 137 },
+      { kind: "branch", condition: "errors.length > 0", line: 144 },
+      { kind: "branch", condition: "warnings.length > 0", line: 152 },
+      { kind: "branch", condition: "cost", line: 160 },
     ],
   },
   "modules/workflow/components/builder/RefInsertMenu": {
@@ -4079,34 +4080,40 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/workflow/components/builder/ToolArgumentsForm",
     requiredStates: [],
     signals: [
-      { kind: "branch", condition: "templated", line: 83 },
-      { kind: "branch", condition: "templated", line: 111 },
-      { kind: "branch", condition: "templated", line: 203 },
-      { kind: "branch", condition: "spec.overflowNames.length > 0", line: 247 },
+      { kind: "branch", condition: "templated", line: 138 },
+      { kind: "branch", condition: "canHoldTemplate", line: 162 },
+      { kind: "branch", condition: "templated", line: 188 },
+      { kind: "branch", condition: "v === undefined", line: 221 },
+      { kind: "branch", condition: "!pendingNumberClear.current", line: 229 },
+      { kind: "branch", condition: "templated", line: 307 },
+      { kind: "branch", condition: "spec.overflowNames.length > 0", line: 351 },
     ],
   },
   "modules/workflow/components/builder/ToolStepForm": {
     surface: "modules/workflow/components/builder/ToolStepForm",
     requiredStates: ["empty"],
     signals: [
-      { kind: "branch", condition: "blockingFailure", line: 239 },
-      { kind: "branch", condition: "usePicker", line: 258 },
-      { kind: "branch", condition: "useGenerated && spec", line: 282 },
-      { kind: "empty", condition: "rows.length === 0", line: 301 },
+      { kind: "branch", condition: "!serverId || !step.server", line: 207 },
+      { kind: "branch", condition: "blockingFailure", line: 287 },
+      { kind: "branch", condition: "serverId && isRetryableFailure(blockingFailure)", line: 295 },
+      { kind: "branch", condition: "usePicker", line: 317 },
+      { kind: "branch", condition: "v === (step.tool ?? '')", line: 328 },
+      { kind: "branch", condition: "useGenerated && spec", line: 348 },
+      { kind: "empty", condition: "rows.length === 0", line: 372 },
     ],
   },
   "modules/workflow/components/builder/WorkflowBuilderPage": {
     surface: "modules/workflow/components/builder/WorkflowBuilderPage",
     requiredStates: ["delayed","error"],
     signals: [
-      { kind: "branch", condition: "!canAccess", line: 42 },
-      { kind: "branch", condition: "!canAccess", line: 90 },
-      { kind: "branch", condition: "deletedExternally", line: 108 },
-      { kind: "error", condition: "loadError", line: 117 },
-      { kind: "loading", condition: "loading", line: 125 },
-      { kind: "branch", condition: "isEdit", line: 143 },
-      { kind: "branch", condition: "existingName", line: 144 },
-      { kind: "branch", condition: "dirty", line: 162 },
+      { kind: "branch", condition: "!canAccess", line: 43 },
+      { kind: "branch", condition: "!canAccess", line: 101 },
+      { kind: "branch", condition: "deletedExternally", line: 119 },
+      { kind: "error", condition: "loadError", line: 128 },
+      { kind: "loading", condition: "loading", line: 136 },
+      { kind: "branch", condition: "isEdit", line: 154 },
+      { kind: "branch", condition: "existingName", line: 155 },
+      { kind: "branch", condition: "dirty", line: 173 },
     ],
   },
   "modules/workflow/components/builder/WorkflowInputsEditor": {

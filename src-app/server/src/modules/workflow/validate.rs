@@ -352,7 +352,17 @@ fn default_expose_mode() -> ExposeMode {
 /// listed code with no human copy in the UI fails. That is what makes "no raw
 /// schema language ever reaches the author" a checked property rather than a
 /// one-off fix.
-pub const VALIDATION_CODES: &[&str] = &[
+///
+/// **`#[cfg(test)]` on purpose.** Nothing in production reads this list — the
+/// guard derives the emitted set from the source itself, so a `pub` const here
+/// would be public API with no caller (CODING_GUIDELINES §15) whose `pub` also
+/// suppresses the `dead_code` lint. It stays as a hand-curated test fixture
+/// because it is the guard's CANARY: the bidirectional `stale` assertion means
+/// any future regression that makes the source scanner see FEWER emit sites
+/// (a new file it forgets, a call shape it mis-lexes) fails loudly instead of
+/// making the humanisation half vacuously pass.
+#[cfg(test)]
+const VALIDATION_CODES: &[&str] = &[
     // validate.rs — whole-workflow shape
     "WORKFLOW_NO_STEPS",
     "WORKFLOW_TOO_MANY_STEPS",
@@ -1909,84 +1919,649 @@ steps:
 #[cfg(test)]
 mod humanisation_contract {
     use super::VALIDATION_CODES;
-    use std::collections::HashSet;
+    use std::collections::BTreeSet;
+    use std::path::{Path, PathBuf};
 
-    /// `validate.rs`'s own source, read back so the test sees every emit site
-    /// (including ones added after this test was written).
-    const VALIDATE_SRC: &str = include_str!("validate.rs");
-    const REF_CHECK_SRC: &str = include_str!("ref_check.rs");
-    /// The builder's author-facing copy map. Path is relative to the SERVER
-    /// crate root (`src-app/server`), so it resolves to `src-app/ui/...`.
-    const UI_COPY_SRC: &str = include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../ui/src/modules/workflow/components/builder/validationCopy.ts"
-    ));
+    /// The layers a finding may carry (`ValidationError::layer`). An emit site
+    /// using anything else FAILS the guard rather than being skipped: a silent
+    /// skip is exactly how a new layer's codes would escape BOTH halves of the
+    /// contract (registry + human copy) and reach the author as raw wire text.
+    const KNOWN_LAYERS: &[&str] = &["schema", "semantic", "security"];
 
-    /// Every code literal passed as the 2nd argument of
-    /// `ValidationError::{err,at,warn}("<layer>", "<CODE>", …)` in `src`.
-    fn emitted_codes(src: &str) -> HashSet<String> {
-        let mut out = HashSet::new();
-        for (idx, _) in src.match_indices("ValidationError::") {
-            let rest = &src[idx..];
-            // The call is `::err(` / `::at(` / `::warn(` — take the text up to a
-            // generous bound so a multi-line call still yields its first two
-            // string literals.
-            let window = &rest[..rest.len().min(400)];
-            let Some(open) = window.find('(') else { continue };
-            let mut literals = Vec::new();
-            let mut chars = window[open..].char_indices().peekable();
-            let mut in_str = false;
-            let mut cur = String::new();
-            while let Some((_, c)) = chars.next() {
-                match (in_str, c) {
-                    (false, '"') => {
-                        in_str = true;
-                        cur.clear();
-                    }
-                    (true, '"') => {
-                        in_str = false;
-                        literals.push(std::mem::take(&mut cur));
-                        if literals.len() == 2 {
-                            break;
-                        }
-                    }
-                    (true, '\\') => {
-                        // Skip the escaped char so `\"` doesn't close the literal.
-                        let _ = chars.next();
-                    }
-                    (true, _) => cur.push(c),
-                    (false, _) => {}
-                }
-            }
-            // literals[0] is the layer ("schema"/"semantic"/"security"),
-            // literals[1] is the code. A helper signature that doesn't match
-            // that shape contributes nothing rather than a false positive.
-            if literals.len() == 2
-                && matches!(literals[0].as_str(), "schema" | "semantic" | "security")
-                && literals[1].chars().all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
-                && !literals[1].is_empty()
-            {
-                out.insert(literals[1].clone());
+    fn manifest_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    }
+
+    /// The builder's author-facing copy map. Read at RUNTIME (not `include_str!`)
+    /// so it can never be a stale compiled-in snapshot.
+    fn ui_copy_path() -> PathBuf {
+        manifest_dir().join("../ui/src/modules/workflow/components/builder/validationCopy.ts")
+    }
+
+    /// Every Rust source that could construct a `ValidationError`.
+    ///
+    /// The whole SERVER crate is scanned, not a hand-listed pair of files:
+    /// `ValidationError::{err,at,warn}` are `pub(crate)` and the struct's fields
+    /// are `pub`, so any module — present or future — can emit a finding, and a
+    /// hardcoded file list would leave it invisible to both halves of the guard.
+    /// The desktop crate is included when present for the same reason (it
+    /// depends on `ziee`, and the struct's `pub` fields make a struct literal
+    /// possible there too).
+    fn scan_roots() -> Vec<PathBuf> {
+        let mut roots = vec![manifest_dir().join("src")];
+        let desktop = manifest_dir().join("../desktop/tauri/src");
+        if desktop.is_dir() {
+            roots.push(desktop);
+        }
+        roots
+    }
+
+    fn collect_rust_sources(dir: &Path, out: &mut Vec<PathBuf>) {
+        let entries = std::fs::read_dir(dir)
+            .unwrap_or_else(|e| panic!("cannot read source dir {}: {e}", dir.display()));
+        for entry in entries {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                collect_rust_sources(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
             }
         }
-        out
     }
+
+    // ── a Rust-source scanner that understands comments, strings and tests ──
+
+    /// A `ValidationError::{err,at,warn}("<layer>", "<CODE>", …)` call found in
+    /// REAL code — not in a comment, not inside a string literal, and not inside
+    /// a `#[cfg(test)]` item (a test fixture must not inject a phantom code).
+    struct Scan {
+        codes: BTreeSet<String>,
+        /// Constructions the guard could not read a `(layer, code)` pair out of.
+        /// Each is a hole in the contract, so they FAIL the test loudly instead
+        /// of being dropped.
+        problems: Vec<String>,
+    }
+
+    fn is_ident_char(c: char) -> bool {
+        c.is_alphanumeric() || c == '_'
+    }
+
+    fn is_screaming_snake(s: &str) -> bool {
+        !s.is_empty()
+            && s.chars()
+                .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
+    }
+
+    fn starts_with(ch: &[char], i: usize, pat: &str) -> bool {
+        pat.chars().enumerate().all(|(k, p)| ch.get(i + k) == Some(&p))
+    }
+
+    fn read_ident(ch: &[char], i: &mut usize) -> String {
+        let start = *i;
+        while ch.get(*i).is_some_and(|c| is_ident_char(*c)) {
+            *i += 1;
+        }
+        ch[start..*i].iter().collect()
+    }
+
+    /// Whitespace + `//` line comments + nesting `/* */` block comments.
+    fn skip_trivia(ch: &[char], i: &mut usize, line: &mut usize) {
+        loop {
+            match ch.get(*i) {
+                Some('\n') => {
+                    *line += 1;
+                    *i += 1;
+                }
+                Some(c) if c.is_whitespace() => *i += 1,
+                Some('/') if ch.get(*i + 1) == Some(&'/') => {
+                    while ch.get(*i).is_some_and(|c| *c != '\n') {
+                        *i += 1;
+                    }
+                }
+                Some('/') if ch.get(*i + 1) == Some(&'*') => skip_block_comment(ch, i, line),
+                _ => return,
+            }
+        }
+    }
+
+    fn skip_block_comment(ch: &[char], i: &mut usize, line: &mut usize) {
+        let mut nest = 0usize;
+        while *i < ch.len() {
+            if starts_with(ch, *i, "/*") {
+                nest += 1;
+                *i += 2;
+            } else if starts_with(ch, *i, "*/") {
+                nest -= 1;
+                *i += 2;
+                if nest == 0 {
+                    return;
+                }
+            } else {
+                if ch[*i] == '\n' {
+                    *line += 1;
+                }
+                *i += 1;
+            }
+        }
+    }
+
+    /// `"…"` with `\` escapes. Returns the content; `None` if `*i` is not on a
+    /// `"` (a non-literal argument — the caller turns that into a problem).
+    fn read_string_literal(ch: &[char], i: &mut usize, line: &mut usize) -> Option<String> {
+        if ch.get(*i) != Some(&'"') {
+            return None;
+        }
+        *i += 1;
+        let mut out = String::new();
+        while let Some(&c) = ch.get(*i) {
+            match c {
+                '\\' => {
+                    if let Some(&e) = ch.get(*i + 1) {
+                        if e == '\n' {
+                            *line += 1;
+                        }
+                        out.push(e);
+                    }
+                    *i += 2;
+                }
+                '"' => {
+                    *i += 1;
+                    return Some(out);
+                }
+                '\n' => {
+                    *line += 1;
+                    out.push(c);
+                    *i += 1;
+                }
+                _ => {
+                    out.push(c);
+                    *i += 1;
+                }
+            }
+        }
+        None
+    }
+
+    /// `r"…"` / `r#"…"#` / `br"…"`: returns the number of chars to the opening
+    /// quote plus the hash count, or `None` when this is an ordinary identifier.
+    fn raw_string_prefix(ch: &[char], i: usize) -> Option<(usize, usize)> {
+        let mut j = i;
+        if ch.get(j) == Some(&'b') {
+            j += 1;
+        }
+        if ch.get(j) != Some(&'r') {
+            return None;
+        }
+        j += 1;
+        let mut hashes = 0usize;
+        while ch.get(j) == Some(&'#') {
+            hashes += 1;
+            j += 1;
+        }
+        if ch.get(j) != Some(&'"') {
+            return None;
+        }
+        Some((j + 1 - i, hashes))
+    }
+
+    fn skip_raw_string(ch: &[char], i: &mut usize, line: &mut usize, offset: usize, hashes: usize) {
+        *i += offset;
+        while *i < ch.len() {
+            if ch[*i] == '"' && (1..=hashes).all(|k| ch.get(*i + k) == Some(&'#')) {
+                *i += 1 + hashes;
+                return;
+            }
+            if ch[*i] == '\n' {
+                *line += 1;
+            }
+            *i += 1;
+        }
+    }
+
+    /// Distinguish a char literal (`'x'`, `'\n'`, `'\u{1f600}'`) from a lifetime
+    /// (`'a`). Advances past a char literal; leaves a lifetime to the ident path.
+    fn skip_char_literal_or_lifetime(ch: &[char], i: &mut usize) {
+        if ch.get(*i + 1) == Some(&'\\') {
+            *i += 2;
+            while ch.get(*i).is_some_and(|c| *c != '\'') {
+                *i += 1;
+            }
+            *i += 1;
+        } else if ch.get(*i + 2) == Some(&'\'') {
+            *i += 3;
+        } else {
+            *i += 1; // a lifetime
+        }
+    }
+
+    /// Scan one Rust source for `ValidationError` constructions.
+    fn scan_rust_source(file: &str, src: &str, scan: &mut Scan) {
+        let ch: Vec<char> = src.chars().collect();
+        let mut i = 0usize;
+        let mut line = 1usize;
+        let mut depth: i32 = 0;
+        // `Some(d)` while inside a `#[cfg(test)]` item body opened at depth `d`.
+        let mut test_body_from: Option<i32> = None;
+        let mut pending_cfg_test = false;
+        let mut prev_word = String::new();
+
+        while i < ch.len() {
+            let c = ch[i];
+
+            if c == '\n' {
+                line += 1;
+                i += 1;
+                continue;
+            }
+            if c.is_whitespace() {
+                i += 1;
+                continue;
+            }
+            if c == '/' && (ch.get(i + 1) == Some(&'/') || ch.get(i + 1) == Some(&'*')) {
+                skip_trivia(&ch, &mut i, &mut line);
+                continue;
+            }
+            if let Some((offset, hashes)) = raw_string_prefix(&ch, i) {
+                skip_raw_string(&ch, &mut i, &mut line, offset, hashes);
+                prev_word.clear();
+                continue;
+            }
+            if c == '"' {
+                let mut sink_line = line;
+                let _ = read_string_literal(&ch, &mut i, &mut sink_line);
+                line = sink_line;
+                prev_word.clear();
+                continue;
+            }
+            if c == '\'' {
+                skip_char_literal_or_lifetime(&ch, &mut i);
+                continue;
+            }
+            if c == '#' && starts_with(&ch, i, "#[cfg(test)]") {
+                pending_cfg_test = true;
+                i += "#[cfg(test)]".chars().count();
+                continue;
+            }
+            if c == '{' {
+                if pending_cfg_test && test_body_from.is_none() {
+                    test_body_from = Some(depth);
+                }
+                pending_cfg_test = false;
+                depth += 1;
+                i += 1;
+                continue;
+            }
+            if c == '}' {
+                depth -= 1;
+                if test_body_from == Some(depth) {
+                    test_body_from = None;
+                }
+                i += 1;
+                continue;
+            }
+            if c == ';' {
+                // A `#[cfg(test)] use …;` has no body to skip.
+                pending_cfg_test = false;
+                i += 1;
+                continue;
+            }
+            if c == '-' && ch.get(i + 1) == Some(&'>') {
+                // Return-type position: `fn f() -> ValidationError {` is a
+                // signature, not a struct literal.
+                prev_word = "->".to_string();
+                i += 2;
+                continue;
+            }
+            if is_ident_char(c) && !c.is_ascii_digit() {
+                let word = read_ident(&ch, &mut i);
+                if word == "ValidationError" && test_body_from.is_none() {
+                    scan_validation_error_use(
+                        &ch, &mut i, &mut line, file, &prev_word, scan,
+                    );
+                }
+                prev_word = word;
+                continue;
+            }
+            i += 1;
+        }
+    }
+
+    /// Called with `*i` just past a `ValidationError` identifier in real code.
+    fn scan_validation_error_use(
+        ch: &[char],
+        i: &mut usize,
+        line: &mut usize,
+        file: &str,
+        prev_word: &str,
+        scan: &mut Scan,
+    ) {
+        let mut j = *i;
+        let mut jline = *line;
+        skip_trivia(ch, &mut j, &mut jline);
+
+        // `ValidationError { … }` — a struct literal. The guard cannot read a
+        // code out of it, so it must never be how a finding is built.
+        if ch.get(j) == Some(&'{') {
+            if !matches!(
+                prev_word,
+                "struct" | "impl" | "enum" | "union" | "trait" | "for" | "->"
+            ) {
+                scan.problems.push(format!(
+                    "{file}:{line}: `ValidationError {{ … }}` is built as a struct literal — \
+                     the drift guard cannot read its `code`. Construct findings through \
+                     `ValidationError::{{err,at,warn}}(\"<layer>\", \"<CODE>\", …)`."
+                ));
+            }
+            return; // leave the brace to the caller's depth accounting
+        }
+
+        if !(ch.get(j) == Some(&':') && ch.get(j + 1) == Some(&':')) {
+            return; // a type mention (`Vec<ValidationError>`, a return type, …)
+        }
+        j += 2;
+        skip_trivia(ch, &mut j, &mut jline);
+        let ctor = read_ident(ch, &mut j);
+        if !matches!(ctor.as_str(), "err" | "at" | "warn") {
+            scan.problems.push(format!(
+                "{file}:{line}: `ValidationError::{ctor}` is not one of the \
+                 `err`/`at`/`warn` constructors the drift guard can read a code out of. \
+                 Either build the finding through one of those, or teach \
+                 `scan_validation_error_use` about the new constructor."
+            ));
+            *i = j;
+            *line = jline;
+            return;
+        }
+        skip_trivia(ch, &mut j, &mut jline);
+        if ch.get(j) != Some(&'(') {
+            scan.problems.push(format!(
+                "{file}:{line}: `ValidationError::{ctor}` is not followed by a call — \
+                 the drift guard cannot read its layer/code."
+            ));
+            *i = j;
+            *line = jline;
+            return;
+        }
+        j += 1;
+
+        // Argument 0 = layer, argument 1 = code. BOTH must be plain string
+        // literals; anything else (a variable, a `const`, a `format!`) is a
+        // finding the guard cannot verify, and is reported rather than skipped.
+        skip_trivia(ch, &mut j, &mut jline);
+        let Some(layer) = read_string_literal(ch, &mut j, &mut jline) else {
+            scan.problems.push(format!(
+                "{file}:{line}: the 1st argument of `ValidationError::{ctor}` is not a \
+                 string literal, so the drift guard cannot tell which layer/code it emits."
+            ));
+            *i = j;
+            *line = jline;
+            return;
+        };
+        skip_trivia(ch, &mut j, &mut jline);
+        if ch.get(j) != Some(&',') {
+            scan.problems.push(format!(
+                "{file}:{line}: `ValidationError::{ctor}(\"{layer}\" …)` has an \
+                 unexpected argument shape — the drift guard cannot read its code."
+            ));
+            *i = j;
+            *line = jline;
+            return;
+        }
+        j += 1;
+        skip_trivia(ch, &mut j, &mut jline);
+        let Some(code) = read_string_literal(ch, &mut j, &mut jline) else {
+            scan.problems.push(format!(
+                "{file}:{line}: the 2nd argument of `ValidationError::{ctor}` is not a \
+                 string literal, so the drift guard cannot register/humanise its code."
+            ));
+            *i = j;
+            *line = jline;
+            return;
+        };
+
+        *i = j;
+        *line = jline;
+
+        if !KNOWN_LAYERS.contains(&layer.as_str()) {
+            scan.problems.push(format!(
+                "{file}:{line}: `ValidationError::{ctor}` emits code '{code}' on the \
+                 UNKNOWN layer '{layer}'. Add the layer to `KNOWN_LAYERS` (and to \
+                 `ValidationError::layer`'s doc) — until then the guard refuses to \
+                 vouch for the codes it emits."
+            ));
+            return;
+        }
+        if !is_screaming_snake(&code) {
+            scan.problems.push(format!(
+                "{file}:{line}: `ValidationError::{ctor}` emits '{code}', which is not a \
+                 SCREAMING_SNAKE code — the builder keys its author-facing copy off the \
+                 code, so it must be a stable identifier."
+            ));
+            return;
+        }
+        scan.codes.insert(code);
+    }
+
+    /// Every code emitted anywhere in the scanned crates, plus every emit site
+    /// the scanner could not verify.
+    fn scan_emitted_codes() -> Scan {
+        let mut files = Vec::new();
+        for root in scan_roots() {
+            assert!(
+                root.is_dir(),
+                "scan root {} does not exist — the drift guard would silently stop \
+                 seeing that crate's emit sites",
+                root.display()
+            );
+            collect_rust_sources(&root, &mut files);
+        }
+        assert!(
+            !files.is_empty(),
+            "the drift guard found no Rust sources to scan — its roots have drifted"
+        );
+
+        let mut scan = Scan {
+            codes: BTreeSet::new(),
+            problems: Vec::new(),
+        };
+        let manifest = manifest_dir();
+        for path in files {
+            let src = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+            // Cheap pre-filter; the lexer below is the authority.
+            if !src.contains("ValidationError") {
+                continue;
+            }
+            let label = path
+                .strip_prefix(&manifest)
+                .unwrap_or(path.as_path())
+                .display()
+                .to_string();
+            scan_rust_source(&label, &src, &mut scan);
+        }
+        scan
+    }
+
+    // ── the builder's copy map ─────────────────────────────────────────────
+
+    /// A `'…'` / `"…"` / `` `…` `` literal, skipping `${…}` interpolations.
+    fn read_ts_string(ch: &[char], i: &mut usize) -> Option<String> {
+        let quote = *ch.get(*i)?;
+        *i += 1;
+        let mut out = String::new();
+        while let Some(&c) = ch.get(*i) {
+            if c == '\\' {
+                if let Some(&e) = ch.get(*i + 1) {
+                    out.push(e);
+                }
+                *i += 2;
+                continue;
+            }
+            if c == quote {
+                *i += 1;
+                return Some(out);
+            }
+            if quote == '`' && c == '$' && ch.get(*i + 1) == Some(&'{') {
+                *i += 2;
+                let mut d = 1usize;
+                while let Some(&k) = ch.get(*i) {
+                    match k {
+                        '{' => {
+                            d += 1;
+                            *i += 1;
+                        }
+                        '}' => {
+                            d -= 1;
+                            *i += 1;
+                            if d == 0 {
+                                break;
+                            }
+                        }
+                        '"' | '\'' | '`' => {
+                            read_ts_string(ch, i)?;
+                        }
+                        _ => *i += 1,
+                    }
+                }
+                continue;
+            }
+            out.push(c);
+            *i += 1;
+        }
+        None
+    }
+
+    fn skip_ts_trivia(ch: &[char], i: &mut usize) {
+        loop {
+            match ch.get(*i) {
+                Some(c) if c.is_whitespace() => *i += 1,
+                Some('/') if ch.get(*i + 1) == Some(&'/') => {
+                    while ch.get(*i).is_some_and(|c| *c != '\n') {
+                        *i += 1;
+                    }
+                }
+                Some('/') if ch.get(*i + 1) == Some(&'*') => {
+                    *i += 2;
+                    while *i < ch.len() && !starts_with(ch, *i, "*/") {
+                        *i += 1;
+                    }
+                    *i += 2;
+                }
+                _ => return,
+            }
+        }
+    }
+
+    fn find_chars(ch: &[char], pat: &str, from: usize) -> Option<usize> {
+        (from..ch.len()).find(|&k| starts_with(ch, k, pat))
+    }
+
+    /// The KEYS of the builder's `HUMAN_COPY` map — i.e. the codes
+    /// `humaniseFinding` can actually restate.
+    ///
+    /// This is deliberately a KEY parse, not a substring search over the file:
+    /// `humaniseFinding` does `HUMAN_COPY[finding.code]` and falls back to the
+    /// raw wire message when the lookup misses, so a code mentioned only in a
+    /// comment (or in an unrelated array) must NOT satisfy the guard. Parsed
+    /// against the map's STRUCTURE so reformatting/reordering the file is free.
+    fn human_copy_keys(src: &str) -> Result<BTreeSet<String>, String> {
+        let ch: Vec<char> = src.chars().collect();
+        let decl = find_chars(&ch, "const HUMAN_COPY", 0).ok_or_else(|| {
+            "no `const HUMAN_COPY` declaration in validationCopy.ts — the drift guard \
+             reads that map's KEYS to know which codes the builder can restate"
+                .to_string()
+        })?;
+        let mut i = decl + "const HUMAN_COPY".chars().count();
+        while ch.get(i).is_some_and(|c| *c != '=') {
+            i += 1;
+        }
+        if ch.get(i).is_none() {
+            return Err("`const HUMAN_COPY` has no initializer".to_string());
+        }
+        i += 1;
+        skip_ts_trivia(&ch, &mut i);
+        if ch.get(i) != Some(&'{') {
+            return Err("`const HUMAN_COPY` is not initialized with an object literal — \
+                        the drift guard cannot enumerate its keys"
+                .to_string());
+        }
+        i += 1;
+
+        let mut keys = BTreeSet::new();
+        let mut depth = 0usize;
+        let mut expect_key = true;
+        loop {
+            skip_ts_trivia(&ch, &mut i);
+            let Some(&c) = ch.get(i) else {
+                return Err("unterminated `HUMAN_COPY` object literal".to_string());
+            };
+            if depth == 0 && c == '}' {
+                break;
+            }
+            if expect_key && depth == 0 {
+                let key = if c == '"' || c == '\'' || c == '`' {
+                    read_ts_string(&ch, &mut i)
+                        .ok_or_else(|| "unterminated key string in `HUMAN_COPY`".to_string())?
+                } else if is_ident_char(c) && !c.is_ascii_digit() {
+                    read_ident(&ch, &mut i)
+                } else {
+                    return Err(format!(
+                        "`HUMAN_COPY` entry starting with `{c}` is neither a quoted nor a \
+                         plain identifier key. A spread (`...OTHER`) or a computed key would \
+                         hide codes from this guard — keep the keys literal."
+                    ));
+                };
+                skip_ts_trivia(&ch, &mut i);
+                if ch.get(i) != Some(&':') {
+                    return Err(format!("`HUMAN_COPY` key '{key}' is not followed by ':'"));
+                }
+                i += 1;
+                keys.insert(key);
+                expect_key = false;
+                continue;
+            }
+            match c {
+                '{' | '(' | '[' => {
+                    depth += 1;
+                    i += 1;
+                }
+                '}' | ')' | ']' => {
+                    if depth == 0 {
+                        return Err(format!(
+                            "unbalanced `{c}` while parsing `HUMAN_COPY` values"
+                        ));
+                    }
+                    depth -= 1;
+                    i += 1;
+                }
+                ',' if depth == 0 => {
+                    expect_key = true;
+                    i += 1;
+                }
+                '"' | '\'' | '`' => {
+                    read_ts_string(&ch, &mut i)
+                        .ok_or_else(|| "unterminated string in `HUMAN_COPY`".to_string())?;
+                }
+                _ => i += 1,
+            }
+        }
+        Ok(keys)
+    }
+
+    // ── the two tests ──────────────────────────────────────────────────────
 
     /// TEST-15 — the registry itself is well-formed, so the set comparisons
     /// below actually mean something.
     #[test]
     fn validation_codes_registry_is_well_formed() {
-        let mut seen = HashSet::new();
+        let mut seen = BTreeSet::new();
         for code in VALIDATION_CODES {
             assert!(
                 seen.insert(*code),
                 "VALIDATION_CODES lists '{code}' twice — remove the duplicate"
             );
             assert!(
-                !code.is_empty()
-                    && code
-                        .chars()
-                        .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit()),
+                is_screaming_snake(code),
                 "VALIDATION_CODES entry '{code}' is not SCREAMING_SNAKE"
             );
         }
@@ -1994,20 +2569,32 @@ mod humanisation_contract {
 
     /// TEST-1 (acceptance, INV-1) — no raw schema language can reach the author.
     ///
-    /// Two directions, both required:
-    ///   1. every code the validator can EMIT is in `VALIDATION_CODES`;
-    ///   2. every registered code has AUTHOR-FACING copy in the builder's
-    ///      `validationCopy.ts`.
+    /// Three directions, all required:
+    ///
+    /// 1. every emit site is one the scanner can READ (no unverifiable
+    ///    construction, no unknown layer, no non-literal code);
+    /// 2. the emitted set and `VALIDATION_CODES` are the same set;
+    /// 3. every registered code is a KEY of the builder's `HUMAN_COPY`.
+    ///
     /// Adding a finding with a wire-vocabulary message is fine — shipping one
     /// the builder cannot restate in human language is not.
     #[test]
     fn validation_codes_are_registered_and_humanised() {
-        let registered: HashSet<String> =
+        let registered: BTreeSet<String> =
             VALIDATION_CODES.iter().map(|s| s.to_string()).collect();
 
-        let mut emitted = emitted_codes(VALIDATE_SRC);
-        emitted.extend(emitted_codes(REF_CHECK_SRC));
+        let scan = scan_emitted_codes();
 
+        assert!(
+            scan.problems.is_empty(),
+            "the drift guard found {} `ValidationError` construction(s) it cannot verify. \
+             Each one escapes BOTH the registry and the author-facing-copy check, so it \
+             would reach the person building the workflow as a raw wire message:\n  - {}",
+            scan.problems.len(),
+            scan.problems.join("\n  - ")
+        );
+
+        let emitted = scan.codes;
         assert!(
             !emitted.is_empty(),
             "the emit-site scanner found no codes at all — it has drifted from \
@@ -2015,11 +2602,7 @@ mod humanisation_contract {
              no longer guarding anything"
         );
 
-        let unregistered: Vec<_> = {
-            let mut v: Vec<_> = emitted.difference(&registered).cloned().collect();
-            v.sort();
-            v
-        };
+        let unregistered: Vec<_> = emitted.difference(&registered).cloned().collect();
         assert!(
             unregistered.is_empty(),
             "these validation codes are emitted but NOT listed in \
@@ -2028,11 +2611,7 @@ mod humanisation_contract {
              src-app/ui/src/modules/workflow/components/builder/validationCopy.ts"
         );
 
-        let stale: Vec<_> = {
-            let mut v: Vec<_> = registered.difference(&emitted).cloned().collect();
-            v.sort();
-            v
-        };
+        let stale: Vec<_> = registered.difference(&emitted).cloned().collect();
         assert!(
             stale.is_empty(),
             "these codes are listed in `VALIDATION_CODES` but no longer emitted \
@@ -2040,15 +2619,22 @@ mod humanisation_contract {
              validationCopy.ts) so the guard keeps meaning something"
         );
 
-        let unhumanised: Vec<_> = {
-            let mut v: Vec<_> = registered
-                .iter()
-                .filter(|code| !UI_COPY_SRC.contains(&format!("\"{code}\"")))
-                .cloned()
-                .collect();
-            v.sort();
-            v
-        };
+        let copy_path = ui_copy_path();
+        let copy_src = std::fs::read_to_string(&copy_path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", copy_path.display()));
+        let humanised = human_copy_keys(&copy_src).unwrap_or_else(|e| {
+            panic!(
+                "cannot enumerate `HUMAN_COPY`'s keys in {}: {e}",
+                copy_path.display()
+            )
+        });
+        assert!(
+            !humanised.is_empty(),
+            "`HUMAN_COPY` parsed to zero keys — the key parser has drifted from the \
+             map's shape and is no longer guarding anything"
+        );
+
+        let unhumanised: Vec<_> = registered.difference(&humanised).cloned().collect();
         assert!(
             unhumanised.is_empty(),
             "these validation codes have NO author-facing copy: {unhumanised:?}\n\

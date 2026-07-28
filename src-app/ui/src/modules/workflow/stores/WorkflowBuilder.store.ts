@@ -99,6 +99,10 @@ export const WorkflowBuilderStoreDef = defineLocalStore({
         set(d => {
           d.validation = result
           d.validating = false
+          // A check that SUCCEEDED retires the previous failure. Without this
+          // the panel's error alert (and the green line it suppresses) would
+          // latch on a single transient blip and never recover.
+          d.error = null
         })
       } catch (error) {
         set(d => {

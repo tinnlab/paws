@@ -30,6 +30,8 @@ mod mcp_streaming_workflow_test;
 mod resource_link_test;
 // Admin per-(server, tool) approval-mode defaults (ITEM-54 / DEC-112)
 mod tool_approvals_test;
+// TEST-17: GET /mcp/servers/{id}/tools payload + both 403 gates (workflow-builder tool picker)
+mod list_tools_for_builder_test;
 // ============================================================================
 // Runtime Tests
 // ============================================================================

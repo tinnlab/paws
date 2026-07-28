@@ -8,7 +8,7 @@
 ## Summary
 
 - **339** surfaces carry at least one renderable-state signal.
-- **2077** signals total: 1627 branch, 138 empty, 119 error, 93 loading, 96 overlay, 4 panel.
+- **2084** signals total: 1634 branch, 138 empty, 119 error, 93 loading, 96 overlay, 4 panel.
 - **4** right-panel renderers registered (each a right-panel-open state).
 - **35** slot registrations (sidebar / settings / chat mount points).
 
@@ -4412,13 +4412,14 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!finding.stepId` | 46 |
-| branch | `validating` | 90 |
-| branch | `!validation && !validating` | 93 |
-| empty | `validation && errors.length === 0` | 99 |
-| branch | `errors.length > 0` | 106 |
-| branch | `warnings.length > 0` | 114 |
-| branch | `cost` | 122 |
+| branch | `!finding.stepId` | 52 |
+| branch | `validating` | 112 |
+| branch | `errorText` | 115 |
+| branch | `!validation && !validating && !errorText` | 128 |
+| empty | `validation && errors.length === 0 && !errorText` | 137 |
+| branch | `errors.length > 0` | 144 |
+| branch | `warnings.length > 0` | 152 |
+| branch | `cost` | 160 |
 
 ### `modules/workflow/components/builder/RefInsertMenu`
 
@@ -4454,10 +4455,13 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `templated` | 83 |
-| branch | `templated` | 111 |
-| branch | `templated` | 203 |
-| branch | `spec.overflowNames.length > 0` | 247 |
+| branch | `templated` | 138 |
+| branch | `canHoldTemplate` | 162 |
+| branch | `templated` | 188 |
+| branch | `v === undefined` | 221 |
+| branch | `!pendingNumberClear.current` | 229 |
+| branch | `templated` | 307 |
+| branch | `spec.overflowNames.length > 0` | 351 |
 
 ### `modules/workflow/components/builder/ToolStepForm`
 
@@ -4465,10 +4469,13 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `blockingFailure` | 239 |
-| branch | `usePicker` | 258 |
-| branch | `useGenerated && spec` | 282 |
-| empty | `rows.length === 0` | 301 |
+| branch | `!serverId \|\| !step.server` | 207 |
+| branch | `blockingFailure` | 287 |
+| branch | `serverId && isRetryableFailure(blockingFailure)` | 295 |
+| branch | `usePicker` | 317 |
+| branch | `v === (step.tool ?? '')` | 328 |
+| branch | `useGenerated && spec` | 348 |
+| empty | `rows.length === 0` | 372 |
 
 ### `modules/workflow/components/builder/WorkflowBuilderPage`
 
@@ -4476,14 +4483,14 @@ Required states: `delayed`, `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!canAccess` | 42 |
-| branch | `!canAccess` | 90 |
-| branch | `deletedExternally` | 108 |
-| error | `loadError` | 117 |
-| loading | `loading` | 125 |
-| branch | `isEdit` | 143 |
-| branch | `existingName` | 144 |
-| branch | `dirty` | 162 |
+| branch | `!canAccess` | 43 |
+| branch | `!canAccess` | 101 |
+| branch | `deletedExternally` | 119 |
+| error | `loadError` | 128 |
+| loading | `loading` | 136 |
+| branch | `isEdit` | 154 |
+| branch | `existingName` | 155 |
+| branch | `dirty` | 173 |
 
 ### `modules/workflow/components/builder/WorkflowInputsEditor`
 

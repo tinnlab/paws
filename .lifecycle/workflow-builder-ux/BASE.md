@@ -10,7 +10,7 @@ This feature adds **NO migration**. Workflow migrations are module-local
 
 ## OpenAPI regen
 
-**Not implied.** The only backend edit is a `pub const VALIDATION_CODES: &[&str]`
+**Not implied.** The only backend edit is a `#[cfg(test)] const VALIDATION_CODES: &[&str]`
 plus a `#[cfg(test)]` guard test in
 `src-app/server/src/modules/workflow/validate.rs`. Neither is a `JsonSchema`
 type, a handler, nor a route, so `openapi.json` and `api-client/types.ts` are
