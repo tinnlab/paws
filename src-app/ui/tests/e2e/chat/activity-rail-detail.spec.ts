@@ -131,12 +131,12 @@ test.describe('Activity rail — detail reachability (INV-2)', () => {
     // ── LEVEL 1: the owning extension's body, inline ───────────────────────
     const body = await expandStep(rail, 'toolu_detail_weather')
     await expect(body).toBeVisible()
-    const inlineDetail = body.getByTestId('mcp-step-detail')
+    const inlineDetail = body.getByTestId('rail-step-detail-body')
     await expect(inlineDetail).toBeVisible()
     // Arguments AND result are both reachable inline — the two things the
     // retired per-tool card carried.
-    await expect(inlineDetail.getByTestId('mcp-step-detail-args')).toContainText('Oslo')
-    await expect(inlineDetail.getByTestId('mcp-step-detail-result')).toContainText(
+    await expect(inlineDetail.getByTestId('rail-step-detail-args')).toContainText('Oslo')
+    await expect(inlineDetail.getByTestId('rail-step-detail-result')).toContainText(
       'light rain',
     )
 

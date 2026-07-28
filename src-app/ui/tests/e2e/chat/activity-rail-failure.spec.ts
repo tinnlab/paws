@@ -103,13 +103,17 @@ test.describe('Activity rail — a failure forces it open (INV-5)', () => {
     const summary = rail.getByTestId('activity-rail-summary')
     await expect(summary).toBeVisible()
     await expect(summary).not.toContainText('Completed')
-    await expect(summary).toHaveAttribute('aria-label', /^Activity: /)
-    await expect(summary).toHaveAttribute('aria-expanded', 'true')
 
-    // NO usable collapse control while forced open.
-    await expect(summary).toBeDisabled()
-    // …and it genuinely cannot be collapsed: force the click through and assert
-    // the steps are still there (an inert-but-clickable control would fail here).
+    // NO collapse control while forced open — and specifically NOT a *disabled*
+    // one. The kit disables with `opacity-50 pointer-events-none`, so rendering
+    // this as a disabled Button would paint a FAILURE summary as the dimmest,
+    // unfocusable, tooltip-less element in the message — the opposite of what
+    // this invariant is for. The forced-open state is a status ROW, so assert
+    // the control is ABSENT rather than inert.
+    await expect(summary).not.toHaveAttribute('aria-expanded', /.*/)
+    await expect(rail.locator('button[data-testid="activity-rail-summary"]')).toHaveCount(0)
+    // …and it genuinely cannot be collapsed: force a click through and assert
+    // the steps are still there.
     await summary.click({ force: true })
     await expect(rail.getByTestId('activity-rail-steps')).toBeVisible()
     await expect(failed).toBeVisible()
@@ -176,7 +180,8 @@ test.describe('Activity rail — a failure forces it open (INV-5)', () => {
 
     const summary = rail.getByTestId('activity-rail-summary')
     await expect(summary).not.toContainText('Completed')
-    await expect(summary).toBeDisabled()
+    // Absent, not disabled — see the note on the failed-step case above.
+    await expect(rail.locator('button[data-testid="activity-rail-summary"]')).toHaveCount(0)
     await summary.click({ force: true })
     await expect(timedOut).toBeVisible()
   })

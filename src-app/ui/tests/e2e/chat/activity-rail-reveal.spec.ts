@@ -75,7 +75,10 @@ async function seedSecretCall(
 ): Promise<{ conversationId: string; assistantId: string; toolUseId: string }> {
   const { apiURL } = testInfra
   const userId = await currentUserId(page, apiURL, token)
-  const toolUseId = `toolu_reveal_${label}`
+  // NOT "reveal": a right-panel tab close button carries the tab id in its
+  // accessible name, so an id containing the word this spec greps for makes the
+  // affordance scan match the close button and fail for the wrong reason.
+  const toolUseId = `toolu_secretargs_${label}`
 
   const seeded = await seedRailConversation(
     page,
@@ -168,11 +171,16 @@ test.describe('Activity rail — raw-argument reveal is permission-gated (TEST-4
 
     // NO AFFORDANCE — button, menu item, or any focusable control.
     await expect(panel.getByTestId('tool-call-reveal-btn')).toHaveCount(0)
-    await expect(panel.getByRole('button', { name: /reveal/i })).toHaveCount(0)
-    await expect(panel.getByRole('menuitem', { name: /reveal|raw/i })).toHaveCount(0)
+    // Match the affordance's actual wording, not the bare word "reveal": a
+    // right-panel tab's close button carries the TAB ID in its accessible name
+    // ("Close tool:<tool_use_id>"), so a fixture id containing that substring
+    // makes a loose regex match the close button and fail for the wrong reason.
+    // The exhaustive `actionableNames` enumeration below is the real guard.
+    await expect(panel.getByRole('button', { name: /reveal raw/i })).toHaveCount(0)
+    await expect(panel.getByRole('menuitem', { name: /reveal raw|raw arguments/i })).toHaveCount(0)
     // …and not merely hidden elsewhere on the page either.
     await expect(page.getByTestId('tool-call-reveal-btn')).toHaveCount(0)
-    await expect(page.getByRole('button', { name: /reveal/i })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: /reveal raw/i })).toHaveCount(0)
 
     // No KEYBOARD path: enumerate every actuatable node in the panel and assert
     // none of them is a reveal control.

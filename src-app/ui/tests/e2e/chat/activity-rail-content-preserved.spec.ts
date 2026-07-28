@@ -122,11 +122,14 @@ test.describe('Activity rail — content boxes survive (INV-6)', () => {
     await expect(table.locator('[data-streamdown="table-row"]')).not.toHaveCount(0)
     await expect(table).toContainText('0.958')
 
-    // 3. a GFM alert (streamdown renders `> [!WARNING]` as its blockquote).
-    const alert = message
-      .locator('[data-streamdown="blockquote"]')
-      .filter({ hasText: 'Raising ef_search past 200' })
-    await expect(alert).toBeVisible()
+    // 3. a GFM alert. Asserted by its RENDERED TEXT rather than by a particular
+    // `data-streamdown` attribute: which element the markdown renderer chooses
+    // for `> [!WARNING]` is its implementation detail, and INV-6's claim is about
+    // the content surviving, not about the tag it survives in. The
+    // outside-the-rail half is asserted structurally below, which is the part of
+    // the invariant this feature can actually break.
+    const alert = message.getByText('Raising ef_search past 200', { exact: false })
+    await expect(alert.first()).toBeVisible()
 
     // ── and NONE of them is inside the rail ────────────────────────────────
     // The rail is collapsed, so anything it had absorbed would be gone from the
@@ -135,10 +138,17 @@ test.describe('Activity rail — content boxes survive (INV-6)', () => {
     for (const [name, selector] of [
       ['code block', '[data-streamdown="code-block"]'],
       ['table', '[data-streamdown="table"]'],
-      ['GFM alert', '[data-streamdown="blockquote"]'],
+      // The alert's containing element is renderer-owned (see above), so the
+      // rail-containment check for it is done by text, immediately after.
+
     ] as const) {
       await expect(rail.locator(selector), `${name} must not be inside the rail`).toHaveCount(0)
     }
+    // The alert, by text — the rail must not have absorbed it.
+    await expect(
+      rail.getByText('Raising ef_search past 200', { exact: false }),
+      'the GFM alert must not be inside the rail',
+    ).toHaveCount(0)
     // Belt and braces: no rail anywhere on the page contains them either.
     await expect(
       page.locator('[data-testid="activity-rail"] [data-streamdown="code-block"]'),
