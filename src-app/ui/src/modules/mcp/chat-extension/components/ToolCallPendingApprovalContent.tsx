@@ -11,7 +11,7 @@ import {
   type McpToolCall,
 } from '@/modules/mcp/stores/mcpComposer'
 import { useChatPaneOrNull } from '@/modules/chat/core/pane/ChatPaneContext'
-import { mcpServerParenLabel } from '@/modules/chat/core/utils/serverLabel'
+import { serverParenLabel } from '@/modules/chat/core/utils/serverLabel'
 import { McpComposer } from '@/modules/mcp/stores/mcpComposer'
 import { McpServer } from '@/modules/mcp/stores/mcpServer'
 import { Chat as ChatStore } from '@/modules/chat/core/stores/chatBridge'
@@ -298,9 +298,9 @@ export function ToolCallPendingApprovalContent({
         <div className="flex items-center gap-2 min-w-0">
           <Clock className="size-4 shrink-0 text-warning" />
           <Text strong className="truncate">{toolCall.tool_name}</Text>
-          {mcpServerParenLabel(toolCall.server) && (
+          {serverParenLabel(toolCall.server) && (
             <Text type="secondary" className="text-xs whitespace-nowrap">
-              {mcpServerParenLabel(toolCall.server)}
+              {serverParenLabel(toolCall.server)}
             </Text>
           )}
           <Text type="secondary" className="text-xs whitespace-nowrap">

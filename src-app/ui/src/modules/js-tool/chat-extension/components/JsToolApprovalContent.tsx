@@ -2,10 +2,11 @@ import { useState, useSyncExternalStore } from 'react'
 import { Alert, Button, Space, Text } from '@ziee/kit'
 import { Check, Clock, X } from 'lucide-react'
 import type { ContentRendererProps } from '@/modules/chat/core/extensions/types'
-import { mcpServerParenLabel } from '@/modules/chat/core/utils/serverLabel'
+import { serverParenLabel } from '@/modules/chat/core/utils/serverLabel'
 import {
   elicitationStatus,
   elicitationVersion,
+  hasElicitationTransport,
   resolveElicitationVia,
   subscribeElicitation,
 } from '@/modules/chat/core/elicitation/transport'
@@ -29,6 +30,18 @@ interface JsToolApprovalData {
 export function JsToolApprovalContent({ content }: ContentRendererProps) {
   const data = content.content as unknown as JsToolApprovalData
   const [submitting, setSubmitting] = useState(false)
+  /**
+   * FIX_ROUND-3: the decision could not be carried anywhere.
+   *
+   * Before AP-4 this card called `McpComposer.resolveElicitation` directly, so
+   * the POST happened whether or not mcp's CHAT EXTENSION had initialized. Going
+   * through the core seam made it conditional on that `initialize` having run —
+   * and `resolveElicitationVia`'s `false` return (documented as existing "so a
+   * caller can surface 'not resolvable' rather than silently claiming success")
+   * was discarded, so a click on Approve/Deny flipped a spinner and did nothing,
+   * with no message, no error and no state change. Surface it instead.
+   */
+  const [unresolvable, setUnresolvable] = useState(false)
 
   // Derive the resolved state from the CORE-owned elicitation seam (the live
   // source of truth), NOT local state: the provider flips the entry
@@ -51,10 +64,15 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
     // Re-entrancy guard: never POST twice to a single-use elicitation.
     if (submitting || resolved !== null) return
     setSubmitting(true)
+    setUnresolvable(false)
     try {
       // The transport reflects success/failure in its own entry; the derived
-      // `resolved` above reacts (rollback → buttons return for retry).
-      await resolveElicitationVia(data.elicitation_id, action)
+      // `resolved` above reacts (rollback → buttons return for retry). A `false`
+      // return means the decision never left the browser at all — a different
+      // failure from "the POST was rejected", and the only one the transport can
+      // report, so it gets its own user-visible message.
+      const carried = await resolveElicitationVia(data.elicitation_id, action)
+      if (!carried) setUnresolvable(true)
     } finally {
       setSubmitting(false)
     }
@@ -72,9 +90,9 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
         title={
           <div>
             <Text strong>run_js wants to call: {data.tool_name}</Text>
-            {mcpServerParenLabel(data.server) && (
+            {serverParenLabel(data.server) && (
               <Text type="secondary" className="ms-2 text-xs whitespace-nowrap">
-                {mcpServerParenLabel(data.server)}
+                {serverParenLabel(data.server)}
               </Text>
             )}
           </div>
@@ -96,6 +114,17 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
             )}
             {resolved === null ? (
               <div className="mt-3">
+                {(unresolvable || !hasElicitationTransport()) && (
+                  <Text
+                    type="danger"
+                    role="status"
+                    className="mb-2 block text-xs"
+                    data-testid={`run-js-approval-unresolvable-${data.elicitation_id}`}
+                  >
+                    This request cannot be answered right now — the approval channel is
+                    unavailable. Reload the conversation and try again.
+                  </Text>
+                )}
                 <Space>
                   <Button
                     icon={<Check />}
@@ -121,6 +150,10 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
             ) : (
               <Text
                 type="secondary"
+                // The buttons are UNMOUNTED when the decision lands, so whatever
+                // had keyboard focus is destroyed. `role=status` announces the
+                // outcome to a screen reader that would otherwise get nothing.
+                role="status"
                 className="mt-2 block text-xs"
                 data-testid={`run-js-approval-status-${data.elicitation_id}`}
                 data-status={resolved}

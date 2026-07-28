@@ -3,7 +3,7 @@ import { Alert, Button, Card, Progress, Text } from '@ziee/kit'
 import { ChevronDown } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { ToolStatusIcon } from '@/modules/chat/core/ToolStatusIcon'
-import { mcpServerParenLabel } from '@/modules/chat/core/utils/serverLabel'
+import { serverParenLabel } from '@/modules/chat/core/utils/serverLabel'
 import {
   createExtension,
   type ChatExtension,
@@ -38,7 +38,7 @@ function McpToolCallUI({ toolCall }: { toolCall: McpToolCall }) {
     return <ToolCallPendingApprovalContent toolCall={toolCall} />
   }
 
-  const serverLabel = mcpServerParenLabel(toolCall.server)
+  const serverLabel = serverParenLabel(toolCall.server)
 
   return (
     <Card
@@ -192,8 +192,8 @@ function McpToolUseRenderer({ content: data }: ContentRendererProps) {
             status={toolResultData ? (toolResultData.is_error ? 'failed' : 'success') : 'running'}
           />
           <Text strong className="truncate">{toolUseData.name || 'Tool Call'}</Text>
-          {mcpServerParenLabel(server?.display_name) && (
-            <Text type="secondary" className="text-xs whitespace-nowrap">{mcpServerParenLabel(server?.display_name)}</Text>
+          {serverParenLabel(server?.display_name) && (
+            <Text type="secondary" className="text-xs whitespace-nowrap">{serverParenLabel(server?.display_name)}</Text>
           )}
           {/* Status is conveyed by the icon (check / x / wrench) — no text. A
               hidden marker keeps the completed/failed signal available to tests. */}
@@ -305,7 +305,24 @@ const mcpExtension: ChatExtension = createExtension({
         } as unknown as SSEChatStreamMcpElicitationRequiredData),
       resolve: (id, action, content) =>
         McpComposer.resolveElicitation(id, action, content),
-      subscribe: onChange => useMcpComposerStore.subscribe(onChange),
+      // FIX_ROUND-3: notify only when the ELICITATION slice actually changes.
+      //
+      // Forwarding the whole store meant every addToolCall / updateToolCall /
+      // setToolCallProgress / server-selection mutation bumped the core seam and
+      // re-rendered every mounted approval card. That was a strict widening over
+      // the code this replaced, which read `McpComposer.elicitationRequests`
+      // through the store proxy's per-property `useShallow` selector and so woke
+      // only on elicitation changes. The store replaces the Map on every
+      // elicitation mutation (immutable update), so identity is a sound trigger.
+      subscribe: onChange => {
+        let last = McpComposer.$.elicitationRequests
+        return useMcpComposerStore.subscribe(() => {
+          const next = McpComposer.$.elicitationRequests
+          if (next === last) return
+          last = next
+          onChange()
+        })
+      },
     }, 'mcp')
 
     // Bind the editing-message restore to the OWNING pane's chat store

@@ -34,11 +34,20 @@ function sourceFiles(dir: string): string[] {
   return out
 }
 
-/** Module specifiers imported (statically or dynamically) by a file. */
+/**
+ * Module specifiers imported by a file — static (`from '…'`), dynamic
+ * (`import('…')`) AND bare side-effect (`import '…'`).
+ *
+ * FIX_ROUND-3: the side-effect form was missing, which made both guards below
+ * defeatable by a one-line `import '@/modules/mcp/stores/mcpComposer'`. That is
+ * not a hypothetical form — `js-tool/module.tsx` and `mcp/module.tsx` both use
+ * it today for their own registrations, so the guard had a real blind spot on
+ * exactly the syntax these modules already write.
+ */
 function importsOf(file: string): string[] {
   const text = readFileSync(file, 'utf8')
   const specs: string[] = []
-  const re = /(?:from\s+|import\s*\(\s*)['"]([^'"]+)['"]/g
+  const re = /(?:from\s+|import\s*\(\s*|^\s*import\s+)['"]([^'"]+)['"]/gm
   for (const m of text.matchAll(re)) specs.push(m[1])
   return specs
 }
@@ -213,15 +222,22 @@ test('FIX_ROUND-2 #3 (AP-4): js-tool and mcp are decoupled in BOTH directions', 
   ]
   const violations: string[] = []
   for (const [fromDir, toDir] of pairs) {
+    // FIX_ROUND-3: match the BARREL form too. `@/modules/mcp` (no trailing
+    // slash) was caught by neither branch — not by the `@/modules/mcp/` prefix
+    // test, and not by `resolvedModulePath`, which returns null for every `@/`
+    // specifier. Latent only because neither module has an `index.ts` today;
+    // live the moment one is added, which is exactly when a barrel import
+    // becomes the natural way to re-couple them.
     const alias = `@/${toDir}/`
+    const barrel = `@/${toDir}`
     for (const f of sourceFiles(join(SRC, fromDir))) {
       for (const spec of importsOf(f)) {
-        if (spec.startsWith(alias)) {
+        if (spec === barrel || spec.startsWith(alias)) {
           violations.push(`${f.replace(SRC + '/', '')} → ${spec}`)
           continue
         }
         const rel = resolvedModulePath(f, spec)
-        if (rel && rel.startsWith(`${toDir}/`)) {
+        if (rel === toDir || (rel && rel.startsWith(`${toDir}/`))) {
           violations.push(`${f.replace(SRC + '/', '')} → ${spec} (resolves to ${rel})`)
         }
       }

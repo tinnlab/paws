@@ -20,7 +20,7 @@ export const looksLikeId = (s?: string | null): boolean =>
  * parenthetical of its own, in which case it is returned as-is (no double wrap).
  * Returns `null` when there's nothing worth showing (empty / a raw id).
  */
-export function mcpServerParenLabel(name?: string | null): string | null {
+export function serverParenLabel(name?: string | null): string | null {
   const trimmed = name?.trim()
   if (!trimmed || looksLikeId(trimmed)) return null
   return trimmed.includes('(') ? trimmed : `(${trimmed})`

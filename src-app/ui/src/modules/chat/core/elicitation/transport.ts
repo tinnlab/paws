@@ -99,11 +99,30 @@ export function setElicitationTransport(
   owner?: string,
 ): void {
   if (transport === next) return
-  unsubscribeTransport?.()
+  try {
+    unsubscribeTransport?.()
+  } catch (e) {
+    console.error('[elicitation] transport unsubscribe threw', e)
+  }
   unsubscribeTransport = null
   transport = next
   transportOwner = next ? (owner ?? null) : null
-  if (transport) unsubscribeTransport = transport.subscribe(bump)
+  if (transport) {
+    // FIX_ROUND-3: a throwing `subscribe` used to leave an INSTALLED transport
+    // with no change subscription — every card frozen at the status it first
+    // read — and the exception escaped into the registering extension's
+    // `initialize`, where the registry only logs it, silently skipping the rest
+    // of that extension's wiring. Refuse the install instead: that is the
+    // "degrades cleanly when nothing is registered" contract this file promises.
+    try {
+      unsubscribeTransport = transport.subscribe(bump)
+    } catch (e) {
+      console.error('[elicitation] transport subscribe threw; refusing the install', e)
+      transport = null
+      transportOwner = null
+      unsubscribeTransport = null
+    }
+  }
   bump()
 }
 
@@ -118,7 +137,12 @@ export function clearElicitationTransportIfOwnedBy(owner: string): void {
   setElicitationTransport(null)
 }
 
-/** True when some extension has installed a transport. */
+/**
+ * True when some extension has installed a transport — i.e. whether a card's
+ * approve/deny can actually be carried anywhere. Consumed by
+ * `JsToolApprovalContent` to disable + explain instead of rendering live buttons
+ * that would silently no-op.
+ */
 export function hasElicitationTransport(): boolean {
   return transport !== null
 }
@@ -128,7 +152,8 @@ export function elicitationExists(elicitationId: string): boolean {
   if (!transport) return false
   try {
     return transport.has(elicitationId)
-  } catch {
+  } catch (e) {
+    console.error('[elicitation] transport.has threw', e)
     return false
   }
 }
@@ -138,18 +163,34 @@ export function elicitationStatus(elicitationId: string): ElicitationStatus | un
   if (!transport) return undefined
   try {
     return transport.status(elicitationId)
-  } catch {
+  } catch (e) {
+    console.error('[elicitation] transport.status threw', e)
     return undefined
   }
 }
 
-/** Open a request. No-op (and never throws) when no transport is installed. */
-export function registerElicitation(init: ElicitationRequestInit): void {
-  if (!transport) return
+/**
+ * Open a request. Returns `false` when it could NOT be opened (no transport, or
+ * the provider threw) so the caller can tell "registered" from "dropped on the
+ * floor" — the consumer injects a card unconditionally after this call, and a
+ * silently-failed registration leaves that card pending forever.
+ *
+ * Never throws: a provider must not break a transcript render.
+ */
+export function registerElicitation(init: ElicitationRequestInit): boolean {
+  if (!transport) {
+    console.error(
+      '[elicitation] no transport installed; dropping request',
+      init.elicitation_id,
+    )
+    return false
+  }
   try {
     transport.register(init)
-  } catch {
-    /* a provider must never break a transcript render */
+    return true
+  } catch (e) {
+    console.error('[elicitation] transport.register threw', init.elicitation_id, e)
+    return false
   }
 }
 
@@ -163,9 +204,22 @@ export async function resolveElicitationVia(
   action: ElicitationAction,
   content?: Record<string, unknown>,
 ): Promise<boolean> {
-  if (!transport) return false
-  await transport.resolve(elicitationId, action, content)
-  return true
+  if (!transport) {
+    console.error('[elicitation] no transport installed; cannot resolve', elicitationId)
+    return false
+  }
+  // FIX_ROUND-3: this was the one seam call with no guard. The current provider
+  // happens to swallow its own errors, but the published `resolve` contract only
+  // promises optimistic-update-plus-rollback — a provider that REJECTS would
+  // propagate into a floated `onClick` promise (an unhandled rejection, i.e. a
+  // gating HIGH page-error under `gallery:runtime`). Report it as unresolved.
+  try {
+    await transport.resolve(elicitationId, action, content)
+    return true
+  } catch (e) {
+    console.error('[elicitation] transport.resolve threw', elicitationId, action, e)
+    return false
+  }
 }
 
 /** Monotonic version — bumped on every transport change (for `useSyncExternalStore`). */

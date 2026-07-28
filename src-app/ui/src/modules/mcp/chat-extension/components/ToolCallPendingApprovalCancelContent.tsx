@@ -1,7 +1,7 @@
 import { Alert, Text } from '@ziee/kit'
 import type { McpToolCall } from '@/modules/mcp/stores/mcpComposer'
 import { TOOL_STATUS } from '@/modules/chat/core/tool-status'
-import { mcpServerParenLabel } from '@/modules/chat/core/utils/serverLabel'
+import { serverParenLabel } from '@/modules/chat/core/utils/serverLabel'
 
 interface ToolCallPendingApprovalCancelContentProps {
   toolCall: McpToolCall
@@ -20,7 +20,7 @@ export function ToolCallPendingApprovalCancelContent({
   // `cancelled` status: a slashed circle in muted gray), never the red X / error
   // tone reserved for a genuinely failed tool call (finding #2).
   const CancelIcon = TOOL_STATUS.cancelled.icon
-  const serverLabel = mcpServerParenLabel(toolCall.server)
+  const serverLabel = serverParenLabel(toolCall.server)
   return (
     <div className="my-2">
       <Alert

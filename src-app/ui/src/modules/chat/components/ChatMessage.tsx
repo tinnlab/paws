@@ -173,8 +173,21 @@ export const ChatMessage = memo(function ChatMessage({
    * exactly once (ITEM-5 — the span/render desync stays structurally impossible);
    * only the per-step status/timing/artifacts refresh.
    */
-  const resolveStep = (placed: PlacedRailStep) =>
-    chatExtensionRegistry.resolveRailStep(railCtx(placed))?.step ?? placed.step
+  const resolveStep = (placed: PlacedRailStep) => {
+    const resolved = chatExtensionRegistry.resolveRailStep(railCtx(placed))?.step
+    if (!resolved) return placed.step
+    // FIX_ROUND-3: keep SEGMENTATION's key, not the contribution's.
+    // `segmentRail` disambiguates a repeated `tool_use_id` to `${key}#${i}`
+    // (railSegmentation.ts:122) precisely because two steps sharing a key would
+    // collide on the React key, on the per-message expansion state
+    // (`stepStateKey`) and on the detail-panel tab id. Re-resolution goes back to
+    // the contribution, which never re-applies that suffix — so taking the
+    // resolved key wholesale silently UNDID the disambiguation on exactly the
+    // replayed-call case it exists for, and made the breakout's `data-step-key`
+    // (segmentation-namespaced) and a rail row's (contribution-namespaced) two
+    // different namespaces.
+    return resolved.key === placed.step.key ? resolved : { ...resolved, key: placed.step.key }
+  }
 
   /** Resolve one step's inline detail through the SAME contribution that
    *  described it, so the label and the body can never come from different

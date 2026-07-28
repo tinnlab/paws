@@ -1,5 +1,4 @@
 import { test, expect } from '../../fixtures/test-context'
-import { byTestId } from '../testid'
 import { loginAsAdmin, getCurrentUserToken } from '../../common/auth-helpers'
 import {
   createProviderViaAPI,
@@ -148,12 +147,21 @@ test.describe('Activity rail — a request for input breaks OUT of the rail, on 
     // Legible, not merely present: INV-5's regression was a control rendered at
     // 50% opacity and unfocusable while its own acceptance test stayed green. So
     // assert the two properties that failure actually destroyed.
-    const opacity = await approveOnce.evaluate(
-      el => getComputedStyle(el as HTMLElement).opacity,
-    )
+    // FIX_ROUND-3: read the EFFECTIVE opacity, not the button's own. CSS opacity
+    // composites down the ancestor chain, so a card or breakout wrapper rendered
+    // at `opacity-50` still reports `1` on the button and would have passed.
+    const opacity = await approveOnce.evaluate(el => {
+      let node: HTMLElement | null = el as HTMLElement
+      let effective = 1
+      while (node) {
+        effective *= Number(getComputedStyle(node).opacity || '1')
+        node = node.parentElement
+      }
+      return effective
+    })
     expect(
       Number(opacity),
-      'the approve control must not be rendered dimmed/disabled',
+      'the approve control must not be rendered dimmed/disabled (at any level)',
     ).toBeGreaterThanOrEqual(0.99)
     await approveOnce.focus()
     await expect(approveOnce).toBeFocused()
@@ -163,7 +171,9 @@ test.describe('Activity rail — a request for input breaks OUT of the rail, on 
     // The full external-server disclosure came through the real path too — proof
     // this is the production approval surface, not a stub that merely shares a
     // testid.
-    await expect(byTestId(page, 'mcp-tool-approval-card').first()).toBeVisible()
+    // FIX_ROUND-3: scoped to the BREAKOUT, not the page. Page-scoped, a card
+    // rendered anywhere satisfied it, which is not the claim being made.
+    await expect(breakout.getByTestId('mcp-tool-approval-card').first()).toBeVisible()
     await expect(breakout.locator('[data-testid="approval-tool-args"]')).toContainText(
       'CRISPR delivery vectors',
     )
@@ -184,29 +194,57 @@ test.describe('Activity rail — a request for input breaks OUT of the rail, on 
     await expect(page.locator('[data-testid="activity-rail"] [data-testid="rail-breakout"]')).toHaveCount(0)
     await expect(breakout.getByTestId('activity-rail')).toHaveCount(0)
 
-    // ── 3. FULL WIDTH — it spans the bubble, unlike an indented rail row.
+    // ── 3. FULL WIDTH, measured against a RAIL ROW — it spans the bubble where
+    //       an indented rail step does not.
+    //
+    //       FIX_ROUND-3: comparing the breakout to its own parent only restated
+    //       `w-full`, a class this same change added — the assertion could not
+    //       fail for any reason INV-3 is about. Compare it to the width a rail
+    //       row actually gets when one is present, and otherwise to the message
+    //       bubble; both are widths INV-3 governs rather than CSS restated.
     const widths = await breakout.evaluate(el => {
       const b = el as HTMLElement
+      const row = document.querySelector('[data-testid="rail-step"]') as HTMLElement | null
       return {
         breakout: b.getBoundingClientRect().width,
         parent: (b.parentElement as HTMLElement).getBoundingClientRect().width,
+        railRow: row ? row.getBoundingClientRect().width : null,
       }
     })
     expect(widths.breakout).toBeGreaterThan(0)
     expect(widths.breakout).toBeGreaterThanOrEqual(widths.parent - 1)
+    if (widths.railRow !== null) {
+      expect(
+        widths.breakout,
+        'the breakout must be WIDER than an indented rail row, not laid out as one',
+      ).toBeGreaterThan(widths.railRow)
+    }
 
     // ── 4. NO control inside it can take the decision away. Actuate EVERY
     //       disclosure control in the breakout and re-assert after each.
-    const disclosures = breakout.locator('[aria-expanded]')
-    const disclosureCount = await disclosures.count()
-    for (let i = 0; i < disclosureCount; i++) {
-      await disclosures.nth(i).click({ force: true })
+    //
+    //       FIX_ROUND-3: re-read the set on every iteration (expanding one
+    //       disclosure can reveal another, and the pre-fix loop cached the count
+    //       before the first click so those were never actuated), and drop
+    //       `force: true` — bypassing actionability meant a control that was
+    //       genuinely obscured or zero-size still counted as "actuated".
+    for (let i = 0; ; i++) {
+      const disclosures = breakout.locator('[aria-expanded]')
+      if (i >= (await disclosures.count())) break
+      await disclosures.nth(i).click()
       await expect(
         breakout.locator('[data-testid="tool-approval-approve-once"]'),
         'a control inside the breakout hid the approval decision',
       ).toBeVisible()
+      // Guard against an unbounded loop if a click ever spawns disclosures.
+      expect(i, 'implausibly many disclosure controls inside one breakout').toBeLessThan(50)
     }
-    await expect(breakout.getByRole('button', { name: /^(collapse|hide)\b/i })).toHaveCount(0)
+    // The breakout must carry NO rail chrome. `activity-rail-summary` /
+    // `rail-step-toggle` are the only two collapse affordances the rail ships,
+    // so their absence is what "nothing can collapse it" means structurally.
+    // (The `collapse|hide`-named-button probe the first cut also had matched
+    // nothing that exists in the kit and was removed rather than left to read as
+    // coverage.)
     await expect(breakout.getByTestId('activity-rail-summary')).toHaveCount(0)
     await expect(breakout.getByTestId('rail-step-toggle')).toHaveCount(0)
 
@@ -218,7 +256,23 @@ test.describe('Activity rail — a request for input breaks OUT of the rail, on 
     //       call legitimately renders no rail at all. Steps 1–4 above are
     //       unconditional and are what INV-3 actually governs; the mocked sibling
     //       spec owns the deterministic multi-step structural shape.
-    const rail = page.getByTestId('activity-rail').first()
+    //       FIX_ROUND-3, two defects in this block:
+    //        (a) `.first()` could select the QUIET-SINGLE rail shape, which also
+    //            carries `data-testid="activity-rail"` but renders no summary —
+    //            silently no-opping the whole block even when a real multi-step
+    //            rail existed further down. Select a rail that HAS a summary.
+    //        (b) the steps-collapsed assertion sat OUTSIDE the `aria-expanded`
+    //            branch. A rail that INV-4/INV-5 force open renders its summary
+    //            as a plain div with no `aria-expanded` and no collapse control,
+    //            so no click happened, the steps stayed rendered, and this INV-3
+    //            spec went RED on a design-conformant rendering of INV-4/INV-5.
+    //            The collapse assertion now lives inside the toggleable branch,
+    //            where it is the actual claim; the forced-open case asserts the
+    //            thing INV-3 governs there — the breakout survives regardless.
+    const rail = page
+      .getByTestId('activity-rail')
+      .filter({ has: page.getByTestId('activity-rail-summary') })
+      .first()
     if (await rail.isVisible().catch(() => false)) {
       const isSibling = await page.evaluate(() => {
         const b = document.querySelector('[data-testid="rail-breakout"]')
@@ -232,8 +286,8 @@ test.describe('Activity rail — a request for input breaks OUT of the rail, on 
         if ((await summary.getAttribute('aria-expanded')) === 'true') {
           await summary.click()
           await expect(summary).toHaveAttribute('aria-expanded', 'false')
+          await expect(rail.getByTestId('activity-rail-steps')).toHaveCount(0)
         }
-        await expect(rail.getByTestId('activity-rail-steps')).toHaveCount(0)
       }
       await expect(breakout).toBeVisible()
       await expect(

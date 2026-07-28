@@ -8,7 +8,7 @@
 ## Summary
 
 - **347** surfaces carry at least one renderable-state signal.
-- **2103** signals total: 1647 branch, 139 empty, 122 error, 94 loading, 96 overlay, 5 panel.
+- **2105** signals total: 1649 branch, 139 empty, 122 error, 94 loading, 96 overlay, 5 panel.
 - **5** right-panel renderers registered (each a right-panel-open state).
 - **35** slot registrations (sidebar / settings / chat mount points).
 
@@ -416,12 +416,12 @@ Required states: `empty`
 |---|---|---|
 | branch | `isStreaming \|\| wasStreamingRef.current \|\| isActiveMatch` | 65 |
 | empty | `contents.length === 0 && !showEmptyCompletionNotice` | 93 |
-| branch | `!resolved` | 185 |
-| branch | `attachmentBlocks.length > 0` | 273 |
-| branch | `bubbleBlocks.length > 0` | 302 |
-| branch | `offerCollapse` | 328 |
-| branch | `showEmptyCompletionNotice` | 348 |
-| branch | `renderAsUser` | 367 |
+| branch | `!resolved` | 198 |
+| branch | `attachmentBlocks.length > 0` | 286 |
+| branch | `bubbleBlocks.length > 0` | 315 |
+| branch | `offerCollapse` | 341 |
+| branch | `showEmptyCompletionNotice` | 361 |
+| branch | `renderAsUser` | 380 |
 
 ### `modules/chat/components/CollapsibleBlock`
 
@@ -2165,12 +2165,13 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `submitting \|\| resolved !== null` | 52 |
-| branch | `resolved === 'approved'` | 64 |
-| branch | `resolved === 'denied'` | 64 |
-| branch | `mcpServerParenLabel(data.server)` | 75 |
-| branch | `data.input !== undefined` | 87 |
-| branch | `resolved === null` | 97 |
+| branch | `submitting \|\| resolved !== null` | 65 |
+| branch | `resolved === 'approved'` | 82 |
+| branch | `resolved === 'denied'` | 82 |
+| branch | `serverParenLabel(data.server)` | 93 |
+| branch | `data.input !== undefined` | 105 |
+| branch | `resolved === null` | 115 |
+| branch | `(unresolvable \|\| !hasElicitationTransport())` | 117 |
 
 ### `modules/js-tool/components/JsToolSettingsSection`
 
@@ -2930,7 +2931,7 @@ Required states: _(branch-only — proven via dynamic coverage)_
 | kind | condition | line |
 |---|---|---|
 | branch | `!isControlWrite` | 282 |
-| branch | `mcpServerParenLabel(toolCall.server)` | 301 |
+| branch | `serverParenLabel(toolCall.server)` | 301 |
 | branch | `toolCall.dest_host` | 316 |
 | branch | `toolCall.description` | 345 |
 | branch | `toolCall.input !== undefined` | 353 |
@@ -2964,7 +2965,7 @@ Required states: `error`
 | error | `toolCall.error` | 131 |
 | branch | `!toolUseData.id` | 162 |
 | branch | `toolCall` | 169 |
-| branch | `mcpServerParenLabel(server?.display_name)` | 195 |
+| branch | `serverParenLabel(server?.display_name)` | 195 |
 | branch | `toolResultData` | 200 |
 | branch | `hasDetails` | 208 |
 | branch | `isExpanded` | 219 |
@@ -2972,9 +2973,10 @@ Required states: `error`
 | branch | `toolResultData` | 230 |
 | branch | `toolResultData.is_error` | 233 |
 | branch | `!call` | 273 |
-| branch | `!mcpStore` | 322 |
-| branch | `!streamingMessage` | 699 |
-| branch | `!toolUseId` | 711 |
+| branch | `next === last` | 321 |
+| branch | `!mcpStore` | 339 |
+| branch | `!streamingMessage` | 716 |
+| branch | `!toolUseId` | 728 |
 
 ### `modules/mcp/components/McpConfigModal`
 

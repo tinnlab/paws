@@ -4,7 +4,7 @@
 // renders + overlay triggers + panel/slot registrations) that the reconciliation
 // gate (scripts/reconcile-state-matrix.mjs) checks the gallery entries against.
 //
-// 347 surfaces carry renderable-state signals; 2103 signals total.
+// 347 surfaces carry renderable-state signals; 2105 signals total.
 
 /** A signal is one mechanically-detected render fork (a state the surface can be in). */
 export interface StateSignal {
@@ -344,12 +344,12 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     signals: [
       { kind: "branch", condition: "isStreaming || wasStreamingRef.current || isActiveMatch", line: 65 },
       { kind: "empty", condition: "contents.length === 0 && !showEmptyCompletionNotice", line: 93 },
-      { kind: "branch", condition: "!resolved", line: 185 },
-      { kind: "branch", condition: "attachmentBlocks.length > 0", line: 273 },
-      { kind: "branch", condition: "bubbleBlocks.length > 0", line: 302 },
-      { kind: "branch", condition: "offerCollapse", line: 328 },
-      { kind: "branch", condition: "showEmptyCompletionNotice", line: 348 },
-      { kind: "branch", condition: "renderAsUser", line: 367 },
+      { kind: "branch", condition: "!resolved", line: 198 },
+      { kind: "branch", condition: "attachmentBlocks.length > 0", line: 286 },
+      { kind: "branch", condition: "bubbleBlocks.length > 0", line: 315 },
+      { kind: "branch", condition: "offerCollapse", line: 341 },
+      { kind: "branch", condition: "showEmptyCompletionNotice", line: 361 },
+      { kind: "branch", condition: "renderAsUser", line: 380 },
     ],
   },
   "modules/chat/components/CollapsibleBlock": {
@@ -1958,12 +1958,13 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/js-tool/chat-extension/components/JsToolApprovalContent",
     requiredStates: [],
     signals: [
-      { kind: "branch", condition: "submitting || resolved !== null", line: 52 },
-      { kind: "branch", condition: "resolved === 'approved'", line: 64 },
-      { kind: "branch", condition: "resolved === 'denied'", line: 64 },
-      { kind: "branch", condition: "mcpServerParenLabel(data.server)", line: 75 },
-      { kind: "branch", condition: "data.input !== undefined", line: 87 },
-      { kind: "branch", condition: "resolved === null", line: 97 },
+      { kind: "branch", condition: "submitting || resolved !== null", line: 65 },
+      { kind: "branch", condition: "resolved === 'approved'", line: 82 },
+      { kind: "branch", condition: "resolved === 'denied'", line: 82 },
+      { kind: "branch", condition: "serverParenLabel(data.server)", line: 93 },
+      { kind: "branch", condition: "data.input !== undefined", line: 105 },
+      { kind: "branch", condition: "resolved === null", line: 115 },
+      { kind: "branch", condition: "(unresolvable || !hasElicitationTransport())", line: 117 },
     ],
   },
   "modules/js-tool/components/JsToolSettingsSection": {
@@ -2664,7 +2665,7 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     requiredStates: [],
     signals: [
       { kind: "branch", condition: "!isControlWrite", line: 282 },
-      { kind: "branch", condition: "mcpServerParenLabel(toolCall.server)", line: 301 },
+      { kind: "branch", condition: "serverParenLabel(toolCall.server)", line: 301 },
       { kind: "branch", condition: "toolCall.dest_host", line: 316 },
       { kind: "branch", condition: "toolCall.description", line: 345 },
       { kind: "branch", condition: "toolCall.input !== undefined", line: 353 },
@@ -2696,7 +2697,7 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
       { kind: "error", condition: "toolCall.error", line: 131 },
       { kind: "branch", condition: "!toolUseData.id", line: 162 },
       { kind: "branch", condition: "toolCall", line: 169 },
-      { kind: "branch", condition: "mcpServerParenLabel(server?.display_name)", line: 195 },
+      { kind: "branch", condition: "serverParenLabel(server?.display_name)", line: 195 },
       { kind: "branch", condition: "toolResultData", line: 200 },
       { kind: "branch", condition: "hasDetails", line: 208 },
       { kind: "branch", condition: "isExpanded", line: 219 },
@@ -2704,9 +2705,10 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
       { kind: "branch", condition: "toolResultData", line: 230 },
       { kind: "branch", condition: "toolResultData.is_error", line: 233 },
       { kind: "branch", condition: "!call", line: 273 },
-      { kind: "branch", condition: "!mcpStore", line: 322 },
-      { kind: "branch", condition: "!streamingMessage", line: 699 },
-      { kind: "branch", condition: "!toolUseId", line: 711 },
+      { kind: "branch", condition: "next === last", line: 321 },
+      { kind: "branch", condition: "!mcpStore", line: 339 },
+      { kind: "branch", condition: "!streamingMessage", line: 716 },
+      { kind: "branch", condition: "!toolUseId", line: 728 },
     ],
   },
   "modules/mcp/components/McpConfigModal": {

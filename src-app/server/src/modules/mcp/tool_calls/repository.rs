@@ -435,20 +435,51 @@ mod tests {
     /// probe in `.lifecycle/activity-rail/explain-mcp-tool-calls.sql`).
     /// `202607200200` replaced the single-column pair with `(user_id, col)`.
     ///
-    /// This walks the module's real migration directory in application order and
-    /// replays its `CREATE INDEX` / `DROP INDEX` statements, so it fails on a
-    /// re-added single-column index OR on a reverted drop — not just on the two
-    /// filenames that happen to exist today.
+    /// This walks EVERY module's real migration directory in application order
+    /// and replays its `CREATE [UNIQUE] INDEX` / `DROP INDEX` statements, so it
+    /// fails on a re-added single-column index OR on a reverted drop — not just
+    /// on the two filenames that happen to exist today.
+    ///
+    /// FIX_ROUND-3 widened three blind spots the first cut had:
+    ///  * it only recognised `CREATE INDEX`, so the canonical one-line violation
+    ///    written as `CREATE UNIQUE INDEX …` slipped past;
+    ///  * it only scanned `mcp/migrations`, while the set actually applied at
+    ///    boot is the generated union of every module's dir — an index on
+    ///    `mcp_tool_calls` authored from another module escaped entirely;
+    ///  * `FILTERED` listed 2 of the 5 columns [`list_calls_for_user`] narrows
+    ///    on, so the docstring claimed more than the assertion checked. All five
+    ///    are checked now, with the two PRE-EXISTING single-column indexes
+    ///    (`idx_mcp_tool_calls_server`, `idx_mcp_tool_calls_conv`, both from
+    ///    `202607140180`) named in an explicit legacy allowlist — this branch did
+    ///    not create them, and a blanket assert would be red for reasons it did
+    ///    not cause. Anything NEW on those columns must still be owner-leading.
     #[test]
     fn tool_call_lookup_indexes_are_owner_leading() {
-        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src/modules/mcp/migrations");
-        let mut files: Vec<_> = std::fs::read_dir(dir)
-            .expect("read the mcp migrations dir")
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.extension().is_some_and(|x| x == "sql"))
-            .collect();
-        // Filename order IS application order (the version prefix sorts).
-        files.sort();
+        let modules = concat!(env!("CARGO_MANIFEST_DIR"), "/src/modules");
+        let mut files: Vec<std::path::PathBuf> = Vec::new();
+        for module in std::fs::read_dir(modules).expect("read the modules dir") {
+            let migrations = match module {
+                Ok(m) => m.path().join("migrations"),
+                Err(_) => continue,
+            };
+            let Ok(entries) = std::fs::read_dir(&migrations) else {
+                continue;
+            };
+            files.extend(
+                entries
+                    .filter_map(|e| e.ok().map(|e| e.path()))
+                    .filter(|p| p.extension().is_some_and(|x| x == "sql")),
+            );
+        }
+        assert!(
+            files.len() > 50,
+            "expected to find every module's migrations, found {} — the walk is \
+             looking in the wrong place and the guard would be vacuous",
+            files.len()
+        );
+        // Filename order IS application order (the version prefix sorts), and it
+        // is global across modules because every name is timestamp-prefixed.
+        files.sort_by_key(|p| p.file_name().map(|n| n.to_os_string()));
 
         // index name -> indexed columns, replayed across every migration.
         let mut indexes: std::collections::BTreeMap<String, Vec<String>> = Default::default();
@@ -463,12 +494,15 @@ mod tests {
             for stmt in sql.split(';').map(str::trim).filter(|s| !s.is_empty()) {
                 let flat = stmt.split_whitespace().collect::<Vec<_>>().join(" ");
                 let upper = flat.to_uppercase();
-                if upper.starts_with("CREATE INDEX") {
+                if upper.starts_with("CREATE INDEX") || upper.starts_with("CREATE UNIQUE INDEX") {
                     if !flat.contains("mcp_tool_calls") {
                         continue;
                     }
                     let name = flat
-                        .trim_start_matches("CREATE INDEX ")
+                        .trim_start_matches("CREATE ")
+                        .trim_start_matches("UNIQUE ")
+                        .trim_start_matches("INDEX ")
+                        .trim_start_matches("CONCURRENTLY ")
                         .trim_start_matches("IF NOT EXISTS ")
                         .split_whitespace()
                         .next()
@@ -506,11 +540,28 @@ mod tests {
             }
         }
 
-        // The columns `list_calls_for_user` narrows on under `user_id = $1`.
-        const FILTERED: [&str; 2] = ["tool_use_id", "message_id"];
+        // EVERY column `list_calls_for_user` narrows on under `user_id = $1`.
+        const FILTERED: [&str; 5] = [
+            "server_id",
+            "conversation_id",
+            "workflow_run_id",
+            "tool_use_id",
+            "message_id",
+        ];
+        /// Single-column indexes on a filtered column that PRE-DATE this rule
+        /// (`202607140180_mcp_schema.sql`). Named, not silently excluded, so the
+        /// assertion's scope is legible: nothing NEW may join this list.
+        const LEGACY_SINGLE_COLUMN: [&str; 3] = [
+            "idx_mcp_tool_calls_server",
+            "idx_mcp_tool_calls_conv",
+            "idx_mcp_tool_calls_workflow_run",
+        ];
         let mut owner_leading = 0usize;
         for (name, cols) in &indexes {
             if !cols.iter().any(|c| FILTERED.contains(&c.as_str())) {
+                continue;
+            }
+            if LEGACY_SINGLE_COLUMN.contains(&name.as_str()) {
                 continue;
             }
             assert_eq!(
