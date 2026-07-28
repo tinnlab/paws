@@ -117,11 +117,25 @@ test.describe('ask_user — a JSON-encoded schema still renders a real form', ()
 
       // …and it must be asking THIS schema's questions, so an unrelated
       // elicitation cannot satisfy the spec.
+      //
+      // The decisive signal is the wizard's step COUNT: the rich ask_user UX
+      // renders one step per `properties` entry, so "step 1 of 3" can only
+      // happen if all three properties were decoded out of the string. On the
+      // pre-fix backend `properties` is `{}`, so there are no steps at all.
+      //
+      // NOTE we do NOT assert the literal "Project name" here: on step 1 the
+      // wizard renders the elicitation MESSAGE as the question text, so the
+      // first field's `title` is not on screen yet. Asserting it failed against
+      // a CORRECT render — the assertion was wrong, not the product.
       const cardText = ((await pending.textContent()) ?? '').toLowerCase()
       expect(
         cardText,
-        'the decoded schema\'s own question must be rendered',
-      ).toContain('project name')
+        'the wizard must show one step per decoded property (3), which is only possible if the string was decoded',
+      ).toContain('step 1 of 3')
+      expect(
+        cardText,
+        "a title from the decoded schema must be rendered, so an unrelated elicitation cannot satisfy this spec",
+      ).toContain('brief description')
 
       // The degraded "no fields" card must NOT be what rendered.
       await expect(

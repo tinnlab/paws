@@ -85,8 +85,42 @@ so no OpenAPI regen is implied.
 - A 400 on an unusable elicitation `content` leaves the elicitation PENDING. That
   is correct — the user has not answered — and is what the new tests exercise.
 
-**New confirmed findings:** 0
 
 (That zero is the count for a SECOND pass over the same diff after the fixes
 above; it is not a claim that an independent reviewer would find zero. See the
 provenance note.)
+
+## Addendum — findings from the phase-8 runs
+
+Two more, both caught by RUNNING rather than reading, and both worth recording
+because in each case the PRODUCT was correct and the TEST was wrong — the
+failure mode that most easily gets "fixed" in the wrong place.
+
+- **The e2e used `provider_type: 'custom'`** (tests-quality, high). The API
+  accepts the row, but no model under it reaches the chat model dropdown, so the
+  spec timed out at model selection having proved nothing. Diagnosed from the
+  failing run's own error (`waiting for locator('[role="listbox"]')` resolving to
+  an empty listbox), then switched to the established `openai` + explicit
+  `base_url` BRIDGE pattern, which routes to the same OpenAI-compatible client.
+
+- **The acceptance assertion demanded text the wizard does not show on step 1**
+  (tests-quality, high). It asserted the card contained "project name" (the first
+  property's `title`). The rendered card was
+  `"assistant is requesting input · step 1 of 3 · what would you like to name
+  this new project? · brief description (optional) · decline · next"` — i.e. the
+  decode WORKED and produced a three-step wizard; the rich UX simply renders the
+  elicitation MESSAGE as step 1's question rather than the field title. The
+  assertion was failing a CORRECT render.
+
+  Retargeted to the decisive signal: **"step 1 of 3"**. The wizard renders one
+  step per `properties` entry, so that string can only appear if all three
+  properties were decoded out of the string — and on the pre-fix backend
+  `properties` is `{}`, so there are no steps at all. Kept a second assertion on
+  a title from the decoded schema ("brief description") so an unrelated
+  elicitation still cannot satisfy the spec.
+
+  Recorded because the tempting reaction to "the assertion failed" is to weaken
+  it (drop the text check entirely); the right one was to find the signal that is
+  BOTH true of a correct render and false of the defect.
+
+**New confirmed findings:** 0
