@@ -113,6 +113,25 @@ cd src-app/desktop/ui && npm run check   → PASS (exit 0)
 
 ## Gate notes
 
+- **Phase 8 fails A3** on `test.skip(!TEST_LLM, NO_LLM_SKIP)` in the new e2e:
+  "diff ADDS a test skip". This is the repo's OWN mandated pattern for a
+  real-LLM spec — every sibling control spec carries the identical line, and
+  `helpers/control-llm-helpers.ts` documents at length why it exists ("run
+  against WHATEVER LLM the environment configures, and skip ONLY when nothing is
+  configured"), a rule written precisely because `ANTHROPIC_API_KEY`-gating once
+  sent this whole surface dark. The gate flags it only because MY spec is new, so
+  the line is diff-ADDED; the identical line in the siblings is pre-existing and
+  invisible to it.
+  It is NOT a skip-to-go-green: **the test ran and passed here** (25.9s, real
+  Qwen). Deliberately not evaded — the check could be dodged by writing
+  `TEST_LLM ? test.describe : test.describe.skip`, which is the same behaviour
+  with the guardrail spelled around it, and that would be worse than an honest
+  failing gate. Removing the guard instead would make the spec FAIL on any box
+  without an LLM, which is the outcome the convention exists to prevent.
+  Recorded as an accepted, convention-matching exception; the orchestrator should
+  decide whether A3 wants a real-LLM allowance.
+
+
 - **`gate:ui (ui)`: PASS** — `205/205 PASS`, `✅ GATE PASSED — every UI DONE
   criterion met`, exit 0 (`cds-gateui3.log`). tsc PASS · lint PASS ·
   runtime-health PASS · visual PASS.
