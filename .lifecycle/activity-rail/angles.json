@@ -77,5 +77,10 @@
     "dead-code",
     "test-quality",
     "modularity-coupling"
+  ],
+  "sdk": [
+    "dead-code",
+    "test-quality",
+    "modularity-coupling"
   ]
 }
