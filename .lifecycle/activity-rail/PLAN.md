@@ -122,7 +122,7 @@ grouping simulation over the whole database, and a per-module contribution audit
 - **ITEM-17**: ONE canonical detail source, **redacted by default in both the step and the panel**,
   with the denylist gaps closed (`cookie`, `credentials`, `x_auth_token`, `openai_api_key`,
   `Bearer-Token` — all confirmed open today, `record.rs:40-61` matches keys exactly). Plus an
-  **admin-gated raw reveal** in the panel, gated on the existing `mcp_servers::manage` (DEC-1/DEC-2),
+  **admin-gated raw reveal** in the panel, gated on the existing `mcp_servers_admin::edit` (DEC-1/DEC-2, amended at phase 7),
   so no detail becomes permanently unreachable. The chat card renders `tool_use.input` completely
   unredacted today; the detail view must not widen that exposure.
 

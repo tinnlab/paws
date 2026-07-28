@@ -4,7 +4,7 @@
 // renders + overlay triggers + panel/slot registrations) that the reconciliation
 // gate (scripts/reconcile-state-matrix.mjs) checks the gallery entries against.
 //
-// 349 surfaces carry renderable-state signals; 2105 signals total.
+// 347 surfaces carry renderable-state signals; 2103 signals total.
 
 /** A signal is one mechanically-detected render fork (a state the surface can be in). */
 export interface StateSignal {
@@ -1966,13 +1966,6 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
       { kind: "branch", condition: "resolved === null", line: 84 },
     ],
   },
-  "modules/js-tool/chat-extension/extension": {
-    surface: "modules/js-tool/chat-extension/extension",
-    requiredStates: [],
-    signals: [
-      { kind: "branch", condition: "!base || base.label !== 'run_js'", line: 43 },
-    ],
-  },
   "modules/js-tool/components/JsToolSettingsSection": {
     surface: "modules/js-tool/components/JsToolSettingsSection",
     requiredStates: ["delayed","error"],
@@ -2714,13 +2707,6 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
       { kind: "branch", condition: "!mcpStore", line: 293 },
       { kind: "branch", condition: "!streamingMessage", line: 670 },
       { kind: "branch", condition: "!toolUseId", line: 682 },
-    ],
-  },
-  "modules/mcp/chat-extension/railContribution": {
-    surface: "modules/mcp/chat-extension/railContribution",
-    requiredStates: [],
-    signals: [
-      { kind: "branch", condition: "!base", line: 30 },
     ],
   },
   "modules/mcp/components/McpConfigModal": {

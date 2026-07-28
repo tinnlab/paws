@@ -162,6 +162,63 @@ async fn seed_fingerprint(pool: &PgPool) -> (i64, i64, i64, i64, String) {
     )
 }
 
+/// The showcase branch must be STRICTLY ORDERED in time.
+///
+/// `pg_temp.msg`'s ordinal becomes `(n || ' seconds')::interval`, i.e. a DECIMAL
+/// — not a dotted version. That makes `25.10` twenty-five point one seconds: it
+/// sorts BEFORE `25.7` and lands byte-for-byte on the pre-existing `25.1` turn.
+/// Every transcript read orders by `branch_messages.created_at`, so a collision
+/// renders the conversation scrambled — an assistant answer appearing before its
+/// own question — and the "populated rail" design review would be done against a
+/// nonsense transcript. This shipped exactly once and the blind audit caught it;
+/// this test is why it cannot ship twice.
+#[tokio::test]
+async fn showcase_seed_message_ordering_is_strict_and_collision_free() {
+    let server = crate::common::TestServer::start().await;
+    let owner = crate::common::test_helpers::create_user_with_permissions(
+        &server,
+        "showcase_order_owner",
+        &["profile::read"],
+    )
+    .await;
+    let pool = PgPool::connect(&server.database_url)
+        .await
+        .expect("connect to the test database");
+    ensure_builtin_server_rows(&pool).await;
+    load_seed(&pool, &owner.user_id).await;
+
+    let rows: Vec<(uuid::Uuid, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+        "SELECT bm.message_id, bm.created_at
+           FROM branch_messages bm
+           JOIN branches b ON b.id = bm.branch_id
+          WHERE b.conversation_id = $1::uuid
+          ORDER BY bm.created_at ASC, bm.message_id ASC",
+    )
+    .bind(SHOWCASE_CONVERSATION_ID)
+    .fetch_all(&pool)
+    .await
+    .expect("read showcase branch messages");
+
+    assert!(
+        rows.len() >= 8,
+        "expected the showcase conversation to carry its turns, got {}",
+        rows.len()
+    );
+
+    let mut seen: std::collections::HashMap<chrono::DateTime<chrono::Utc>, uuid::Uuid> =
+        std::collections::HashMap::new();
+    for (id, at) in &rows {
+        if let Some(other) = seen.insert(*at, *id) {
+            panic!(
+                "two showcase messages share created_at {at}: {other} and {id}. \
+                 The ordinal passed to pg_temp.msg is a DECIMAL — `25.10` is 25.1 \
+                 seconds, not 'after 25.9'. Renumber with a fixed number of \
+                 decimal places and a value that is not already taken."
+            );
+        }
+    }
+}
+
 #[tokio::test]
 async fn showcase_seed_is_idempotent_and_every_tool_use_is_paired() {
     let server = crate::common::TestServer::start().await;

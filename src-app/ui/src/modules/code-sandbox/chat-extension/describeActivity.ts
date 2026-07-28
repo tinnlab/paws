@@ -80,6 +80,10 @@ export function describeActivity(
   const sc = structuredOf(ctx)
 
   switch (base.label) {
+    // The deleted nine-module map also keyed a bare `code_sandbox` tool id (used
+    // by `agent_activity` entries rather than by a real MCP tool). Claiming it
+    // here keeps the map→registry migration lossless.
+    case 'code_sandbox':
     case 'execute_command': {
       const exit = typeof sc?.exit_code === 'number' ? sc.exit_code : null
       const durationMs =

@@ -12,11 +12,27 @@ keeps INV-2 literally satisfiable (no detail becomes permanently unreachable) wh
 plaintext secrets from the default surface. Amends ITEM-17 and adds TEST-41/TEST-42.
 
 ### DEC-2: What permission gates the raw reveal — a new one, or an existing?
-**Resolution:** Reuse the existing `mcp_servers::manage`. No new permission, no migration.
-**Basis:** convention + least privilege — a holder of `mcp_servers::manage` can already read and set
-a server's configured secret headers, so revealing arguments grants no capability they lack. Minting
+**Resolution:** Reuse an existing permission — **`mcp_servers_admin::edit`** (`McpServersAdminEdit`).
+No new permission, no migration.
+
+> **Amended at phase 7.** This decision originally named `mcp_servers::manage`, which **does not
+> exist in this codebase** — the mcp module uses split verbs `mcp_servers::{read,create,edit,delete}`
+> plus an admin tier `mcp_servers_admin::{read,create,edit,delete}`. The substance of the decision is
+> unchanged (reuse, no migration, no new surface) and `mcp_servers_admin::edit` is the constant that
+> matches BOTH clauses of the original rationale: it is the admin-tier editor of system MCP servers,
+> and DEC-1 asks for an **admin**-gated affordance. It is also strictly NARROWER than
+> `mcp_servers::edit`, which an ordinary user can hold for their own servers. Recorded as DRIFT-1.1.
+**Basis:** convention + least privilege — a holder of `mcp_servers_admin::edit` administers system
+MCP servers, so revealing one call's arguments grants no capability they lack. Minting
 `mcp::secrets::reveal` would add a permission surface (and an A10 obligation) for zero additional
 containment. The reveal is a discrete user action, never a default render.
+
+> **Honest scope, added at phase 7 after the blind audit.** This is a SURFACE gate, not a wire gate.
+> The raw `tool_use.input` is already present in the conversation-messages payload the owner
+> receives, so a determined owner can read it from the API without the permission. What the gate
+> buys is that a credential is no longer *printed into the transcript* as a side effect of rendering
+> a tool call, and that the authoritative read is audited. It is not a containment boundary against
+> the resource owner and is not described as one in the code.
 
 ### DEC-3: What does a SINGLE completed tool call render as? (84% of tool-using messages)
 **Resolution:** One quiet muted line — no rail spine, no summary row, no collapse control — still

@@ -7,8 +7,8 @@
 
 ## Summary
 
-- **349** surfaces carry at least one renderable-state signal.
-- **2105** signals total: 1649 branch, 139 empty, 122 error, 94 loading, 96 overlay, 5 panel.
+- **347** surfaces carry at least one renderable-state signal.
+- **2103** signals total: 1647 branch, 139 empty, 122 error, 94 loading, 96 overlay, 5 panel.
 - **5** right-panel renderers registered (each a right-panel-open state).
 - **35** slot registrations (sidebar / settings / chat mount points).
 
@@ -2172,14 +2172,6 @@ Required states: _(branch-only — proven via dynamic coverage)_
 | branch | `data.input !== undefined` | 74 |
 | branch | `resolved === null` | 84 |
 
-### `modules/js-tool/chat-extension/extension`
-
-Required states: _(branch-only — proven via dynamic coverage)_
-
-| kind | condition | line |
-|---|---|---|
-| branch | `!base \|\| base.label !== 'run_js'` | 43 |
-
 ### `modules/js-tool/components/JsToolSettingsSection`
 
 Required states: `delayed`, `error`
@@ -2983,14 +2975,6 @@ Required states: `error`
 | branch | `!mcpStore` | 293 |
 | branch | `!streamingMessage` | 670 |
 | branch | `!toolUseId` | 682 |
-
-### `modules/mcp/chat-extension/railContribution`
-
-Required states: _(branch-only — proven via dynamic coverage)_
-
-| kind | condition | line |
-|---|---|---|
-| branch | `!base` | 30 |
 
 ### `modules/mcp/components/McpConfigModal`
 
