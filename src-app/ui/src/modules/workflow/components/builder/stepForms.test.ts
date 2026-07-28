@@ -345,3 +345,31 @@ test('the required marker agrees with the schema about prompt_file steps', () =>
     )
   }
 })
+
+test('clearing the prompt box saves an ABSENT prompt, not an empty one', () => {
+  // R8 finding (HIGH). WORKFLOW_PROMPT_BOTH's copy tells the author to clear
+  // this box to use the file. If clearing writes `prompt: ""`, the backend
+  // reads `Some("")` as "no typed prompt" (validate.rs: has_prompt filters
+  // empty), so BOTH clears, MISSING does not fire, the panel goes green and
+  // Save is enabled — and then dispatch.rs's load_raw_prompt, which matches
+  // only (Some,None)/(None,Some), fails the RUN with "invalid prompt config".
+  // The builder's own remedy would break the workflow it was fixing.
+  //
+  // Source-scanned: the value never reaches `configErrors` (an empty prompt
+  // beside a prompt_file is legitimately error-free), so only the WRITE can be
+  // asserted, and only at the call site.
+  const HERE = dirname(fileURLToPath(import.meta.url))
+  for (const file of ['AgentStepForm.tsx', 'LlmStepForm.tsx', 'LlmMapStepForm.tsx']) {
+    const src = readFileSync(join(HERE, file), 'utf8')
+    assert.ok(
+      !/patch\(\{ prompt: v \}\)/.test(src),
+      `${file}: a cleared prompt box must not be written through as "" — ` +
+        'that passes validation and then fails the run',
+    )
+    assert.match(
+      src,
+      /patch\(\{ prompt: v \|\| null \}\)/,
+      `${file}: a cleared prompt must be normalised to absent`,
+    )
+  }
+})
