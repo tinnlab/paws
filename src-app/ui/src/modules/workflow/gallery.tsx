@@ -291,8 +291,10 @@ const toolInputSchema = {
   },
 }
 
-/** A representative 4-step workflow (agent → llm → elicit → sandbox) so the
- *  populated builder shows real-data master/detail layout. */
+/** A representative 5-step workflow (agent → llm → elicit → sandbox → tool) so
+ *  the populated builder shows real-data master/detail layout, including a tool
+ *  step (without one, `ToolStepForm` is never rendered by the surface whose
+ *  coverage entry claims it). */
 const builderFourStepDef = {
   inputs: [
     { name: 'topic', description: 'The research topic', required: true },
@@ -527,6 +529,43 @@ const toolStepFallbackSurface = lazy(async () => {
   }
 })
 
+/** The builder with PROBLEMS: the step list marks which steps are incomplete
+ *  and the panel names + links to each (INV-2). Two steps are broken for
+ *  DIFFERENT reasons while a THIRD, unrelated step is selected — the owner's
+ *  actual situation, and the state a clean-validation fixture cannot show. */
+const problemBuilderSurface = lazy(async () => {
+  const { WorkflowBuilderStoreDef } = await import(
+    '@/modules/workflow/stores/WorkflowBuilder.store'
+  )
+  const { StepList } = await import(
+    '@/modules/workflow/components/builder/StepList'
+  )
+  const { BuilderValidationPanel } = await import(
+    '@/modules/workflow/components/builder/BuilderValidationPanel'
+  )
+  return {
+    default: () => {
+      const store = WorkflowBuilderStoreDef.use({
+        def: builderFourStepDef,
+        // Deliberately NOT one of the broken steps: a finding must be
+        // actionable from wherever the author happens to be reading it.
+        selectedStepId: 'review',
+        validation: errorValidation,
+      })
+      return (
+        <div className="flex flex-col gap-4 p-4 md:flex-row">
+          <div className="shrink-0 md:w-80">
+            <StepList store={store} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <BuilderValidationPanel store={store} />
+          </div>
+        </div>
+      )
+    },
+  }
+})
+
 /** The builder validation panel with ≥1 error + ≥1 warning + a cost estimate. */
 const validationErrorSurface = lazy(async () => {
   const { WorkflowBuilderStoreDef } = await import(
@@ -537,7 +576,14 @@ const validationErrorSurface = lazy(async () => {
   )
   return {
     default: () => {
-      const store = WorkflowBuilderStoreDef.use({ validation: errorValidation })
+      // The def MUST be seeded alongside the validation: a finding is attributed
+      // by resolving its `location` against the real steps, so a validation-only
+      // fixture renders every finding as "Whole workflow" and silently fails to
+      // exercise the attribution this panel exists to do.
+      const store = WorkflowBuilderStoreDef.use({
+        def: builderFourStepDef,
+        validation: errorValidation,
+      })
       return (
         <div className="max-w-2xl p-4">
           <BuilderValidationPanel store={store} />
@@ -854,12 +900,22 @@ export const gallery: ModuleGallery = {
     // ── Builder — populated (4-step workflow incl. an agent step). ─────────────
     {
       slug: 'seeded-wf-builder-populated',
-      title: 'Workflow builder — populated (4 steps)',
-      note: 'step-list + config-panel + inputs + validation, seeded with agent→llm→elicit→sandbox; agent step selected',
+      title: 'Workflow builder — populated (5 steps)',
+      note: 'step-list + config-panel + inputs + validation, seeded with agent→llm→elicit→sandbox→tool; agent step selected',
       path: '/',
       initialPath: '/',
       fullHeight: true,
       component: populatedBuilderSurface,
+    },
+    // ── Builder — steps with problems: per-step invalid markers + attribution.
+    {
+      slug: 'seeded-wf-builder-problems',
+      title: 'Workflow builder — steps with problems',
+      note: 'two steps invalid for different reasons, a third selected: the step list marks the broken ones and each finding names + links to its step',
+      path: '/',
+      initialPath: '/',
+      fullHeight: true,
+      component: problemBuilderSurface,
     },
     // ── Builder — tool step: schema-driven arguments (INV-4). ─────────────────
     {

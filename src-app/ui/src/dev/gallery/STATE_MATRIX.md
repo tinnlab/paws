@@ -8,7 +8,7 @@
 ## Summary
 
 - **339** surfaces carry at least one renderable-state signal.
-- **2076** signals total: 1626 branch, 138 empty, 119 error, 93 loading, 96 overlay, 4 panel.
+- **2077** signals total: 1627 branch, 138 empty, 119 error, 93 loading, 96 overlay, 4 panel.
 - **4** right-panel renderers registered (each a right-panel-open state).
 - **35** slot registrations (sidebar / settings / chat mount points).
 
@@ -4426,7 +4426,8 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `ref.hint` | 50 |
+| branch | `ref.hint` | 56 |
+| branch | `compact` | 66 |
 
 ### `modules/workflow/components/builder/StepConfigPanel`
 
@@ -4444,8 +4445,8 @@ Required states: `empty`
 |---|---|---|
 | branch | `from == null` | 47 |
 | empty | `steps.length === 0` | 59 |
-| branch | `problems > 0` | 111 |
-| empty | `problems === 0 && cautions > 0` | 121 |
+| branch | `problems > 0` | 115 |
+| empty | `problems === 0 && cautions > 0` | 128 |
 
 ### `modules/workflow/components/builder/ToolArgumentsForm`
 
@@ -4454,9 +4455,9 @@ Required states: _(branch-only — proven via dynamic coverage)_
 | kind | condition | line |
 |---|---|---|
 | branch | `templated` | 83 |
-| branch | `templated` | 107 |
-| branch | `templated` | 199 |
-| branch | `spec.overflowNames.length > 0` | 238 |
+| branch | `templated` | 111 |
+| branch | `templated` | 203 |
+| branch | `spec.overflowNames.length > 0` | 247 |
 
 ### `modules/workflow/components/builder/ToolStepForm`
 

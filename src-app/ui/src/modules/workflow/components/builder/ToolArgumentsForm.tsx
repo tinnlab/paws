@@ -84,12 +84,13 @@ function GeneratedField({
         <Button
           type="button"
           variant="ghost"
+          size="icon"
           icon={<Undo2 />}
+          aria-label="Use a value instead of a reference"
+          tooltip="Use a value instead"
           data-testid={`${testid}-clear-ref`}
           onClick={() => onChange('')}
-        >
-          Use a value
-        </Button>
+        />
       )}
       <RefInsertMenu
         store={store}
@@ -98,6 +99,9 @@ function GeneratedField({
         // reference is not a value the backend could resolve.
         onInsert={token => onChange(token)}
         testid={`${testid}-ref`}
+        // Icon-only: this menu repeats once per generated field, and a labelled
+        // trigger on every row overflows the label row at 390px.
+        compact
       />
     </div>
   )
@@ -197,10 +201,15 @@ function GeneratedField({
       action={refAction}
       description={
         templated ? (
-          <span className="flex items-center gap-1">
-            <Braces className="size-3 shrink-0" aria-hidden />
-            Using a reference — resolved when the workflow runs.
-            {description ? ` ${description}` : ''}
+          // `items-start` + a nudge keeps the marker on the FIRST line when the
+          // text wraps (with `items-center` it floats to the vertical middle of
+          // a 2-3 line block, which reads as a stray glyph).
+          <span className="flex items-start gap-1">
+            <Braces className="mt-0.5 size-3 shrink-0" aria-hidden />
+            <span>
+              Using a reference — resolved when the workflow runs.
+              {description ? ` ${description}` : ''}
+            </span>
           </span>
         ) : (
           description || undefined

@@ -4,7 +4,7 @@
 // renders + overlay triggers + panel/slot registrations) that the reconciliation
 // gate (scripts/reconcile-state-matrix.mjs) checks the gallery entries against.
 //
-// 339 surfaces carry renderable-state signals; 2076 signals total.
+// 339 surfaces carry renderable-state signals; 2077 signals total.
 
 /** A signal is one mechanically-detected render fork (a state the surface can be in). */
 export interface StateSignal {
@@ -4054,7 +4054,8 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/workflow/components/builder/RefInsertMenu",
     requiredStates: [],
     signals: [
-      { kind: "branch", condition: "ref.hint", line: 50 },
+      { kind: "branch", condition: "ref.hint", line: 56 },
+      { kind: "branch", condition: "compact", line: 66 },
     ],
   },
   "modules/workflow/components/builder/StepConfigPanel": {
@@ -4070,8 +4071,8 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     signals: [
       { kind: "branch", condition: "from == null", line: 47 },
       { kind: "empty", condition: "steps.length === 0", line: 59 },
-      { kind: "branch", condition: "problems > 0", line: 111 },
-      { kind: "empty", condition: "problems === 0 && cautions > 0", line: 121 },
+      { kind: "branch", condition: "problems > 0", line: 115 },
+      { kind: "empty", condition: "problems === 0 && cautions > 0", line: 128 },
     ],
   },
   "modules/workflow/components/builder/ToolArgumentsForm": {
@@ -4079,9 +4080,9 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     requiredStates: [],
     signals: [
       { kind: "branch", condition: "templated", line: 83 },
-      { kind: "branch", condition: "templated", line: 107 },
-      { kind: "branch", condition: "templated", line: 199 },
-      { kind: "branch", condition: "spec.overflowNames.length > 0", line: 238 },
+      { kind: "branch", condition: "templated", line: 111 },
+      { kind: "branch", condition: "templated", line: 203 },
+      { kind: "branch", condition: "spec.overflowNames.length > 0", line: 247 },
     ],
   },
   "modules/workflow/components/builder/ToolStepForm": {

@@ -103,29 +103,39 @@ export function StepList({ store }: StepListProps) {
                     <Tag
                       variant="outline"
                       tone="info"
-                      className="text-xs self-start"
+                      className="min-w-0 self-start truncate text-xs"
                       data-testid={`wf-builder-step-kind-${step.id}`}
                     >
                       {STEP_KIND_LABELS[step.kind as StepKind] ?? step.kind}
                     </Tag>
+                    {/* Icon + count only: the list column is `w-80` minus the
+                        grip and three buttons, so a spelled-out "1 problem"
+                        next to the kind Tag wraps onto a second line. The full
+                        phrasing stays available to assistive tech + on hover. */}
                     {problems > 0 && (
                       <span
-                        className="flex items-center gap-1 text-xs text-destructive"
+                        className="flex shrink-0 items-center gap-1 whitespace-nowrap text-xs text-destructive"
                         data-testid={`wf-builder-step-invalid-${step.id}`}
                         title={`${problems} problem${problems === 1 ? '' : 's'}`}
                       >
                         <XCircle className="size-3 shrink-0" aria-hidden />
-                        {problems} problem{problems === 1 ? '' : 's'}
+                        {problems}
+                        <span className="sr-only">
+                          problem{problems === 1 ? '' : 's'}
+                        </span>
                       </span>
                     )}
                     {problems === 0 && cautions > 0 && (
                       <span
-                        className="flex items-center gap-1 text-xs text-warning"
+                        className="flex shrink-0 items-center gap-1 whitespace-nowrap text-xs text-warning"
                         data-testid={`wf-builder-step-warned-${step.id}`}
                         title={`${cautions} thing${cautions === 1 ? '' : 's'} to check`}
                       >
                         <AlertTriangle className="size-3 shrink-0" aria-hidden />
-                        {cautions} to check
+                        {cautions}
+                        <span className="sr-only">
+                          thing{cautions === 1 ? '' : 's'} to check
+                        </span>
                       </span>
                     )}
                   </div>
