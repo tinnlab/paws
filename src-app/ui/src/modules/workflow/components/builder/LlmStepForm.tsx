@@ -1,6 +1,6 @@
 import { Segmented } from '@ziee/kit'
 import type { WorkflowBuilderStore } from '../../stores/WorkflowBuilder.store'
-import { type BuilderStep, configErrors } from './stepForms'
+import { type BuilderStep, configErrors, promptSuppliedByFile, PROMPT_FROM_FILE_NOTE } from './stepForms'
 import { LabeledControl, PromptField } from './builderFields'
 
 type LlmStep = Extract<BuilderStep, { kind: 'llm' }>
@@ -15,6 +15,12 @@ export function LlmStepForm({ store, step }: Props) {
   const errors = configErrors(step)
   const patch = (p: Record<string, unknown>) => store.updateStep(step.id, p)
 
+  // A step whose wording comes from `prompt_file:` needs no typed prompt
+  // (validate.rs: WORKFLOW_PROMPT_MISSING fires only when NEITHER is
+  // present). Marking it required anyway is a false statement, and the
+  // only one left on the field — obeying it produces WORKFLOW_PROMPT_BOTH.
+  const fromFile = promptSuppliedByFile(step)
+
   return (
     <div className="flex flex-col gap-4">
       <PromptField
@@ -25,7 +31,8 @@ export function LlmStepForm({ store, step }: Props) {
         onChange={v => patch({ prompt: v })}
         placeholder="Write the prompt. Insert a reference to reuse an input or a prior step's output."
         rows={6}
-        required
+        required={!fromFile}
+        description={fromFile ? PROMPT_FROM_FILE_NOTE : undefined}
         error={errors.prompt}
         testid="wf-builder-llm-prompt"
       />

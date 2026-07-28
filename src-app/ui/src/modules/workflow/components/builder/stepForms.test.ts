@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 
 import {
@@ -299,5 +302,46 @@ test('buildStepZodSchema returns a schema for each kind (no throw)', () => {
     assert.ok(schema, `schema built for ${kind}`)
     // safeParse never throws even on garbage input.
     assert.doesNotThrow(() => schema.safeParse({ nonsense: true } as never))
+  }
+})
+
+test('the required marker agrees with the schema about prompt_file steps', () => {
+  // R7 finding. Round 6 lifted the prompt REQUIREMENT for a `prompt_file:` step
+  // but the three forms still passed a hardcoded `required`, so the asterisk —
+  // the only remaining statement about that field — stayed FALSE, and obeying
+  // it produces WORKFLOW_PROMPT_BOTH. The two halves must read the wire shape
+  // the SAME way, which is why the forms import the schema's own predicate
+  // rather than re-deriving one.
+  //
+  // Source-scanned because `required` is a render-time prop: a value test on
+  // `promptSuppliedByFile` alone would still pass with the forms hardcoding it.
+  const HERE = dirname(fileURLToPath(import.meta.url))
+  // Scoped to the PROMPT field's own block. `LlmMapStepForm`'s other
+  // `PromptField` is `for_each`, a non-Option backend field that IS always
+  // required — asserting over the whole file would wrongly flag it.
+  const cases = [
+    ['AgentStepForm.tsx', 'wf-builder-agent-prompt'],
+    ['LlmStepForm.tsx', 'wf-builder-llm-prompt'],
+    ['LlmMapStepForm.tsx', 'wf-builder-map-prompt'],
+  ] as const
+  for (const [file, testid] of cases) {
+    const src = readFileSync(join(HERE, file), 'utf8')
+    const end = src.indexOf(testid)
+    assert.ok(end > 0, `${file}: expected a PromptField carrying ${testid}`)
+    const block = src.slice(src.lastIndexOf('<PromptField', end), end)
+    assert.match(
+      src,
+      /promptSuppliedByFile\(step\)/,
+      `${file}: must derive the prompt's requiredness from prompt_file, not hardcode it`,
+    )
+    assert.ok(
+      !/\n\s+required\n/.test(block),
+      `${file}: a bare \`required\` on the prompt field re-asserts the false requirement`,
+    )
+    assert.match(
+      src,
+      /PROMPT_FROM_FILE_NOTE/,
+      `${file}: the file-backed state must STATE its reason (DESIGN 2.5), not just drop the asterisk`,
+    )
   }
 })

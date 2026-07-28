@@ -213,7 +213,20 @@ const promptField = (label: string, suppliedByFile: boolean) => {
 /** Whether a step supplies its wording from a file, by the backend's rule
  *  (`prompt_file: Option<String>` → `is_some()`; anything serde would not
  *  deserialize into `Some(String)` is not a file). */
-function promptSuppliedByFile(step: unknown): boolean {
+/**
+ * What the author is told when a step's wording comes from `prompt_file:`.
+ *
+ * The builder renders no `prompt_file` control, so without this the field is a
+ * blank required-looking box with no explanation — a SILENT degradation, which
+ * DESIGN §2.5 forbids. Naming the file is also what stops the author "fixing"
+ * the emptiness and landing on WORKFLOW_PROMPT_BOTH.
+ */
+export const PROMPT_FROM_FILE_NOTE =
+  'This step takes its wording from a prompt file in the workflow bundle, so ' +
+  'there is nothing to type here. Type something to override it — but then ' +
+  'remove the file, since a step cannot use both.'
+
+export function promptSuppliedByFile(step: unknown): boolean {
   return typeof (step as { prompt_file?: unknown })?.prompt_file === 'string'
 }
 

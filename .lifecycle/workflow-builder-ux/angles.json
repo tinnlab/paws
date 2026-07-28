@@ -112,5 +112,12 @@
     "test-reality",
     "coverage-honesty"
   ],
-  "_comment_sdk": "The `sdk` submodule pointer bump (22d48e1 -> 364925d) contains EXACTLY one mechanically-generated delta: six data-testid literals added to packages/kit/src/testIds.generated.ts by gen-testid-registry.mjs. It is the same class as openapi.json / api-client/types.ts (derived output the coverage law excludes) but is not on that exclude list, so it is recorded explicitly. The angles listed are the ones that genuinely reviewed those six ids at their STAMPING SITES: ux-accessibility (components agent \u2014 flagged the non-unique wf-builder-finding-goto id), patterns-conformance + coverage-honesty (gallery agent \u2014 verified testid uniqueness across surfaces), and test-reality (tests agent \u2014 the e2e specs select by these ids). The parent additionally verified the regen is byte-identical from BOTH npm workspaces and that the delta is exactly those six ids and nothing else."
+  "_comment_sdk": "The `sdk` submodule pointer bump (22d48e1 -> 364925d) contains EXACTLY one mechanically-generated delta: six data-testid literals added to packages/kit/src/testIds.generated.ts by gen-testid-registry.mjs. It is the same class as openapi.json / api-client/types.ts (derived output the coverage law excludes) but is not on that exclude list, so it is recorded explicitly. The angles listed are the ones that genuinely reviewed those six ids at their STAMPING SITES: ux-accessibility (components agent \u2014 flagged the non-unique wf-builder-finding-goto id), patterns-conformance + coverage-honesty (gallery agent \u2014 verified testid uniqueness across surfaces), and test-reality (tests agent \u2014 the e2e specs select by these ids). The parent additionally verified the regen is byte-identical from BOTH npm workspaces and that the delta is exactly those six ids and nothing else.",
+  "src-app/server/src/modules/workflow/handlers/dev.rs": [
+    "api-contract",
+    "security-authz",
+    "correctness-logic",
+    "design-conformance",
+    "regression-risk"
+  ]
 }

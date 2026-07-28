@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import { Accordion, InputNumber, Segmented, Text, Textarea } from '@ziee/kit'
 
 import type { WorkflowBuilderStore } from '../../stores/WorkflowBuilder.store'
-import { type BuilderStep, configErrors } from './stepForms'
+import { type BuilderStep, configErrors, promptSuppliedByFile, PROMPT_FROM_FILE_NOTE } from './stepForms'
 import { LabeledControl, PromptField } from './builderFields'
 import { CapabilityMultiSelect } from './capabilities'
 import { McpServer } from '@/modules/mcp/stores/mcpServer'
@@ -55,6 +55,12 @@ export function AgentStepForm({ store, step }: AgentStepFormProps) {
     capabilityLabels,
   })
 
+  // A step whose wording comes from `prompt_file:` needs no typed prompt
+  // (validate.rs: WORKFLOW_PROMPT_MISSING fires only when NEITHER is
+  // present). Marking it required anyway is a false statement, and the
+  // only one left on the field — obeying it produces WORKFLOW_PROMPT_BOTH.
+  const fromFile = promptSuppliedByFile(step)
+
   return (
     <div className="flex flex-col gap-4">
       <PromptField
@@ -65,7 +71,8 @@ export function AgentStepForm({ store, step }: AgentStepFormProps) {
         onChange={v => patch({ prompt: v })}
         placeholder="Describe the task in plain language, e.g. “Find the three most-cited papers on the topic and summarise their key findings.”"
         rows={5}
-        required
+        required={!fromFile}
+        description={fromFile ? PROMPT_FROM_FILE_NOTE : undefined}
         error={errors.prompt}
         testid="wf-builder-agent-prompt"
       />
