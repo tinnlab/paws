@@ -12,3 +12,5 @@ src-app/ui/src/dev/gallery/STATE_MATRIX.md	1	4000	correctness,maintainability,wi
 src-app/ui/src/dev/gallery/stateMatrix.generated.ts	1	4000	correctness,maintainability,wired-and-behaving
 sdk	1	1	extensibility,scope-drift,process,maintainability
 agent-kit	1	1	scope-drift,process,wired-and-behaving
+src-app/ui/src/dev/gallery/RUNTIME_FINDINGS.md	1	4000	correctness,maintainability,wired-and-behaving
+src-app/ui/src/dev/gallery/RUNTIME_FINDINGS.jsonl	1	20000	correctness,maintainability,wired-and-behaving
