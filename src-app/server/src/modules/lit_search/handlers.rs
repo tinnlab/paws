@@ -546,6 +546,18 @@ async fn do_dedup_records(args: &Value) -> Result<Value, AppError> {
     let mut union_capped = false;
     'flatten: for set in args.record_sets {
         for rec_val in set {
+            // A model that stringifies the OUTER array often stringifies the
+            // inner records too. Undecoded, each one failed `from_value` and was
+            // silently counted as `dropped` — the caller saw a smaller union
+            // with no indication why. Decode per element; a genuinely malformed
+            // record still falls to `dropped`.
+            let rec_val = crate::common::tool_args::coerce_value(
+                rec_val.clone(),
+                crate::common::tool_args::ArgShape::Object,
+                "record_sets[][]",
+                LIT_RECORD_SETS_EXAMPLE,
+            )
+            .unwrap_or(rec_val);
             match serde_json::from_value::<super::models::LitRecord>(rec_val) {
                 Ok(rec) => {
                     *identified.entry(rec.source.clone()).or_insert(0) += 1;
@@ -627,7 +639,17 @@ async fn do_select_included(args: &Value) -> Result<Value, AppError> {
     let mut excluded = 0usize;
     let mut skipped = 0usize;
     for d in &args.decisions {
-        let Some(obj) = d.as_object() else {
+        // Same inner-element stringification as `record_sets` above: a
+        // JSON-encoded decision object used to fall straight to `skipped`,
+        // quietly shrinking the PRISMA include set.
+        let decoded = crate::common::tool_args::coerce_value(
+            d.clone(),
+            crate::common::tool_args::ArgShape::Object,
+            "decisions[]",
+            LIT_DECISIONS_EXAMPLE,
+        )
+        .unwrap_or_else(|_| d.clone());
+        let Some(obj) = decoded.as_object() else {
             // null (a dropped llm_map item) or a non-object record → not a decision.
             skipped += 1;
             continue;

@@ -484,16 +484,23 @@ mod tests {
             "the refusal must name the bound: {err}"
         );
 
-        // A 50-deep nesting must ALSO stop at the bound — proving the unwrap is
-        // a bounded repetition and not an unbounded `while let` that would
-        // happily follow model-controlled input all the way down.
+        // A DEEP nesting must ALSO stop at the bound — proving the unwrap is a
+        // bounded repetition and not an unbounded `while let` that would happily
+        // follow model-controlled input all the way down.
+        //
+        // Depth is 10, not 50: every re-encode escapes the previous layer's
+        // quotes, so the FIXTURE grows ~2^n. (50 layers is ~2^50 bytes and hangs
+        // the test — observed, not theorised.) 10 layers is 8 past the bound,
+        // which is all the assertion needs.
+        const DEEP: usize = 10;
+        assert!(DEEP > MAX_STRING_UNWRAPS, "the fixture must exceed the bound");
         let mut deep = serde_json::to_string(&obj).unwrap();
-        for _ in 0..50 {
+        for _ in 0..DEEP {
             deep = serde_json::to_string(&deep).unwrap();
         }
         assert!(
             coerce_value(Value::String(deep), ArgShape::Object, "schema", EX).is_err(),
-            "a 50-deep encoding must be refused, not unwrapped"
+            "a {DEEP}-deep encoding must be refused, not unwrapped"
         );
     }
 
