@@ -2165,15 +2165,15 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!hasTransport \|\| resolved !== null` | 139 |
-| branch | `elicitationExists(data.elicitation_id)` | 140 |
-| branch | `spent >= HEAL_BUDGET` | 142 |
-| branch | `submitting \|\| resolved !== null \|\| elicitationIsUnactionable(blocked)` | 188 |
-| branch | `resolved === 'approved'` | 213 |
-| branch | `resolved === 'denied'` | 213 |
-| branch | `serverParenLabel(data.server)` | 224 |
-| branch | `data.input !== undefined` | 236 |
-| branch | `resolved === null` | 284 |
+| branch | `!hasTransport \|\| resolved !== null` | 140 |
+| branch | `elicitationExists(data.elicitation_id)` | 141 |
+| branch | `spent >= HEAL_BUDGET` | 153 |
+| branch | `submitting \|\| resolved !== null \|\| elicitationIsUnactionable(blocked)` | 201 |
+| branch | `resolved === 'approved'` | 226 |
+| branch | `resolved === 'denied'` | 226 |
+| branch | `serverParenLabel(data.server)` | 237 |
+| branch | `data.input !== undefined` | 249 |
+| branch | `resolved === null` | 297 |
 
 ### `modules/js-tool/components/JsToolSettingsSection`
 

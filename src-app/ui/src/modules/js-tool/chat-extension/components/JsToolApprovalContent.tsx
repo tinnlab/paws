@@ -78,6 +78,7 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
     id: data.elicitation_id,
     n: 0,
   })
+  const healCount = useRef<{ id: string; n: number }>({ id: data.elicitation_id, n: 0 })
   const statusId = `run-js-approval-status-${data.elicitation_id}`
 
   // Derive the resolved state from the CORE-owned elicitation seam (the live
@@ -138,9 +139,21 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
   useEffect(() => {
     if (!hasTransport || resolved !== null) return
     if (elicitationExists(data.elicitation_id)) return
-    const spent = healAttempts.id === data.elicitation_id ? healAttempts.n : 0
+    // The count is read from a REF and mirrored into state (FIX_ROUND-12).
+    //
+    // `healAttempts` is deliberately NOT a dep: listing it collapsed the retry
+    // cadence, because every set allocates a new object, so the effect re-ran
+    // itself and burned the whole budget in one tick at mount — after which no
+    // later seam change could retry at all, the opposite of what FIX_ROUND-8
+    // added the seam trigger for. And the register call stays OUT of the state
+    // updater, which React may invoke twice under StrictMode; an updater must be
+    // pure. The ref carries the count for the effect, the state carries it for
+    // the render (which is what makes the "budget spent" copy observable at all).
+    const spent = healCount.current.id === data.elicitation_id ? healCount.current.n : 0
     if (spent >= HEAL_BUDGET) return
-    setHealAttempts({ id: data.elicitation_id, n: spent + 1 })
+    healCount.current = { id: data.elicitation_id, n: spent + 1 }
+    setHealAttempts(healCount.current)
+    registerElicitation(runJsElicitationInit(data))
     // No need to consume the boolean here (FIX_ROUND-7): whether it succeeded is
     // observable from the seam itself — `entryExists` above derives the
     // `not-registered` state, which SURFACES the condition and clears itself when
