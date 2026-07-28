@@ -177,12 +177,11 @@ test('TEST-36 (ITEM-24): literature / knowledge-base / workflow no longer import
   ]
   const violations: string[] = []
   for (const rel of offenders) {
-    let text: string
-    try {
-      text = readFileSync(join(SRC, rel), 'utf8')
-    } catch {
-      continue // the file may legitimately have been removed
-    }
+    // No `catch { continue }` (FIX_ROUND-10): the same tolerance was removed from
+    // the sibling guard below on the grounds that a rename must fail loudly, and
+    // an identical construct in the same file did not deserve an exception —
+    // proven by renaming one of these files WITH the forbidden import re-added.
+    const text = readFileSync(join(SRC, rel), 'utf8')
     const code = text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
     if (/from\s+['"][^'"]*MessageFilesView['"]/.test(code)) {
       violations.push(`${rel} still imports MessageFilesView`)
@@ -322,7 +321,12 @@ test('FIX_ROUND-5: ChatMessage re-resolves rail steps THROUGH withSegmentationSh
   // condemned in the Rust drift parser's 400-byte window. Scan to the start of
   // the next top-level `const `/`function `/`return ` at indentation 2.
   const after = code.slice(declStart + 'const resolveStep'.length)
-  const nextDecl = after.search(/\n {2}(?:const|function|return|\/\*\*) /)
+  // Terminate on ANY 2-indent construct, not just const/function/return
+  // (FIX_ROUND-10): an `if`/`for`/`useEffect` following the declaration was
+  // swallowed into the window, so a `withSegmentationShape(` in a NEIGHBOURING
+  // statement satisfied the declaration-level check — reopening the "merely the
+  // file" hole at a smaller radius.
+  const nextDecl = after.search(/\n {2}[A-Za-z]/)
   const decl = after
     .slice(0, nextDecl === -1 ? after.length : nextDecl)
     .replace(/\s+/g, ' ')
@@ -405,7 +409,11 @@ function buttonProps(code: string): string[] {
         if (ch === quote) quote = null
         continue
       }
-      if (ch === '"' || ch === "'" || ch === '`') quote = ch
+      // Quotes only count in the ATTRIBUTE list (depth 0). Inside a prop
+      // expression an apostrophe is ordinary JSX TEXT (`icon={<span>Don't…`),
+      // not a string opener — treating it as one swallowed the next element and
+      // false-RED'd on correct code (FIX_ROUND-10).
+      if (depth === 0 && (ch === '"' || ch === "'" || ch === '`')) quote = ch
       else if (ch === '{') depth++
       else if (ch === '}') depth--
       else if (ch === '>' && depth === 0) break
@@ -420,7 +428,16 @@ test('FIX_ROUND-8: no `tooltip` on a Button that can be disabled (kit clobbers a
   const violations: string[] = []
   for (const rel of APPROVAL_SURFACES) {
     // No `catch { continue }` — a renamed file must fail, not silently pass.
-    for (const props of buttonProps(codeOf(rel))) {
+    const all = buttonProps(codeOf(rel))
+    // NON-VACUITY (FIX_ROUND-10): the scan keys on the literal `<Button`, so a
+    // surface that spells its control anything else would find zero elements and
+    // pass with the defect present — proven by renaming the element.
+    assert.ok(
+      all.length > 0,
+      `${rel} renders no <Button> — this guard would be vacuous for it. Either the ` +
+        `control was renamed (update the scanner) or the surface no longer belongs here.`,
+    )
+    for (const props of all) {
       // `disabled` as an assignment, as BOOLEAN SHORTHAND, or via a spread —
       // all three reach `nativeDisabled`, and the first cut only saw the first.
       const canDisable =
@@ -447,16 +464,37 @@ test('FIX_ROUND-9: the approval controls disable ONLY through the seam predicate
   // left everything green. This pins the call sites.
   const rel = 'modules/js-tool/chat-extension/components/JsToolApprovalContent.tsx'
   const props = buttonProps(codeOf(rel))
-  const disabling = props.filter(p => /\bdisabled\s*=/.test(p))
+  const disabling = props.filter(
+    p => /\bdisabled\s*=/.test(p) || /\{\s*\.\.\..*\bdisabled\b/.test(p),
+  )
   assert.ok(disabling.length >= 2, `expected the approve/deny controls, found ${disabling.length}`)
-  for (const p of disabling) {
-    const expr = /\bdisabled\s*=\s*\{([^}]*)\}/.exec(p)?.[1]?.trim()
-    assert.equal(
-      expr,
-      'elicitationIsUnactionable(blocked)',
-      'an approval control must derive `disabled` from the seam predicate — every ' +
-        'time a state the user could still act through was disabled, the card ' +
-        'became unanswerable (three times: FIX_ROUND-4, -6, -7)',
+  assert.match(
+    codeOf(rel),
+    /elicitationIsUnactionable\s*\(/,
+    'the card must derive its disable decision from the seam predicate — every time ' +
+      'a state the user could still act through was disabled, the card became ' +
+      'unanswerable (three times: FIX_ROUND-4, -6, -7)',
+  )
+  for (const p of props) {
+    // A PREDICATE, not an exact string (FIX_ROUND-10): pinning the spelling
+    // false-RED'd on behaviour-preserving refactors (hoisting the value to a
+    // const, renaming the local) with a message that misdiagnosed them. What
+    // matters is that the decision goes through the seam and that nothing
+    // re-derives it from "any blocked reason", which is the latch.
+    const hasDisabled = /\bdisabled\s*=/.test(p) || /\{\s*\.\.\..*\bdisabled\b/.test(p)
+    if (!hasDisabled) continue
+    // The file must go through the seam predicate SOMEWHERE — checked once,
+    // below — and each element must not re-derive the decision. Requiring the
+    // call INSIDE the prop would false-RED on hoisting it to a local, which is a
+    // behaviour-preserving refactor the guard has no business rejecting.
+    // …and must not ALSO re-derive it. A later spread wins at runtime, so a
+    // conforming prop plus `{...{ disabled: blocked !== null }}` fully reverts
+    // the decision while satisfying the check above (FIX_ROUND-10).
+    assert.doesNotMatch(
+      p.replace(/\s+/g, ' '),
+      /disabled\s*[:=]\s*\{?\s*blocked\s*(!==|===)/,
+      'an approval control must not re-derive `disabled` from the raw blocked ' +
+        'reason — that is the FIX_ROUND-7 latch',
     )
   }
 })

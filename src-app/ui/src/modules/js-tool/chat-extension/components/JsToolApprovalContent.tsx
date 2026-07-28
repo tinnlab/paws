@@ -9,7 +9,9 @@ import {
   elicitationVersion,
   hasElicitationTransport,
   elicitationBlockedReason,
+  elicitationIsError,
   elicitationIsUnactionable,
+  resolveDidFail,
   elicitationExists,
   registerElicitation,
   resolveElicitationVia,
@@ -52,11 +54,22 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
   const [resolveFailed, setResolveFailed] = useState(false)
   const statusRef = useRef<HTMLElement>(null)
   /**
-   * How many times the self-heal has tried. Bounded (FIX_ROUND-9) so a provider
-   * that violates the register→`has()` contract cannot spin this effect: the seam
-   * contract now states the requirement, and this is the consumer-side belt.
+   * Self-heal budget, per elicitation.
+   *
+   * Bounded (FIX_ROUND-9) so a provider that violates the register→`has()`
+   * contract cannot spin this effect — the contract states the requirement and
+   * this is the consumer-side belt. A conforming provider costs exactly one
+   * attempt, so the bound never binds in practice; three gives a transient
+   * failure a couple of retries without becoming a busy-loop.
+   *
+   * KEYED to the id (FIX_ROUND-10): a bare counter let a component instance React
+   * reuses for a DIFFERENT elicitation inherit a spent budget and get zero
+   * attempts. Note the budget is per-MOUNT, so scrolling the virtualized
+   * transcript away and back grants a fresh one — deliberate: a remount is a new
+   * chance for a transient failure to have cleared.
    */
-  const healAttempts = useRef(0)
+  const HEAL_BUDGET = 3
+  const healAttempts = useRef<{ id: string; n: number }>({ id: data.elicitation_id, n: 0 })
   const statusId = `run-js-approval-status-${data.elicitation_id}`
 
   // Derive the resolved state from the CORE-owned elicitation seam (the live
@@ -91,6 +104,12 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
    * disabled the card permanently after a single failure.
    */
   const hasTransport = hasElicitationTransport()
+  // Once the budget is spent the self-heal has STOPPED, so the present-progressive
+  // copy below would be an active falsehood (FIX_ROUND-10). The user is not stuck
+  // — the controls stay live and still POST — but they should not be told work is
+  // ongoing when it is not.
+  const healExhausted =
+    healAttempts.current.id === data.elicitation_id && healAttempts.current.n >= HEAL_BUDGET
   // `entryExists` is read from the seam on every bump, so `not-registered` clears
   // itself the moment the self-heal below succeeds — nothing latches.
   const blocked = elicitationBlockedReason({
@@ -111,8 +130,11 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
   useEffect(() => {
     if (!hasTransport || resolved !== null) return
     if (elicitationExists(data.elicitation_id)) return
-    if (healAttempts.current >= 3) return
-    healAttempts.current += 1
+    if (healAttempts.current.id !== data.elicitation_id) {
+      healAttempts.current = { id: data.elicitation_id, n: 0 }
+    }
+    if (healAttempts.current.n >= HEAL_BUDGET) return
+    healAttempts.current.n += 1
     // No need to consume the boolean here (FIX_ROUND-7): whether it succeeded is
     // observable from the seam itself — `entryExists` above derives the
     // `not-registered` state, which DISABLES the controls and clears itself when
@@ -164,32 +186,15 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
       // failure from "the POST was rejected", and the only one the transport can
       // report, so it gets its own user-visible message.
       const carried = await resolveElicitationVia(data.elicitation_id, action)
-      // FIX_ROUND-6: `carried === false` only covers a transport that is absent or
-      // THROWS. The shipped provider swallows its own errors and signals a
-      // rejected POST by ROLLING THE ENTRY BACK to 'pending' — so the failure a
-      // user actually hits produced no message at all, which is the original
-      // silent-failure symptom this whole thread started from. Treat a settled
-      // resolve that left the entry pending as the same failure.
-      // FIX_ROUND-6: `carried === false` covers only an absent or THROWING
-      // transport. The shipped provider swallows its own errors and signals a
-      // rejected POST by ROLLING THE ENTRY BACK — so the failure a user actually
-      // hits produced no message at all.
-      // FIX_ROUND-7: `undefined` counts too — with no entry the provider's
-      // optimistic set is a no-op and its catch returns early, so the status stays
-      // undefined. Defensive rather than observed (FIX_ROUND-8): the shipped
-      // provider never deletes an entry, and the `not-registered` state already
-      // describes the no-entry case at higher precedence. Kept because the seam's
-      // contract permits `status()` to return undefined, so a conforming provider
-      // that DOES delete on resolve must not read as success here.
-      // Only judge the outcome when the provider HELD an entry to judge it by
-      // (FIX_ROUND-9). With no entry, its optimistic update is a no-op and the
-      // status stays `undefined` — but the POST still went out and the suspended
-      // script still resumed, so recording that as a failure marks a SUCCESSFUL
-      // approve as failed. `not-registered` already describes that card, and the
-      // self-heal is what resolves it.
+      // The shipped provider swallows its own errors and signals a rejected POST
+      // by ROLLING THE ENTRY BACK, so `carried` alone never sees the failure a
+      // user actually hits — that is what `resolveDidFail` reads. (An earlier
+      // draft also treated a missing entry as failure; FIX_ROUND-9 removed that
+      // because the POST still goes out and the script still resumes, and
+      // FIX_ROUND-10 deleted the paragraph that still claimed otherwise.)
       const after = elicitationStatus(data.elicitation_id)
       const hadEntry = elicitationExists(data.elicitation_id)
-      if (!carried || (hadEntry && after === 'pending')) setResolveFailed(true)
+      if (resolveDidFail({ carried, hadEntry, after })) setResolveFailed(true)
     } finally {
       setSubmitting(false)
     }
@@ -248,11 +253,7 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
               // (FIX_ROUND-9). `not-registered` is transient, self-healing and
               // explicitly answerable — painting it in the destructive red
               // DESIGN_SYSTEM.md reserves for errors contradicted its own copy.
-              type={
-                !resolved && (blocked === 'no-transport' || blocked === 'resolve-failed')
-                  ? 'danger'
-                  : 'secondary'
-              }
+              type={!resolved && elicitationIsError(blocked) ? 'danger' : 'secondary'}
               className="mt-2 block text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-sm"
               data-testid={statusId}
               data-status={resolved ?? blocked ?? 'pending'}
@@ -264,7 +265,9 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
                   : blocked === 'no-transport'
                     ? 'This request cannot be answered right now — the approval channel is unavailable. It will become answerable on its own once the connection is back, or reload the conversation.'
                     : blocked === 'not-registered'
-                      ? 'Reopening this request — you can still answer it.'
+                      ? healExhausted
+                        ? 'This request could not be reopened locally — you can still answer it, or reload the conversation.'
+                        : 'Reopening this request — you can still answer it.'
                       : blocked === 'resolve-failed'
                         ? "That didn't go through — try again."
                         : ''}

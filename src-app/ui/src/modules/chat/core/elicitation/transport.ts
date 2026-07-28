@@ -317,3 +317,37 @@ export function elicitationBlockedReason(args: {
 export function elicitationIsUnactionable(reason: ElicitationBlockedReason | null): boolean {
   return reason === 'no-transport'
 }
+
+/**
+ * Does this state STOP the user, or is it progress they can act through?
+ *
+ * Drives the status tone. `not-registered` is transient, self-healing and
+ * explicitly answerable, so painting it in the destructive red DESIGN_SYSTEM.md
+ * reserves for errors contradicted its own copy (FIX_ROUND-9). Extracted
+ * (FIX_ROUND-10) because reverting that fix left every test green — this
+ * workspace's runner cannot mount JSX, so the DECISION is the testable part.
+ */
+export function elicitationIsError(reason: ElicitationBlockedReason | null): boolean {
+  return reason === 'no-transport' || reason === 'resolve-failed'
+}
+
+/**
+ * Did a resolve attempt genuinely FAIL?
+ *
+ * Judged only when the provider HELD an entry to judge it by. With no entry its
+ * optimistic update is a no-op and the status stays `undefined` — but the POST
+ * still went out and the suspended script still resumed, so recording that as a
+ * failure marks a SUCCESSFUL approve as failed (FIX_ROUND-9). `not-registered`
+ * already describes that card, and the self-heal is what resolves it.
+ *
+ * Extracted (FIX_ROUND-10) for the same reason as above: reverting the fix left
+ * the whole suite green, and the only e2e never reaches a blocked state.
+ */
+export function resolveDidFail(args: {
+  carried: boolean
+  hadEntry: boolean
+  after: ElicitationStatus | undefined
+}): boolean {
+  if (!args.carried) return true
+  return args.hadEntry && args.after === 'pending'
+}

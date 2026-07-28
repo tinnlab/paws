@@ -8,7 +8,9 @@ import {
   elicitationVersion,
   hasElicitationTransport,
   elicitationBlockedReason,
+  elicitationIsError,
   elicitationIsUnactionable,
+  resolveDidFail,
   registerElicitation,
   resolveElicitationVia,
   setElicitationTransport,
@@ -193,9 +195,12 @@ test('elicitationBlockedReason keeps its THREE states distinct', () => {
     'no-transport',
   )
 
-  // A transport exists but holds no entry: a decision would resolve into nothing,
-  // so this DISABLES too. FIX_ROUND-6 reported it as `resolve-failed`, which keeps
-  // the buttons live and describes an attempt the user never made.
+  // A transport exists but holds no entry. FIX_ROUND-6 reported this as
+  // `resolve-failed`, which describes an attempt the user never made. It gets its
+  // own state — and, from FIX_ROUND-8, it does NOT disable: the provider POSTs
+  // unconditionally, so a click still reaches /respond and still resumes the
+  // suspended script. (An earlier draft of this comment said the opposite;
+  // corrected in FIX_ROUND-10.)
   assert.equal(
     elicitationBlockedReason({ ...healthy, entryExists: false }),
     'not-registered',
@@ -236,4 +241,38 @@ test('ONLY the impossible state disables a control', () => {
   assert.equal(elicitationIsUnactionable('not-registered'), false)
   assert.equal(elicitationIsUnactionable('resolve-failed'), false)
   assert.equal(elicitationIsUnactionable(null), false)
+})
+
+test('elicitationIsError: only the states that STOP the user are errors', () => {
+  // FIX_ROUND-10. `not-registered` is transient, self-healing and answerable, so
+  // painting it destructive-red contradicted its own copy. Reverting that fix
+  // left the whole suite green, which is why the decision is a function now.
+  assert.equal(elicitationIsError('no-transport'), true)
+  assert.equal(elicitationIsError('resolve-failed'), true)
+  assert.equal(elicitationIsError('not-registered'), false, 'progress, not an error')
+  assert.equal(elicitationIsError(null), false)
+})
+
+test('resolveDidFail: judge the outcome ONLY when there was an entry to judge by', () => {
+  const undef = undefined
+  // Nothing carried the decision -> failure, whatever the provider holds.
+  assert.equal(resolveDidFail({ carried: false, hadEntry: true, after: 'pending' }), true)
+  assert.equal(resolveDidFail({ carried: false, hadEntry: false, after: undef }), true)
+
+  // Carried, entry present, still pending -> the provider ROLLED BACK: a real
+  // rejected POST, and the one the shipped provider actually reports this way.
+  assert.equal(resolveDidFail({ carried: true, hadEntry: true, after: 'pending' }), true)
+
+  // Carried and settled -> success.
+  assert.equal(resolveDidFail({ carried: true, hadEntry: true, after: 'accepted' }), false)
+  assert.equal(resolveDidFail({ carried: true, hadEntry: true, after: 'declined' }), false)
+
+  // THE FIX (FIX_ROUND-9): carried with NO entry. The optimistic update is a
+  // no-op so the status stays undefined — but the POST went out and the script
+  // resumed. Reporting that as a failure marked a SUCCESSFUL approve as failed.
+  assert.equal(
+    resolveDidFail({ carried: true, hadEntry: false, after: undef }),
+    false,
+    'a successful POST with no local entry is NOT a failure',
+  )
 })
