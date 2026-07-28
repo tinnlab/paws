@@ -259,6 +259,24 @@ test('withSegmentationShape PRESERVES every field segmentation owns', () => {
   const same: RailStepDescriptor = { ...placed.step }
   assert.equal(withSegmentationShape(placed, same), same)
 
+  // …and the intactness CHECK must cover every pinned field, not just `key`.
+  // FIX_ROUND-7: without these, dropping a term from `shapeIntact` was a silent
+  // mutant — a re-resolved step with a matching key but an UNCLAMPED `consumed`
+  // was returned verbatim, breaking the ITEM-5 invariant this test cites, and
+  // both fixtures above stayed green.
+  const sameKeyWiderConsumed: RailStepDescriptor = { ...placed.step, consumed: 3 }
+  assert.equal(
+    withSegmentationShape(placed, sameKeyWiderConsumed).consumed,
+    1,
+    'a matching key must not let an unclamped consumed through',
+  )
+  const sameKeyBlockingFlipped: RailStepDescriptor = { ...placed.step, blocking: true }
+  assert.equal(
+    withSegmentationShape(placed, sameKeyBlockingFlipped).blocking,
+    false,
+    'a matching key must not let a flipped blocking through',
+  )
+
   // No resolution at all -> fall back to the placed step, never undefined.
   assert.equal(withSegmentationShape(placed, null), placed.step)
   assert.equal(withSegmentationShape(placed, undefined), placed.step)

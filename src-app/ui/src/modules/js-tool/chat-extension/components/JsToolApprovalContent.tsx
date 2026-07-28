@@ -3,7 +3,7 @@ import { Alert, Button, Space, Text } from '@ziee/kit'
 import { Check, Clock, X } from 'lucide-react'
 import type { ContentRendererProps } from '@/modules/chat/core/extensions/types'
 import { serverParenLabel } from '@/modules/chat/core/utils/serverLabel'
-import { runJsElicitationInit } from '../elicitationInit'
+import { runJsElicitationInit, type RunJsApprovalIdentity } from '../elicitationInit'
 import {
   elicitationStatus,
   elicitationVersion,
@@ -24,10 +24,13 @@ import {
  * into the script. Injected as a `run_js_approval` content block by the
  * `runJsApprovalRequired` SSE handler.
  */
-interface JsToolApprovalData {
-  elicitation_id: string
-  tool_name: string
-  server: string
+/**
+ * FIX_ROUND-7: EXTENDS the shared identity rather than restating it. The three
+ * identity fields were declared in three places (here, the factory, and the SSE
+ * frame type), so the card and the handler could drift on the very fields the
+ * card reconciles against.
+ */
+interface JsToolApprovalData extends RunJsApprovalIdentity {
   input?: Record<string, unknown>
 }
 
@@ -77,7 +80,13 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
    * disabled the card permanently after a single failure.
    */
   const hasTransport = hasElicitationTransport()
-  const blocked = elicitationBlockedReason({ hasTransport, resolveFailed })
+  // `entryExists` is read from the seam on every bump, so `not-registered` clears
+  // itself the moment the self-heal below succeeds — nothing latches.
+  const blocked = elicitationBlockedReason({
+    hasTransport,
+    entryExists: elicitationExists(data.elicitation_id),
+    resolveFailed,
+  })
 
   /**
    * SELF-HEAL. mcp's `initialize` awaits a dynamic import before installing the
@@ -91,10 +100,13 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
   useEffect(() => {
     if (!hasTransport || resolved !== null) return
     if (elicitationExists(data.elicitation_id)) return
-    // The boolean IS consumed: a self-heal that itself fails leaves the card
-    // reporting that it cannot be answered rather than offering live buttons over
-    // an entry the provider does not have.
-    if (!registerElicitation(runJsElicitationInit(data))) setResolveFailed(true)
+    // No need to consume the boolean here (FIX_ROUND-7): whether it succeeded is
+    // observable from the seam itself — `entryExists` above derives the
+    // `not-registered` state, which DISABLES the controls and clears itself when
+    // a later attempt lands. FIX_ROUND-6 routed the failure through
+    // `resolveFailed` instead, which keeps the buttons enabled and reports a
+    // resolve the user never attempted, and latched.
+    registerElicitation(runJsElicitationInit(data))
   }, [hasTransport, resolved, data])
 
   /**
@@ -123,7 +135,10 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
   const resolve = async (action: 'accept' | 'decline') => {
     // Re-entrancy guard: never POST twice to a single-use elicitation.
     // Only `no-transport` blocks a retry; a failed resolve stays actionable.
-    if (submitting || resolved !== null || !hasTransport) return
+    // Only the two DISABLING reasons block a retry; `resolve-failed` stays
+    // actionable, which is what makes it a retry rather than a dead end.
+    if (submitting || resolved !== null || blocked === 'no-transport' || blocked === 'not-registered')
+      return
     setSubmitting(true)
     setResolveFailed(false)
     try {
@@ -139,8 +154,15 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
       // user actually hits produced no message at all, which is the original
       // silent-failure symptom this whole thread started from. Treat a settled
       // resolve that left the entry pending as the same failure.
-      const stillPending = elicitationStatus(data.elicitation_id) === 'pending'
-      if (!carried || stillPending) setResolveFailed(true)
+      // FIX_ROUND-6: `carried === false` covers only an absent or THROWING
+      // transport. The shipped provider swallows its own errors and signals a
+      // rejected POST by ROLLING THE ENTRY BACK — so the failure a user actually
+      // hits produced no message at all.
+      // FIX_ROUND-7: `undefined` counts too. When the provider holds no entry its
+      // optimistic set is a no-op and its catch returns early, so the status stays
+      // undefined and a genuinely no-op'd resolve reported success.
+      const after = elicitationStatus(data.elicitation_id)
+      if (!carried || after === 'pending' || after === undefined) setResolveFailed(true)
     } finally {
       setSubmitting(false)
     }
@@ -206,9 +228,11 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
                   ? 'Denied.'
                   : blocked === 'no-transport'
                     ? 'This request cannot be answered right now — the approval channel is unavailable. It will become answerable on its own once the connection is back, or reload the conversation.'
-                    : blocked === 'resolve-failed'
-                      ? "That didn't go through — try again."
-                      : ''}
+                    : blocked === 'not-registered'
+                      ? 'Reopening this request… if it stays this way, reload the conversation.'
+                      : blocked === 'resolve-failed'
+                        ? "That didn't go through — try again."
+                        : ''}
             </Text>
             {resolved === null && (
               <div className="mt-3">
@@ -236,7 +260,7 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
                     icon={<Check />}
                     onClick={() => resolve('accept')}
                     loading={submitting}
-                    disabled={blocked === 'no-transport'}
+                    disabled={blocked === 'no-transport' || blocked === 'not-registered'}
                     aria-describedby={blocked ? statusId : undefined}
                     size="default"
                     data-testid={`run-js-approval-approve-${data.elicitation_id}`}
@@ -248,7 +272,7 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
                     icon={<X />}
                     onClick={() => resolve('decline')}
                     loading={submitting}
-                    disabled={blocked === 'no-transport'}
+                    disabled={blocked === 'no-transport' || blocked === 'not-registered'}
                     aria-describedby={blocked ? statusId : undefined}
                     size="default"
                     data-testid={`run-js-approval-deny-${data.elicitation_id}`}

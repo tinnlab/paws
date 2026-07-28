@@ -182,27 +182,45 @@ test('a throwing provider never breaks a transcript render', async () => {
   assert.equal(await quiet(() => resolveElicitationVia('e1', 'accept')), false)
 })
 
-test('elicitationBlockedReason keeps NO-TRANSPORT and RESOLVE-FAILED distinct', () => {
+test('elicitationBlockedReason keeps its THREE states distinct', () => {
+  const healthy = { hasTransport: true, entryExists: true, resolveFailed: false }
+  assert.equal(elicitationBlockedReason(healthy), null, 'the healthy case is actionable')
+
+  // Nothing can carry the decision -> the controls must be dead.
   assert.equal(
-    elicitationBlockedReason({ hasTransport: true, resolveFailed: false }),
-    null,
-    'the healthy case is actionable',
+    elicitationBlockedReason({ ...healthy, hasTransport: false }),
+    'no-transport',
   )
 
-  // No transport: nothing can carry the decision -> the controls must be dead.
-  assert.equal(elicitationBlockedReason({ hasTransport: false, resolveFailed: false }), 'no-transport')
+  // A transport exists but holds no entry: a decision would resolve into nothing,
+  // so this DISABLES too. FIX_ROUND-6 reported it as `resolve-failed`, which keeps
+  // the buttons live and describes an attempt the user never made.
+  assert.equal(
+    elicitationBlockedReason({ ...healthy, entryExists: false }),
+    'not-registered',
+  )
 
-  // A rejected POST with a transport present is TRANSIENT and must stay
-  // retryable — this is the distinction FIX_ROUND-4 collapsed, which made one
-  // failure disable the card for the life of the mount.
-  assert.equal(elicitationBlockedReason({ hasTransport: true, resolveFailed: true }), 'resolve-failed')
+  // A rejected POST with an entry present is TRANSIENT and must stay retryable —
+  // the distinction FIX_ROUND-4 collapsed, which disabled the card for the life
+  // of the mount.
+  assert.equal(
+    elicitationBlockedReason({ ...healthy, resolveFailed: true }),
+    'resolve-failed',
+  )
 
-  // No transport dominates: reporting "try again" would be a lie when there is
-  // nothing to try against.
-  assert.equal(elicitationBlockedReason({ hasTransport: false, resolveFailed: true }), 'no-transport')
+  // PRECEDENCE, both steps: no-transport dominates not-registered (there is
+  // nothing to register against), and not-registered dominates resolve-failed
+  // (reporting a failed retry against an entry that does not exist is a lie).
+  assert.equal(
+    elicitationBlockedReason({ hasTransport: false, entryExists: false, resolveFailed: true }),
+    'no-transport',
+  )
+  assert.equal(
+    elicitationBlockedReason({ hasTransport: true, entryExists: false, resolveFailed: true }),
+    'not-registered',
+  )
 
-  // LIVE, not latched: the same resolveFailed with a transport back is the
-  // retryable state, and with the failure cleared it is actionable again — the
-  // caller re-derives on every seam bump, so the card recovers by itself.
-  assert.equal(elicitationBlockedReason({ hasTransport: true, resolveFailed: false }), null)
+  // LIVE, not latched: with the transport back and the entry present, the same
+  // resolveFailed is the retryable state, and clearing it is actionable again.
+  assert.equal(elicitationBlockedReason(healthy), null)
 })

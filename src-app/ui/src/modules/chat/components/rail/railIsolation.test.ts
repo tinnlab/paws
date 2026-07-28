@@ -287,6 +287,14 @@ test('FIX_ROUND-5: ChatMessage re-resolves rail steps THROUGH withSegmentationSh
     .map(l => l.replace(/\/\/.*$/, ''))
     .join('\n')
 
+  // Both halves: it must IMPORT the helper from the segmentation module (so a
+  // locally-defined shadow of the same name cannot satisfy the call check) and
+  // CALL it. FIX_ROUND-7 restored the import half, which FIX_ROUND-6 dropped
+  // while removing a genuinely redundant assertion next to it.
+  assert.ok(
+    importsOf(file).some(spec => spec.endsWith('rail/railSegmentation')),
+    'withSegmentationShape must come from the segmentation module, not a local shadow',
+  )
   assert.match(
     code,
     /withSegmentationShape\s*\(/,
@@ -296,9 +304,17 @@ test('FIX_ROUND-5: ChatMessage re-resolves rail steps THROUGH withSegmentationSh
   // FIX_ROUND-6: the first version used `[^)]*`, which cannot cross the inner `)`
   // of `railCtx(placed)` — so it did not match the real revert spelling at all
   // and was decoration reading as coverage.
+  // Whitespace normalised PER LINE, not across the file (FIX_ROUND-7): collapsing
+  // the whole file to one line let the lazy `.*?` span it, so any future unrelated
+  // co-occurrence of `resolveRailStep(` and `)?.step ?? placed.step` would
+  // false-RED.
+  const perLine = code
+    .split(/\r?\n/)
+    .map(l => l.replace(/\s+/g, ' '))
+    .join('\n')
   assert.doesNotMatch(
-    code.replace(/\s+/g, ' '),
-    /resolveRailStep\(.*?\)\?\.step \?\? placed\.step/,
+    perLine,
+    /resolveRailStep\([^\n]*?\)\?\.step \?\? placed\.step/,
     'resolveStep must not return the contribution step directly — that discards ' +
       'segmentation’s disambiguated key and its consumed clamp',
   )

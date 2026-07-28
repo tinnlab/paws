@@ -62,7 +62,24 @@ test.describe('run_js inner-tool approval', () => {
     const prompt = page.locator(`[data-testid="run-js-approval-${eid}"]`).first()
     await expect(prompt).toBeVisible({ timeout: 30000 })
 
-    await page.locator(`[data-testid="run-js-approval-approve-${eid}"]`).click()
+    const approve = page.locator(`[data-testid="run-js-approval-approve-${eid}"]`)
+    const deny = page.locator(`[data-testid="run-js-approval-deny-${eid}"]`)
+
+    // FIX_ROUND-7: pin the ACCESSIBLE NAMES. This property flip-flopped across two
+    // fix rounds with nothing guarding it: FIX_ROUND-5 added a `tooltip` to the
+    // disabled state, and kit Button derives `aria-label` from a string tooltip
+    // UNCONDITIONALLY — so both controls announced identically and became
+    // indistinguishable to a screen reader (WCAG 2.5.3 / 4.1.2). Re-adding it
+    // turns this red.
+    await expect(approve).toHaveAccessibleName(/approve/i)
+    await expect(deny).toHaveAccessibleName(/deny/i)
+    // Healthy transport -> both actionable, and no description pointing at an
+    // empty status region.
+    await expect(approve).toBeEnabled()
+    await expect(deny).toBeEnabled()
+    await expect(approve).not.toHaveAttribute('aria-describedby', /./)
+
+    await approve.click()
 
     await expect.poll(() => respondAction, { timeout: 5000 }).toBe('accept')
     await expect(page.locator(`[data-testid="run-js-approval-status-${eid}"]`)).toHaveAttribute(

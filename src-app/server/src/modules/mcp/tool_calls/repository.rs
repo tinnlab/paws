@@ -75,6 +75,24 @@ pub async fn insert_call(pool: &PgPool, req: CreateMcpToolCall) -> Result<McpToo
     Ok(row)
 }
 
+/// EVERY column [`list_calls_for_user`] narrows on under `user_id = $1` — read off
+/// the query, NOT off the table's column list.
+///
+/// Lives OUTSIDE `#[cfg(test)]` on purpose (FIX_ROUND-7): the authoritative
+/// owner-leading index guard is an INTEGRATION test
+/// (`tests/mcp/tool_call_index_test.rs`), which is a separate crate linked against
+/// the lib built WITHOUT `cfg(test)`. A `pub(crate)` const inside the unit-test
+/// module was invisible to it, so that test hand-duplicated this list and the
+/// "the two cannot drift" claim was false — a sixth narrowing would have updated
+/// only one copy and silently narrowed a security guard.
+pub const FILTERED_LOOKUP_COLUMNS: [&str; 5] = [
+    "server_id",
+    "conversation_id",
+    "is_built_in",
+    "tool_use_id",
+    "message_id",
+];
+
 /// The optional filters `GET /api/mcp/tool-calls` accepts, grouped so adding one
 /// does not grow every signature between the handler and the SQL (clippy's
 /// `too_many_arguments` was already at the limit).
@@ -424,20 +442,6 @@ mod tests {
         );
     }
 
-    /// EVERY column [`list_calls_for_user`] narrows on under `user_id = $1` —
-    /// read off the query, NOT off the table's column list.
-    ///
-    /// Consumed by the AUTHORITATIVE guard, which lives in
-    /// `tests/mcp/tool_call_index_test.rs` and interrogates `pg_indexes` on a
-    /// really-migrated database. Exported here so the two cannot drift.
-    pub(crate) const FILTERED_LOOKUP_COLUMNS: [&str; 5] = [
-        "server_id",
-        "conversation_id",
-        "is_built_in",
-        "tool_use_id",
-        "message_id",
-    ];
-
     /// FIX_ROUND-6: the hand-rolled SQL replay this used to be is DELETED.
     ///
     /// FIX_ROUND-2 introduced a unit test that re-implemented enough of a SQL
@@ -465,37 +469,55 @@ mod tests {
     /// What remains here is the column list itself, shared with that test.
     #[test]
     fn filtered_lookup_columns_match_the_query() {
-        // The list is only meaningful if it tracks the SQL. `list_calls_for_user`
-        // is in this file; assert each column appears as an optional narrowing in
-        // its WHERE clause, and that no OTHER `($n IS NULL OR col = $n)` narrowing
-        // exists that the list has missed.
+        // The list is only meaningful if it tracks the SQL, so parse the ACTUAL
+        // WHERE clause of `list_calls_for_user` and compare.
+        //
+        // FIX_ROUND-7: bounded by the real `ORDER BY`, not a hardcoded 400-byte
+        // window that silently truncated a 7th narrowing mid-predicate — and
+        // every `AND (` line must PARSE, so a narrowing written in any other
+        // shape (`AND (($7…`, a function on the left, `= ANY($7)`) fails loudly
+        // instead of being skipped into agreement with a stale const.
         let src = include_str!("repository.rs");
         let start = src
-            .find("FROM mcp_tool_calls\n        WHERE user_id = $1")
+            .find("FROM mcp_tool_calls")
             .expect("locate the list query");
-        let where_clause = &src[start..start + 400];
+        let rest = &src[start..];
+        let end = rest.find("ORDER BY").expect("locate the end of the WHERE clause");
+        let where_clause = &rest[..end];
 
         let mut found: Vec<String> = Vec::new();
         for line in where_clause.lines() {
             let line = line.trim();
-            let Some(rest) = line.strip_prefix("AND ($") else {
+            if !line.starts_with("AND (") {
                 continue;
-            };
-            // `AND ($2::uuid IS NULL OR server_id = $2)` -> "server_id"
-            if let Some(col) = rest.split(" OR ").nth(1).and_then(|c| c.split(" =").next()) {
-                found.push(col.trim().to_string());
+            }
+            let col = line
+                .strip_prefix("AND ($")
+                .and_then(|rest| rest.split(" OR ").nth(1))
+                .and_then(|c| c.split(" =").next())
+                .map(str::trim)
+                .filter(|c| !c.is_empty() && c.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_'));
+            match col {
+                Some(c) => found.push(c.to_string()),
+                None => panic!(
+                    "an optional narrowing this test cannot parse: `{line}`. It would be                      SILENTLY dropped, letting a stale FILTERED_LOOKUP_COLUMNS agree with a                      query it no longer matches. Teach this parser the new shape."
+                ),
             }
         }
+        assert!(
+            !found.is_empty(),
+            "parsed no narrowings at all — the anchor no longer matches and this              guard would be vacuous"
+        );
+
         found.sort();
-        let mut expected: Vec<String> =
-            FILTERED_LOOKUP_COLUMNS.iter().map(|c| c.to_string()).collect();
+        let mut expected: Vec<String> = super::FILTERED_LOOKUP_COLUMNS
+            .iter()
+            .map(|c| c.to_string())
+            .collect();
         expected.sort();
         assert_eq!(
             found, expected,
-            "FILTERED_LOOKUP_COLUMNS must equal the optional narrowings in \
-             list_calls_for_user's WHERE clause — the owner-leading index guard \
-             in tests/mcp/tool_call_index_test.rs is scoped by this list, so a \
-             drift here silently narrows a security guard"
+            "FILTERED_LOOKUP_COLUMNS must equal the optional narrowings in              list_calls_for_user's WHERE clause — the owner-leading index guard in              tests/mcp/tool_call_index_test.rs is scoped by this list, so a drift              here silently narrows a security guard"
         );
     }
 

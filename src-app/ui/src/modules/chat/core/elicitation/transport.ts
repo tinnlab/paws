@@ -261,32 +261,37 @@ export function __resetElicitationTransportForTests(): void {
 }
 
 /** Why a card's approve/deny cannot be actioned right now, or `null` when it can. */
-export type ElicitationBlockedReason = 'no-transport' | 'resolve-failed'
+export type ElicitationBlockedReason = 'no-transport' | 'not-registered' | 'resolve-failed'
 
 /**
- * Classify a card's actionability. TWO DISTINCT states that FIX_ROUND-4 wrongly
- * collapsed into one boolean, with a real regression as the result:
+ * Classify a card's actionability. THREE distinct states, because collapsing them
+ * has now caused a regression twice:
  *
- *  - **`no-transport`** — there is nothing to carry the decision. The controls
- *    must be DISABLED (clicking would silently no-op), and the state is LIVE: it
- *    clears by itself the moment an extension installs a transport, because the
- *    caller re-reads it on every seam bump.
- *  - **`resolve-failed`** — a resolve attempt came back `false` with a transport
- *    present, i.e. the provider rejected. That is TRANSIENT and must stay
- *    RETRYABLE. FIX_ROUND-4 folded it into the disable predicate, which also
- *    gated the reset that cleared it — one failure disabled both buttons for the
- *    life of the mount, with the reset statement unreachable. That was strictly
- *    worse than the behaviour it replaced.
+ *  - **`no-transport`** — nothing can carry the decision. DISABLE (clicking would
+ *    silently no-op). LIVE: clears itself the moment an extension installs a
+ *    transport, because the caller re-derives on every seam bump.
+ *  - **`not-registered`** (FIX_ROUND-7) — a transport exists but the provider
+ *    holds no entry for this id, so a decision would resolve into nothing. DISABLE.
+ *    Also live: the card re-registers itself, and this clears when that succeeds.
+ *    FIX_ROUND-6 signalled this case as `resolve-failed`, which by design keeps the
+ *    buttons ENABLED and says "that didn't go through" about an attempt the user
+ *    never made — the opposite of what its own comment claimed, and it latched.
+ *  - **`resolve-failed`** — a resolve attempt genuinely failed with an entry
+ *    present. TRANSIENT: keep the controls ENABLED, because retrying is the point.
+ *    FIX_ROUND-4 folded this into the disable predicate, which gated its own reset
+ *    and disabled the card for the life of the mount.
  *
- * Nothing here is latched, and there is deliberately no third "declared" term:
- * a registration failure recorded into the message block could never be
- * corrected (see the FIX_ROUND-5 note in js-tool's SSE handler).
+ * Nothing here is latched, and there is deliberately no "declared" term: a
+ * registration failure recorded into the message block could never be corrected
+ * (see the FIX_ROUND-5 note in js-tool's SSE handler).
  */
 export function elicitationBlockedReason(args: {
   hasTransport: boolean
+  entryExists: boolean
   resolveFailed: boolean
 }): ElicitationBlockedReason | null {
   if (!args.hasTransport) return 'no-transport'
+  if (!args.entryExists) return 'not-registered'
   if (args.resolveFailed) return 'resolve-failed'
   return null
 }
