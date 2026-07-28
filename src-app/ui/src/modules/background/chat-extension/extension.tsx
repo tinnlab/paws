@@ -11,6 +11,7 @@
 import { Bot } from 'lucide-react'
 import { createExtension, type ChatExtension } from '@/modules/chat/core/extensions'
 import { BackgroundRunsFooter } from '../components/BackgroundRunsFooter'
+import { backgroundRailContributions } from './railContribution'
 import '../types' // PanelRendererMap declaration merge for 'background'
 
 const backgroundExtension: ChatExtension = createExtension({
@@ -33,6 +34,10 @@ const backgroundExtension: ChatExtension = createExtension({
       component: BackgroundRunsPanel,
     })
   },
+
+  // ACTIVITY-RAIL contributions (ITEM-20): this module describes its own
+  // `background_mcp` tool steps, so no central tool map ever learns them.
+  railContributions: backgroundRailContributions,
 
   // Pinned below the last turn. The component renders null when the conversation
   // has no runs, so it is invisible on an ordinary chat and only appears once a

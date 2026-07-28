@@ -12,6 +12,7 @@ It seeds **several conversations** (all in a "UI Showcase" project):
 | **Scenario · Tool call — completed** | One clean completed tool call in isolation. |
 | **Scenario · Elicitation — waiting for input** | The **pending elicitation form** (`status='pending'`). |
 | **Scenario · Elicitation — resolved** | Accepted + declined elicitations side by side. |
+| **Scenario · Activity rail — multi-step run awaiting approval** | Three completed steps followed by a **pending approval** break-out — the rail with real content above the thing that needs the user. |
 
 The scenario conversations isolate ONE state each so it's obvious in the sidebar
 — particularly the two **seedable "waiting" states**:
@@ -74,8 +75,13 @@ FILES_DIR='/path/to/app-data/files' \
 ```
 
 Then open the conversation in the chat UI (as the owner user) and scroll top to
-bottom. The mcp tool-call **Calls** tab (per built-in server) shows the 13
-recorded calls, including the failed + cancelled ones.
+bottom. The mcp tool-call **Calls** tab (per built-in server) shows the recorded
+calls, including the failed / cancelled / timed-out ones. For the exact count of
+what is currently seeded, ask the DB rather than trusting this file:
+
+```bash
+psql "$DB_URL" -c "SELECT server_name, status, count(*) FROM mcp_tool_calls GROUP BY 1,2 ORDER BY 1,2;"
+```
 
 ## What it covers
 
@@ -109,6 +115,17 @@ recorded calls, including the failed + cancelled ones.
   **in-flight** tool_use with no result yet, and **empty `{}` input**. The
   `mcp_tool_calls` rows cover every `status` (completed/failed/cancelled/timeout)
   and every `source` (chat/always/rest/sampling/approval) for the Calls tab.
+- **Activity-rail shapes** (SECTION C, turns C16-C19 — the turns above render as
+  a single quiet line each, which is not what the rail exists for):
+  a **multi-tool run** (five consecutive `tool_use`/`tool_result` pairs across
+  four servers in ONE assistant message), an **artifact-producing run** (a result
+  carrying three `resource_links`), a run that **succeeds then fails then times
+  out** mid-way (a failed step must never hide inside a collapsed summary), and
+  **`knowledge_base`** — `list_knowledge_bases` + `search_knowledge` with the
+  real `structuredContent` shape from `knowledge_base/handlers.rs`, seeded
+  deliberately `indexing_incomplete` (7 of 9 documents searchable) so the
+  half-indexed banner renders. The pending-approval rail lives in its own
+  scenario conversation (see the table above).
 - **Files:** PNG + JPG (as `image` blocks), PDF / CSV / multi-sheet XLSX / .py /
   .md / large .txt (as `file_attachment` blocks), tool-returned `resource_link`
   files, and 2 project files. On-disk bytes land at

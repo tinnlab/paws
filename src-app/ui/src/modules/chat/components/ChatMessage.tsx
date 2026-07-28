@@ -1,4 +1,4 @@
-import { Fragment, memo, useMemo, useRef, type ReactNode } from 'react'
+import { memo, useMemo, useRef, type ReactNode } from 'react'
 import { Alert, ScrollArea } from '@ziee/kit'
 import { cn } from '@/lib/utils'
 import type {
@@ -16,6 +16,11 @@ import { shouldOfferCollapse } from '@/modules/chat/components/collapsible'
 import { messageText } from '@/modules/chat/components/findMatches'
 import { useConversationFind } from '@/modules/chat/components/ConversationFindContext'
 import { normalizeToolResultOrder } from '@/modules/chat/core/utils/normalizeToolResultOrder'
+import { ActivityRail } from '@/modules/chat/components/rail/ActivityRail'
+import {
+  segmentRail,
+  type PlacedRailStep,
+} from '@/modules/chat/components/rail/railSegmentation'
 
 export const ChatMessage = memo(function ChatMessage({
   message,
@@ -134,31 +139,100 @@ export const ChatMessage = memo(function ChatMessage({
       : sortedContents,
   )
 
-  // Render blocks with a run-loop (not a plain map): a renderer that claims a
-  // block can consume the blocks that follow it (via its static `contentSpan`),
-  // so e.g. the MCP extension can fold a consecutive tool_use/tool_result run
-  // into one "N tools called" group. `renderContent` reports how many blocks it
-  // took; we advance past them. A block no extension claims falls back to the
-  // built-in ContentRenderer (consumes 1).
+  // ── Activity-rail segmentation (ITEM-2) ────────────────────────────────────
+  // Blocks are segmented ONCE into activity spans vs prose vs breakouts, and
+  // every span records how many blocks each of its steps owns. The renderer
+  // below walks that same array, so the "span says N, renders M" class of bug
+  // that the retired group card lived with is structurally impossible (ITEM-5).
+  //
+  // Membership comes from CONTRIBUTIONS — core asks each extension "is this a
+  // step of yours?" and never inspects a tool name itself.
+  const segments = segmentRail(
+    bubbleBlocks,
+    ctx => chatExtensionRegistry.resolveRailStep(ctx)?.step ?? null,
+  )
+
+  const railCtx = (placed: PlacedRailStep) => ({
+    content: bubbleBlocks[placed.index],
+    blocks: bubbleBlocks,
+    index: placed.index,
+  })
+
+  /**
+   * Re-derive one step's descriptor at RENDER time.
+   *
+   * Segmentation above runs during THIS component's render, and this component
+   * is `memo`'d on the message — it subscribes to nothing live. A tool call that
+   * finishes without adding a block to the message (the ordinary case: the
+   * `mcpToolComplete` frame only updates the live store) would therefore leave
+   * the segmented descriptor frozen at `running`, with a ticking timer that never
+   * settles, until some unrelated re-render happened to refresh it.
+   *
+   * So the rail re-resolves each step inside `ActivityRail`, which IS subscribed
+   * to the live-step seam. Segmentation still decides the SHAPE of the message
+   * exactly once (ITEM-5 — the span/render desync stays structurally impossible);
+   * only the per-step status/timing/artifacts refresh.
+   */
+  const resolveStep = (placed: PlacedRailStep) =>
+    chatExtensionRegistry.resolveRailStep(railCtx(placed))?.step ?? placed.step
+
+  /** Resolve one step's inline detail through the SAME contribution that
+   *  described it, so the label and the body can never come from different
+   *  extensions. */
+  const renderStepDetail = (placed: PlacedRailStep): ReactNode => {
+    const ctx = railCtx(placed)
+    const resolved = chatExtensionRegistry.resolveRailStep(ctx)
+    if (!resolved) return null
+    return chatExtensionRegistry.renderRailDetail(
+      ctx,
+      resolved.contribution,
+      renderAsUser,
+      placed.step.consumed,
+    )
+  }
+
   const bubbleNodes: ReactNode[] = []
-  for (let i = 0; i < bubbleBlocks.length; ) {
-    const block = bubbleBlocks[i]
-    const key = block.id || `blk-${i}`
-    const res = chatExtensionRegistry.renderContent({
-      content: block,
-      isUser: renderAsUser,
-      blocks: bubbleBlocks,
-      index: i,
-    })
-    if (res) {
-      bubbleNodes.push(<Fragment key={key}>{res.node}</Fragment>)
-      i += res.consumed
-    } else {
+  for (const seg of segments) {
+    const block = bubbleBlocks[seg.index]
+    const key = block?.id || `blk-${seg.index}`
+
+    if (seg.kind === 'span') {
+      // A rail is keyed by the message, never by component state (INV-7): its
+      // expanded state survives the virtualiser unmounting this row.
       bubbleNodes.push(
-        <ContentRenderer key={key} content={block} isUser={renderAsUser} />,
+        <ActivityRail
+          key={`rail-${seg.steps[0]?.step.key ?? seg.index}`}
+          steps={seg.steps}
+          messageId={message.id}
+          isStreaming={isStreaming}
+          resolveStep={resolveStep}
+          renderStepDetail={renderStepDetail}
+        />,
       )
-      i += 1
+      continue
     }
+
+    if (seg.kind === 'breakout') {
+      // Anything that needs the USER breaks out of the rail (INV-3): full width,
+      // and with no control that collapses or hides it. The contribution declared
+      // it blocking; core does not know which content types those are.
+      //
+      // It renders through the ORDINARY content path, not the step's inline
+      // detail body — a request for input is not a "detail", it is the surface
+      // itself. An approval prompt must arrive as the full approve/deny card the
+      // extension already ships, not as the lighter argument/result body a
+      // collapsed row expands into.
+      bubbleNodes.push(
+        <div key={`breakout-${key}`} className="w-full" data-testid="rail-breakout">
+          <ContentRenderer content={block} isUser={renderAsUser} />
+        </div>,
+      )
+      continue
+    }
+
+    bubbleNodes.push(
+      <ContentRenderer key={key} content={block} isUser={renderAsUser} />,
+    )
   }
 
   return (

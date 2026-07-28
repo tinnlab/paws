@@ -342,22 +342,18 @@ impl McpRepository {
     }
 
     /// List a user's tool-call history (owner-scoped, paginated, filterable by
-    /// server / conversation / built-in).
+    /// server / conversation / built-in / tool_use_id / message_id).
     pub async fn list_tool_calls(
         &self,
         user_id: Uuid,
-        server_id: Option<Uuid>,
-        conversation_id: Option<Uuid>,
-        is_built_in: Option<bool>,
+        filters: super::tool_calls::repository::ToolCallFilters<'_>,
         page: i64,
         per_page: i64,
     ) -> Result<super::tool_calls::McpToolCallListResponse, AppError> {
         let (calls, total) = super::tool_calls::repository::list_calls_for_user(
             &self.pool,
             user_id,
-            server_id,
-            conversation_id,
-            is_built_in,
+            filters,
             page,
             per_page,
         )
@@ -381,6 +377,24 @@ impl McpRepository {
         user_id: Uuid,
     ) -> Result<Option<super::tool_calls::McpToolCall>, AppError> {
         super::tool_calls::repository::find_call_for_user(&self.pool, id, user_id).await
+    }
+
+    /// ITEM-17 / DEC-1 reveal: the RAW (unredacted) `tool_use.input` paired with a
+    /// recorded call, owner-scoped through the conversation. `None` when the
+    /// transcript block no longer exists.
+    pub async fn get_raw_tool_use_input(
+        &self,
+        message_id: Uuid,
+        tool_use_id: &str,
+        user_id: Uuid,
+    ) -> Result<Option<serde_json::Value>, AppError> {
+        super::tool_calls::repository::find_raw_tool_use_input(
+            &self.pool,
+            message_id,
+            tool_use_id,
+            user_id,
+        )
+        .await
     }
 
     /// Delete tool-call rows older than `cutoff` (retention prune).

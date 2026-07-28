@@ -9,6 +9,13 @@ import type {
   ContentRendererProps,
 } from '@/modules/chat/core/extensions/types'
 import { resolveCancel } from '@/modules/chat/core/extensions/beforeSendCancel'
+import type {
+  RailActivityContext,
+  RailContribution,
+  RailStepDescriptor,
+} from '@/modules/chat/components/rail/railTypes'
+import { RailContributionRegistry } from '@/modules/chat/core/extensions/railRegistryCore'
+import { RailStepDetail } from '@/modules/chat/components/rail/RailStepDetail'
 import React from 'react'
 import { createSlotRegistry } from '@ziee/framework/slots'
 
@@ -69,6 +76,25 @@ export class ChatExtensionRegistry {
     string,
     Array<{ extension: ChatExtension; Component: React.ComponentType<ContentRendererProps> }>
   > = new Map()
+
+  /**
+   * ACTIVITY-RAIL contribution registry (ITEM-1).
+   *
+   * Deliberately a SEPARATE registry BESIDE `contentTypeRegistry`, not a rewrite
+   * of renderer resolution. Two reasons:
+   *
+   *  1. Correctness — a rail step and a rendered block are different questions.
+   *     A contribution may describe a step it does not render (it delegates the
+   *     body straight back through `renderContent`), and a renderer may render a
+   *     block that is not a step at all.
+   *  2. Merge safety — this file is one of the three hottest on the branch
+   *     (BASE.md). An additive field + three thin delegations merge cleanly
+   *     against a concurrent edit to `renderContent`; a rewrite would not.
+   *
+   * The resolution logic itself lives in a pure, JSX-free module so it is
+   * reachable from a unit spec (`railRegistryCore.ts`).
+   */
+  private railContributions = new RailContributionRegistry()
 
   /**
    * SSE event handler registry: Maps event types to handlers
@@ -223,6 +249,24 @@ export class ChatExtensionRegistry {
       )
     }
 
+    // Register ACTIVITY-RAIL contributions (ITEM-1). Sorted by `order` (falling
+    // back to the extension's priority) so a generic fallback contribution can
+    // deliberately sit behind every tool-family contribution.
+    if (extension.railContributions) {
+      this.railContributions.register(
+        extension.name,
+        extension.railContributions,
+        extension.priority ?? 100,
+      )
+
+      console.log(
+        `[ChatExtensions] Registered rail contributions for ${extension.name}:`,
+        extension.railContributions
+          .flatMap(c => c.contentTypes)
+          .join(', '),
+      )
+    }
+
     // Register slot components via the generic slot registry (gap G8).
     if (extension.slots) {
       this.slots.register(extension.name, extension.slots)
@@ -321,6 +365,9 @@ export class ChatExtensionRegistry {
         this.contentTypeRegistry.set(contentType, filtered)
       }
     }
+
+    // Clear rail-contribution entries for this extension
+    this.railContributions.unregister(name)
 
     // Clear SSE event handler registry entries for this extension
     for (const [eventType, entries] of this.sseEventHandlerRegistry.entries()) {
@@ -919,13 +966,100 @@ export class ChatExtensionRegistry {
   }
 
   /**
+   * Resolve the ACTIVITY-RAIL step anchored at `ctx.index`, if any extension
+   * claims it.
+   *
+   * First non-null wins, in `order` (then priority) sequence — the same
+   * first-wins discipline `renderContent` uses. Returns the owning contribution
+   * alongside the descriptor so the caller can render the step's detail through
+   * the SAME contribution that described it (they can never disagree).
+   *
+   * A contribution that throws is skipped, not fatal: a broken descriptor must
+   * degrade the row, never break the transcript.
+   */
+  resolveRailStep(
+    ctx: RailActivityContext,
+  ): { step: RailStepDescriptor; contribution: RailContribution } | null {
+    return this.railContributions.resolve(
+      ctx,
+      name => this.extensionOptions.get(name)?.enabled !== false,
+      (name, error) =>
+        console.error(
+          `[ChatExtensions] Error describing rail activity in ${name}:`,
+          error,
+        ),
+    )
+  }
+
+  /**
+   * The inline detail body for a resolved step (ITEM-11 / INV-2).
+   *
+   * When the contribution supplies no `renderDetail` — the normal case — the
+   * rail DELEGATES to `renderContent({ content })` with NO neighbour list. That
+   * is the documented non-recursion guard, and it is what makes expanding a
+   * knowledge-base step render the knowledge-base card and a file step render
+   * the file preview: the rail re-uses each extension's already-registered
+   * renderer rather than re-implementing anything.
+   */
+  renderRailDetail(
+    ctx: RailActivityContext,
+    contribution: RailContribution,
+    isUser: boolean,
+    /** How many blocks the step OWNS (its `consumed`). Defaults to 1. */
+    consumed = 1,
+  ): React.ReactNode {
+    if (contribution.renderDetail) {
+      try {
+        return contribution.renderDetail(ctx)
+      } catch (error) {
+        console.error('[ChatExtensions] Error rendering rail detail:', error)
+        return null
+      }
+    }
+    // The CORE default body, plus every block the step CONSUMED beyond its
+    // anchor.
+    //
+    // Two separate defects were closed here, both found by the blind audit:
+    //
+    //  - Delegating the ANCHOR to `renderContent` resolved to the extension's
+    //    full tool CARD — a second bordered box with its own chevron inside the
+    //    rail, whose open flag lives in component state (the virtualised-list
+    //    reset INV-7 exists to prevent), and which prints `tool_use.input`
+    //    unredacted. `RailStepDetail` is rendered instead: redacted, chrome-free,
+    //    and unavoidable.
+    //  - Rendering the anchor ALONE dropped the paired `tool_result`, which is
+    //    where the file/knowledge-base/literature renderers live — so a
+    //    tool-produced chart/PDF/CSV lost its inline FileCard entirely. That is a
+    //    real INV-2 regression, and because the set of tools that can emit a
+    //    `resource_link` is open-ended (which is exactly why that renderer is a
+    //    catch-all), it has to be fixed in the delegation rather than by asking
+    //    each contribution to remember.
+    const nodes: React.ReactNode[] = []
+    const anchor = ctx.blocks[ctx.index]
+    const span = Math.max(1, consumed)
+    let paired: import('@/api-client/types').MessageContentDataToolResult | null = null
+    for (let i = ctx.index + 1; i < ctx.index + span && i < ctx.blocks.length; i++) {
+      const b = ctx.blocks[i]
+      if (b.content_type === 'tool_result' && !paired) {
+        paired = b.content as import('@/api-client/types').MessageContentDataToolResult
+      }
+      const node = this.renderContent({ content: b, isUser })
+      if (node) nodes.push(<React.Fragment key={b.id || `d-${i}`}>{node}</React.Fragment>)
+    }
+    return (
+      <>
+        <RailStepDetail block={anchor} result={paired} />
+        {nodes}
+      </>
+    )
+  }
+
+  /**
    * Get content renderer for a specific content type
    * Uses pre-built content-type registry for efficient rendering
    * Only creates components for extensions registered to this content type
    */
-  renderContent(
-    props: ContentRendererProps,
-  ): { node: React.ReactNode; consumed: number } | null {
+  renderContent(props: ContentRendererProps): React.ReactNode | null {
     const contentType = props.content.content_type
     const registered = this.contentTypeRegistry.get(contentType)
 
@@ -947,24 +1081,20 @@ export class ChatExtensionRegistry {
     // is a catch-all (the historical first-wins behavior). This lets several
     // extensions co-own a content type (`tool_result`) without an internal
     // delegation chain — each claims its own, the catch-all handles the rest.
+    //
+    // A renderer ALWAYS renders exactly the block it is handed. The former
+    // `contentSpan` grouping seam is gone (ITEM-5) — grouping is the activity
+    // rail's job and is computed once, so a renderer can no longer claim a span
+    // that disagrees with what it draws.
     for (const { extension, Component } of enabledRegistered) {
       const statics = Component as {
         contentMatch?: (c: ContentRendererProps['content']) => boolean
-        contentSpan?: (blocks: ContentRendererProps['content'][], index: number) => number
       }
       if (statics.contentMatch && !statics.contentMatch(props.content)) {
         continue
       }
       try {
-        // A grouping renderer may consume this block + following ones — but only
-        // when it has the neighbor list (inline in a message). Rendered
-        // standalone (no `blocks`), it always consumes exactly one, so grouping
-        // never recurses when a group renders its own members.
-        const consumed =
-          props.blocks && props.index != null && statics.contentSpan
-            ? Math.max(1, statics.contentSpan(props.blocks, props.index))
-            : 1
-        return { node: <Component {...props} />, consumed }
+        return <Component {...props} />
       } catch (error) {
         console.error(
           `[ChatExtensions] Error rendering content type '${contentType}' in ${extension.name}:`,

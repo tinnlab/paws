@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Alert, Button, Card, Progress, Text } from '@ziee/kit'
 import { ChevronDown } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -6,28 +6,22 @@ import { ToolStatusIcon } from '@/modules/chat/core/ToolStatusIcon'
 import { mcpServerParenLabel } from '@/modules/mcp/chat-extension/serverLabel'
 import {
   createExtension,
-  chatExtensionRegistry,
   type ChatExtension,
   type ContentRendererProps,
 } from '@/modules/chat/core/extensions'
 import type { McpToolCall } from '@/modules/mcp/stores/mcpComposer'
-import type { MessageContent, MessageContentDataToolUse, MessageContentDataToolResult, MessageWithContent, SSEChatStreamMcpElicitationRequiredData } from '@/api-client/types'
+import type { MessageContent, MessageContentDataToolUse, MessageContentDataToolResult, MessageWithContent } from '@/api-client/types'
 import { ToolCallPendingApprovalContent } from '@/modules/mcp/chat-extension/components/ToolCallPendingApprovalContent'
 import { McpMenuItem } from '@/modules/mcp/chat-extension/components/McpMenuItem'
 import { McpConfigModalMount } from '@/modules/mcp/chat-extension/components/McpConfigModalMount'
 import { McpStatusRow } from '@/modules/mcp/chat-extension/components/McpStatusRow'
 import { McpInitializer } from '@/modules/mcp/chat-extension/components/McpInitializer'
 import { ElicitationFormContent } from '@/modules/mcp/chat-extension/components/ElicitationFormContent'
-import { JsToolApprovalContent } from '@/modules/mcp/chat-extension/components/JsToolApprovalContent'
-import {
-  runToolUseIds,
-  hasArtifactInRun,
-  shouldAutoOpen,
-  deriveGroupOpen,
-  resolveArtifactToolUseId,
-  shouldWrapRun,
-} from '@/modules/mcp/chat-extension/toolRun'
-import { McpComposer } from '@/modules/mcp/stores/mcpComposer'
+import { resolveArtifactToolUseId } from '@/modules/mcp/chat-extension/toolRun'
+import { redactedJson } from '@/modules/chat/core/rail/redactToolArgs'
+import { mcpRailContributions } from '@/modules/mcp/chat-extension/railContribution'
+import { setRailLiveSource } from '@/modules/chat/core/rail/liveSteps'
+import { McpComposer, useMcpComposerStore } from '@/modules/mcp/stores/mcpComposer'
 import { McpServer as McpServerStore } from '@/modules/mcp/stores/mcpServer'
 import { Chat } from '@/modules/chat/core/stores/chatBridge'
 
@@ -111,8 +105,15 @@ function McpToolCallUI({ toolCall }: { toolCall: McpToolCall }) {
           {toolCall.input !== undefined && (
             <div className="mb-2">
               <Text strong>Input:</Text>
+              {/* REDACTED at source (ITEM-17 / DEC-1). This is the ONLY renderer
+                  registered for `tool_use`, so it is also what the activity rail
+                  delegates to for every contribution that supplies no
+                  `renderDetail` of its own — i.e. most of them. Redacting the
+                  contributions individually would leave the guarantee one
+                  forgotten opt-in away from failing; redacting here makes it
+                  hold for every tool family by construction. */}
               <pre className="p-2 rounded mt-1 overflow-auto max-h-40">
-                {JSON.stringify(toolCall.input, null, 2)}
+                {redactedJson(toolCall.input)}
               </pre>
             </div>
           )}
@@ -121,7 +122,7 @@ function McpToolCallUI({ toolCall }: { toolCall: McpToolCall }) {
             <div className="mb-2">
               <Text strong>Result:</Text>
               <pre className="p-2 rounded mt-1 overflow-auto max-h-40">
-                {JSON.stringify(toolCall.result, null, 2)}
+                {redactedJson(toolCall.result)}
               </pre>
             </div>
           )}
@@ -219,8 +220,9 @@ function McpToolUseRenderer({ content: data }: ContentRendererProps) {
           {!!toolUseData.input && (
             <div className="mb-2">
               <Text strong>Input:</Text>
+              {/* REDACTED at source — see the note in McpToolCallUI above. */}
               <pre className="p-2 rounded mt-1 overflow-auto max-h-40">
-                {JSON.stringify(toolUseData.input, null, 2)}
+                {redactedJson(toolUseData.input)}
               </pre>
             </div>
           )}
@@ -241,173 +243,6 @@ function McpToolUseRenderer({ content: data }: ContentRendererProps) {
 }
 
 /**
- * A maximal run of consecutive tool blocks starting at `index` — every
- * following `tool_use` / `tool_result` block, stopping at the first block of any
- * other type (e.g. an assistant `text`). Tool calls are emitted as adjacent
- * tool_use→tool_result pairs, so a run of K tool calls is up to 2K blocks.
- */
-function collectToolRun(
-  blocks: MessageContent[],
-  index: number,
-): MessageContent[] {
-  const run: MessageContent[] = []
-  for (let i = index; i < blocks.length; i++) {
-    const t = blocks[i].content_type
-    if (t !== 'tool_use' && t !== 'tool_result') break
-    run.push(blocks[i])
-  }
-  return run
-}
-
-/**
- * Collapsible wrapper for a tool run — a run of ≥2 consecutive tool calls, OR a
- * single tool call that produced an artifact (so its file(s) sit in the same
- * collapsible box). Expanding renders each run member through the registry's
- * single-block path (tool_use → its own card, tool_result → its files), so
- * nothing regroups. The header reads "N tools called" for a multi-tool run and
- * the tool name (+ server label) for a single-tool wrapper.
- */
-function McpToolGroupCard({
-  run,
-  isUser,
-}: {
-  run: MessageContent[]
-  isUser: boolean
-}) {
-  // Live tool statuses. Destructure the Map off the store proxy to create a
-  // reactive subscription (the same pattern as McpToolUseRenderer — the
-  // getToolCall() method does NOT trigger re-renders). An approval / running
-  // status that arrives after mount re-renders this component and opens it.
-  const { toolCalls } = McpComposer
-  // Server rows for resolving a human display name in the single-tool header
-  // (same reactive read + resolution as McpToolUseRenderer).
-  const { servers } = McpServerStore
-  const useIds = runToolUseIds(run)
-  const hasPendingApproval = useIds.some(
-    id => toolCalls.get(id)?.status === 'pending_approval',
-  )
-  const hasRunning = useIds.some(id => toolCalls.get(id)?.status === 'started')
-  const hasArtifact = hasArtifactInRun(run)
-
-  // Auto-open: default open when a tool is running or the run produced an
-  // artifact (latches — the user may collapse afterward). A pending approval
-  // FORCES open so a collapsed group can never hide the approval prompt.
-  const autoOpen = shouldAutoOpen({ hasRunning, hasArtifact })
-  const [userOpen, setUserOpen] = useState(autoOpen)
-  useEffect(() => {
-    if (autoOpen) setUserOpen(true)
-  }, [autoOpen])
-  const isExpanded = deriveGroupOpen({ hasPendingApproval, userOpen })
-
-  const toolUses = run.filter(b => b.content_type === 'tool_use')
-  const resultByUseId = new Map<string, { is_error?: boolean }>()
-  for (const b of run) {
-    if (b.content_type !== 'tool_result') continue
-    const rc = b.content as unknown as { tool_use_id?: string; is_error?: boolean }
-    if (rc.tool_use_id) resultByUseId.set(rc.tool_use_id, rc)
-  }
-  const hasError = [...resultByUseId.values()].some(r => r.is_error)
-  const allDone = toolUses.every(u =>
-    resultByUseId.has((u.content as MessageContentDataToolUse).id),
-  )
-  const icon = (
-    <ToolStatusIcon status={hasError ? 'failed' : !allDone ? 'running' : 'success'} />
-  )
-
-  // Single-tool wrapper (one tool call that produced an artifact): the header
-  // itself stands in for the tool-call block — it shows the tool name + server
-  // label + status icon like the bare McpToolCallUI/McpToolUseRenderer card
-  // ("N tools called" would be wrong for one call). The expanded body then
-  // renders ONLY the result (files); re-rendering the tool_use card too would
-  // duplicate the name/server/status.
-  const singleUse =
-    toolUses.length === 1
-      ? (toolUses[0]?.content as MessageContentDataToolUse | undefined)
-      : null
-  const singleServerLabel = singleUse
-    ? mcpServerParenLabel(
-        servers.find(s => s.id === singleUse.server_id)?.display_name,
-      )
-    : null
-
-  return (
-    <Card size="sm" className={cn('mb-2', !isExpanded && 'py-2.5')} data-testid="mcp-toolgroup-card">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2 min-w-0">
-          {icon}
-          {singleUse ? (
-            <>
-              <Text strong className="truncate" title={singleUse.name || undefined}>
-                {singleUse.name || 'Tool Call'}
-              </Text>
-              {singleServerLabel && (
-                <Text type="secondary" className="text-xs whitespace-nowrap">
-                  {singleServerLabel}
-                </Text>
-              )}
-            </>
-          ) : (
-            <Text strong>{toolUses.length} tools called</Text>
-          )}
-        </div>
-        <Button
-          size="icon"
-          variant="ghost"
-          tooltip={isExpanded ? 'Hide details' : 'Show details'}
-          icon={<ChevronDown className={cn('transition-transform', isExpanded && 'rotate-180')} />}
-          onClick={() => setUserOpen(v => !v)}
-          data-testid="mcp-toolgroup-details-btn"
-        />
-      </div>
-      {isExpanded && (
-        <div className="mt-2 flex flex-col gap-2">
-          {run
-            // For a single-tool wrapper the header already stands in for the
-            // tool_use card, so render only the remaining blocks (its result /
-            // files) to avoid duplicating the tool name+server+status. EXCEPTION:
-            // if that tool errored, keep its tool_use card so its error alert /
-            // message stays visible (the header only shows a 'failed' icon). A
-            // multi-tool group always renders every member.
-            .filter(b => !singleUse || hasError || b.content_type !== 'tool_use')
-            .map((b, i) => {
-              // Single-block render (no `blocks`), so the group renderer falls back
-              // to its single form — no recursion.
-              const res = chatExtensionRegistry.renderContent({ content: b, isUser })
-              return <Fragment key={b.id || `run-${i}`}>{res?.node ?? null}</Fragment>
-            })}
-        </div>
-      )}
-    </Card>
-  )
-}
-
-/**
- * tool_use renderer entry point. Given its neighbor blocks (from ChatMessage's
- * run-loop), it folds a run of ≥2 consecutive tool calls into one
- * `McpToolGroupCard`; otherwise (a lone call, or rendered standalone without
- * neighbors) it defers to the single-tool `McpToolUseRenderer`. Its
- * `contentSpan` tells the run-loop how many blocks the group consumed.
- */
-function McpToolUseGroup(props: ContentRendererProps) {
-  const { content, isUser, blocks, index } = props
-  const run =
-    blocks && index != null ? collectToolRun(blocks, index) : null
-  if (!run || !shouldWrapRun(run)) {
-    return <McpToolUseRenderer content={content} isUser={isUser} />
-  }
-  return <McpToolGroupCard run={run} isUser={isUser} />
-}
-McpToolUseGroup.contentSpan = (blocks: MessageContent[], index: number): number => {
-  const run = collectToolRun(blocks, index)
-  // Swallow the whole run (use+result blocks) ONLY when it wraps — a ≥2-tool run,
-  // or a single tool that produced an artifact. `shouldWrapRun` is the SAME
-  // predicate the render branch uses, so `consumed` always matches what
-  // McpToolGroupCard renders (no run-loop desync). Otherwise consume just this
-  // block so a lone no-artifact tool's result renders normally.
-  return shouldWrapRun(run) ? run.length : 1
-}
-
-/**
  * MCP Extension
  * Handles MCP tool calls, approval workflows, and renders tool call UI
  */
@@ -421,6 +256,28 @@ const mcpExtension: ChatExtension = createExtension({
 
   initialize: async (ctx) => {
     const { ApiClient } = await import('@/api-client')
+
+    // Feed the CORE-owned rail live-step seam (ITEM-9 / DEC-9).
+    //
+    // Three things a persisted `tool_use`/`tool_result` pair cannot express —
+    // `pending-approval`, a start timestamp to tick an elapsed timer from, and
+    // "finished but the result block hasn't landed yet" — live in THIS module's
+    // SSE-fed store. Core declares the shape and reads it; it never imports or
+    // names this module (INV-1). Registration is idempotent, and re-registering
+    // detaches the previous source, so a re-mounted pane cannot leak a
+    // subscription.
+    setRailLiveSource({
+      get: toolUseId => {
+        const call = McpComposer.$.toolCalls.get(toolUseId)
+        if (!call) return null
+        return {
+          status: call.status,
+          startedAt: call.started_at,
+          durationMs: call.duration_ms,
+        }
+      },
+      subscribe: onChange => useMcpComposerStore.subscribe(onChange),
+    })
 
     // Bind the editing-message restore to the OWNING pane's chat store
     // (ctx.chatStore, ITEM-34/5) so editing in a non-focused pane restores that
@@ -493,6 +350,10 @@ const mcpExtension: ChatExtension = createExtension({
         message_id: get().streamingMessage?.id,
         status: 'started',
         input: data.input,
+        // ITEM-14: the frame now carries the call's start instant, so a LIVE
+        // step can show a ticking elapsed time. A DB join cannot serve this —
+        // `mcp_tool_calls` is not written until the call finishes.
+        started_at: data.started_at ?? undefined,
       })
 
       // Inject tool_use content block into streaming message so McpToolUseRenderer can mount
@@ -612,6 +473,9 @@ const mcpExtension: ChatExtension = createExtension({
         // tool's full exact description so the approval card can render them.
         dest_host: data.dest_host,
         description: data.description,
+        // ITEM-25/AP-3 — the server declares its own re-prompt policy instead of
+        // the client hardcoding a built-in server's UUID.
+        always_reprompt: data.always_reprompt ?? undefined,
       })
 
       // Inject tool_use content block into streaming message so McpToolUseRenderer can mount
@@ -706,94 +570,6 @@ const mcpExtension: ChatExtension = createExtension({
       }
     },
 
-    runJsApprovalRequired: async (data, get, set) => {
-      // A run_js script is SUSPENDED awaiting approval of a gated sub-tool call.
-      // Inject a `run_js_approval` content block so JsToolApprovalContent renders
-      // approve/deny; resolution goes via the side-channel elicitation /respond
-      // endpoint (the same in-process oneshot ask_user uses), NOT the
-      // turn-boundary tool_approvals flow — a live script stack can't survive a
-      // request boundary.
-      //
-      // Register an elicitationRequests entry keyed by elicitation_id so
-      // resolveElicitation can reflect the resolved status there (and roll it
-      // back to 'pending' on a failed POST) — the component reads its status
-      // from the store, so a failed approve re-enables the buttons and the
-      // resolved state survives a component remount. Guard on !has() so a
-      // double-delivered SSE frame can't reset an already-resolved entry to
-      // 'pending' (which would re-show the buttons + allow a duplicate POST).
-      if (!McpComposer.$.elicitationRequests.has(data.elicitation_id)) {
-        McpComposer.addElicitationRequest({
-          elicitation_id: data.elicitation_id,
-          message: `run_js wants to call ${data.tool_name}`,
-          requested_schema: {},
-          server: data.server,
-          message_id: null,
-        } as unknown as SSEChatStreamMcpElicitationRequiredData)
-      }
-
-      const chatState = get()
-      const streamingMessage = chatState.streamingMessage
-      const now = new Date().toISOString()
-
-      const approvalContent = {
-        id: '',
-        message_id: '',
-        content_type: 'run_js_approval',
-        content: {
-          type: 'run_js_approval',
-          status: 'pending',
-          elicitation_id: data.elicitation_id,
-          tool_name: data.tool_name,
-          server: data.server,
-          input: data.input,
-        },
-        sequence_order: 0,
-        created_at: now,
-        updated_at: now,
-      } as unknown as MessageContent
-
-      if (streamingMessage) {
-        // Dedup by the unique per-approval elicitation_id.
-        const exists = streamingMessage.contents.some(
-          c =>
-            c.content_type === 'run_js_approval' &&
-            (c.content as unknown as { elicitation_id: string }).elicitation_id === data.elicitation_id,
-        )
-        if (!exists) {
-          approvalContent.id = `${streamingMessage.id}-runjs-${data.elicitation_id}`
-          approvalContent.message_id = streamingMessage.id
-          approvalContent.sequence_order = streamingMessage.contents.length
-
-          const updatedMessage = {
-            ...streamingMessage,
-            contents: [...streamingMessage.contents, approvalContent],
-          }
-          const newMessages = new Map(chatState.messages)
-          newMessages.set(updatedMessage.id, updatedMessage)
-          set({ streamingMessage: updatedMessage, messages: newMessages })
-        }
-      } else {
-        // No streaming message (e.g. after reload / SSE-resume, since generation
-        // is a detached server task) — create one so the approval prompt renders
-        // and the suspended script can still be resumed. Mirrors
-        // mcpElicitationRequired's else-branch.
-        const messageId = `streaming-${Date.now()}`
-        approvalContent.id = `${messageId}-runjs-${data.elicitation_id}`
-        approvalContent.message_id = messageId
-
-        const newMessage: MessageWithContent = {
-          id: messageId,
-          role: 'assistant',
-          contents: [approvalContent],
-          originated_from_id: '',
-          edit_count: 0,
-          created_at: now,
-        }
-        const newMessages = new Map(chatState.messages)
-        newMessages.set(newMessage.id, newMessage)
-        set({ streamingMessage: newMessage, messages: newMessages })
-      }
-    },
 
     mcpElicitationRequired: async (data, get, set) => {
       // data is automatically typed as SSEChatStreamMcpElicitationRequiredData
@@ -874,6 +650,10 @@ const mcpExtension: ChatExtension = createExtension({
         status: data.is_error ? 'error' : 'completed',
         error: data.is_error ? 'Tool execution failed' : undefined,
         result: data.result,
+        // ITEM-14 — the authoritative wall time, so the rail row settles from a
+        // ticking elapsed timer onto the real duration.
+        started_at: data.started_at ?? undefined,
+        duration_ms: data.duration_ms ?? undefined,
       })
     },
 
@@ -1208,11 +988,22 @@ const mcpExtension: ChatExtension = createExtension({
   // render INLINE at that block's position. The registry returns the first
   // renderer for a content type, so registering a null renderer here would
   // shadow the file extension's.
+  // The tool-call CARD renders one block, never a group: grouping is the
+  // ACTIVITY RAIL's job now (ITEM-2/ITEM-5), and the "N tools called" collapsible
+  // group card it replaced is deleted — the two can never coexist, because both
+  // claimed the same `tool_use` blocks and any overlap double-renders or drops
+  // them (DEC-4, hard cutover).
+  //
+  // `run_js_approval` is NOT here: the js-tool module owns its own approval UI
+  // now (ITEM-25/AP-4). mcp rendering another module's surface was an
+  // anti-pattern, not a convenience.
   contentTypes: {
-    tool_use: McpToolUseGroup,
+    tool_use: McpToolUseRenderer,
     elicitation_request: ElicitationFormContent,
-    run_js_approval: JsToolApprovalContent,
   },
+
+  // Each extension contributes its own step descriptor + detail body (INV-1).
+  railContributions: mcpRailContributions,
 
   // Register slot components
   slots: {

@@ -1,5 +1,8 @@
 import type { MessageViewStateSet } from '../state'
-import { emptyViewMaps } from '@/modules/chat/core/stores/messageViewState.helpers'
+import {
+  emptyViewMaps,
+  forgetRailKeys,
+} from '@/modules/chat/core/stores/messageViewState.helpers'
 
 export default (set: MessageViewStateSet) => {
   /**
@@ -18,6 +21,11 @@ export default (set: MessageViewStateSet) => {
   return (messageIds?: string[]) =>
     set(d => {
       if (!messageIds) return emptyViewMaps()
-      for (const id of messageIds) delete d.collapsed[id]
+      for (const id of messageIds) {
+        delete d.collapsed[id]
+        // Rail + step entries are `<messageId>#…`-prefixed, so they evict with
+        // the same scoping guarantee (never another pane's conversation).
+        forgetRailKeys(d, id)
+      }
     })
 }

@@ -55,6 +55,22 @@ export interface McpToolCall {
   message_id?: string
   tool_name: string
   status: 'started' | 'pending_approval' | 'completed' | 'error'
+  /** ISO start timestamp from the `mcpToolStart` / `mcpToolComplete` frame
+   *  (ITEM-14). A LIVE step cannot get its timing from a DB join — the row is
+   *  not written until the call finishes — so the frame carries it and the rail
+   *  ticks an elapsed timer from here (DEC-9). */
+  started_at?: string
+  /** Final wall time in ms from the `mcpToolComplete` frame (ITEM-14). */
+  duration_ms?: number
+  /** The server ALWAYS re-prompts for this tool, ignoring any persisted
+   *  per-conversation auto-approval — so the "Approve for this conversation"
+   *  affordance would be a silent no-op and is hidden.
+   *
+   *  Carried on the `mcpApprovalRequired` frame (ITEM-25/AP-3). It replaces a
+   *  hardcoded `control_mcp` server UUID + tool name that the mcp module used to
+   *  keep in its approval card: the SERVER knows its own re-prompt policy, so it
+   *  declares it, and mcp stops naming another module's built-in. */
+  always_reprompt?: boolean
   input?: unknown
   result?: unknown
   error?: string

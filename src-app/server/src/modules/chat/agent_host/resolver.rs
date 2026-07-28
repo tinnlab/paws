@@ -282,6 +282,13 @@ impl ToolProvider for ChatToolProvider {
         // tools were attached (a later turn) — or via bare-name recovery — must be
         // refused, honoring the user's disable. (Was `false` under DEC-17, which
         // silently ignored a call-time disable.)
+        // ITEM-14: filled by `call_mcp_tool` with the timing of the underlying
+        // `McpSession::call_tool` — the SAME pair persisted to `mcp_tool_calls` —
+        // on BOTH the success and the failure path, so the `mcpToolComplete` frame
+        // and the stored history report identical timing. Stays `None` when the
+        // call never reached a session (pre-dispatch refusal / cancellation).
+        let mut call_timing: Option<crate::modules::mcp::tool_calls::models::ToolCallTiming> =
+            None;
         let outcome = call_mcp_tool(
             &scope,
             &server_name,
@@ -301,6 +308,7 @@ impl ToolProvider for ChatToolProvider {
             None,
             None, // idempotency_key: chat has no workflow-run resume (see call() note)
             crate::modules::mcp::tool_calls::models::McpToolCallSource::Chat,
+            Some(&mut call_timing),
         )
         .await;
         match outcome {
@@ -328,6 +336,7 @@ impl ToolProvider for ChatToolProvider {
                     &server_name,
                     agent.is_error,
                     text,
+                    call_timing,
                 )
                 .await;
                 Ok(agent)
@@ -340,6 +349,7 @@ impl ToolProvider for ChatToolProvider {
                     &server_name,
                     true,
                     Some("cancelled"),
+                    call_timing,
                 )
                 .await;
                 Err(AppError::internal_error("chat: tool call cancelled"))
@@ -352,6 +362,7 @@ impl ToolProvider for ChatToolProvider {
                     &server_name,
                     true,
                     Some(&m),
+                    call_timing,
                 )
                 .await;
                 Err(AppError::internal_error(m))

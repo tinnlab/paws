@@ -3073,10 +3073,18 @@ export interface ListToolCallsQuery {
   conversation_id?: string
   /** Filter by built-in vs external servers (e.g. `false` to hide built-ins). */
   is_built_in?: boolean
+  /** Filter to every call recorded under one assistant message. */
+  message_id?: string
   page?: number
   per_page?: number
   /** Filter to a single MCP server. */
   server_id?: string
+  /**
+   * Filter to the single call the model stamped with this `tool_use` id — the
+   *  join key between an assistant message's `tool_use` block and its recorded
+   *  invocation (duration / source / result size).
+   */
+  tool_use_id?: string
 }
 
 export interface ListToolsResponse {
@@ -3715,6 +3723,28 @@ export interface McpToolCallListResponse {
   per_page: number
   total: number
   total_pages: number
+}
+
+/**
+ * ITEM-17 / DEC-1: the admin-gated raw reveal of a recorded call's arguments.
+ *
+ *  `arguments_json` here is the RAW `tool_use.input` the model emitted, read from
+ *  the paired `message_contents` block — NOT the `mcp_tool_calls.arguments_json`
+ *  column, which was redacted before insert and therefore never held the raw
+ *  value. When the transcript block no longer exists the recorded (redacted)
+ *  arguments are returned instead, with `raw = false`.
+ */
+export interface McpToolCallReveal {
+  /** The unredacted arguments, when the source block is still present. */
+  arguments_json: unknown
+  /** The tool-call row this reveal is for. */
+  id: string
+  /**
+   * `true` when `arguments_json` is the raw transcript value; `false` when the
+   *  source block is gone and the recorded (already redacted) arguments were
+   *  returned as a fallback.
+   */
+  raw: boolean
 }
 
 /**
@@ -5291,6 +5321,20 @@ export interface SSEChatStreamMcpApprovalRequiredData {
    */
   description?: string
   /**
+   * ITEM-25 / AP-3: `true` when this call will re-prompt on EVERY turn no
+   *  matter what the user chooses now — i.e. persisting a per-(server, tool)
+   *  auto-approval would NOT prevent the next prompt, so offering "Approve for
+   *  this conversation" would be a lie.
+   *
+   *  The server declares its own policy here. The client previously inferred it
+   *  by hardcoding the App Control built-in's UUID and the `invoke_capability`
+   *  tool name — a client-side copy of another module's identity that drifted
+   *  the moment a second such server (background's `spawn_background`) or an
+   *  admin `manual_approve` override appeared. See
+   *  `helpers::approval_is_always_reprompt` for the single source of truth.
+   */
+  always_reprompt: boolean
+  /**
    * ITEM-50 (full-disclosure): the EXTERNAL destination host the tool would
    *  send data to (e.g. `api.example.com`), so the human reviews a
    *  *data-egress* decision and not just a verb. `None` for built-in /
@@ -5326,12 +5370,28 @@ export interface SSEChatStreamMcpElicitationRequiredData {
 
 /** Event data for MCP tool execution completion */
 export interface SSEChatStreamMcpToolCompleteData {
+  /**
+   * ITEM-14: how long that call took, in milliseconds — the SAME value stored
+   *  as `mcp_tool_calls.duration_ms`. Present whenever `started_at` is.
+   */
+  duration_ms?: number
   /** Whether the tool execution resulted in an error */
   is_error: boolean
   /** Tool result text, truncated to 2000 chars (for display in "Show details" panel) */
   result?: string
   /** MCP server that executed the tool */
   server: string
+  /**
+   * ITEM-14: RFC 3339 instant the underlying `tools/call` was dispatched —
+   *  the AUTHORITATIVE `started_at`, read straight off the one clock in
+   *  `McpSession::call_tool` and identical to the value persisted on the
+   *  matching `mcp_tool_calls` row. Supersedes `mcpToolStart.started_at`.
+   *
+   *  `None` when the step never reached a session (a pre-dispatch refusal, an
+   *  inline built-in like `ask_user`, or a cancelled call) — there is no timing
+   *  to report and we do not invent one.
+   */
+  started_at?: string
   /** Name of the completed tool */
   tool_name: string
   /** Unique identifier for this tool use */
@@ -5366,6 +5426,18 @@ export interface SSEChatStreamMcpToolStartData {
   input: unknown
   /** MCP server executing the tool */
   server: string
+  /**
+   * ITEM-14 (DEC-9): RFC 3339 instant the step began, so a LIVE rail step can
+   *  tick an elapsed time while the tool runs. This is the moment the chat host
+   *  dispatched the step — the STEP's start, which necessarily precedes the
+   *  underlying `tools/call` (session acquisition happens in between) and is the
+   *  only reading available before the call exists.
+   *
+   *  It is a display seed, NOT the authoritative timing: on completion
+   *  `mcpToolComplete` carries the recorder's own `started_at` + `duration_ms`
+   *  (the pair persisted to `mcp_tool_calls`), which supersedes this.
+   */
+  started_at?: string
   /** Name of the tool being executed */
   tool_name: string
   /** Unique identifier for this tool use */
@@ -8142,7 +8214,8 @@ export type ApiEndpointParameters = {
   'McpServerToolApprovals.get': { id: string }
   'McpServerToolApprovals.set': { id: string; tool: string } & SetToolApprovalRequest
   'McpToolCall.get': { id: string }
-  'McpToolCall.list': { conversation_id?: string; is_built_in?: boolean; page?: number; per_page?: number; server_id?: string }
+  'McpToolCall.list': { conversation_id?: string; is_built_in?: boolean; message_id?: string; page?: number; per_page?: number; server_id?: string; tool_use_id?: string }
+  'McpToolCall.reveal': { id: string }
   'McpUserPolicy.get': void
   'McpUserPolicy.update': UpdateMcpUserPolicyRequest
   'Memory.create': CreateMemoryRequest
@@ -8589,6 +8662,7 @@ export type ApiEndpointResponses = {
   'McpServerToolApprovals.set': SetToolApprovalResponse
   'McpToolCall.get': McpToolCall
   'McpToolCall.list': McpToolCallListResponse
+  'McpToolCall.reveal': McpToolCallReveal
   'McpUserPolicy.get': McpUserPolicy
   'McpUserPolicy.update': McpUserPolicy
   'Memory.create': UserMemory

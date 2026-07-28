@@ -8,6 +8,7 @@
 
 import { createExtension, type ChatExtension } from '@/modules/chat/core/extensions'
 import { WorkflowWorkspaceRunCard } from './components/WorkflowWorkspaceRunCard'
+import { workflowRailContributions } from './railContribution'
 
 const workflowExtension: ChatExtension = createExtension({
   name: 'workflow-workspace',
@@ -19,6 +20,9 @@ const workflowExtension: ChatExtension = createExtension({
   contentTypes: {
     tool_result: WorkflowWorkspaceRunCard,
   },
+
+  // Each extension contributes its own step descriptor + detail body (INV-1).
+  railContributions: workflowRailContributions,
 })
 
 export default workflowExtension

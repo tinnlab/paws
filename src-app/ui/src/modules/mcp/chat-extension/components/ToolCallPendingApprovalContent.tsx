@@ -20,13 +20,6 @@ interface ToolCallPendingApprovalContentProps {
   toolCall: McpToolCall
 }
 
-/**
- * Deterministic id of the built-in App Control MCP server
- * (`Uuid::new_v5(NAMESPACE_URL, "control.ziee.internal")`). Stable across
- * deployments; mirrors the backend `control_mcp_server_id()`.
- */
-const CONTROL_MCP_SERVER_ID = 'd878787e-aa48-5f16-a31f-673052083f34'
-
 /** Collapse whitespace + cap a string for the one-line egress sentence. The FULL
  *  args are always shown verbatim in the Arguments block below, so a truncated
  *  preview here never hides anything from the reviewer. */
@@ -131,16 +124,16 @@ export function ToolCallPendingApprovalContent({
   // wrong-pane approval bug). Single-pane falls back to the primary.
   const chat = (useChatPaneOrNull()?.store ?? ChatStore) as typeof ChatStore
 
-  // The built-in App Control server (`invoke_capability`) ALWAYS re-prompts on a
-  // state-changing action — the backend deliberately ignores any persisted
-  // per-conversation auto-approval for it (mutations to the app are always
-  // confirmed). So the "Approve for this conversation" affordance would be a
-  // silent no-op here; hide it to avoid misleading the user. Gate on the control
-  // server's deterministic id (Uuid v5 of "control.ziee.internal") — NOT the tool
-  // name alone, which a third-party server could also expose.
-  const isControlWrite =
-    toolCall.server_id === CONTROL_MCP_SERVER_ID &&
-    toolCall.tool_name === 'invoke_capability'
+  // Some tools ALWAYS re-prompt — the backend deliberately ignores any persisted
+  // per-conversation auto-approval for them (a mutation to the app is always
+  // confirmed). The "Approve for this conversation" affordance would be a silent
+  // no-op for those, so hide it rather than mislead the user.
+  //
+  // The SERVER declares this on the approval frame (ITEM-25/AP-3). This used to
+  // be a hardcoded `control_mcp` server UUID + tool name kept inside the mcp
+  // module — mcp naming another module's built-in, which is precisely the
+  // coupling the activity rail exists to remove.
+  const isControlWrite = toolCall.always_reprompt === true
 
   const handleApproveOnce = async () => {
     setIsSubmitting(true)

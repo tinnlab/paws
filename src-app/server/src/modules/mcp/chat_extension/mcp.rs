@@ -1350,6 +1350,11 @@ impl McpChatExtension {
                 Some(elicit_notify_tx.clone()),
             )
             .await;
+            // ITEM-14: read the ONE clock the call was timed on, while we still
+            // hold the session exclusively — the same `started_at`/`elapsed_ms`
+            // pair `record_call` persisted. `None` for an inline built-in
+            // (`ask_user`) or a step that never reached the session.
+            let call_timing = session.last_call_timing();
 
             // Set tool_use_id and server_id
             if let McpContentData::ToolResult {
@@ -1372,6 +1377,7 @@ impl McpChatExtension {
                         &server.name,
                         is_error.unwrap_or(false),
                         Some(content.as_str()),
+                        call_timing,
                     )
                     .await;
                 }
@@ -3082,6 +3088,19 @@ impl ChatExtension for McpChatExtension {
                     tool_name,
                 )
                 .await;
+                // ITEM-25/AP-3: declare, server-side, whether this call will
+                // re-prompt every turn regardless of the user's choice — computed
+                // from the SAME admin-override + control/background ladder that
+                // produced `needs_approval` above, so the button the client shows
+                // can never contradict the gate.
+                let always_reprompt = helpers::approval_is_always_reprompt(
+                    *server_id_opt,
+                    tool_name,
+                    input,
+                    (*server_id_opt)
+                        .and_then(|sid| admin_tool_overrides.get(&sid))
+                        .and_then(|m| m.get(tool_name)),
+                );
                 helpers::send_approval_required_event(
                     tx,
                     tool_use_id,
@@ -3091,6 +3110,7 @@ impl ChatExtension for McpChatExtension {
                     input,
                     dest_host,
                     description,
+                    always_reprompt,
                 )
                 .await?;
             }
@@ -3284,6 +3304,16 @@ impl ChatExtension for McpChatExtension {
             // Send tool start event
             helpers::send_tool_start_event(tx, &tool_use_id, &tool_name, &server.name, &input).await;
 
+            // ITEM-14: filled from `McpSession::last_call_timing()` by whichever
+            // branch below actually dispatched a `tools/call` — the SAME
+            // `started_at`/`elapsed_ms` pair persisted to `mcp_tool_calls`. Stays
+            // `None` for the inline branches (`run_js`, `ask_user`) and for a
+            // session that never opened, so the frame reports no timing rather
+            // than a fabricated one.
+            let mut call_timing: Option<
+                crate::modules::mcp::tool_calls::models::ToolCallTiming,
+            > = None;
+
             let (mut result, is_final) = if server.id
                 == crate::modules::js_tool::run_js_mcp_server_id()
             {
@@ -3395,7 +3425,7 @@ impl ChatExtension for McpChatExtension {
                                                 is_built_in: server.is_built_in,
                                                 ..Default::default()
                                             });
-                                            helpers::execute_tool(
+                                            let outcome = helpers::execute_tool(
                                                 &mut sampling_session,
                                                 &tool_name,
                                                 input,
@@ -3405,7 +3435,11 @@ impl ChatExtension for McpChatExtension {
                                                 tx.cloned(),
                                                 Some(elicit_notify_tx.clone()),
                                             )
-                                            .await
+                                            .await;
+                                            // ITEM-14: the one clock, read off the
+                                            // ephemeral sampling session.
+                                            call_timing = sampling_session.last_call_timing();
+                                            outcome
                                         }
                                         Err(e) => {
                                             // Log the full error (may contain the upstream URL) server-side only.
@@ -3483,7 +3517,12 @@ impl ChatExtension for McpChatExtension {
                     }
                     Ok(session_arc) => {
                         let mut session = session_arc.write().await;
-                        helpers::execute_tool(&mut session, &tool_name, input, &server.name, Some(server.timeout_seconds), context.message_id, tx.cloned(), Some(elicit_notify_tx.clone())).await
+                        let outcome = helpers::execute_tool(&mut session, &tool_name, input, &server.name, Some(server.timeout_seconds), context.message_id, tx.cloned(), Some(elicit_notify_tx.clone())).await;
+                        // ITEM-14: read the one clock while the session is still
+                        // held exclusively (a pooled session is shared, so the
+                        // write guard is what makes this reading unambiguous).
+                        call_timing = session.last_call_timing();
+                        outcome
                     }
                 }
             };
@@ -3508,6 +3547,7 @@ impl ChatExtension for McpChatExtension {
                     &server.name,
                     is_error.unwrap_or(false),
                     Some(content.as_str()),
+                    call_timing,
                 )
                 .await;
             }

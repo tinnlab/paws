@@ -6,7 +6,19 @@ export interface McpServerDrawerPrefill {
   hub_id?: string
 }
 
-export type McpServerDrawerMode = 'create' | 'edit' | 'clone' | 'create-system' | 'edit-system'
+// `history` is a READ-ONLY mode: it renders ONLY the per-server tool-call
+// history (McpToolCallsTab) — no form, no save/test/delete affordance. It
+// exists so a non-admin holding `mcp_servers::read` can audit the calls THEY
+// made against a built-in / system server, whose edit surface stays closed to
+// them. The backend already owner-scopes every tool-call query, so this mode
+// widens no data boundary.
+export type McpServerDrawerMode =
+  | 'create'
+  | 'edit'
+  | 'clone'
+  | 'create-system'
+  | 'edit-system'
+  | 'history'
 
 export const mcpServerDrawerState = {
   open: false,

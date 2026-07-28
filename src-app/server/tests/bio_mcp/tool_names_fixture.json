@@ -1,0 +1,42 @@
+{
+  "_comment": [
+    "OBSERVED `tools/list` output of the BioMCP sidecar (DEC-10 / ITEM-28).",
+    "`bio_mcp/handlers.rs` is a PURE reverse proxy — no tool name exists in-tree; the",
+    "names arrive from the external sidecar at runtime. So this fixture is the ONLY",
+    "in-repo source of truth for the bio tool surface, and the frontend rail",
+    "contribution (ui/src/modules/mcp-builtins/chat-extension/railContribution.ts) is",
+    "derived from it. Any name NOT listed here degrades to a name-only rail row",
+    "(ITEM-6), which is the same behaviour as before this fixture existed.",
+    "Re-probe and re-commit this file after a `BIOMCP_VERSION` bump."
+  ],
+  "probe": {
+    "ran": true,
+    "date": "2026-07-28",
+    "binary": "~/.ziee/bin/biomcp (29327360 bytes — a REAL binary, not a fail-soft stub)",
+    "command": "biomcp serve-http --host 127.0.0.1 --port <ephemeral>",
+    "transport": "MCP streamable HTTP, POST /mcp (initialize -> notifications/initialized -> tools/list)",
+    "server_info": { "name": "biomcp", "version": "0.8.23" },
+    "protocol_version": "2025-06-18",
+    "capabilities": ["resources", "tools"],
+    "notes": [
+      "tools/list returned exactly ONE tool. The whole ~45-database surface is",
+      "reached through a single CLI-shaped `command` string.",
+      "Two live tools/call probes (`list`, and the networked `get gene BRAF`) both",
+      "returned `structuredContent: null` — the sidecar answers in the TEXT channel",
+      "only. The rail contribution therefore derives its detail from the tool_use",
+      "INPUT (`command`), never from structured content."
+    ]
+  },
+  "tools": [
+    {
+      "name": "biomcp",
+      "input_schema": {
+        "type": "object",
+        "title": "ShellCommand",
+        "properties": { "command": { "type": "string" } },
+        "required": ["command"]
+      },
+      "structured_content": null
+    }
+  ]
+}

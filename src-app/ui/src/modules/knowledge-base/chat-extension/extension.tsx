@@ -22,6 +22,7 @@ import { createExtension, type ChatExtension } from '@/modules/chat/core/extensi
 import { KbMenuItem } from './components/KbMenuItem'
 import { KbStatusRow } from './components/KbStatusRow'
 import { SearchKnowledgeToolResultCard } from './components/SearchKnowledgeToolResultCard'
+import { knowledgeBaseRailContributions } from './railContribution'
 import type { KbSourceData } from './components/KbSourcePanel'
 import { KnowledgeBaseComposer } from '@/modules/knowledge-base/stores/knowledgeBaseComposer'
 import { Chat } from '@/modules/chat/core/stores/chatBridge'
@@ -93,6 +94,9 @@ const knowledgeBaseExtension: ChatExtension = createExtension({
   contentTypes: {
     tool_result: SearchKnowledgeToolResultCard,
   },
+
+  // Each extension contributes its own step descriptor + detail body (INV-1).
+  railContributions: knowledgeBaseRailContributions,
 
   onConversationLoad: async conversation => {
     const store = KnowledgeBaseComposer

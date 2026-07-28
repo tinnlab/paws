@@ -148,6 +148,12 @@ export function McpServerDrawer() {
   // owner-scoped). Built-in/system servers authenticate differently.
   const isUserMode = mode === 'create' || mode === 'edit'
   const isSystemMode = mode === 'create-system' || mode === 'edit-system'
+  // Read-only call-history mode (ITEM-16). Opened from the card's "Calls"
+  // button, which is gated on `mcp_servers::read` — NOT on the edit perms — so
+  // a non-admin can audit their own calls against a built-in / system server.
+  // Nothing mutable is mounted in this mode: no form, no save, no test, no
+  // enable switch (`canManage` is false below and the form body isn't rendered).
+  const isHistoryMode = mode === 'history'
 
   // Mirror the user/ + assistants/ pattern (audit I-3): gate the form
   // by mode-specific manage permissions so the drawer becomes read-
@@ -166,6 +172,9 @@ export function McpServerDrawer() {
         return canCreateSystem
       case 'edit-system':
         return canEditSystem
+      // `history` is read-only by construction — never manageable.
+      case 'history':
+        return false
       default:
         return false
     }
@@ -764,6 +773,10 @@ export function McpServerDrawer() {
         return 'Add System Server'
       case 'edit-system':
         return 'Edit System Server'
+      case 'history':
+        return editingServer
+          ? `Tool calls — ${editingServer.display_name}`
+          : 'Tool calls'
       default:
         return 'MCP Server'
     }
@@ -1409,6 +1422,8 @@ export function McpServerDrawer() {
 
   // In edit mode, surface a per-server tool-call history tab beside the form.
   // Create mode has no server id yet, so just render the form.
+  // In `history` mode (read-only, `mcp_servers::read`) the history body is the
+  // ONLY thing mounted — see the render below.
   const isEditMode = mode === 'edit' || mode === 'edit-system'
   return (
     <Drawer
@@ -1449,7 +1464,11 @@ export function McpServerDrawer() {
         </div>
       }
     >
-      {isEditMode && editingServer ? (
+      {isHistoryMode && editingServer ? (
+        // Read-only: the history body ONLY. No Tabs strip (there is nothing to
+        // switch to), no details form, no tool-approvals tab.
+        <McpToolCallsTab serverId={editingServer.id} />
+      ) : isEditMode && editingServer ? (
         <Tabs
           defaultValue="details"
           data-testid="mcp-drawer-tabs"

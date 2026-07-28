@@ -73,6 +73,15 @@ pub fn user_routes() -> ApiRouter {
                 tool_call_handlers::get_tool_call_docs,
             ),
         )
+        // ITEM-17 / DEC-1: admin-gated raw reveal of one call's arguments
+        // (`mcp_servers_admin::edit` + owner-scoped).
+        .api_route(
+            "/mcp/tool-calls/{id}/reveal",
+            get_with(
+                tool_call_handlers::reveal_tool_call_arguments,
+                tool_call_handlers::reveal_tool_call_arguments_docs,
+            ),
+        )
         .api_route(
             "/mcp/servers/{id}/resources",
             get_with(runtime::list_server_resources, runtime::list_server_resources_docs),

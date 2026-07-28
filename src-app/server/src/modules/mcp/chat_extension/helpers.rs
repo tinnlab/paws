@@ -694,11 +694,20 @@ pub async fn send_tool_start_event(
     input: &serde_json::Value,
 ) {
     if let Some(tx) = tx {
+        // ITEM-14 (DEC-9): stamp the step's start so a live rail row can tick an
+        // elapsed time. This is the STEP's start (the dispatch moment), which is
+        // all that can exist before the call does; the authoritative
+        // `started_at`/`duration_ms` arrive on `mcpToolComplete` from the
+        // recorder's clock and replace it.
+        let started_at = time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .ok();
         let event = SSEChatStreamEvent::McpToolStart(SSEChatStreamMcpToolStartData {
             tool_use_id: tool_use_id.to_string(),
             tool_name: tool_name.to_string(),
             server: server.to_string(),
             input: input.clone(),
+            started_at,
         });
 
         if let Err(e) = tx.send(Ok(event.into())) {
@@ -707,8 +716,39 @@ pub async fn send_tool_start_event(
     }
 }
 
+/// Max bytes of tool-result text carried on the `mcpToolComplete` frame. The full
+/// result is always reachable via `get_tool_result` / the tool-call history; this
+/// is only the inline preview.
+const TOOL_COMPLETE_RESULT_PREVIEW_BYTES: usize = 2000;
+
+/// Truncate `s` to at most `max_bytes`, **never splitting a UTF-8 character**.
+///
+/// Replaces `&r[..2000]`, which panicked (`byte index N is not a char boundary`)
+/// whenever the 2000th byte landed mid-character — i.e. on any tool result
+/// containing CJK text, emoji, accented Latin, or box-drawing output positioned
+/// across the cut. A tool whose output happened to be multibyte at that offset
+/// crashed the SSE emitter for the whole turn.
+fn truncate_on_char_boundary(s: &str, max_bytes: usize) -> String {
+    if s.len() <= max_bytes {
+        return s.to_string();
+    }
+    // Walk back to the nearest char boundary at or below `max_bytes`. `floor_char_boundary`
+    // is still unstable, so do it explicitly.
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...[truncated]", &s[..end])
+}
+
 /// Send SSE event for tool complete.
 /// Fire-and-forget: logs a warning if the channel is closed but never fails the caller.
+///
+/// `timing` (ITEM-14) is the reading of the ONE clock in `McpSession::call_tool` —
+/// the same `started_at`/`elapsed_ms` pair persisted to `mcp_tool_calls`. Callers
+/// obtain it from `McpSession::last_call_timing()` (surfaced by `execute_tool` and
+/// `call_mcp_tool`); `None` when the step never reached a session, in which case
+/// the frame carries no timing rather than a fabricated one.
 pub async fn send_tool_complete_event(
     tx: Option<&tokio::sync::mpsc::UnboundedSender<Result<Event, Infallible>>>,
     tool_use_id: &str,
@@ -716,15 +756,11 @@ pub async fn send_tool_complete_event(
     server: &str,
     is_error: bool,
     result: Option<&str>,
+    timing: Option<crate::modules::mcp::tool_calls::models::ToolCallTiming>,
 ) {
     if let Some(tx) = tx {
-        let result_truncated = result.map(|r| {
-            if r.len() > 2000 {
-                format!("{}...[truncated]", &r[..2000])
-            } else {
-                r.to_string()
-            }
-        });
+        let result_truncated =
+            result.map(|r| truncate_on_char_boundary(r, TOOL_COMPLETE_RESULT_PREVIEW_BYTES));
 
         let event = SSEChatStreamEvent::McpToolComplete(SSEChatStreamMcpToolCompleteData {
             tool_use_id: tool_use_id.to_string(),
@@ -732,12 +768,64 @@ pub async fn send_tool_complete_event(
             server: server.to_string(),
             is_error,
             result: result_truncated,
+            started_at: timing.and_then(|t| t.started_at_rfc3339()),
+            duration_ms: timing.map(|t| t.elapsed_ms),
         });
 
         if let Err(e) = tx.send(Ok(event.into())) {
             tracing::warn!("Failed to send SSE tool complete event: {:?}", e);
         }
     }
+}
+
+/// ITEM-25 / AP-3: does this call re-prompt for approval on EVERY turn, no matter
+/// what the user chooses now?
+///
+/// TRUE means a persisted per-(server, tool) auto-approval would NOT prevent the
+/// next prompt, so the client must not offer "Approve for this conversation".
+/// This is the SERVER declaring its own policy — the single source of truth for
+/// the `always_reprompt` field on `mcpApprovalRequired`. The client previously
+/// re-derived it by hardcoding the App Control server's UUID plus the
+/// `invoke_capability` tool name, which was wrong for `background`'s
+/// `spawn_background` and for any admin `manual_approve` override.
+///
+/// The three conditions are exactly the branches of the approval ladder (mirrored
+/// in `mcp.rs::after_llm_call` and `chat::agent_host::gate::decide_pure`) that
+/// reach "needs approval" WITHOUT ever consulting the auto-approved list:
+///
+/// 1. an admin per-(server, tool) `manual_approve` override — it wins over
+///    everything downstream, including any user auto-approval;
+/// 2. `control_mcp`'s mutating ops (`control_call_needs_approval`);
+/// 3. `background_mcp`'s launching op (`background_call_needs_approval`).
+///
+/// Everything else routes through `decide_regular_tool_approval` /
+/// `ApprovalMode::ManualApprove`, both of which DO honor auto-approval → `false`.
+pub fn approval_is_always_reprompt(
+    server_id: Option<uuid::Uuid>,
+    tool_name: &str,
+    input: &serde_json::Value,
+    admin_override: Option<&super::approval::models::ApprovalMode>,
+) -> bool {
+    use super::approval::models::ApprovalMode;
+    // (1) An admin `manual_approve` override forces the prompt regardless of any
+    // user/conversation auto-approval, so the prompt WILL recur.
+    if let Some(mode) = admin_override {
+        return matches!(mode, ApprovalMode::ManualApprove);
+    }
+    let Some(id) = server_id else {
+        return false;
+    };
+    // (2) control_mcp: read-only tools auto-run; a mutating `invoke_capability`
+    // always re-prompts (overriding even AutoApprove).
+    if id == crate::modules::control_mcp::control_mcp_server_id() {
+        return crate::modules::control_mcp::handlers::control_call_needs_approval(tool_name, input);
+    }
+    // (3) background_mcp: owner-scoped reads auto-run; `spawn_background` launches
+    // a detached agent and always re-prompts.
+    if id == crate::modules::background_mcp::background_mcp_server_id() {
+        return crate::modules::background_mcp::tools::background_call_needs_approval(tool_name);
+    }
+    false
 }
 
 /// Send SSE event for approval required.
@@ -759,6 +847,11 @@ pub async fn send_approval_required_event(
     // *data-egress* review, not just "this tool needs approval".
     dest_host: Option<String>,
     description: Option<String>,
+    // ITEM-25/AP-3: the server's own declaration that this call re-prompts every
+    // turn regardless of the user's choice. Compute it with
+    // `approval_is_always_reprompt` at the call site (which holds the resolved
+    // server id + admin override) — never re-derive it client-side.
+    always_reprompt: bool,
 ) -> Result<(), AppError> {
     if let Some(tx) = tx {
         let event = SSEChatStreamEvent::McpApprovalRequired(SSEChatStreamMcpApprovalRequiredData {
@@ -769,6 +862,7 @@ pub async fn send_approval_required_event(
             input: input.clone(),
             dest_host,
             description,
+            always_reprompt,
         });
 
         tx.send(Ok(event.into()))
@@ -840,8 +934,9 @@ mod tests {
     use super::{
         ask_user_tool_result, build_query_input, cap_structured_content,
         convert_mcp_tool_to_ai_tool, run_ask_user_elicitation, stamp_ask_user_marker,
-        McpContentData, ASK_USER_SCHEMA_MARKER, MAX_ANTHROPIC_TOOL_NAME_LEN,
-        MAX_STRUCTURED_CONTENT_BYTES,
+        truncate_on_char_boundary, McpContentData, ASK_USER_SCHEMA_MARKER,
+        MAX_ANTHROPIC_TOOL_NAME_LEN, MAX_STRUCTURED_CONTENT_BYTES,
+        TOOL_COMPLETE_RESULT_PREVIEW_BYTES,
     };
 
     use crate::modules::mcp::client::traits::Tool as McpToolDef;
@@ -1404,5 +1499,168 @@ mod tests {
         let (content, is_error) = tool_result_parts(&result);
         assert!(is_error, "oversized schema must be a tool error");
         assert!(content.contains("too large"), "got: {content}");
+    }
+
+    // ========================================================================
+    // ITEM-14 — `mcpToolComplete` result preview must not panic on multibyte
+    // ========================================================================
+
+    /// REGRESSION (the bug ITEM-14 fixes): `send_tool_complete_event` truncated
+    /// with `&r[..2000]`, a BYTE slice that panics with
+    /// `byte index 2000 is not a char boundary` whenever the cut lands mid-character.
+    /// Any tool returning CJK / emoji / accented text longer than the cap could
+    /// therefore kill the SSE emitter for the whole turn.
+    ///
+    /// The string below is built so byte 2000 falls STRICTLY INSIDE a 3-byte
+    /// character: 1998 ASCII bytes, then '日' occupying bytes 1998..2001.
+    /// `&s[..2000]` on it panics; `truncate_on_char_boundary` must not.
+    #[test]
+    fn truncate_on_char_boundary_survives_a_split_multibyte_char() {
+        let cap = TOOL_COMPLETE_RESULT_PREVIEW_BYTES;
+        let mut s = "a".repeat(cap - 2);
+        s.push('\u{65e5}'); // 3 bytes: occupies cap-2 .. cap+1
+        s.push_str(&"b".repeat(50));
+        assert!(s.len() > cap, "fixture must exceed the cap");
+        assert!(
+            !s.is_char_boundary(cap),
+            "fixture must actually straddle the cut (this is what used to panic)"
+        );
+
+        let out = truncate_on_char_boundary(&s, cap);
+
+        assert!(out.ends_with("...[truncated]"), "truncation marker kept: {}", &out[out.len() - 20..]);
+        let body = out.strip_suffix("...[truncated]").unwrap();
+        // Cut back to the boundary BELOW the cap — never past it, never mid-char.
+        assert_eq!(body.len(), cap - 2, "cut back to the nearest char boundary");
+        assert!(!body.contains('\u{65e5}'), "the straddling char is dropped, not split");
+        // The whole output is valid UTF-8 by construction (it is a `String`), which
+        // is precisely what the byte slice could not guarantee.
+    }
+
+    /// A 4-byte emoji straddling the cut is handled the same way, and a cut that
+    /// lands exactly ON a boundary keeps every full character before it.
+    #[test]
+    fn truncate_on_char_boundary_handles_emoji_and_exact_boundaries() {
+        // Emoji straddling: 1999 ASCII + a 4-byte emoji spanning 1999..2003.
+        let cap = TOOL_COMPLETE_RESULT_PREVIEW_BYTES;
+        let mut s = "x".repeat(cap - 1);
+        s.push('\u{1f600}');
+        s.push_str(&"y".repeat(10));
+        assert!(!s.is_char_boundary(cap));
+        let body = truncate_on_char_boundary(&s, cap)
+            .strip_suffix("...[truncated]")
+            .unwrap()
+            .to_string();
+        assert_eq!(body.len(), cap - 1);
+
+        // Exact boundary: 2 bytes per char, cut lands between chars → nothing lost.
+        let s = "\u{e9}".repeat(cap); // 'é' is 2 bytes
+        assert!(s.is_char_boundary(cap));
+        let body = truncate_on_char_boundary(&s, cap)
+            .strip_suffix("...[truncated]")
+            .unwrap()
+            .to_string();
+        assert_eq!(body.len(), cap);
+        assert_eq!(body.chars().count(), cap / 2);
+    }
+
+    /// Under the cap the value passes through byte-for-byte (no marker appended),
+    /// including multibyte content.
+    #[test]
+    fn truncate_on_char_boundary_passes_short_input_through() {
+        let s = "hello \u{4e16}\u{754c} \u{1f30f}";
+        assert_eq!(
+            truncate_on_char_boundary(s, TOOL_COMPLETE_RESULT_PREVIEW_BYTES),
+            s
+        );
+        // Degenerate cap: everything is dropped, but it still must not panic.
+        assert_eq!(truncate_on_char_boundary("\u{65e5}\u{672c}", 1), "...[truncated]");
+    }
+
+    // ========================================================================
+    // ITEM-25 / AP-3 — the server declares its own re-prompt policy
+    // ========================================================================
+
+    /// The client used to decide whether to hide "Approve for this conversation"
+    /// by hardcoding the App Control built-in's UUID plus the `invoke_capability`
+    /// tool name. These pin the SERVER-side replacement so the flag matches the
+    /// gate that actually causes the re-prompt.
+    #[test]
+    fn approval_is_always_reprompt_matches_the_gate() {
+        use super::approval_is_always_reprompt;
+        use crate::modules::mcp::chat_extension::approval::models::ApprovalMode;
+        use serde_json::json;
+
+        let control = crate::modules::control_mcp::control_mcp_server_id();
+        let background = crate::modules::background_mcp::background_mcp_server_id();
+        let regular = uuid::Uuid::from_u128(0xdead_beef);
+
+        // An admin `manual_approve` override wins over EVERYTHING downstream, so
+        // auto-approving in the conversation could not stop the next prompt.
+        assert!(approval_is_always_reprompt(
+            Some(regular),
+            "anything",
+            &json!({}),
+            Some(&ApprovalMode::ManualApprove)
+        ));
+        // The other two override modes never reach a prompt at all.
+        assert!(!approval_is_always_reprompt(
+            Some(control),
+            "invoke_capability",
+            &json!({}),
+            Some(&ApprovalMode::AutoApprove)
+        ));
+        assert!(!approval_is_always_reprompt(
+            Some(control),
+            "invoke_capability",
+            &json!({}),
+            Some(&ApprovalMode::Disabled)
+        ));
+
+        // control_mcp: read-only tools auto-run (no prompt at all, so no
+        // "always"); a mutating/unknown invoke always re-prompts.
+        assert!(!approval_is_always_reprompt(
+            Some(control),
+            "list_capabilities",
+            &json!({}),
+            None
+        ));
+        assert!(!approval_is_always_reprompt(
+            Some(control),
+            "describe_capability",
+            &json!({}),
+            None
+        ));
+        assert!(
+            approval_is_always_reprompt(Some(control), "invoke_capability", &json!({}), None),
+            "a malformed/unknown invoke fails safe to approve, and re-prompts"
+        );
+
+        // background_mcp: the SECOND such server — exactly the case the client's
+        // control-only hardcoding got wrong.
+        assert!(!approval_is_always_reprompt(
+            Some(background),
+            "check_status",
+            &json!({}),
+            None
+        ));
+        assert!(!approval_is_always_reprompt(
+            Some(background),
+            "collect_result",
+            &json!({}),
+            None
+        ));
+        assert!(approval_is_always_reprompt(
+            Some(background),
+            "spawn_background",
+            &json!({}),
+            None
+        ));
+
+        // A regular server routes through the approval-mode ladder, which DOES
+        // honour a persisted auto-approval → the button is offered.
+        assert!(!approval_is_always_reprompt(Some(regular), "search", &json!({}), None));
+        // Unresolvable server → no basis to claim "always"; offer the button.
+        assert!(!approval_is_always_reprompt(None, "search", &json!({}), None));
     }
 }

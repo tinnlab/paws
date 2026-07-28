@@ -27,6 +27,25 @@ export function isSearchKnowledgeResult(content: MessageContent): boolean {
   return (content.content as MessageContentDataToolResult).name === 'search_knowledge'
 }
 
+/**
+ * The registry's `contentMatch` predicate for the inline card: claim a
+ * `search_knowledge` result ONLY when its payload is well-formed enough to
+ * render.
+ *
+ * Stricter than {@link isSearchKnowledgeResult} on purpose (ITEM-24). The card
+ * used to claim every `search_knowledge` block and then hand a malformed one
+ * back to `file`'s MessageFilesView by importing it directly — a cross-module
+ * import the first-wins registry forced. Narrowing the CLAIM makes that manual
+ * delegation unnecessary: an unclaimed block simply falls through to the next
+ * registered `tool_result` renderer on its own.
+ */
+export function isRenderableSearchKnowledgeResult(content: MessageContent): boolean {
+  if (!isSearchKnowledgeResult(content)) return false
+  return (
+    parseSearchKnowledge(content.content as MessageContentDataToolResult) !== null
+  )
+}
+
 /** Parse a tool_result block's structuredContent into a typed result, or null
  *  if it isn't a well-formed search_knowledge payload. */
 export function parseSearchKnowledge(

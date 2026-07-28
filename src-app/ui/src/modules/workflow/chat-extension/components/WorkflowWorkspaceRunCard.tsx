@@ -8,7 +8,6 @@ import type { MessageContentDataToolResult, MessageContent } from '@/api-client/
 import { usePermission } from '@/core/permissions'
 import type { ContentRendererProps } from '@/modules/chat/core/extensions'
 import { useChatPaneOrNull } from '@/modules/chat/core/pane/ChatPaneContext'
-import { MessageFilesView } from '@/modules/file/chat-extension/components/MessageFilesView'
 import { Chat } from '@/modules/chat/core/stores/chatBridge'
 
 /** The tool name a `run_from_workspace` result carries. */
@@ -20,13 +19,18 @@ function toolResultBlock(content: MessageContent): MessageContentDataToolResult 
 }
 
 /**
- * Inline card for a `run_from_workspace` tool result: renders the default
- * file/resource view, plus — on a SUCCESSFUL run that reported its authored
- * `workspace_dir` — a "Save to my workflows" + "Download .tar.gz" affordance so
- * the user can graduate the ephemeral workflow.
+ * Inline card for a `run_from_workspace` tool result: on a SUCCESSFUL run that
+ * reported its authored `workspace_dir`, a "Save to my workflows" + "Download
+ * .tar.gz" affordance so the user can graduate the ephemeral workflow.
  *
  * Uses the registry's `contentMatch` seam to claim ONLY its own blocks; every
  * other `tool_result` falls through to the next renderer (file / literature).
+ *
+ * It used to also render `file`'s `MessageFilesView` itself, reaching across
+ * module boundaries to show the run's artifacts. That import is gone (ITEM-24):
+ * a run's artifacts are the activity rail's job — the step row renders them as
+ * chips from the result's `resource_links` — so this card carries only what it
+ * actually owns, the graduation affordance.
  */
 export function WorkflowWorkspaceRunCard(props: ContentRendererProps) {
   const block = toolResultBlock(props.content)
@@ -95,7 +99,6 @@ export function WorkflowWorkspaceRunCard(props: ContentRendererProps) {
 
   return (
     <>
-      <MessageFilesView {...props} />
       {canGraduate && (
         <div className="my-2 flex gap-2" data-testid="workflow-workspace-run-actions">
           {canSave && (
