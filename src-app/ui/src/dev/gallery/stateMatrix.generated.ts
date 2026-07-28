@@ -4105,8 +4105,8 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
       { kind: "branch", condition: "isRetryableFailure(blockingFailure)", line: 374 },
       { kind: "branch", condition: "usePicker", line: 396 },
       { kind: "branch", condition: "v === (step.tool ?? '')", line: 407 },
-      { kind: "branch", condition: "useGenerated && spec", line: 433 },
-      { kind: "empty", condition: "rows.length === 0", line: 458 },
+      { kind: "branch", condition: "useGenerated && spec", line: 438 },
+      { kind: "empty", condition: "rows.length === 0", line: 463 },
     ],
   },
   "modules/workflow/components/builder/WorkflowBuilderPage": {

@@ -11,6 +11,7 @@ import {
 import {
   type FindingIdentity,
   describeRequestError,
+  humaniseRequestError,
 } from '../components/builder/validationCopy'
 
 // ---------------------------------------------------------------------------
@@ -90,6 +91,23 @@ export interface ValidationSlice {
 }
 
 /**
+ * Codes `POST /validate-def` is structurally UNABLE to decide, so its silence
+ * about them is not evidence of anything.
+ *
+ * A draft has no materialized bundle, so the def-validation endpoint skips the
+ * `prompt_file:` existence/confinement half entirely (see `check_prompt_files`
+ * in `server/src/modules/workflow/validate.rs`). Only the SAVE path, which
+ * validates against the real bundle root, can reach a verdict on these. Reading
+ * "the check did not report it" as "the author fixed it" would retire a true
+ * save failure the moment the author touched any field — exactly the
+ * nothing-was-fixed retirement this rule exists to prevent.
+ */
+const UNDECIDABLE_BY_DEF_CHECK: readonly string[] = [
+  'WORKFLOW_PROMPT_FILE_MISSING',
+  'WORKFLOW_PROMPT_FILE_ESCAPE',
+]
+
+/**
  * Is the finding a stored failure describes still among the blocking findings
  * of a fresh check?
  *
@@ -98,12 +116,31 @@ export interface ValidationSlice {
  * check no longer reports that finding, the claim is provably false — and it
  * would otherwise sit above a green "No blocking errors." until the author
  * happened to press Save again.
+ *
+ * Two things make "the check no longer reports it" weaker evidence than it
+ * looks, and both resolve the SAME way — keep the message:
+ *
+ * 1. the check may not be able to answer the question at all
+ *    (`UNDECIDABLE_BY_DEF_CHECK`);
+ * 2. the stored `location` may have been GUESSED out of the save error's
+ *    message rather than sent by the backend (`FindingIdentity.locationCertain`)
+ *    — a location-less `workflow.yaml: …` finding parses as
+ *    `location: "workflow.yaml"` and would never match the structured result's
+ *    absent location, retiring the error on the first check with nothing fixed.
+ *
+ * Retirement is only ever taken on PROOF; every uncertainty leaves the author's
+ * message where it is (at worst until they press Save again).
  */
 function findingStillPresent(
   result: ValidateDefResponse,
   finding: FindingIdentity,
 ): boolean {
-  return (result.errors ?? []).some(
+  if (UNDECIDABLE_BY_DEF_CHECK.includes(finding.code)) return true
+  const errors = result.errors ?? []
+  if (!finding.locationCertain) {
+    return errors.some(e => e.code === finding.code)
+  }
+  return errors.some(
     e => e.code === finding.code && (e.location ?? null) === finding.location,
   )
 }
@@ -301,10 +338,17 @@ export const WorkflowBuilderStoreDef = defineLocalStore({
         } catch (error) {
           set(d => {
             d.loading = false
-            d.loadError =
-              error instanceof Error
-                ? error.message
-                : 'Failed to load workflow definition'
+            // The LOAD boundary humanises through the same one place every
+            // other failure surface does. `error.message` here is the generated
+            // api-client's `HTTP error! status: 502 - <the whole response body>`
+            // — routinely a full HTML error page, which the page renders into
+            // `ErrorState`'s details. There is no definition to attribute a
+            // finding against yet (the load is what failed), so no steps.
+            d.loadError = humaniseRequestError(
+              error,
+              [],
+              'Failed to load workflow definition',
+            )
           })
         }
       },

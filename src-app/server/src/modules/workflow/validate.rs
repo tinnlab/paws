@@ -1041,8 +1041,35 @@ fn collect_template_strings(v: &serde_json::Value) -> Vec<&str> {
     out
 }
 
+/// `prompt_file:` checks.
+///
+/// Two DIFFERENT kinds of check live here, and only one of them needs a bundle:
+///
+/// * the path-SHAPE reject (`..` / absolute) is purely textual — decidable
+///   anywhere, and it is a security check, so it always runs;
+/// * the EXISTENCE / confinement pair (`WORKFLOW_PROMPT_FILE_MISSING`,
+///   `WORKFLOW_PROMPT_FILE_ESCAPE`) can only be decided against a real,
+///   materialized bundle.
+///
+/// The draft-validation surfaces (`POST /validate` on YAML text and
+/// `POST /validate-def` on a posted `WorkflowDef`, both in `handlers/dev.rs`)
+/// have NO bundle: they deliberately pass a unique path that was never created,
+/// so a `WorkflowsRead` caller cannot probe real filesystem contents through
+/// them. Statting a `prompt_file` under such a root can only ever fail — which
+/// used to report `WORKFLOW_PROMPT_FILE_MISSING` for EVERY `prompt_file:` step,
+/// a verdict the endpoint had no way to reach. In the builder that false finding
+/// became a confident human sentence, a red step marker and a permanently
+/// disabled Save on any imported `prompt_file:` workflow, with no form field
+/// able to clear it.
+///
+/// So when the bundle root does not exist, the existence half is SKIPPED rather
+/// than answered wrongly: it is a draft check, and the install/import path
+/// (which passes the real extracted bundle dir) re-validates authoritatively
+/// before anything is written. No finding is invented for a question this call
+/// cannot answer.
 fn check_prompt_files(workflow: &WorkflowDef, bundle_root: &Path) -> Vec<ValidationError> {
     let mut out = Vec::new();
+    let bundle_present = bundle_root.is_dir();
     for s in &workflow.steps {
         let pf = match &s.config {
             StepConfig::Llm { prompt_file, .. } => prompt_file.as_deref(),
@@ -1058,6 +1085,10 @@ fn check_prompt_files(workflow: &WorkflowDef, bundle_root: &Path) -> Vec<Validat
                     format!("prompt_file '{p}' must be a bundle-relative path without '..'"),
                     &s.id,
                 ));
+                continue;
+            }
+            if !bundle_present {
+                // No bundle to resolve against — see this fn's doc comment.
                 continue;
             }
             let resolved = bundle_root.join(p);
@@ -1689,6 +1720,71 @@ steps:
         );
     }
 
+    #[test]
+    fn draft_validation_without_a_bundle_reports_no_prompt_file_verdict() {
+        // FIX round 4 / finding 2. `handlers/dev.rs`'s two DRAFT surfaces
+        // (`POST /validate` and `POST /validate-def`) pass a unique path that is
+        // never created as the bundle root, so a `WorkflowsRead` caller cannot
+        // probe the filesystem through them. Against such a root every
+        // `prompt_file:` step used to come back `WORKFLOW_PROMPT_FILE_MISSING` —
+        // a verdict the endpoint cannot actually reach — which the builder
+        // amplified into a human sentence, a red step marker and a permanently
+        // disabled Save that no form field could clear.
+        //
+        // The root below is built EXACTLY as `validate_workflow_def` builds it.
+        let yaml = r#"
+steps:
+  - id: g
+    kind: llm
+    prompt_file: "prompts/step.md"
+"#;
+        let wf = parse_workflow_yaml(yaml).unwrap();
+        let never_created =
+            std::env::temp_dir().join(format!("ziee-wf-validate-{}", uuid::Uuid::new_v4()));
+        assert!(
+            !never_created.exists(),
+            "the fixture root must not exist, or this test proves nothing"
+        );
+
+        let errs = validate_collecting(&wf, &never_created, true);
+
+        assert!(
+            !errs
+                .iter()
+                .any(|e| e.code == "WORKFLOW_PROMPT_FILE_MISSING"),
+            "a draft check with no bundle must not claim the prompt file is missing: {errs:?}"
+        );
+        assert!(
+            !errs.iter().any(|e| e.code == "WORKFLOW_PROMPT_FILE_ESCAPE"),
+            "a draft check with no bundle cannot decide confinement either: {errs:?}"
+        );
+        // …and the step is not blocked at all: nothing else about it is wrong.
+        assert!(
+            !errs.iter().any(|e| e.severity == Severity::Error),
+            "a valid draft step must leave Save reachable: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn draft_validation_without_a_bundle_still_rejects_an_unsafe_prompt_path() {
+        // The SHAPE reject is textual, so it is decidable with no bundle — and it
+        // is the security half. Skipping the existence check must not take it.
+        let yaml = r#"
+steps:
+  - id: g
+    kind: llm
+    prompt_file: "../../etc/passwd"
+"#;
+        let wf = parse_workflow_yaml(yaml).unwrap();
+        let never_created =
+            std::env::temp_dir().join(format!("ziee-wf-validate-{}", uuid::Uuid::new_v4()));
+        let errs = validate_collecting(&wf, &never_created, true);
+        assert!(
+            errs.iter().any(|e| e.code == "WORKFLOW_PROMPT_FILE_UNSAFE"),
+            "the textual path reject must survive the no-bundle skip: {errs:?}"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn prompt_file_escaping_bundle_via_symlink_is_reported() {
@@ -1927,6 +2023,25 @@ mod humanisation_contract {
     /// skip is exactly how a new layer's codes would escape BOTH halves of the
     /// contract (registry + human copy) and reach the author as raw wire text.
     const KNOWN_LAYERS: &[&str] = &["schema", "semantic", "security"];
+
+    /// The `ValidationError` fields that decide what this guard vouches for.
+    ///
+    /// The struct's fields are `pub` (every consumer — `handlers/dev.rs`,
+    /// `workflow_mcp/tools.rs`, `ref_check.rs` — READS them), and Rust has no
+    /// read-only-public field, so the type cannot forbid
+    ///
+    /// ```ignore
+    /// let mut e = ValidationError::err("semantic", "REAL_CODE", "…");
+    /// e.code = "SNEAKY_CODE";           // ← re-labels the finding
+    /// ```
+    ///
+    /// The scanner reads the CONSTRUCTOR, so all three checks (emitted set,
+    /// registry, human copy) would agree on `REAL_CODE` while `SNEAKY_CODE` is
+    /// what reaches the author — the same silent-agreement mode the `Self::`
+    /// hole had. Narrowing the field's visibility cannot close it (the scan is
+    /// crate-wide and `pub(crate)` still permits assignment), so it is made
+    /// LOUD instead: assigning any of these post-construction is reported.
+    const FINDING_FIELDS: &[&str] = &["code", "layer", "severity"];
 
     fn manifest_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -2237,6 +2352,16 @@ mod humanisation_contract {
                 i += 2;
                 continue;
             }
+            if c == '.' {
+                // Recorded so the ident that follows is known to be a FIELD
+                // ACCESS (`e.code`) rather than a binding, a struct-literal key
+                // or a path segment. `..` (range / struct update) is recorded
+                // distinctly so it can never be read as a field access.
+                let dots = if ch.get(i + 1) == Some(&'.') { 2 } else { 1 };
+                prev_word = ".".repeat(dots);
+                i += dots;
+                continue;
+            }
             if is_ident_char(c) && !c.is_ascii_digit() {
                 let word = read_ident(&ch, &mut i);
                 if word == "type" && test_body_from.is_none() {
@@ -2245,6 +2370,14 @@ mod humanisation_contract {
                     // a non-committing lookahead, so the tokens are still scanned
                     // normally afterwards.
                     scan_type_alias(&ch, i, line, file, scan);
+                }
+                if prev_word == "."
+                    && test_body_from.is_none()
+                    && FINDING_FIELDS.contains(&word.as_str())
+                {
+                    // `e.code = "…"` — a finding re-labelled AFTER the
+                    // constructor this scanner read. Pure lookahead.
+                    scan_field_assignment(&ch, i, line, file, &word, scan);
                 }
                 if word == "ValidationError" && test_body_from.is_none() {
                     let opens_impl = scan_validation_error_use(
@@ -2265,6 +2398,45 @@ mod humanisation_contract {
             }
             i += 1;
         }
+    }
+
+    /// Called with `i` just past a `code` / `layer` / `severity` identifier that
+    /// followed a `.` — i.e. a FIELD ACCESS on something.
+    ///
+    /// Reports an ASSIGNMENT to it (`e.code = "SNEAKY"`). A read, a comparison
+    /// (`e.code == "…"` / `!=`), a method call (`e.code.to_string()`) and a
+    /// `match e.code {` are all left alone — the consumers of findings do
+    /// exactly those, and a guard that cried wolf on them would be turned off.
+    ///
+    /// Deliberately NOT type-aware: this lexer cannot know the receiver's type,
+    /// so it over-approximates to "a field with one of these names, in a file
+    /// that mentions `ValidationError` at all". That is the safe direction — a
+    /// false positive is loud and one line to fix, a false negative re-opens the
+    /// silent-agreement hole. Purely a lookahead: nothing is consumed.
+    fn scan_field_assignment(
+        ch: &[char],
+        i: usize,
+        line: usize,
+        file: &str,
+        field: &str,
+        scan: &mut Scan,
+    ) {
+        let mut j = i;
+        skip_trivia_no_line(ch, &mut j);
+        if ch.get(j) != Some(&'=') {
+            return; // a read, a call, a match scrutinee, …
+        }
+        if ch.get(j + 1) == Some(&'=') {
+            return; // `==` is a comparison, not an assignment
+        }
+        scan.problems.push(format!(
+            "{file}:{line}: a finding's `{field}` is assigned after construction. This \
+             guard reads the `ValidationError::{{err,at,warn}}` CALL, so the code it \
+             vouches for is the one the constructor named — a later `{field} = …` \
+             re-labels the finding behind BOTH the registry and the author-facing-copy \
+             check, and a wire code with no human copy reaches the author. Pass the \
+             final values to the constructor instead."
+        ));
     }
 
     /// A path (`a::b::ValidationError`) starting at `j`: returns its LAST
@@ -3146,6 +3318,61 @@ fn after() -> Vec<ValidationError> {
             assert!(
                 scan.problems.iter().any(|p| p.contains(needle)),
                 "expected a problem containing {needle:?} for {src:?}, got {:?}",
+                scan.problems
+            );
+        }
+
+        // 6. FIX round 4 / finding 4 — POST-CONSTRUCTION field assignment.
+        //    `ValidationError`'s fields are `pub`, so a finding can be built
+        //    through a perfectly legitimate `::err(…)` (which the scanner reads,
+        //    and whose code the registry vouches for) and then have its `code`
+        //    OVERWRITTEN on the next line. The scanner records the constructor's
+        //    code, the registry lists it, the copy map has an entry for it — all
+        //    three agree — and the code that actually reaches the author is one
+        //    nobody has ever written copy for. Same silent-agreement failure the
+        //    `Self::` fix closed, through a different door, so it has to be as
+        //    LOUD as every other hole here.
+        for (src, needle) in [
+            (
+                "fn m() {\n    let mut e = ValidationError::err(\"semantic\", \"REAL_CODE\", \"m\");\n    e.code = \"SNEAKY_CODE\";\n}\n",
+                "code",
+            ),
+            (
+                "fn m() {\n    let mut e = ValidationError::err(\"semantic\", \"REAL_CODE\", \"m\");\n    e.layer = \"runtime\";\n}\n",
+                "layer",
+            ),
+            (
+                "fn m() {\n    let mut e = ValidationError::err(\"semantic\", \"REAL_CODE\", \"m\");\n    e.severity = Severity::Warning;\n}\n",
+                "severity",
+            ),
+        ] {
+            let scan = scan_of(src);
+            assert!(
+                scan.problems
+                    .iter()
+                    .any(|p| p.contains("assigned after construction") && p.contains(needle)),
+                "a post-construction `{needle}` assignment was invisible to the guard \
+                 ({src:?}), so it could re-label a finding behind every check's back: {:?}",
+                scan.problems
+            );
+        }
+
+        // Negative controls: reading, comparing and matching are not mutation,
+        // and neither is a field named `code` on some OTHER type in a file that
+        // merely mentions `ValidationError`. Reporting those would make the
+        // guard cry wolf on the code that CONSUMES findings.
+        for benign in [
+            "fn r(e: &ValidationError) -> bool { e.code == \"WORKFLOW_NO_STEPS\" }\n",
+            "fn r(e: &ValidationError) -> bool { e.code != \"WORKFLOW_NO_STEPS\" }\n",
+            "fn r(e: &ValidationError) -> String { e.code.to_string() }\n",
+            "fn r(e: &ValidationError) { match e.code { _ => () } }\n",
+            "fn r(v: Vec<ValidationError>) -> usize { v.iter().filter(|e| e.severity == Severity::Error).count() }\n",
+            "struct Row { code: String }\nfn r(e: &ValidationError) -> Row { Row { code: e.code.to_string() } }\n",
+        ] {
+            let scan = scan_of(benign);
+            assert!(
+                scan.problems.is_empty(),
+                "reading a finding's fields was reported as mutation ({benign:?}): {:?}",
                 scan.problems
             );
         }

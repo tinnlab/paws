@@ -227,7 +227,13 @@ describe('createValidateRunner — the two ordering rules of a validation run', 
     slice.error =
       'Step 1 · Research the topic: This step needs a task description — say what the assistant should do.'
     slice.errorSource = 'save'
-    slice.errorFinding = { code: 'WORKFLOW_PROMPT_MISSING', location: 'agent_1' }
+    slice.errorFinding = {
+      code: 'WORKFLOW_PROMPT_MISSING',
+      location: 'agent_1',
+      // The backend SENT this location and it names a real step — see
+      // `FindingIdentity.locationCertain`.
+      locationCertain: true,
+    }
 
     await run()
 
@@ -257,7 +263,13 @@ describe('createValidateRunner — the two ordering rules of a validation run', 
       'Step 1 · Research the topic: This step needs a task description — say what the assistant should do.'
     slice.error = msg
     slice.errorSource = 'save'
-    slice.errorFinding = { code: 'WORKFLOW_PROMPT_MISSING', location: 'agent_1' }
+    slice.errorFinding = {
+      code: 'WORKFLOW_PROMPT_MISSING',
+      location: 'agent_1',
+      // The backend SENT this location and it names a real step — see
+      // `FindingIdentity.locationCertain`.
+      locationCertain: true,
+    }
 
     await run()
 
@@ -285,7 +297,13 @@ describe('createValidateRunner — the two ordering rules of a validation run', 
     const { slice, run } = harness(async () => otherStep)
     slice.error = 'Step 1 · Research the topic: This step needs a task description — say what the assistant should do.'
     slice.errorSource = 'save'
-    slice.errorFinding = { code: 'WORKFLOW_PROMPT_MISSING', location: 'agent_1' }
+    slice.errorFinding = {
+      code: 'WORKFLOW_PROMPT_MISSING',
+      location: 'agent_1',
+      // The backend SENT this location and it names a real step — see
+      // `FindingIdentity.locationCertain`.
+      locationCertain: true,
+    }
 
     await run()
 
@@ -294,6 +312,91 @@ describe('createValidateRunner — the two ordering rules of a validation run', 
       'a sentence naming step 1 survived a check in which step 1 is clean',
     ).toBeNull()
     expect(slice.error).toBeNull()
+  })
+
+  it('KEEPS a save failure whose location was GUESSED out of the message', async () => {
+    // FIX round 4 / finding 1. `WORKFLOW_TOO_MANY_STEPS` carries NO location;
+    // its message merely opens `workflow.yaml: …`, which `parseInstallError`
+    // reads as a location. The structured `/validate-def` result for the very
+    // same finding has no location, so a code+location comparison never matched
+    // and the save error was retired on the FIRST check — with nothing fixed,
+    // and reachable through the 400ms debounce race.
+    const stillTooMany = {
+      errors: [
+        {
+          layer: 'semantic',
+          code: 'WORKFLOW_TOO_MANY_STEPS',
+          message: 'workflow.yaml: a workflow may declare at most 50 steps',
+          // exactly what the endpoint returns: no location at all
+        },
+      ],
+      warnings: [],
+      cost_estimate: null,
+    } as unknown as ValidateDefResponse
+    const { slice, run } = harness(async () => stillTooMany)
+    const msg = 'This workflow has too many steps — remove a few.'
+    slice.error = msg
+    slice.errorSource = 'save'
+    // What `describeRequestError` produces for that wire string.
+    slice.errorFinding = {
+      code: 'WORKFLOW_TOO_MANY_STEPS',
+      location: 'workflow.yaml',
+      locationCertain: false,
+    }
+
+    await run()
+
+    expect(
+      slice.error,
+      'a save failure was retired by a check that still reports the very same finding',
+    ).toBe(msg)
+    expect(slice.errorSource).toBe('save')
+  })
+
+  it('retires a GUESSED-location save failure once the code is gone entirely', async () => {
+    // The other direction: falling back to code-only matching must still retire
+    // a message the author has genuinely dealt with, or the fix would just trade
+    // one untrue screen for another.
+    const { slice, run } = harness(async () => RESULT_A)
+    slice.error = 'This workflow has too many steps — remove a few.'
+    slice.errorSource = 'save'
+    slice.errorFinding = {
+      code: 'WORKFLOW_TOO_MANY_STEPS',
+      location: 'workflow.yaml',
+      locationCertain: false,
+    }
+
+    await run()
+
+    expect(slice.error).toBeNull()
+    expect(slice.errorSource).toBeNull()
+    expect(slice.errorFinding).toBeNull()
+  })
+
+  it('never retires a finding the def-check cannot decide (prompt_file existence)', async () => {
+    // A draft has no bundle, so `/validate-def` skips the `prompt_file:`
+    // existence/confinement check entirely (validate.rs::check_prompt_files).
+    // Its silence is not evidence — only a save, which validates against the
+    // real bundle root, can settle it. Reading silence as "fixed" would wipe a
+    // true save failure on the author's next keystroke.
+    const { slice, run } = harness(async () => RESULT_A)
+    const msg =
+      'Step 1 · Research the topic: The prompt file for this step is missing.'
+    slice.error = msg
+    slice.errorSource = 'save'
+    slice.errorFinding = {
+      code: 'WORKFLOW_PROMPT_FILE_MISSING',
+      location: 'agent_1',
+      locationCertain: true,
+    }
+
+    await run()
+
+    expect(
+      slice.error,
+      'a save failure was retired by a check that never looked at the question',
+    ).toBe(msg)
+    expect(slice.errorSource).toBe('save')
   })
 
   it('a failed check does not clobber a save failure already on screen', async () => {

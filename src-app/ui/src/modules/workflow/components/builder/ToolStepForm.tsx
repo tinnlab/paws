@@ -407,7 +407,12 @@ export function ToolStepForm({ store, step }: Props) {
               if (v === (step.tool ?? '')) return
               patch({ tool: v, arguments: {} })
             }}
-            loading={busy}
+            // No `loading` prop: this branch is only reachable when
+            // `usePicker` is true, and `usePicker` is `!blockingFailure &&
+            // !busy && …` — so `busy` is provably false here. Passing it read
+            // as a live state the picker could enter (CODING_GUIDELINES §15);
+            // the busy frames render the `Input` branch below, which says what
+            // is happening in words.
             placeholder="Search this server's tools…"
             emptyText="No tool matches"
           />

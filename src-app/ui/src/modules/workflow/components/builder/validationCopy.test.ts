@@ -528,6 +528,20 @@ test('the store is the ONLY humanisation boundary in the builder', () => {
     'WorkflowBuilder.store.ts no longer humanises — the wire string ' +
       '`[semantic/CODE] step_id: …` would reach the author verbatim (INV-1)',
   )
+
+  // …and EVERY failure surface in the store has to go through it, not just the
+  // save. FIX round 4 / finding 5: the LOAD boundary still assigned
+  // `error.message` straight into `loadError`, so a 502's whole HTML body was
+  // rendered into the page's ErrorState details. This is the CLASS assertion —
+  // a raw-message passthrough anywhere in the store fails it, including in a
+  // failure surface that does not exist yet.
+  assert.ok(
+    !/\berror\.message\b/.test(store),
+    'a failure surface in WorkflowBuilder.store.ts passes `error.message` ' +
+      'through raw. The api-client formats a transport failure as ' +
+      '`HTTP error! status: 502 - <the entire response body>` — routinely a ' +
+      'whole HTML page. Route it through describeRequestError/humaniseRequestError.',
+  )
 })
 
 test('describeRequestError reports WHICH finding it restated', () => {
@@ -540,13 +554,15 @@ test('describeRequestError reports WHICH finding it restated', () => {
   assert.deepEqual(fromFinding.finding, {
     code: 'WORKFLOW_PROMPT_MISSING',
     location: 'agent_1',
+    // it resolves to a real step, so it is a location we can match on
+    locationCertain: true,
   })
 
   // A workflow-level finding carries its location as the validator sent it.
   assert.deepEqual(
     describeRequestError('[schema/WORKFLOW_NO_STEPS] steps[] must contain at least one step', steps)
       .finding,
-    { code: 'WORKFLOW_NO_STEPS', location: null },
+    { code: 'WORKFLOW_NO_STEPS', location: null, locationCertain: false },
   )
 
   // Anything that is not a validator finding reports none — a successful check
@@ -558,4 +574,38 @@ test('describeRequestError reports WHICH finding it restated', () => {
   ]) {
     assert.equal(describeRequestError(raw, steps).finding, null, raw)
   }
+})
+
+test('a location GUESSED out of the message is not reported as authoritative', () => {
+  // FIX round 4 / finding 1. `WORKFLOW_TOO_MANY_STEPS` / `WORKFLOW_NO_STEPS`
+  // carry NO location; their message merely OPENS `workflow.yaml: `, which the
+  // `<token>: <rest>` split reads as one. The structured `/validate-def` result
+  // for the same finding has no location, so treating the guess as authoritative
+  // made the two never match — and the store retired the save error on the first
+  // check, with nothing fixed.
+  const guessed = describeRequestError(
+    '[semantic/WORKFLOW_TOO_MANY_STEPS] workflow.yaml: a workflow may declare at most 50 steps',
+    steps,
+  )
+  assert.deepEqual(guessed.finding, {
+    code: 'WORKFLOW_TOO_MANY_STEPS',
+    location: 'workflow.yaml',
+    locationCertain: false,
+  })
+
+  // A location that is REAL but names no step (an output path) is equally
+  // unusable as a match key, and is reported as such rather than guessed at.
+  const outputPath = describeRequestError(
+    '[semantic/WORKFLOW_UNKNOWN_STEP_REF] outputs[summary].from: unknown step',
+    steps,
+  )
+  assert.equal(outputPath.finding?.locationCertain, false)
+
+  // Sanity: a step id that DOES exist stays authoritative, so the location-aware
+  // match (the same code on another step is a different claim) is not lost.
+  const real = describeRequestError(
+    '[semantic/WORKFLOW_PROMPT_MISSING] summarize: step has neither prompt: nor prompt_file:',
+    steps,
+  )
+  assert.equal(real.finding?.locationCertain, true)
 })

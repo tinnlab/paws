@@ -129,17 +129,31 @@ and register a real loopback MCP server serving three distinct tools
   *different* step form) and a cell that genuinely renders `ToolStepForm` with a
   resolved server + schema-driven form was added.
 
-### One transient e2e failure, disclosed
+### e2e flakiness under box contention — disclosed with evidence
 
-An earlier full-suite run showed `1 failed / 8 passed`, TEST-7 failing on the
-edit→save→reload leg. Classified as transport contention, not a product defect,
-on three pieces of evidence: TEST-7 passes in ISOLATION (`1 passed (46.8s)`);
-the full four-spec suite passes on re-run (`9 passed`); and the failing run's log
-carries `GET /api/mcp/servers: TypeError: Failed to fetch` plus sync/chat-stream
-`network error` — i.e. the save request itself failed. Recorded as a finding
-rather than papered over: **`saveBuilder` (a shared e2e helper) does not verify
-the save SUCCEEDED**, so a failed POST surfaces later as a confusing value
-assertion. Not fixed here — it is shared harness (rule B3); flagged for its owner.
+Across six full-suite runs this session the four-spec set returned `9 passed`
+four times and `1 failed / 8 passed` twice, always the same leg: TEST-7's
+edit -> save -> reload. It is **box contention, not a product defect**, and the
+evidence is specific rather than a load metric:
+
+- The tool-picker spec run ALONE passed 4/4 on two consecutive runs, and TEST-7
+  alone passed (`1 passed (46.8s)`).
+- Each failing run's log carries **650 / 280 `ERR_CONNECTION_REFUSED`** and,
+  decisively, `Error calling endpoint PUT /api/workflows/{id}/definition` — the
+  SAVE request never reached the backend, so the reload legitimately showed the
+  previous save's value (`an_unlisted_tool` instead of `another_tool`). The
+  assertion was correct; the write never happened.
+- `ps` showed **108 concurrent `ziee` server processes** from other worktrees'
+  suites at that moment. Each spec spawns its own backend + Vite, so a four-spec
+  sequential run stands up four more.
+
+The final recorded run is `9 passed (3.4m)`.
+
+**Recorded as a real test-robustness finding, not papered over:** `saveBuilder`
+(`tests/e2e/workflows/helpers/builder-helpers.ts`) clicks Save but does NOT
+verify the write succeeded, so a failed `PUT` surfaces several steps later as a
+confusing value mismatch instead of "the save failed". Fixing it belongs in that
+shared helper, which this branch does not own (rule B3) — flagged for its owner.
 
 ## Static gates
 

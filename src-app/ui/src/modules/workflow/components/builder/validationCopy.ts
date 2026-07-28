@@ -377,6 +377,24 @@ export function parseInstallError(raw: string): ParsedInstallError | null {
 export interface FindingIdentity {
   code: string
   location: string | null
+  /**
+   * Is `location` a location the backend actually SENT, or one this module
+   * guessed out of the message text?
+   *
+   * `parseInstallError` cannot tell them apart: the wire string is
+   * `[layer/CODE] <rest>` and a location is just "the first unspaced token
+   * followed by `: `". A finding that carries NO location but whose message
+   * happens to open `workflow.yaml: …` (`WORKFLOW_TOO_MANY_STEPS`,
+   * `WORKFLOW_NO_STEPS`) therefore parses as `location: "workflow.yaml"` —
+   * while the structured `/validate-def` result for the very same finding has
+   * no location at all. Comparing the two as equals retired the save error on
+   * the first check, with nothing fixed.
+   *
+   * So a location is only authoritative once it RESOLVES to a real step in the
+   * definition. When it does not, matching falls back to the code alone, which
+   * can only ever keep a message on screen longer — never retire one wrongly.
+   */
+  locationCertain: boolean
 }
 
 /**
@@ -406,7 +424,16 @@ function humaniseValidatorFinding(
     text: attributed.stepId
       ? `${findingStepTitle(attributed)}: ${attributed.text}`
       : attributed.text,
-    identity: { code: parsed.code, location: parsed.location },
+    identity: {
+      code: parsed.code,
+      location: parsed.location,
+      // `resolveFindingStep` is the only evidence available that the token we
+      // read really is a location: it resolved to a step that exists. A
+      // pseudo-location (`workflow.yaml`) resolves to nothing, and so does a
+      // genuine non-step location (`outputs[x].from`) — both fall back to
+      // code-only matching, which is the conservative direction.
+      locationCertain: attributed.stepId != null,
+    },
   }
 }
 
@@ -530,7 +557,13 @@ export function describeRequestError(
   return { text: tidyMachineText(raw) || fallback, finding: null }
 }
 
-/** `describeRequestError`'s sentence, for callers that need nothing else. */
+/**
+ * `describeRequestError`'s sentence, for callers that need nothing else.
+ *
+ * Used by the store's LOAD boundary (`WorkflowBuilder.store.ts::load`), where a
+ * failure can never be a validator finding — there is no definition to attribute
+ * one against yet — so the finding identity would be dead weight.
+ */
 export function humaniseRequestError(
   error: unknown,
   steps: BuilderStep[],
