@@ -111,43 +111,36 @@ cd src-app/desktop/ui && npm run check   → PASS (exit 0)
 `npm run check (ui): PASS`
 `npm run check (desktop/ui): PASS`
 
-## Not yet green — stated plainly
+## Gate notes
 
-- **`gate:ui (ui)`: FAIL — harness-originated, NOT attributable to this branch.**
-  Two full runs, both FAIL on `runtime-health`, and the evidence is consistent:
+- **`gate:ui (ui)`: PASS** — `205/205 PASS`, `✅ GATE PASSED — every UI DONE
+  criterion met`, exit 0 (`cds-gateui3.log`). tsc PASS · lint PASS ·
+  runtime-health PASS · visual PASS.
+
+  It took three runs to get a trustworthy signal, and the two failures are worth
+  recording because the diagnosis was the whole point:
 
   | run | verdict | failing surfaces |
   |---|---|---|
   | 1 | 202/204 | `chat` (HIGH 772), `auth` (HIGH 536) |
   | 2 | 195/205 | seven `overlay-*` surfaces (HIGH 37–360) |
+  | 3 | **205/205** | — (after `pkill -f "vite --config"`) |
 
-  **The failing surfaces are disjoint between runs** — the signature of flake,
-  not a defect. And in run 2, **100 % of the HIGH findings are the same thing**:
-  3,405 `console-error — Failed to load resource: net::ERR_NETWORK_CHANGED`
-  plus ~1,200 `request-failed` on Vite module loads
-  (`GET http://localhost/@fs/…/node_modules/.vite/…`,
-  `…/sdk/packages/kit/src/shadcn/…`) — against a **portless**
-  `http://localhost/`, i.e. the gallery dev server dropping mid-run. Run 1's
-  findings additionally carried `harness: true`.
+  The failing surfaces were **disjoint between runs 1 and 2** — flake, not a
+  defect — and 100 % of run 2's HIGH findings were one signature: 3,405
+  `net::ERR_NETWORK_CHANGED` plus ~1,200 `request-failed` on Vite module loads
+  against a **portless** `http://localhost/`, on files this branch never touches
+  (`sdk/packages/kit/src/shadcn/*`, `node_modules/.vite/*`). Run 1's findings
+  were tagged `harness: true` by the harness itself.
 
-  Causal check: this branch changes **zero** files under `src-app/ui/src`,
-  `src-app/desktop/ui/src` or `sdk/packages/**`
-  (`git diff origin/feat/agent-core...HEAD --name-only` over those paths is
-  empty), and `types.ts` / `api-client/*` are byte-unchanged — the gallery build
-  is identical to the base's. The modules failing to load
-  (`sdk/packages/kit/src/shadcn/*`) are ones the diff never touches.
+  Both failing runs logged `reusing THIS worktree's gallery dev server already
+  on :20004` — the stale-Vite failure mode CLAUDE.md documents. Killing it and
+  letting the gate boot its own server produced a clean 205/205. The lesson for
+  the next person: a `gate:ui` runtime-health failure whose findings are all
+  `ERR_NETWORK_CHANGED` on a portless localhost is a stale dev server, and
+  `pkill -f "vite --config"` is the fix — do not go hunting for a UI regression.
 
-  Both runs logged `reusing THIS worktree's gallery dev server already on
-  :20004` — the stale-Vite failure mode CLAUDE.md documents. A third run was
-  started after `pkill -f "vite --config"` (port verified free) and had not
-  produced a verdict when this record was written.
-
-  **This is an open item, not a pass.** The line below must read PASS before
-  merge; it does not yet. What is NOT in doubt is that the cause lies in the
-  harness/box rather than this diff — but that argument is evidence, not a
-  green gate, and it is recorded as such.
-
-  `gate:ui (ui): FAIL (harness — see above; re-run required before merge)`
+`gate:ui (ui): PASS`
 
 - **Phase 0 / A1 fails with 17 `.lifecycle` feature dirs.** Inherited from
   `origin/feat/agent-core`, which carries 16 before this branch adds its own; the
