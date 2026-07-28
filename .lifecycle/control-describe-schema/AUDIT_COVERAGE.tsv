@@ -21,5 +21,6 @@ src-app/ui/tests/e2e/control/control-negative-perm.spec.ts	36	39	correctness,per
 src-app/ui/tests/e2e/control/control-negative-perm.spec.ts	178	192	correctness,perms/authz,tests-quality
 src-app/ui/tests/e2e/control/control-negative-perm.spec.ts	194	194	correctness,perms/authz,tests-quality
 src-app/ui/tests/e2e/control/control-negative-perm.spec.ts	203	204	correctness,perms/authz,tests-quality
-src-app/ui/tests/e2e/control/control-negative-perm.spec.ts	210	215	correctness,perms/authz,tests-quality
-src-app/ui/tests/e2e/control/control-negative-perm.spec.ts	284	288	correctness,perms/authz,tests-quality
+src-app/ui/tests/e2e/control/control-negative-perm.spec.ts	210	225	correctness,perms/authz,tests-quality
+src-app/ui/tests/e2e/control/control-negative-perm.spec.ts	237	241	correctness,perms/authz,tests-quality
+src-app/ui/tests/e2e/control/control-negative-perm.spec.ts	298	302	correctness,perms/authz,tests-quality
