@@ -4,7 +4,7 @@
 // renders + overlay triggers + panel/slot registrations) that the reconciliation
 // gate (scripts/reconcile-state-matrix.mjs) checks the gallery entries against.
 //
-// 347 surfaces carry renderable-state signals; 2107 signals total.
+// 347 surfaces carry renderable-state signals; 2108 signals total.
 
 /** A signal is one mechanically-detected render fork (a state the surface can be in). */
 export interface StateSignal {
@@ -1958,14 +1958,15 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/js-tool/chat-extension/components/JsToolApprovalContent",
     requiredStates: [],
     signals: [
-      { kind: "branch", condition: "!hasTransport || resolved !== null", line: 106 },
-      { kind: "branch", condition: "elicitationExists(data.elicitation_id)", line: 107 },
-      { kind: "branch", condition: "submitting || resolved !== null || elicitationIsUnactionable(blocked)", line: 149 },
-      { kind: "branch", condition: "resolved === 'approved'", line: 184 },
-      { kind: "branch", condition: "resolved === 'denied'", line: 184 },
-      { kind: "branch", condition: "serverParenLabel(data.server)", line: 195 },
-      { kind: "branch", condition: "data.input !== undefined", line: 207 },
-      { kind: "branch", condition: "resolved === null", line: 249 },
+      { kind: "branch", condition: "!hasTransport || resolved !== null", line: 112 },
+      { kind: "branch", condition: "elicitationExists(data.elicitation_id)", line: 113 },
+      { kind: "branch", condition: "healAttempts.current >= 3", line: 114 },
+      { kind: "branch", condition: "submitting || resolved !== null || elicitationIsUnactionable(blocked)", line: 157 },
+      { kind: "branch", condition: "resolved === 'approved'", line: 199 },
+      { kind: "branch", condition: "resolved === 'denied'", line: 199 },
+      { kind: "branch", condition: "serverParenLabel(data.server)", line: 210 },
+      { kind: "branch", condition: "data.input !== undefined", line: 222 },
+      { kind: "branch", condition: "resolved === null", line: 272 },
     ],
   },
   "modules/js-tool/components/JsToolSettingsSection": {

@@ -51,6 +51,12 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
    */
   const [resolveFailed, setResolveFailed] = useState(false)
   const statusRef = useRef<HTMLElement>(null)
+  /**
+   * How many times the self-heal has tried. Bounded (FIX_ROUND-9) so a provider
+   * that violates the register→`has()` contract cannot spin this effect: the seam
+   * contract now states the requirement, and this is the consumer-side belt.
+   */
+  const healAttempts = useRef(0)
   const statusId = `run-js-approval-status-${data.elicitation_id}`
 
   // Derive the resolved state from the CORE-owned elicitation seam (the live
@@ -105,6 +111,8 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
   useEffect(() => {
     if (!hasTransport || resolved !== null) return
     if (elicitationExists(data.elicitation_id)) return
+    if (healAttempts.current >= 3) return
+    healAttempts.current += 1
     // No need to consume the boolean here (FIX_ROUND-7): whether it succeeded is
     // observable from the seam itself — `entryExists` above derives the
     // `not-registered` state, which DISABLES the controls and clears itself when
@@ -173,8 +181,15 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
       // describes the no-entry case at higher precedence. Kept because the seam's
       // contract permits `status()` to return undefined, so a conforming provider
       // that DOES delete on resolve must not read as success here.
+      // Only judge the outcome when the provider HELD an entry to judge it by
+      // (FIX_ROUND-9). With no entry, its optimistic update is a no-op and the
+      // status stays `undefined` — but the POST still went out and the suspended
+      // script still resumed, so recording that as a failure marks a SUCCESSFUL
+      // approve as failed. `not-registered` already describes that card, and the
+      // self-heal is what resolves it.
       const after = elicitationStatus(data.elicitation_id)
-      if (!carried || after === 'pending' || after === undefined) setResolveFailed(true)
+      const hadEntry = elicitationExists(data.elicitation_id)
+      if (!carried || (hadEntry && after === 'pending')) setResolveFailed(true)
     } finally {
       setSubmitting(false)
     }
@@ -229,7 +244,15 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
               id={statusId}
               tabIndex={-1}
               role="status"
-              type={blocked && !resolved ? 'danger' : 'secondary'}
+              // `danger` only for the states that genuinely stop the user
+              // (FIX_ROUND-9). `not-registered` is transient, self-healing and
+              // explicitly answerable — painting it in the destructive red
+              // DESIGN_SYSTEM.md reserves for errors contradicted its own copy.
+              type={
+                !resolved && (blocked === 'no-transport' || blocked === 'resolve-failed')
+                  ? 'danger'
+                  : 'secondary'
+              }
               className="mt-2 block text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-sm"
               data-testid={statusId}
               data-status={resolved ?? blocked ?? 'pending'}

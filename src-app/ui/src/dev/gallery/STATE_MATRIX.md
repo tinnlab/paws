@@ -8,7 +8,7 @@
 ## Summary
 
 - **347** surfaces carry at least one renderable-state signal.
-- **2107** signals total: 1651 branch, 139 empty, 122 error, 94 loading, 96 overlay, 5 panel.
+- **2108** signals total: 1652 branch, 139 empty, 122 error, 94 loading, 96 overlay, 5 panel.
 - **5** right-panel renderers registered (each a right-panel-open state).
 - **35** slot registrations (sidebar / settings / chat mount points).
 
@@ -2165,14 +2165,15 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!hasTransport \|\| resolved !== null` | 106 |
-| branch | `elicitationExists(data.elicitation_id)` | 107 |
-| branch | `submitting \|\| resolved !== null \|\| elicitationIsUnactionable(blocked)` | 149 |
-| branch | `resolved === 'approved'` | 184 |
-| branch | `resolved === 'denied'` | 184 |
-| branch | `serverParenLabel(data.server)` | 195 |
-| branch | `data.input !== undefined` | 207 |
-| branch | `resolved === null` | 249 |
+| branch | `!hasTransport \|\| resolved !== null` | 112 |
+| branch | `elicitationExists(data.elicitation_id)` | 113 |
+| branch | `healAttempts.current >= 3` | 114 |
+| branch | `submitting \|\| resolved !== null \|\| elicitationIsUnactionable(blocked)` | 157 |
+| branch | `resolved === 'approved'` | 199 |
+| branch | `resolved === 'denied'` | 199 |
+| branch | `serverParenLabel(data.server)` | 210 |
+| branch | `data.input !== undefined` | 222 |
+| branch | `resolved === null` | 272 |
 
 ### `modules/js-tool/components/JsToolSettingsSection`
 

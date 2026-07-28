@@ -316,7 +316,24 @@ test('FIX_ROUND-5: ChatMessage re-resolves rail steps THROUGH withSegmentationSh
   // the search to the declaration gives both properties.
   const declStart = code.indexOf('const resolveStep')
   assert.notEqual(declStart, -1, 'ChatMessage must still declare resolveStep')
-  const decl = code.slice(declStart, declStart + 400).replace(/\s+/g, ' ')
+  // Bounded by the declaration's REAL end, not a byte count (FIX_ROUND-9): a
+  // hardcoded 400-char window put an ordinary multi-branch body's revert at
+  // offset 417 and went silently green — the same defect this branch had just
+  // condemned in the Rust drift parser's 400-byte window. Scan to the start of
+  // the next top-level `const `/`function `/`return ` at indentation 2.
+  const after = code.slice(declStart + 'const resolveStep'.length)
+  const nextDecl = after.search(/\n {2}(?:const|function|return|\/\*\*) /)
+  const decl = after
+    .slice(0, nextDecl === -1 ? after.length : nextDecl)
+    .replace(/\s+/g, ' ')
+  // The DECLARATION itself must route through the helper (FIX_ROUND-9): checking
+  // only that the file mentions it somewhere let a multi-statement revert of
+  // `resolveStep` pass while an unrelated call kept the file-level match alive.
+  assert.match(
+    decl,
+    /withSegmentationShape\s*\(/,
+    'resolveStep itself must call withSegmentationShape, not merely the file',
+  )
   assert.doesNotMatch(
     decl,
     /resolveRailStep\(.*?\)\?\.step \?\? placed\.step/,
@@ -327,10 +344,10 @@ test('FIX_ROUND-5: ChatMessage re-resolves rail steps THROUGH withSegmentationSh
 
 /**
  * FIX_ROUND-8 — a `tooltip` must never be passed to a control that can be
- * `disabled`.
+ * `disabled`; and FIX_ROUND-9 — the disable decision must go through the seam.
  *
- * Two mechanical facts about the kit make this a real defect rather than a style
- * preference:
+ * Two mechanical facts about the kit make the first a real defect rather than a
+ * style preference:
  *  1. `Button` derives `aria-label` from a STRING `tooltip` unconditionally, so a
  *     tooltip silently REPLACES the visible label in the accessibility tree —
  *     FIX_ROUND-5 shipped exactly this and made Approve and Deny announce
@@ -338,50 +355,79 @@ test('FIX_ROUND-5: ChatMessage re-resolves rail steps THROUGH withSegmentationSh
  *  2. `disabled` becomes the native attribute and the base class carries
  *     `disabled:pointer-events-none`, so the trigger can never fire anyway.
  *
- * This is a SOURCE guard, and it is here because the e2e cannot be one: the
- * regression's tooltip was CONDITIONAL on the degraded state, and no spec can
- * reach that state (it needs mcp's transport to be absent mid-conversation). An
- * e2e that only ever visits the healthy state sees `tooltip === undefined` and
- * stays green — which is precisely what round 8 proved about the first attempt at
- * pinning this.
+ * These are SOURCE guards, and they are here because neither can be an e2e: the
+ * regression's tooltip was CONDITIONAL on a degraded state, and no spec can reach
+ * a state that needs mcp's transport to be absent mid-conversation.
+ *
+ * FIX_ROUND-9 closed three proven evasions of the first cut — boolean-shorthand
+ * `disabled`, a spread carrying it, and a `>` inside an earlier quoted attribute
+ * truncating the props window — and removed the `catch { continue }` that made
+ * the whole guard vacuous the moment a scanned file was renamed. That tolerance
+ * was the same standing-hole shape this branch had just condemned on the Rust
+ * side; it did not deserve an exception here.
  */
-test('FIX_ROUND-8: no `tooltip` on a Button that can be disabled (kit clobbers aria-label)', () => {
-  const files = [
-    'modules/js-tool/chat-extension/components/JsToolApprovalContent.tsx',
-    'modules/mcp/chat-extension/components/ToolCallPendingApprovalContent.tsx',
-  ]
-  const violations: string[] = []
-  for (const rel of files) {
-    let text: string
-    try {
-      text = readFileSync(join(SRC, rel), 'utf8')
-    } catch {
-      continue // the file may legitimately have been renamed
-    }
-    const code = text
-      .replace(/\/\*[\s\S]*?\*\//g, '')
-      .split(/\r?\n/)
-      .map(l => l.replace(/\/\/.*$/, ''))
-      .join('\n')
-    // Each `<Button …>` element's props. The opening tag ends at the first `>`
-    // seen at BRACE DEPTH ZERO — a lazy `/<Button[\s\S]*?>/` stops at the `>` of a
-    // nested element inside a prop (`icon={<Check />}`) and reads none of the
-    // props, which is how the first cut of this guard missed its own control.
-    let from = 0
-    for (;;) {
-      const open = code.indexOf('<Button', from)
-      if (open === -1) break
-      let depth = 0
-      let i = open + '<Button'.length
-      for (; i < code.length; i++) {
-        const ch = code[i]
-        if (ch === '{') depth++
-        else if (ch === '}') depth--
-        else if (ch === '>' && depth === 0) break
+
+/** The files whose approve/deny controls this guards. A rename must FAIL. */
+const APPROVAL_SURFACES = [
+  'modules/js-tool/chat-extension/components/JsToolApprovalContent.tsx',
+  'modules/mcp/chat-extension/components/ToolCallPendingApprovalContent.tsx',
+]
+
+/** Source with comments stripped. */
+function codeOf(rel: string): string {
+  return readFileSync(join(SRC, rel), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split(/\r?\n/)
+    .map(l => l.replace(/\/\/.*$/, ''))
+    .join('\n')
+}
+
+/**
+ * Every `<Button …>` opening tag's props.
+ *
+ * The tag ends at the first `>` that is outside BOTH braces and quotes. A lazy
+ * `/<Button[\s\S]*?>/` stops at the `>` of a nested element in a prop
+ * (`icon={<Check />}`); tracking only braces still stops at a `>` inside a quoted
+ * attribute value. Both were verified to blind the guard.
+ */
+function buttonProps(code: string): string[] {
+  const out: string[] = []
+  let from = 0
+  for (;;) {
+    const open = code.indexOf('<Button', from)
+    if (open === -1) break
+    let depth = 0
+    let quote: string | null = null
+    let i = open + '<Button'.length
+    for (; i < code.length; i++) {
+      const ch = code[i]
+      if (quote) {
+        if (ch === quote) quote = null
+        continue
       }
-      const props = code.slice(open + '<Button'.length, i)
-      from = i + 1
-      if (/\bdisabled\s*=/.test(props) && /\btooltip\s*=/.test(props)) {
+      if (ch === '"' || ch === "'" || ch === '`') quote = ch
+      else if (ch === '{') depth++
+      else if (ch === '}') depth--
+      else if (ch === '>' && depth === 0) break
+    }
+    out.push(code.slice(open + '<Button'.length, i))
+    from = i + 1
+  }
+  return out
+}
+
+test('FIX_ROUND-8: no `tooltip` on a Button that can be disabled (kit clobbers aria-label)', () => {
+  const violations: string[] = []
+  for (const rel of APPROVAL_SURFACES) {
+    // No `catch { continue }` — a renamed file must fail, not silently pass.
+    for (const props of buttonProps(codeOf(rel))) {
+      // `disabled` as an assignment, as BOOLEAN SHORTHAND, or via a spread —
+      // all three reach `nativeDisabled`, and the first cut only saw the first.
+      const canDisable =
+        /\bdisabled\s*=/.test(props) ||
+        /(^|[\s{])disabled(\s|$|\/)/.test(props) ||
+        /\{\s*\.\.\..*\bdisabled\b/.test(props)
+      if (canDisable && /\btooltip\s*=/.test(props)) {
         violations.push(`${rel}: a <Button> takes BOTH \`disabled\` and \`tooltip\``)
       }
     }
@@ -392,4 +438,25 @@ test('FIX_ROUND-8: no `tooltip` on a Button that can be disabled (kit clobbers a
     `a tooltip on a disable-able Button overwrites its accessible name and can never ` +
       `render:\n${violations.join('\n')}`,
   )
+})
+
+test('FIX_ROUND-9: the approval controls disable ONLY through the seam predicate', () => {
+  // The rule "only the impossible state disables" was pinned as a pure predicate
+  // (`elicitationIsUnactionable`) but NOT at the two JSX call sites that render
+  // it — so re-introducing the FIX_ROUND-7 latch (`disabled={blocked !== null}`)
+  // left everything green. This pins the call sites.
+  const rel = 'modules/js-tool/chat-extension/components/JsToolApprovalContent.tsx'
+  const props = buttonProps(codeOf(rel))
+  const disabling = props.filter(p => /\bdisabled\s*=/.test(p))
+  assert.ok(disabling.length >= 2, `expected the approve/deny controls, found ${disabling.length}`)
+  for (const p of disabling) {
+    const expr = /\bdisabled\s*=\s*\{([^}]*)\}/.exec(p)?.[1]?.trim()
+    assert.equal(
+      expr,
+      'elicitationIsUnactionable(blocked)',
+      'an approval control must derive `disabled` from the seam predicate — every ' +
+        'time a state the user could still act through was disabled, the card ' +
+        'became unanswerable (three times: FIX_ROUND-4, -6, -7)',
+    )
+  }
 })

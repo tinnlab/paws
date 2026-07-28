@@ -11,63 +11,63 @@ use super::models::{CreateMcpToolCall, McpToolCall};
 /// Insert one recorded tool call, returning the full row.
 pub async fn insert_call(pool: &PgPool, req: CreateMcpToolCall) -> Result<McpToolCall, AppError> {
     let row = sqlx::query_as!(
- McpToolCall,
- r#"
- INSERT INTO mcp_tool_calls (
- server_id, server_name, is_built_in, user_id, conversation_id,
- branch_id, message_id, tool_use_id, tool_name, arguments_json,
- source, status, is_error, result_json, content_kinds, result_bytes,
- error_message, started_at, finished_at, duration_ms, workflow_run_id,
- review_classification
+        McpToolCall,
+        r#"
+        INSERT INTO mcp_tool_calls (
+            server_id, server_name, is_built_in, user_id, conversation_id,
+            branch_id, message_id, tool_use_id, tool_name, arguments_json,
+            source, status, is_error, result_json, content_kinds, result_bytes,
+            error_message, started_at, finished_at, duration_ms, workflow_run_id,
+            review_classification
         )
- VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
- RETURNING
- id,
- server_id,
- server_name,
- is_built_in,
- user_id,
- conversation_id,
- branch_id,
- message_id,
- tool_use_id,
- tool_name,
- arguments_json as "arguments_json: _",
- source,
- status,
- is_error,
- result_json as "result_json: _",
- content_kinds as "content_kinds: _",
- result_bytes,
- error_message,
- started_at as "started_at: _",
- finished_at as "finished_at: _",
- duration_ms,
- created_at as "created_at: _",
- updated_at as "updated_at: _"
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+        RETURNING
+            id,
+            server_id,
+            server_name,
+            is_built_in,
+            user_id,
+            conversation_id,
+            branch_id,
+            message_id,
+            tool_use_id,
+            tool_name,
+            arguments_json as "arguments_json: _",
+            source,
+            status,
+            is_error,
+            result_json as "result_json: _",
+            content_kinds as "content_kinds: _",
+            result_bytes,
+            error_message,
+            started_at as "started_at: _",
+            finished_at as "finished_at: _",
+            duration_ms,
+            created_at as "created_at: _",
+            updated_at as "updated_at: _"
         "#,
- req.server_id,
- req.server_name,
- req.is_built_in,
- req.user_id,
- req.conversation_id,
- req.branch_id,
- req.message_id,
- req.tool_use_id,
- req.tool_name,
- req.arguments_json,
- req.source.as_str(),
- req.status.as_str(),
- req.is_error,
- req.result_json,
+        req.server_id,
+        req.server_name,
+        req.is_built_in,
+        req.user_id,
+        req.conversation_id,
+        req.branch_id,
+        req.message_id,
+        req.tool_use_id,
+        req.tool_name,
+        req.arguments_json,
+        req.source.as_str(),
+        req.status.as_str(),
+        req.is_error,
+        req.result_json,
         &req.content_kinds,
- req.result_bytes,
- req.error_message,
- req.started_at,
- req.finished_at,
- req.duration_ms,
- req.workflow_run_id,
- req.review_classification,
+        req.result_bytes,
+        req.error_message,
+        req.started_at,
+        req.finished_at,
+        req.duration_ms,
+        req.workflow_run_id,
+        req.review_classification,
     )
     .fetch_one(pool)
     .await
@@ -130,82 +130,82 @@ pub async fn list_calls_for_user(
     per_page: i64,
 ) -> Result<(Vec<McpToolCall>, i64), AppError> {
     let ToolCallFilters {
- server_id,
- conversation_id,
- is_built_in,
- tool_use_id,
- message_id,
+        server_id,
+        conversation_id,
+        is_built_in,
+        tool_use_id,
+        message_id,
     } = filters;
     let per_page = per_page.clamp(1, 200);
     let offset = (page - 1).max(0) * per_page;
 
     let rows = sqlx::query_as!(
- McpToolCall,
- r#"
- SELECT
- id,
- server_id,
- server_name,
- is_built_in,
- user_id,
- conversation_id,
- branch_id,
- message_id,
- tool_use_id,
- tool_name,
- arguments_json as "arguments_json: _",
- source,
- status,
- is_error,
- result_json as "result_json: _",
- content_kinds as "content_kinds: _",
- result_bytes,
- error_message,
- started_at as "started_at: _",
- finished_at as "finished_at: _",
- duration_ms,
- created_at as "created_at: _",
- updated_at as "updated_at: _"
- FROM mcp_tool_calls
- WHERE user_id = $1
- AND ($2::uuid IS NULL OR server_id = $2)
- AND ($3::uuid IS NULL OR conversation_id = $3)
- AND ($4::bool IS NULL OR is_built_in = $4)
- AND ($5::text IS NULL OR tool_use_id = $5)
- AND ($6::uuid IS NULL OR message_id = $6)
- ORDER BY created_at DESC
- LIMIT $7 OFFSET $8
+        McpToolCall,
+        r#"
+        SELECT
+            id,
+            server_id,
+            server_name,
+            is_built_in,
+            user_id,
+            conversation_id,
+            branch_id,
+            message_id,
+            tool_use_id,
+            tool_name,
+            arguments_json as "arguments_json: _",
+            source,
+            status,
+            is_error,
+            result_json as "result_json: _",
+            content_kinds as "content_kinds: _",
+            result_bytes,
+            error_message,
+            started_at as "started_at: _",
+            finished_at as "finished_at: _",
+            duration_ms,
+            created_at as "created_at: _",
+            updated_at as "updated_at: _"
+        FROM mcp_tool_calls
+        WHERE user_id = $1
+          AND ($2::uuid IS NULL OR server_id = $2)
+          AND ($3::uuid IS NULL OR conversation_id = $3)
+          AND ($4::bool IS NULL OR is_built_in = $4)
+          AND ($5::text IS NULL OR tool_use_id = $5)
+          AND ($6::uuid IS NULL OR message_id = $6)
+        ORDER BY created_at DESC
+        LIMIT $7 OFFSET $8
         "#,
- user_id,
- server_id,
- conversation_id,
- is_built_in,
- tool_use_id,
- message_id,
- per_page,
- offset,
+        user_id,
+        server_id,
+        conversation_id,
+        is_built_in,
+        tool_use_id,
+        message_id,
+        per_page,
+        offset,
     )
     .fetch_all(pool)
     .await
     .map_err(AppError::database_error)?;
 
     let total = sqlx::query!(
- r#"
- SELECT COUNT(*) AS "count!"
- FROM mcp_tool_calls
- WHERE user_id = $1
- AND ($2::uuid IS NULL OR server_id = $2)
- AND ($3::uuid IS NULL OR conversation_id = $3)
- AND ($4::bool IS NULL OR is_built_in = $4)
- AND ($5::text IS NULL OR tool_use_id = $5)
- AND ($6::uuid IS NULL OR message_id = $6)
+        r#"
+        SELECT COUNT(*) AS "count!"
+        FROM mcp_tool_calls
+        WHERE user_id = $1
+          AND ($2::uuid IS NULL OR server_id = $2)
+          AND ($3::uuid IS NULL OR conversation_id = $3)
+          AND ($4::bool IS NULL OR is_built_in = $4)
+          AND ($5::text IS NULL OR tool_use_id = $5)
+          AND ($6::uuid IS NULL OR message_id = $6)
         "#,
- user_id,
- server_id,
- conversation_id,
- is_built_in,
- tool_use_id,
- message_id,
+        user_id,
+        server_id,
+        conversation_id,
+        is_built_in,
+        tool_use_id,
+        message_id,
     )
     .fetch_one(pool)
     .await
@@ -224,37 +224,37 @@ pub async fn find_call_for_user(
     user_id: Uuid,
 ) -> Result<Option<McpToolCall>, AppError> {
     let row = sqlx::query_as!(
- McpToolCall,
- r#"
- SELECT
- id,
- server_id,
- server_name,
- is_built_in,
- user_id,
- conversation_id,
- branch_id,
- message_id,
- tool_use_id,
- tool_name,
- arguments_json as "arguments_json: _",
- source,
- status,
- is_error,
- result_json as "result_json: _",
- content_kinds as "content_kinds: _",
- result_bytes,
- error_message,
- started_at as "started_at: _",
- finished_at as "finished_at: _",
- duration_ms,
- created_at as "created_at: _",
- updated_at as "updated_at: _"
- FROM mcp_tool_calls
- WHERE id = $1 AND user_id = $2
+        McpToolCall,
+        r#"
+        SELECT
+            id,
+            server_id,
+            server_name,
+            is_built_in,
+            user_id,
+            conversation_id,
+            branch_id,
+            message_id,
+            tool_use_id,
+            tool_name,
+            arguments_json as "arguments_json: _",
+            source,
+            status,
+            is_error,
+            result_json as "result_json: _",
+            content_kinds as "content_kinds: _",
+            result_bytes,
+            error_message,
+            started_at as "started_at: _",
+            finished_at as "finished_at: _",
+            duration_ms,
+            created_at as "created_at: _",
+            updated_at as "updated_at: _"
+        FROM mcp_tool_calls
+        WHERE id = $1 AND user_id = $2
         "#,
- id,
- user_id,
+        id,
+        user_id,
     )
     .fetch_optional(pool)
     .await
@@ -284,21 +284,21 @@ pub async fn find_raw_tool_use_input(
     user_id: Uuid,
 ) -> Result<Option<serde_json::Value>, AppError> {
     let row = sqlx::query!(
- r#"
- SELECT mc.content -> 'input' AS "input?: serde_json::Value"
- FROM message_contents mc
- JOIN branch_messages bm ON bm.message_id = mc.message_id
- JOIN branches b ON b.id = bm.branch_id
- JOIN conversations c ON c.id = b.conversation_id
- WHERE mc.message_id = $1
- AND mc.content_type = 'tool_use'
- AND mc.content ->> 'id' = $2
- AND c.user_id = $3
- LIMIT 1
+        r#"
+        SELECT mc.content -> 'input' AS "input?: serde_json::Value"
+        FROM message_contents mc
+        JOIN branch_messages bm ON bm.message_id = mc.message_id
+        JOIN branches b ON b.id = bm.branch_id
+        JOIN conversations c ON c.id = b.conversation_id
+        WHERE mc.message_id = $1
+          AND mc.content_type = 'tool_use'
+          AND mc.content ->> 'id' = $2
+          AND c.user_id = $3
+        LIMIT 1
         "#,
- message_id,
- tool_use_id,
- user_id,
+        message_id,
+        tool_use_id,
+        user_id,
     )
     .fetch_optional(pool)
     .await
@@ -318,8 +318,8 @@ pub async fn prune_calls_older_than(
     cutoff: time::OffsetDateTime,
 ) -> Result<u64, AppError> {
     let res = sqlx::query!(
- r#"DELETE FROM mcp_tool_calls WHERE created_at < $1"#,
- cutoff,
+        r#"DELETE FROM mcp_tool_calls WHERE created_at < $1"#,
+        cutoff,
     )
     .execute(pool)
     .await
@@ -338,7 +338,7 @@ mod tests {
     /// Every `SELECT`/`UPDATE`/`DELETE` body in this file that touches
     /// `mcp_tool_calls`, as raw SQL text.
     fn tool_call_statements() -> Vec<&'static str> {
- SOURCE
+        SOURCE
             .split("r#\"")
             .skip(1)
             .filter_map(|chunk| chunk.split("\"#").next())
@@ -351,25 +351,25 @@ mod tests {
     /// the cross-user guard. Asserted on the real SQL, not a paraphrase.
     #[test]
     fn filters_never_drop_the_owner_predicate() {
- let statements = tool_call_statements();
- assert!(
- statements.len() >= 4,
+        let statements = tool_call_statements();
+        assert!(
+            statements.len() >= 4,
             "expected the insert + page + count + single-row statements, saw {}",
- statements.len()
+            statements.len()
         );
 
- for sql in &statements {
+        for sql in &statements {
             // The retention prune is deployment-wide by design (it deletes by
             // `created_at` across all users); everything else is owner-scoped.
- if sql.contains("DELETE FROM mcp_tool_calls") {
- continue;
+            if sql.contains("DELETE FROM mcp_tool_calls") {
+                continue;
             }
- if sql.contains("INSERT INTO mcp_tool_calls") {
- assert!(sql.contains("user_id"), "insert must carry an owner: {sql}");
- continue;
+            if sql.contains("INSERT INTO mcp_tool_calls") {
+                assert!(sql.contains("user_id"), "insert must carry an owner: {sql}");
+                continue;
             }
- assert!(
- sql.contains("WHERE user_id = $1") || sql.contains("WHERE id = $1 AND user_id = $2"),
+            assert!(
+                sql.contains("WHERE user_id = $1") || sql.contains("WHERE id = $1 AND user_id = $2"),
                 "every read of mcp_tool_calls must be owner-scoped in SQL: {sql}"
             );
         }
@@ -377,45 +377,45 @@ mod tests {
         // The two LIST statements (page + count) carry the identical predicate
         // list, including the two ITEM-13 filters, so `total` can never disagree
         // with the page.
- let listing: Vec<&&str> = statements
+        let listing: Vec<&&str> = statements
             .iter()
             .filter(|s| s.contains("WHERE user_id = $1"))
             .collect();
- assert_eq!(listing.len(), 2, "expected exactly the page + count statements");
- for sql in listing {
- assert!(sql.contains("WHERE user_id = $1"), "owner predicate present: {sql}");
- assert!(
- sql.contains("($2::uuid IS NULL OR server_id = $2)"),
+        assert_eq!(listing.len(), 2, "expected exactly the page + count statements");
+        for sql in listing {
+            assert!(sql.contains("WHERE user_id = $1"), "owner predicate present: {sql}");
+            assert!(
+                sql.contains("($2::uuid IS NULL OR server_id = $2)"),
                 "server filter preserved: {sql}"
             );
- assert!(
- sql.contains("($3::uuid IS NULL OR conversation_id = $3)"),
+            assert!(
+                sql.contains("($3::uuid IS NULL OR conversation_id = $3)"),
                 "conversation filter preserved: {sql}"
             );
- assert!(
- sql.contains("($4::bool IS NULL OR is_built_in = $4)"),
+            assert!(
+                sql.contains("($4::bool IS NULL OR is_built_in = $4)"),
                 "built-in filter preserved: {sql}"
             );
- assert!(
- sql.contains("($5::text IS NULL OR tool_use_id = $5)"),
+            assert!(
+                sql.contains("($5::text IS NULL OR tool_use_id = $5)"),
                 "ITEM-13 tool_use_id filter present: {sql}"
             );
- assert!(
- sql.contains("($6::uuid IS NULL OR message_id = $6)"),
+            assert!(
+                sql.contains("($6::uuid IS NULL OR message_id = $6)"),
                 "ITEM-13 message_id filter present: {sql}"
             );
             // Every filter is an AND-narrowing under the owner predicate — never
             // an OR that could widen past it.
- let after_owner = sql.split("WHERE user_id = $1").nth(1).unwrap();
- let filter_section = after_owner
+            let after_owner = sql.split("WHERE user_id = $1").nth(1).unwrap();
+            let filter_section = after_owner
                 .split("ORDER BY")
                 .next()
                 .unwrap()
                 .trim_end()
                 .trim_end_matches(|c: char| c.is_whitespace());
- for line in filter_section.lines().map(str::trim).filter(|l| !l.is_empty()) {
- assert!(
- line.starts_with("AND "),
+            for line in filter_section.lines().map(str::trim).filter(|l| !l.is_empty()) {
+                assert!(
+                    line.starts_with("AND "),
                     "filter `{line}` must AND-narrow under the owner predicate"
                 );
             }
@@ -427,16 +427,16 @@ mod tests {
     /// mis-scoped call row still cannot pull another user's transcript).
     #[test]
     fn raw_tool_use_lookup_is_conversation_owner_scoped() {
- let sql = SOURCE
+        let sql = SOURCE
             .split("r#\"")
             .skip(1)
             .filter_map(|chunk| chunk.split("\"#").next())
             .find(|s| s.contains("content_type = 'tool_use'"))
             .expect("the raw tool_use lookup must exist");
- assert!(sql.contains("JOIN branch_messages"), "joins the branch: {sql}");
- assert!(sql.contains("JOIN conversations"), "joins the conversation: {sql}");
- assert!(sql.contains("c.user_id = $3"), "owner-scoped on the conversation: {sql}");
- assert!(
+        assert!(sql.contains("JOIN branch_messages"), "joins the branch: {sql}");
+        assert!(sql.contains("JOIN conversations"), "joins the conversation: {sql}");
+        assert!(sql.contains("c.user_id = $3"), "owner-scoped on the conversation: {sql}");
+        assert!(
             !sql.contains("arguments_json"),
             "the reveal must NOT read the pre-redacted mcp_tool_calls column: {sql}"
         );
@@ -477,13 +477,13 @@ mod tests {
         // every `AND (` line must PARSE, so a narrowing written in any other
         // shape (`AND (($7…`, a function on the left, `= ANY($7)`) fails loudly
         // instead of being skipped into agreement with a stale const.
- let src = include_str!("repository.rs");
- let start = src
+        let src = include_str!("repository.rs");
+        let start = src
             .find("FROM mcp_tool_calls")
             .expect("locate the list query");
- let rest = &src[start..];
- let end = rest.find("ORDER BY").expect("locate the end of the WHERE clause");
- let where_clause = &rest[..end];
+        let rest = &src[start..];
+        let end = rest.find("ORDER BY").expect("locate the end of the WHERE clause");
+        let where_clause = &rest[..end];
 
         // Parse EVERY optional narrowing, wherever it sits.
         //
@@ -493,11 +493,11 @@ mod tests {
         // a stale const in agreement: a narrowing appended to the
         // `WHERE user_id = $1` line, and two narrowings on one line. Split on the
         // `AND (` TOKEN instead, and require every fragment to parse.
- let mut found: Vec<String> = Vec::new();
- let flat = where_clause.split_whitespace().collect::<Vec<_>>().join(" ");
- for frag in flat.split("AND (").skip(1) {
- let predicate = frag.split(')').next().unwrap_or_default();
- let col = predicate
+        let mut found: Vec<String> = Vec::new();
+        let flat = where_clause.split_whitespace().collect::<Vec<_>>().join(" ");
+        for frag in flat.split("AND (").skip(1) {
+            let predicate = frag.split(')').next().unwrap_or_default();
+            let col = predicate
                 .split(" OR ")
                 .nth(1)
                 .and_then(|c| c.split(" =").next())
@@ -505,31 +505,35 @@ mod tests {
                 .filter(|c| {
                     !c.is_empty() && c.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
                 });
- match col {
- Some(c) => found.push(c.to_string()),
- None => panic!(
-                    "an optional narrowing this test cannot parse: `AND ({predicate})`. It \
- would be SILENTLY dropped, letting a stale FILTERED_LOOKUP_COLUMNS \
- agree with a query it no longer matches. Teach this parser the new \
- shape."
+            match col {
+                Some(c) => found.push(c.to_string()),
+                None => panic!(
+                    "an optional narrowing this test cannot parse: `AND ({predicate})`. \
+                     It would be SILENTLY dropped, letting a stale \
+                     FILTERED_LOOKUP_COLUMNS agree with a query it no longer matches. \
+                     Teach this parser the new shape."
                 ),
             }
         }
 
- assert!(
+        assert!(
             !found.is_empty(),
-            "parsed no narrowings at all — the anchor no longer matches and this guard would be vacuous"
+            "parsed no narrowings at all — the anchor no longer matches and this \
+             guard would be vacuous"
         );
 
- found.sort();
- let mut expected: Vec<String> = super::FILTERED_LOOKUP_COLUMNS
+        found.sort();
+        let mut expected: Vec<String> = super::FILTERED_LOOKUP_COLUMNS
             .iter()
             .map(|c| c.to_string())
             .collect();
- expected.sort();
- assert_eq!(
- found, expected,
-            "FILTERED_LOOKUP_COLUMNS must equal the optional narrowings in list_calls_for_user's WHERE clause — the owner-leading index guard in tests/mcp/tool_call_index_test.rs is scoped by this list, so a drift here silently narrows a security guard"
+        expected.sort();
+        assert_eq!(
+            found, expected,
+            "FILTERED_LOOKUP_COLUMNS must equal the optional narrowings in \
+             list_calls_for_user's WHERE clause — the owner-leading index guard in \
+             tests/mcp/tool_call_index_test.rs is scoped by this list, so a drift \
+             here silently narrows a security guard"
         );
     }
 

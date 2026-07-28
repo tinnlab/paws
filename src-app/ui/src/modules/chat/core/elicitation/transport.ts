@@ -60,7 +60,18 @@ export interface ElicitationTransport {
   has(elicitationId: string): boolean
   /** Current status, or `undefined` when the provider knows nothing about it. */
   status(elicitationId: string): ElicitationStatus | undefined
-  /** Open a request. Providers MUST be idempotent on a repeated id. */
+  /**
+   * Open a request. Providers MUST be idempotent on a repeated id, and MUST make
+   * `has(id)` true SYNCHRONOUSLY before any change notification for it.
+   *
+   * That second clause is a real requirement, not pedantry (FIX_ROUND-9): a
+   * consumer that re-registers a missing entry keys its retry off the seam's
+   * change notification, so a provider that notifies while leaving `has()` false
+   * spins it — measured at ~54 registrations before React's update-depth bail-out,
+   * with the resulting error swallowed and mislabelled by this module's own
+   * catch. Consumers additionally bound their own retries, but the contract is
+   * where this belongs.
+   */
   register(init: ElicitationRequestInit): void
   /**
    * Resolve a request. The provider owns the optimistic update AND the
