@@ -7,6 +7,7 @@ import {
   elicitationStatus,
   elicitationVersion,
   hasElicitationTransport,
+  isElicitationUnresolvable,
   registerElicitation,
   resolveElicitationVia,
   setElicitationTransport,
@@ -166,4 +167,28 @@ test('a throwing provider never breaks a transcript render', async () => {
   // A rejecting `resolve` must be reported as unresolved, not floated as an
   // unhandled rejection out of the card's onClick.
   assert.equal(await quiet(() => resolveElicitationVia('e1', 'accept')), false)
+})
+
+test('isElicitationUnresolvable folds the three independent failure sources', () => {
+  const ok = { declaredUnresolvable: false, resolveFailed: false, hasTransport: true }
+  assert.equal(isElicitationUnresolvable(ok), false, 'the healthy case must stay actionable')
+
+  // Each source ALONE is sufficient — a consumer must not be able to handle one
+  // and silently miss another.
+  assert.equal(isElicitationUnresolvable({ ...ok, declaredUnresolvable: true }), true)
+  assert.equal(isElicitationUnresolvable({ ...ok, resolveFailed: true }), true)
+  assert.equal(isElicitationUnresolvable({ ...ok, hasTransport: false }), true)
+
+  // Absent (the ordinary block, which carries no flag) is not unresolvable.
+  assert.equal(
+    isElicitationUnresolvable({ resolveFailed: false, hasTransport: true }),
+    false,
+  )
+
+  // RECOVERY: the transport term is a live input, so re-deriving with a transport
+  // present clears the state. This is what makes the banner non-latching.
+  assert.equal(
+    isElicitationUnresolvable({ declaredUnresolvable: false, resolveFailed: false, hasTransport: true }),
+    false,
+  )
 })

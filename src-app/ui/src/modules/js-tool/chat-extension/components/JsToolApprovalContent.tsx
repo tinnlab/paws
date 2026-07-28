@@ -7,6 +7,7 @@ import {
   elicitationStatus,
   elicitationVersion,
   hasElicitationTransport,
+  isElicitationUnresolvable,
   resolveElicitationVia,
   subscribeElicitation,
 } from '@/modules/chat/core/elicitation/transport'
@@ -74,7 +75,11 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
    * banner CLEARS by itself the moment mcp installs a transport rather than
    * stranding the card behind a message that is no longer true.
    */
-  const unresolvable = data.unresolvable === true || resolveFailed || !hasElicitationTransport()
+  const unresolvable = isElicitationUnresolvable({
+    declaredUnresolvable: data.unresolvable,
+    resolveFailed,
+    hasTransport: hasElicitationTransport(),
+  })
 
   /**
    * Focus the outcome when the buttons unmount. Without this, resolving destroys

@@ -259,3 +259,30 @@ export function __resetElicitationTransportForTests(): void {
   version = 0
   listeners.clear()
 }
+
+/**
+ * Can a card's approve/deny decision actually be CARRIED right now?
+ *
+ * Three independent ways it cannot, deliberately folded into one predicate so a
+ * consumer cannot handle some and miss others:
+ *  - `declaredUnresolvable` — the SSE handler could not even REGISTER the
+ *    request (no transport at the time, or the provider's `register` threw), and
+ *    said so on the injected block;
+ *  - `resolveFailed` — a resolve attempt came back `false`;
+ *  - `!hasTransport` — there is no transport installed right now.
+ *
+ * DERIVED, never latched: the transport term is re-read on every seam bump, so a
+ * card recovers by itself the moment a transport is installed instead of being
+ * stranded behind a message that is no longer true.
+ *
+ * Extracted (FIX_ROUND-4) because this decision is the whole of the degraded
+ * state a user actually sees, and this workspace's unit runner cannot parse JSX
+ * — inline in the component it was unpinnable.
+ */
+export function isElicitationUnresolvable(args: {
+  declaredUnresolvable?: boolean
+  resolveFailed: boolean
+  hasTransport: boolean
+}): boolean {
+  return args.declaredUnresolvable === true || args.resolveFailed || !args.hasTransport
+}

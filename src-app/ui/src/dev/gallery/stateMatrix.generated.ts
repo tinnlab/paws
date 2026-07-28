@@ -1958,12 +1958,12 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/js-tool/chat-extension/components/JsToolApprovalContent",
     requiredStates: [],
     signals: [
-      { kind: "branch", condition: "submitting || resolved !== null || unresolvable", line: 96 },
-      { kind: "branch", condition: "resolved === 'approved'", line: 113 },
-      { kind: "branch", condition: "resolved === 'denied'", line: 113 },
-      { kind: "branch", condition: "serverParenLabel(data.server)", line: 124 },
-      { kind: "branch", condition: "data.input !== undefined", line: 136 },
-      { kind: "branch", condition: "resolved === null", line: 171 },
+      { kind: "branch", condition: "submitting || resolved !== null || unresolvable", line: 101 },
+      { kind: "branch", condition: "resolved === 'approved'", line: 118 },
+      { kind: "branch", condition: "resolved === 'denied'", line: 118 },
+      { kind: "branch", condition: "serverParenLabel(data.server)", line: 129 },
+      { kind: "branch", condition: "data.input !== undefined", line: 141 },
+      { kind: "branch", condition: "resolved === null", line: 176 },
     ],
   },
   "modules/js-tool/components/JsToolSettingsSection": {

@@ -2165,12 +2165,12 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `submitting \|\| resolved !== null \|\| unresolvable` | 96 |
-| branch | `resolved === 'approved'` | 113 |
-| branch | `resolved === 'denied'` | 113 |
-| branch | `serverParenLabel(data.server)` | 124 |
-| branch | `data.input !== undefined` | 136 |
-| branch | `resolved === null` | 171 |
+| branch | `submitting \|\| resolved !== null \|\| unresolvable` | 101 |
+| branch | `resolved === 'approved'` | 118 |
+| branch | `resolved === 'denied'` | 118 |
+| branch | `serverParenLabel(data.server)` | 129 |
+| branch | `data.input !== undefined` | 141 |
+| branch | `resolved === null` | 176 |
 
 ### `modules/js-tool/components/JsToolSettingsSection`
 
