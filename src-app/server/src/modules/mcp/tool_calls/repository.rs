@@ -423,4 +423,110 @@ mod tests {
             "the reveal must NOT read the pre-redacted mcp_tool_calls column: {sql}"
         );
     }
+
+    /// FIX_ROUND-2 #1: every index this module leaves on `mcp_tool_calls` that
+    /// covers a column [`list_calls_for_user`] filters must be OWNER-LEADING.
+    ///
+    /// `user_id = $1` is the unconditional cross-user guard; each other predicate
+    /// is an optional narrowing. An index on the narrowing column ALONE is still
+    /// chosen under a custom plan, but it leaves `user_id` as a post-`Filter` —
+    /// i.e. a row belonging to ANOTHER user is read off the heap and only then
+    /// discarded (observed as `Rows Removed by Filter: 1` on the `?message_id=`
+    /// probe in `.lifecycle/activity-rail/explain-mcp-tool-calls.sql`).
+    /// `202607200200` replaced the single-column pair with `(user_id, col)`.
+    ///
+    /// This walks the module's real migration directory in application order and
+    /// replays its `CREATE INDEX` / `DROP INDEX` statements, so it fails on a
+    /// re-added single-column index OR on a reverted drop — not just on the two
+    /// filenames that happen to exist today.
+    #[test]
+    fn tool_call_lookup_indexes_are_owner_leading() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src/modules/mcp/migrations");
+        let mut files: Vec<_> = std::fs::read_dir(dir)
+            .expect("read the mcp migrations dir")
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|x| x == "sql"))
+            .collect();
+        // Filename order IS application order (the version prefix sorts).
+        files.sort();
+
+        // index name -> indexed columns, replayed across every migration.
+        let mut indexes: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+        for path in &files {
+            let raw = std::fs::read_to_string(path).expect("read a migration");
+            // Strip `--` comments: the rationale prose quotes this very DDL.
+            let sql: String = raw
+                .lines()
+                .map(|l| l.split("--").next().unwrap_or(""))
+                .collect::<Vec<_>>()
+                .join("\n");
+            for stmt in sql.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+                let flat = stmt.split_whitespace().collect::<Vec<_>>().join(" ");
+                let upper = flat.to_uppercase();
+                if upper.starts_with("CREATE INDEX") {
+                    if !flat.contains("mcp_tool_calls") {
+                        continue;
+                    }
+                    let name = flat
+                        .trim_start_matches("CREATE INDEX ")
+                        .trim_start_matches("IF NOT EXISTS ")
+                        .split_whitespace()
+                        .next()
+                        .expect("index name")
+                        .to_string();
+                    let cols = flat
+                        .split_once('(')
+                        .and_then(|(_, rest)| rest.rsplit_once(')'))
+                        .map(|(inner, _)| inner)
+                        .unwrap_or_default();
+                    // `(a, b DESC) WHERE (x IS NOT NULL)` -> ["a", "b"]
+                    let cols = cols
+                        .split(')')
+                        .next()
+                        .unwrap_or_default()
+                        .split(',')
+                        .filter_map(|c| c.split_whitespace().next())
+                        .map(|c| c.trim_matches('"').to_string())
+                        .collect::<Vec<_>>();
+                    indexes.insert(name, cols);
+                } else if upper.starts_with("DROP INDEX") {
+                    let name = flat
+                        .trim_start_matches("DROP INDEX ")
+                        .trim_start_matches("IF EXISTS ")
+                        .trim_end_matches(';')
+                        .rsplit('.')
+                        .next()
+                        .unwrap_or_default()
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or_default()
+                        .to_string();
+                    indexes.remove(&name);
+                }
+            }
+        }
+
+        // The columns `list_calls_for_user` narrows on under `user_id = $1`.
+        const FILTERED: [&str; 2] = ["tool_use_id", "message_id"];
+        let mut owner_leading = 0usize;
+        for (name, cols) in &indexes {
+            if !cols.iter().any(|c| FILTERED.contains(&c.as_str())) {
+                continue;
+            }
+            assert_eq!(
+                cols.first().map(String::as_str),
+                Some("user_id"),
+                "index `{name}` covers a filtered column {cols:?} but does not lead with \
+                 user_id — the owner predicate would become a post-Filter, reading other \
+                 users' rows off the heap before discarding them (see 202607200200)"
+            );
+            owner_leading += 1;
+        }
+        // Guard the guard: a rename must not make the loop above vacuous.
+        assert_eq!(
+            owner_leading, 2,
+            "expected exactly the (user_id, tool_use_id) and (user_id, message_id) \
+             lookup indexes to survive, found {owner_leading}: {indexes:?}"
+        );
+    }
 }

@@ -188,3 +188,48 @@ test('TEST-36 (ITEM-25): mcp contains no control_mcp UUID literal and no run_js 
   }
   assert.deepEqual(violations, [], violations.join('\n'))
 })
+
+test('FIX_ROUND-2 #3 (AP-4): js-tool and mcp are decoupled in BOTH directions', () => {
+  // The test above pins ONE direction: mcp no longer names `run_js`. That is
+  // only half of AP-4. Moving the approval card into js-tool left the moved code
+  // reaching back into `McpComposer` for the elicitation transport, so the
+  // coupling INVERTED rather than disappearing — a cross-module store read plus
+  // a deep import past a module's public surface (coding-guidelines §9), and the
+  // exact failure mode this test family exists to catch.
+  //
+  // The fix inverted the dependency instead: `chat/core/elicitation/transport`
+  // is core-owned, mcp pushes an implementation in, js-tool consumes it through
+  // core. This asserts neither module can reach the other again, by ALIAS or by
+  // a relative escape.
+  //
+  // SCOPE, stated plainly: this pins the AP-4 PAIR, not a repo-wide
+  // "no extension imports another extension" rule. Many other cross-module
+  // edges exist today (mcp → code-sandbox, knowledge-base → file,
+  // scheduler → workflow, …); a blanket guard would be red for reasons this
+  // change did not create. Add a pair here when one is genuinely decoupled.
+  const pairs: Array<[string, string]> = [
+    ['modules/js-tool', 'modules/mcp'],
+    ['modules/mcp', 'modules/js-tool'],
+  ]
+  const violations: string[] = []
+  for (const [fromDir, toDir] of pairs) {
+    const alias = `@/${toDir}/`
+    for (const f of sourceFiles(join(SRC, fromDir))) {
+      for (const spec of importsOf(f)) {
+        if (spec.startsWith(alias)) {
+          violations.push(`${f.replace(SRC + '/', '')} → ${spec}`)
+          continue
+        }
+        const rel = resolvedModulePath(f, spec)
+        if (rel && rel.startsWith(`${toDir}/`)) {
+          violations.push(`${f.replace(SRC + '/', '')} → ${spec} (resolves to ${rel})`)
+        }
+      }
+    }
+  }
+  assert.deepEqual(
+    violations,
+    [],
+    `AP-4 must not re-couple js-tool and mcp in either direction:\n${violations.join('\n')}`,
+  )
+})

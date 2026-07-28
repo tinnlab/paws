@@ -12,12 +12,11 @@ import {
   createExtension,
   type ChatExtension,
 } from '@/modules/chat/core/extensions'
-import type {
-  MessageContent,
-  MessageWithContent,
-  SSEChatStreamMcpElicitationRequiredData,
-} from '@/api-client/types'
-import { McpComposer } from '@/modules/mcp/stores/mcpComposer'
+import type { MessageContent, MessageWithContent } from '@/api-client/types'
+import {
+  elicitationExists,
+  registerElicitation,
+} from '@/modules/chat/core/elicitation/transport'
 import { runJsStep, runJsApprovalStep } from './railContribution'
 import { JsToolApprovalContent } from './components/JsToolApprovalContent'
 
@@ -38,12 +37,17 @@ const jsToolExtension: ChatExtension = createExtension({
   // registry routes an SSE event to whichever extension handles it, so nothing
   // about the delivery path changes — only who owns the surface.
   //
-  // It still writes the shared `elicitationRequests` entry, because resolution
-  // genuinely goes through the side-channel elicitation `/respond` endpoint (the
-  // same in-process oneshot `ask_user` uses) rather than the turn-boundary tool
-  // approvals flow: a live script stack cannot survive a request boundary. That
-  // is a real dependency on the elicitation transport, not mcp owning js-tool's
-  // UI, so it stays.
+  // It still opens a shared elicitation entry, because resolution genuinely goes
+  // through the side-channel elicitation `/respond` endpoint (the same
+  // in-process oneshot `ask_user` uses) rather than the turn-boundary tool
+  // approvals flow: a live script stack cannot survive a request boundary.
+  //
+  // FIX_ROUND-2 #3: that dependency is now expressed through the CORE-owned
+  // seam `chat/core/elicitation/transport`, not by importing mcp's store. AP-4
+  // had turned `mcp → js-tool` into `js-tool → mcp` — a lateral cross-module
+  // store read (coding-guidelines §9) — which is a relocated violation, not a
+  // removed one. Core declares the transport; whichever extension owns the
+  // `/respond` route pushes an implementation in; this module names nobody.
   sseEventHandlers: {
     runJsApprovalRequired: async (data, get, set) => {
       // A run_js script is SUSPENDED awaiting approval of a gated sub-tool call.
@@ -60,14 +64,13 @@ const jsToolExtension: ChatExtension = createExtension({
       // resolved state survives a component remount. Guard on !has() so a
       // double-delivered SSE frame can't reset an already-resolved entry to
       // 'pending' (which would re-show the buttons + allow a duplicate POST).
-      if (!McpComposer.$.elicitationRequests.has(data.elicitation_id)) {
-        McpComposer.addElicitationRequest({
+      if (!elicitationExists(data.elicitation_id)) {
+        registerElicitation({
           elicitation_id: data.elicitation_id,
           message: `run_js wants to call ${data.tool_name}`,
-          requested_schema: {},
           server: data.server,
           message_id: null,
-        } as unknown as SSEChatStreamMcpElicitationRequiredData)
+        })
       }
 
       const chatState = get()

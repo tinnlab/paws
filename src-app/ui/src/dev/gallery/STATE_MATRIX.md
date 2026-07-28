@@ -417,11 +417,11 @@ Required states: `empty`
 | branch | `isStreaming \|\| wasStreamingRef.current \|\| isActiveMatch` | 65 |
 | empty | `contents.length === 0 && !showEmptyCompletionNotice` | 93 |
 | branch | `!resolved` | 185 |
-| branch | `attachmentBlocks.length > 0` | 263 |
-| branch | `bubbleBlocks.length > 0` | 292 |
-| branch | `offerCollapse` | 318 |
-| branch | `showEmptyCompletionNotice` | 338 |
-| branch | `renderAsUser` | 357 |
+| branch | `attachmentBlocks.length > 0` | 273 |
+| branch | `bubbleBlocks.length > 0` | 302 |
+| branch | `offerCollapse` | 328 |
+| branch | `showEmptyCompletionNotice` | 348 |
+| branch | `renderAsUser` | 367 |
 
 ### `modules/chat/components/CollapsibleBlock`
 
@@ -730,11 +730,11 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!state` | 168 |
-| branch | `this.initialized` | 488 |
-| empty | `extensions.length === 0` | 666 |
-| empty | `extensions.length === 0` | 699 |
-| empty | `!registered \|\| registered.length === 0` | 1075 |
+| branch | `!state` | 169 |
+| branch | `this.initialized` | 495 |
+| empty | `extensions.length === 0` | 673 |
+| empty | `extensions.length === 0` | 706 |
+| empty | `!registered \|\| registered.length === 0` | 1082 |
 
 ### `modules/chat/core/extensions/utils`
 
@@ -2165,12 +2165,12 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `submitting \|\| resolved !== null` | 39 |
-| branch | `resolved === 'approved'` | 51 |
-| branch | `resolved === 'denied'` | 51 |
-| branch | `mcpServerParenLabel(data.server)` | 62 |
-| branch | `data.input !== undefined` | 74 |
-| branch | `resolved === null` | 84 |
+| branch | `submitting \|\| resolved !== null` | 52 |
+| branch | `resolved === 'approved'` | 64 |
+| branch | `resolved === 'denied'` | 64 |
+| branch | `mcpServerParenLabel(data.server)` | 75 |
+| branch | `data.input !== undefined` | 87 |
+| branch | `resolved === null` | 97 |
 
 ### `modules/js-tool/components/JsToolSettingsSection`
 
@@ -2953,28 +2953,28 @@ Required states: `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `toolCall.status === 'pending_approval'` | 36 |
-| branch | `serverLabel` | 52 |
-| error | `(toolCall.status === 'completed' \|\| toolCall.status === 'error')` | 60 |
-| branch | `toolCall.status === 'started' && toolCall.progress` | 78 |
-| branch | `toolCall.progress.message` | 80 |
-| branch | `isExpanded` | 103 |
-| branch | `toolCall.input !== undefined` | 105 |
-| branch | `toolCall.result !== undefined` | 121 |
-| error | `toolCall.error` | 130 |
-| branch | `!toolUseData.id` | 161 |
-| branch | `toolCall` | 168 |
-| branch | `mcpServerParenLabel(server?.display_name)` | 194 |
-| branch | `toolResultData` | 199 |
-| branch | `hasDetails` | 207 |
-| branch | `isExpanded` | 218 |
-| branch | `!!toolUseData.input` | 220 |
-| branch | `toolResultData` | 229 |
-| branch | `toolResultData.is_error` | 232 |
-| branch | `!call` | 272 |
-| branch | `!mcpStore` | 293 |
-| branch | `!streamingMessage` | 670 |
-| branch | `!toolUseId` | 682 |
+| branch | `toolCall.status === 'pending_approval'` | 37 |
+| branch | `serverLabel` | 53 |
+| error | `(toolCall.status === 'completed' \|\| toolCall.status === 'error')` | 61 |
+| branch | `toolCall.status === 'started' && toolCall.progress` | 79 |
+| branch | `toolCall.progress.message` | 81 |
+| branch | `isExpanded` | 104 |
+| branch | `toolCall.input !== undefined` | 106 |
+| branch | `toolCall.result !== undefined` | 122 |
+| error | `toolCall.error` | 131 |
+| branch | `!toolUseData.id` | 162 |
+| branch | `toolCall` | 169 |
+| branch | `mcpServerParenLabel(server?.display_name)` | 195 |
+| branch | `toolResultData` | 200 |
+| branch | `hasDetails` | 208 |
+| branch | `isExpanded` | 219 |
+| branch | `!!toolUseData.input` | 221 |
+| branch | `toolResultData` | 230 |
+| branch | `toolResultData.is_error` | 233 |
+| branch | `!call` | 273 |
+| branch | `!mcpStore` | 322 |
+| branch | `!streamingMessage` | 699 |
+| branch | `!toolUseId` | 711 |
 
 ### `modules/mcp/components/McpConfigModal`
 

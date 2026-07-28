@@ -1,9 +1,14 @@
-import { useState } from 'react'
+import { useState, useSyncExternalStore } from 'react'
 import { Alert, Button, Space, Text } from '@ziee/kit'
 import { Check, Clock, X } from 'lucide-react'
 import type { ContentRendererProps } from '@/modules/chat/core/extensions/types'
-import { mcpServerParenLabel } from '@/modules/mcp/chat-extension/serverLabel'
-import { McpComposer } from '@/modules/mcp/stores/mcpComposer'
+import { mcpServerParenLabel } from '@/modules/chat/core/utils/serverLabel'
+import {
+  elicitationStatus,
+  elicitationVersion,
+  resolveElicitationVia,
+  subscribeElicitation,
+} from '@/modules/chat/core/elicitation/transport'
 
 /**
  * Renders the approve/deny prompt for a gated sub-tool call a `run_js` script
@@ -25,12 +30,20 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
   const data = content.content as unknown as JsToolApprovalData
   const [submitting, setSubmitting] = useState(false)
 
-  // Derive the resolved state from the elicitationRequests store (the live
-  // source of truth), NOT local state: resolveElicitation flips the entry
+  // Derive the resolved state from the CORE-owned elicitation seam (the live
+  // source of truth), NOT local state: the provider flips the entry
   // optimistically and ROLLS IT BACK to 'pending' on a failed POST, so a failed
   // approve re-enables the buttons (no false "Approved") and the resolved state
   // survives a component remount (virtualized list / streaming→final swap).
-  const status = McpComposer.elicitationRequests.get(data.elicitation_id)?.status
+  //
+  // FIX_ROUND-2 #3: this used to read `McpComposer.elicitationRequests` — a
+  // cross-module store read (coding-guidelines §9) that AP-4 created while
+  // moving this card out of mcp. `useSyncExternalStore` over the core seam keeps
+  // the same reactivity (the provider forwards its store's changes) with no
+  // import of the providing module. Same pattern as `ActivityRail`'s live-step
+  // subscription.
+  useSyncExternalStore(subscribeElicitation, elicitationVersion, elicitationVersion)
+  const status = elicitationStatus(data.elicitation_id)
   const resolved: 'approved' | 'denied' | null =
     status === 'accepted' ? 'approved' : status === 'declined' || status === 'cancelled' ? 'denied' : null
 
@@ -39,9 +52,9 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
     if (submitting || resolved !== null) return
     setSubmitting(true)
     try {
-      // resolveElicitation reflects success/failure in the store entry; the
-      // derived `resolved` above reacts (rollback → buttons return for retry).
-      await McpComposer.resolveElicitation(data.elicitation_id, action)
+      // The transport reflects success/failure in its own entry; the derived
+      // `resolved` above reacts (rollback → buttons return for retry).
+      await resolveElicitationVia(data.elicitation_id, action)
     } finally {
       setSubmitting(false)
     }

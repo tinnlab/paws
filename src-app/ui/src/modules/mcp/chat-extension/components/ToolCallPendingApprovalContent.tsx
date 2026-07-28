@@ -11,7 +11,7 @@ import {
   type McpToolCall,
 } from '@/modules/mcp/stores/mcpComposer'
 import { useChatPaneOrNull } from '@/modules/chat/core/pane/ChatPaneContext'
-import { mcpServerParenLabel } from '@/modules/mcp/chat-extension/serverLabel'
+import { mcpServerParenLabel } from '@/modules/chat/core/utils/serverLabel'
 import { McpComposer } from '@/modules/mcp/stores/mcpComposer'
 import { McpServer } from '@/modules/mcp/stores/mcpServer'
 import { Chat as ChatStore } from '@/modules/chat/core/stores/chatBridge'

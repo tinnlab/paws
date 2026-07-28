@@ -1,7 +1,7 @@
 import { Alert, Text } from '@ziee/kit'
 import type { McpToolCall } from '@/modules/mcp/stores/mcpComposer'
 import { TOOL_STATUS } from '@/modules/chat/core/tool-status'
-import { mcpServerParenLabel } from '@/modules/mcp/chat-extension/serverLabel'
+import { mcpServerParenLabel } from '@/modules/chat/core/utils/serverLabel'
 
 interface ToolCallPendingApprovalCancelContentProps {
   toolCall: McpToolCall

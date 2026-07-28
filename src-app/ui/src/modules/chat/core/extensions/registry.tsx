@@ -17,6 +17,7 @@ import type {
 import { RailContributionRegistry } from '@/modules/chat/core/extensions/railRegistryCore'
 import { RailStepDetail } from '@/modules/chat/components/rail/RailStepDetail'
 import { clearRailLiveSourceIfOwnedBy } from '@/modules/chat/core/rail/liveSteps'
+import { clearElicitationTransportIfOwnedBy } from '@/modules/chat/core/elicitation/transport'
 import React from 'react'
 import { createSlotRegistry } from '@ziee/framework/slots'
 
@@ -377,6 +378,12 @@ export class ChatExtensionRegistry {
     // statuses to rails from a module the host believes it has disposed.
     // Guarded by owner so unregistering a DIFFERENT extension cannot detach it.
     clearRailLiveSourceIfOwnedBy(name)
+
+    // …and the elicitation transport, on the same owner-scoped terms. Without
+    // it a torn-down provider leaves a module-level transport (and its store
+    // subscription) that another extension's approval card would keep resolving
+    // through.
+    clearElicitationTransportIfOwnedBy(name)
 
     // Clear SSE event handler registry entries for this extension
     for (const [eventType, entries] of this.sseEventHandlerRegistry.entries()) {

@@ -3,14 +3,14 @@ import { Alert, Button, Card, Progress, Text } from '@ziee/kit'
 import { ChevronDown } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { ToolStatusIcon } from '@/modules/chat/core/ToolStatusIcon'
-import { mcpServerParenLabel } from '@/modules/mcp/chat-extension/serverLabel'
+import { mcpServerParenLabel } from '@/modules/chat/core/utils/serverLabel'
 import {
   createExtension,
   type ChatExtension,
   type ContentRendererProps,
 } from '@/modules/chat/core/extensions'
 import type { McpToolCall } from '@/modules/mcp/stores/mcpComposer'
-import type { MessageContent, MessageContentDataToolUse, MessageContentDataToolResult, MessageWithContent } from '@/api-client/types'
+import type { MessageContent, MessageContentDataToolUse, MessageContentDataToolResult, MessageWithContent, SSEChatStreamMcpElicitationRequiredData } from '@/api-client/types'
 import { ToolCallPendingApprovalContent } from '@/modules/mcp/chat-extension/components/ToolCallPendingApprovalContent'
 import { McpMenuItem } from '@/modules/mcp/chat-extension/components/McpMenuItem'
 import { McpConfigModalMount } from '@/modules/mcp/chat-extension/components/McpConfigModalMount'
@@ -21,6 +21,7 @@ import { resolveArtifactToolUseId } from '@/modules/mcp/chat-extension/toolRun'
 import { redactedJson } from '@/modules/chat/core/rail/redactToolArgs'
 import { mcpRailContributions } from '@/modules/mcp/chat-extension/railContribution'
 import { setRailLiveSource } from '@/modules/chat/core/rail/liveSteps'
+import { setElicitationTransport } from '@/modules/chat/core/elicitation/transport'
 import { McpComposer, useMcpComposerStore } from '@/modules/mcp/stores/mcpComposer'
 import { McpServer as McpServerStore } from '@/modules/mcp/stores/mcpServer'
 import { Chat } from '@/modules/chat/core/stores/chatBridge'
@@ -276,6 +277,34 @@ const mcpExtension: ChatExtension = createExtension({
           durationMs: call.duration_ms,
         }
       },
+      subscribe: onChange => useMcpComposerStore.subscribe(onChange),
+    }, 'mcp')
+
+    // Feed the CORE-owned ELICITATION seam (FIX_ROUND-2 #3 / AP-4).
+    //
+    // The side-channel elicitation transport — the `/respond` endpoint a
+    // SUSPENDED in-process call resumes through — is genuinely owned by this
+    // module: the route is `/api/mcp/elicitation/{id}/respond` and the state is
+    // this store's `elicitationRequests`. But it is CONSUMED by any extension
+    // whose tool can suspend mid-call (js-tool's `run_js` is the first). Before
+    // this seam that consumer deep-imported `McpComposer`, which turned AP-4's
+    // `mcp → js-tool` coupling into `js-tool → mcp` instead of removing it.
+    // Now core declares the shape and this module pushes the implementation in;
+    // neither extension names the other. Same inversion as the rail live source
+    // above, same owner-scoped teardown in the registry's `unregister`.
+    setElicitationTransport({
+      has: id => McpComposer.$.elicitationRequests.has(id),
+      status: id => McpComposer.$.elicitationRequests.get(id)?.status,
+      register: init =>
+        McpComposer.addElicitationRequest({
+          elicitation_id: init.elicitation_id,
+          message: init.message,
+          requested_schema: {},
+          server: init.server ?? '',
+          message_id: init.message_id ?? null,
+        } as unknown as SSEChatStreamMcpElicitationRequiredData),
+      resolve: (id, action, content) =>
+        McpComposer.resolveElicitation(id, action, content),
       subscribe: onChange => useMcpComposerStore.subscribe(onChange),
     }, 'mcp')
 
