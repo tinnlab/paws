@@ -113,16 +113,16 @@ Not required. No Rust type, handler, permission or sync entity changes;
   a read of the final file plus those gates.
 - **ITEM-7** — verdict: PASS — the sweep is already executed once (desktop) with
   a reproducible probe; extending it to 390/768 is the same probe.
-- **ITEM-8** — verdict: **CONCERN** — must first measure `McpToolApprovalsTab`
+- **ITEM-8** — verdict: CONCERN — must first measure `McpToolApprovalsTab`
   (a `responsive` Field with a control) to confirm the rule has zero false
   positives before wiring it into `npm run check`. If it IS starved, it is a
   second offender to fix (ITEM-7 output), not a reason to weaken the rule.
-- **ITEM-9** — verdict: **CONCERN** — makes `gate:ui` stricter for every future
+- **ITEM-9** — verdict: CONCERN — makes `gate:ui` stricter for every future
   branch. Acceptable only if the 390/768/1280 sweep is clean after ITEM-1; any
   residual offender must be fixed or explicitly baselined with a written reason
   (the repo already has this idiom: `layout-baseline.ts` / `axe-baseline.ts` /
   `geometry-allowlist.json`).
-- **ITEM-10** — verdict: **CONCERN** — the target file is DIRTY and unpushed in
+- **ITEM-10** — verdict: CONCERN — the target file is DIRTY and unpushed in
   the orchestrator's own `agent-kit` checkout (2392 lines) while
   `agent-kit/origin/main` has 1473. Editing the committed version risks a
   conflict with in-flight work. Resolution recorded as DEC-7: land the detector

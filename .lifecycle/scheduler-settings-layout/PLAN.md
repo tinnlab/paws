@@ -160,8 +160,13 @@ verdict and a phase-3 executable acceptance test.
 
 - `src-app/ui/src/modules/scheduler/pages/SchedulerAdminPage.tsx` (rebuild)
 - `src-app/ui/tests/e2e/visual/form-label-starvation.spec.ts` (new)
-- `src-app/ui/tests/e2e/helpers/layout.ts` (add the reusable
-  `collectStarvedLabels` probe next to the other layout invariants)
+- `src-app/ui/tests/e2e/helpers/label-starvation.ts` (new — the reusable
+  `isStarvedLabel` predicate + `collectStarvedLabels` probe. Amended by
+  DRIFT-1.1 from the original "add it to `tests/e2e/helpers/layout.ts`":
+  `layout.ts` is the overflow/collision invariant set and carries no measurement
+  vocabulary, while this probe needs ~60 lines of definition + calibration
+  doc-comment. A sibling module next to it keeps `layout.ts` single-purpose and
+  gives the rig detector one file to mirror.)
 - `src-app/ui/gallery.config.json` (register the new gating visual spec)
 - `src-app/ui/tests/e2e/14-scheduler/admin-settings-layout.spec.ts` (new)
 - `sdk/packages/config/src/lint/settings-field.mjs` (submodule — lands separately)
