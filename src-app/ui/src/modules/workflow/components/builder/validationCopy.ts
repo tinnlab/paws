@@ -460,25 +460,88 @@ const HTTP_ERROR_RE = /^HTTP error!\s*status:\s*(\d{3})\b/i
 /** Neutral last resort. Used for BOTH surfaces, so it names neither. */
 const GENERIC_REQUEST_FAILURE = 'The server could not be reached — try again.'
 
-/** An HTTP status the author can act on, as a sentence. `null` ⇒ say nothing. */
-function statusSentence(status: number): string | null {
+/**
+ * WHICH ACT failed — because the sentence has to describe something the author
+ * actually did.
+ *
+ * `'mutation'` is the save/check boundary (the author pressed a button that
+ * changes something) and stays the DEFAULT: every caller that predates this
+ * distinction is one. `'read'` is the LOAD boundary — opening a workflow is not
+ * a change, so "the server rejected this change" / "permission to make this
+ * change" describe an act that never happened.
+ */
+export type FailureBoundary = 'read' | 'mutation'
+
+/** Options for `describeRequestError` (a bare string is still the fallback). */
+export interface DescribeErrorOptions {
+  /** The act that failed. Default `'mutation'`. */
+  boundary?: FailureBoundary
+  /** Sentence of last resort, when nothing readable can be derived. */
+  fallback?: string
+}
+
+/**
+ * An HTTP status whose meaning is DEFINITE — it says what happened regardless of
+ * what the server wrote in the body, and the body would add nothing an author
+ * can act on (frequently the opposite: a permission key, a trace id). `null` ⇒
+ * this status does not answer on its own; the server's own message does.
+ */
+function statusSentence(
+  status: number,
+  boundary: FailureBoundary,
+): string | null {
+  const read = boundary === 'read'
   if (status === 401)
     return 'You are no longer signed in — sign in again, then retry.'
   if (status === 403)
-    return 'You do not have permission to make this change.'
+    return read
+      ? 'You do not have permission to open this workflow.'
+      : 'You do not have permission to make this change.'
   if (status === 404) return 'This workflow no longer exists on the server.'
   if (status === 408 || status === 504)
     return 'The server took too long to answer — try again.'
   if (status === 409)
-    return 'This workflow changed on the server — reload it, then retry.'
+    return read
+      ? 'This workflow changed on the server — try opening it again.'
+      : 'This workflow changed on the server — reload it, then retry.'
   if (status === 413)
-    return 'This workflow is too large for the server to accept.'
+    return read
+      ? 'This workflow is too large for the server to send back.'
+      : 'This workflow is too large for the server to accept.'
   if (status === 429)
     return 'The server is busy right now — wait a moment, then retry.'
   if (status >= 500)
     return 'The server reported an internal error — try again in a moment.'
-  if (status >= 400) return 'The server rejected this change.'
   return null
+}
+
+/**
+ * The copy for the REMAINING 4xx — the bucket where the server's own message IS
+ * the diagnostic and a blanket sentence throws away the only actionable thing
+ * the author has.
+ *
+ * The reachable case: `GET /workflows/{id}/definition` parses the stored
+ * workflow.yaml (`handlers/mod.rs`), so a file that no longer deserializes
+ * answers 400 + `workflow.yaml deserialization failed: <which step/field>`.
+ * Flattening that into "The server rejected this change." was wrong twice over
+ * — the author changed nothing, and the one clue was discarded.
+ *
+ * `detail` is ALWAYS pre-tidied + clipped (`tidyMachineText`) and is never the
+ * api-client's `HTTP error! status: N - <body>` wrapper, so the unbounded blob
+ * an earlier round stopped cannot ride back in here. It is ATTRIBUTED to the
+ * server rather than presented as our own copy: machine text a person is
+ * explicitly told came from the server is a visible, TRUE escape hatch (INV-6),
+ * not wire vocabulary dressed up as author-facing language (INV-1).
+ */
+function rejectionCopy(boundary: FailureBoundary, detail: string): string {
+  if (boundary === 'read') {
+    return detail
+      ? `This workflow could not be opened — the server reported: ${detail}`
+      : 'This workflow could not be opened — the server rejected the request.'
+  }
+  return detail
+    ? `The server rejected this change — it reported: ${detail}`
+    : 'The server rejected this change.'
 }
 
 /** The api-client attaches the status to the thrown Error; use it when we have
@@ -515,12 +578,17 @@ export interface DescribedRequestError {
  * Order matters:
  *  1. a validator finding wins — it is the actionable one, and a 400 that
  *     carries one must not be flattened into "the server rejected this";
- *  2. otherwise a status becomes a sentence;
- *  3. otherwise the message itself, stripped of markup and clipped — never an
+ *  2. otherwise a DEFINITE status becomes a sentence (401/403/404/408/409/413/
+ *     429/5xx — see `statusSentence`);
+ *  3. otherwise, for the remaining 4xx, the server's OWN message is the
+ *     diagnostic: it is attributed + clipped into `rejectionCopy`;
+ *  4. otherwise the message itself, stripped of markup and clipped — never an
  *     `HTTP error!` blob, and never blank.
  *
- * `fallback` lets the caller name the act that failed ("could not be saved" vs
- * "could not be checked"); it is only reached when nothing else is readable.
+ * `options` names the act that failed: `fallback` ("could not be saved" vs
+ * "could not be checked"), only reached when nothing else is readable, and
+ * `boundary` (read vs mutation), which decides whether the copy may speak of a
+ * "change" at all. A bare string is still accepted as the fallback.
  *
  * APPLY THIS EXACTLY ONCE, at the store. Step 3 CLIPS machine text at
  * `MAX_ERROR_CHARS`, which is right for a response body and wrong for a
@@ -532,8 +600,13 @@ export interface DescribedRequestError {
 export function describeRequestError(
   error: unknown,
   steps: BuilderStep[],
-  fallback: string = GENERIC_REQUEST_FAILURE,
+  options: string | DescribeErrorOptions = {},
 ): DescribedRequestError {
+  const opts: DescribeErrorOptions =
+    typeof options === 'string' ? { fallback: options } : options
+  const boundary = opts.boundary ?? 'mutation'
+  const fallback = opts.fallback ?? GENERIC_REQUEST_FAILURE
+
   const raw =
     typeof error === 'string'
       ? error
@@ -544,17 +617,30 @@ export function describeRequestError(
   const asFinding = humaniseValidatorFinding(raw, steps)
   if (asFinding) return { text: asFinding.text, finding: asFinding.identity }
 
+  const isTransportWrapper = HTTP_ERROR_RE.test(raw)
+  // A message the SERVER WROTE, vs. the api-client's transport WRAPPER. The
+  // generated client copies the JSON body's `error` field into the Error
+  // message whenever the body parses, and only falls back to
+  // `HTTP error! status: N - <the raw body>` when it does not
+  // (`sdk/packages/framework/src/api-client/core.ts`) — so the wrapper is
+  // exactly the unbounded machine blob, and anything else is a sentence the
+  // server chose to send. Tidied + clipped before it is used either way.
+  const serverDetail = isTransportWrapper ? '' : tidyMachineText(raw)
+
   const fromMessage = HTTP_ERROR_RE.exec(raw)?.[1]
   const status = statusOf(error) ?? (fromMessage ? Number(fromMessage) : null)
   if (status != null) {
-    const sentence = statusSentence(status)
+    const sentence = statusSentence(status, boundary)
     if (sentence) return { text: sentence, finding: null }
+    if (status >= 400) {
+      return { text: rejectionCopy(boundary, serverDetail), finding: null }
+    }
   }
 
   // An `HTTP error!` string whose status told us nothing is still a machine
   // artefact wrapped around a response body — do not paste it.
-  if (HTTP_ERROR_RE.test(raw)) return { text: fallback, finding: null }
-  return { text: tidyMachineText(raw) || fallback, finding: null }
+  if (isTransportWrapper) return { text: fallback, finding: null }
+  return { text: serverDetail || fallback, finding: null }
 }
 
 /**
@@ -562,12 +648,13 @@ export function describeRequestError(
  *
  * Used by the store's LOAD boundary (`WorkflowBuilder.store.ts::load`), where a
  * failure can never be a validator finding — there is no definition to attribute
- * one against yet — so the finding identity would be dead weight.
+ * one against yet — so the finding identity would be dead weight. That caller
+ * passes `{ boundary: 'read' }`; see `FailureBoundary`.
  */
 export function humaniseRequestError(
   error: unknown,
   steps: BuilderStep[],
-  fallback: string = GENERIC_REQUEST_FAILURE,
+  options: string | DescribeErrorOptions = {},
 ): string {
-  return describeRequestError(error, steps, fallback).text
+  return describeRequestError(error, steps, options).text
 }

@@ -344,11 +344,17 @@ export const WorkflowBuilderStoreDef = defineLocalStore({
             // — routinely a full HTML error page, which the page renders into
             // `ErrorState`'s details. There is no definition to attribute a
             // finding against yet (the load is what failed), so no steps.
-            d.loadError = humaniseRequestError(
-              error,
-              [],
-              'Failed to load workflow definition',
-            )
+            //
+            // `boundary: 'read'` because opening a workflow is NOT a change:
+            // the mutation copy ("the server rejected this change", "permission
+            // to make this change") describes an act the author never
+            // performed. It also lets the 400 this endpoint really answers with
+            // — a stored workflow.yaml that no longer deserializes — keep the
+            // server's "which step/field" diagnostic instead of discarding it.
+            d.loadError = humaniseRequestError(error, [], {
+              boundary: 'read',
+              fallback: 'This workflow could not be opened — try again.',
+            })
           })
         }
       },

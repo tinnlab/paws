@@ -163,45 +163,72 @@ export function createStep(kind: StepKind, existingIds: string[]): BuilderStep {
 // required-field hints as the author types. Pure + exported for unit tests.
 // ---------------------------------------------------------------------------
 
-const nonEmpty = (label: string) => z.string().trim().min(1, `${label} is required`)
+// EVERY schema node below carries AUTHORED copy for its TYPE error as well as
+// for its checks (INV-1). A required field can arrive ABSENT, not merely empty:
+// the backend declares the optional config fields with
+// `skip_serializing_if = "Option::is_none"` (`validate.rs`), so a step authored
+// with `prompt_file:` reaches the builder with NO `prompt` key at all. With a
+// custom message attached only to `.min(1, …)`, zod answered that with its own
+// diagnostic — "Invalid input: expected string, received undefined" — which
+// `LabeledControl` renders verbatim under the field: raw schema-validator
+// language in front of the person building the workflow.
+//
+// The class guard is `stepForms.test.ts::no zod default diagnostic can reach a
+// field…`: it walks every kind × every field × absent/null/wrong-type/
+// out-of-range, so a new kind, a new field, or a new node with no authored copy
+// fails there rather than shipping.
+
+/** A required text field: absent, null, non-string and blank all read alike. */
+const nonEmpty = (label: string) => {
+  const required = `${label} is required`
+  return z.string({ error: required }).trim().min(1, required)
+}
+
+const NOT_A_NUMBER = 'Enter a number'
+const NOT_A_WHOLE_NUMBER = 'Enter a whole number'
+
+/** A required whole-number field, authored for absent / non-numeric / decimal. */
+const wholeNumber = () =>
+  z.number({ error: NOT_A_NUMBER }).int(NOT_A_WHOLE_NUMBER)
+
+/** A required choice, authored for both "absent" and "not one of these". */
+const choice = <T extends readonly [string, ...string[]]>(
+  values: T,
+  label: string,
+) => z.enum(values, { error: `Choose ${label}` })
 
 export function buildStepZodSchema(kind: StepKind): z.ZodTypeAny {
   switch (kind) {
     case 'agent':
       return z.object({
         prompt: nonEmpty('A task description'),
-        max_steps: z
-          .number({ message: 'Enter a number' })
-          .int()
-          .min(1, 'Must be at least 1'),
-        output_format: z.enum(['text', 'json']),
+        max_steps: wholeNumber().min(1, 'Must be at least 1'),
+        output_format: choice(['text', 'json'], 'a result format'),
       })
     case 'llm':
       return z.object({
         prompt: nonEmpty('A prompt'),
-        output_format: z.enum(['text', 'json']),
+        output_format: choice(['text', 'json'], 'a result format'),
       })
     case 'llm_map':
       return z.object({
         prompt: nonEmpty('A prompt'),
         for_each: nonEmpty('A list to map over'),
         item_var: nonEmpty('An item variable name'),
-        max_parallel: z
-          .number({ message: 'Enter a number' })
-          .int()
+        max_parallel: wholeNumber()
           .min(1, 'Must be at least 1')
           .max(MAX_PARALLEL_HARD_CAP, `At most ${MAX_PARALLEL_HARD_CAP}`),
-        max_retries: z.number().int().min(0, 'Cannot be negative'),
+        max_retries: wholeNumber().min(0, 'Cannot be negative'),
       })
     case 'sandbox':
       return z.object({
         run: nonEmpty('A command to run'),
-        timeout_ms: z.number().int().min(1, 'Must be at least 1 ms'),
+        timeout_ms: wholeNumber().min(1, 'Must be at least 1 ms'),
       })
     case 'elicit':
       return z.object({
         message: nonEmpty('A prompt for the user'),
-        timeout_ms: z.number().int().min(0, 'Cannot be negative'),
+        timeout_ms: wholeNumber().min(0, 'Cannot be negative'),
       })
     case 'tool':
       return z.object({
@@ -215,6 +242,12 @@ export function buildStepZodSchema(kind: StepKind): z.ZodTypeAny {
  *  the fields that fail. Never throws (unknown-shape input → best-effort). */
 export function configErrors(step: BuilderStep): Record<string, string> {
   const schema = buildStepZodSchema(step.kind as StepKind)
+  // `step.kind as StepKind` is an UNCHECKED cast — the wire may carry a kind
+  // this build does not know — and the switch, being exhaustive over `StepKind`,
+  // returns `undefined` for anything else. Dereferencing that broke the "never
+  // throws" contract above. There is nothing to say about a kind we do not know:
+  // the backend validator is the source of truth for it.
+  if (!schema) return {}
   const result = schema.safeParse(step)
   if (result.success) return {}
   const errors: Record<string, string> = {}

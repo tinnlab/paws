@@ -124,6 +124,96 @@ test('REGRESSION: llm / llm_map createStep sets NO non-empty `tools`', () => {
   }
 })
 
+// ---------------------------------------------------------------------------
+// INV-1 AT THE FIELD LEVEL (fix round 5, finding 2).
+//
+// `LabeledControl` renders a `configErrors` message verbatim under the control,
+// so ANY zod DEFAULT diagnostic that escapes is raw schema-validator language in
+// front of the author. The reachable instance: `StepConfig::{Llm,LlmMap,Agent}`
+// declare `prompt` with `skip_serializing_if = "Option::is_none"`, so a step
+// authored with `prompt_file:` arrives with NO `prompt` key at all — and a
+// custom message attached only to `.min(1, …)` left the ABSENT case answering
+// "Invalid input: expected string, received undefined".
+//
+// These two are the CLASS guard, not the instance guard: they enumerate
+// `STEP_KINDS` and every key of each kind's default step, so a NEW kind, a new
+// field, or a new schema node with no authored copy fails here.
+// ---------------------------------------------------------------------------
+
+/** Vocabulary only a schema validator uses — never author-facing copy. */
+const ZOD_DIAGNOSTIC =
+  /invalid input|invalid option|invalid type|invalid value|invalid format|expected |received |unrecognized key|too small|too big|^required$|\bnan\b/i
+
+test('no zod default diagnostic can reach a field, for ANY kind or field state', () => {
+  const mutations: unknown[] = [
+    undefined,
+    null,
+    '',
+    '   ',
+    0,
+    -1,
+    1.5,
+    999999,
+    'abc',
+    true,
+    {},
+    [],
+  ]
+  for (const kind of STEP_KINDS) {
+    const base = createStep(kind, []) as unknown as Record<string, unknown>
+    // The all-absent shape is the `prompt_file:`-import case: serde omits every
+    // `Option::is_none` config field, so only the discriminant is guaranteed.
+    const variants: Record<string, unknown>[] = [{ kind }, base]
+    for (const key of Object.keys(base)) {
+      const dropped = { ...base }
+      delete dropped[key]
+      variants.push(dropped)
+      for (const value of mutations) variants.push({ ...base, [key]: value })
+    }
+    for (const variant of variants) {
+      for (const [field, message] of Object.entries(configErrors(variant as never))) {
+        assert.ok(
+          message.trim().length > 0,
+          `${kind}.${field}: an empty field message tells the author nothing`,
+        )
+        assert.doesNotMatch(
+          message,
+          ZOD_DIAGNOSTIC,
+          `${kind}.${field} showed the author a raw schema-validator diagnostic ` +
+            `(${JSON.stringify(message)}) for input ${JSON.stringify(variant)}. ` +
+            `Give that schema node authored copy for its TYPE error too ` +
+            `(z.string({ error }) / z.number({ error }) / z.enum([…], { error })).`,
+        )
+      }
+    }
+  }
+})
+
+test('an ABSENT required field reads exactly like an EMPTY one', () => {
+  // THE LITERAL DEFECT: an imported `prompt_file:` step has no `prompt` key.
+  const cases = [
+    ['agent', 'prompt'],
+    ['llm', 'prompt'],
+    ['llm_map', 'prompt'],
+    ['sandbox', 'run'],
+    ['elicit', 'message'],
+    ['tool', 'server'],
+    ['tool', 'tool'],
+  ] as const
+  for (const [kind, field] of cases) {
+    const empty = createStep(kind, []) as unknown as Record<string, unknown>
+    const absent = { ...empty }
+    delete absent[field]
+    const emptyMessage = configErrors(empty as never)[field]
+    assert.ok(emptyMessage, `${kind}.${field}: the empty case must be flagged`)
+    assert.equal(
+      configErrors(absent as never)[field],
+      emptyMessage,
+      `${kind}.${field}: an absent value must read like an empty one`,
+    )
+  }
+})
+
 test('buildStepZodSchema returns a schema for each kind (no throw)', () => {
   for (const kind of STEP_KINDS) {
     const schema = buildStepZodSchema(kind)

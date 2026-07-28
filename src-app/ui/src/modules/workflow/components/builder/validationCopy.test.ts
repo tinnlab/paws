@@ -609,3 +609,117 @@ test('a location GUESSED out of the message is not reported as authoritative', (
   )
   assert.equal(real.finding?.locationCertain, true)
 })
+
+// ---------------------------------------------------------------------------
+// THE BOUNDARY THE COPY SPEAKS FOR (fix round 5, finding 1).
+//
+// Round 4 routed the LOAD failure through the same humanisation as the save —
+// but every sentence there was written for a MUTATION ("The server rejected this
+// CHANGE", "permission to make this CHANGE"). Opening a workflow is not a
+// change: those sentences describe an act the author never performed.
+//
+// And `GET /workflows/{id}/definition` parses the stored workflow.yaml
+// (`handlers/mod.rs`), so a file that no longer deserializes answers 400 with
+// `workflow.yaml deserialization failed: <which step/field>` — the ONLY
+// diagnostic there is, which the blanket status sentence threw away.
+// ---------------------------------------------------------------------------
+
+test('the READ boundary never describes the failure as a change the author made', () => {
+  for (const status of [400, 403, 409, 413]) {
+    const shown = humaniseRequestError(
+      Object.assign(new Error(`HTTP error! status: ${status} - <html>x</html>`), {
+        status,
+      }),
+      [],
+      { boundary: 'read' },
+    )
+    assert.doesNotMatch(
+      shown,
+      /\bchange\b/i,
+      `status ${status} told the author their CHANGE failed while they were only opening a workflow`,
+    )
+    assert.ok(shown.trim().length > 0, `status ${status} said nothing at all`)
+  }
+})
+
+test("a load rejected by an unreadable workflow file keeps the server's diagnostic", () => {
+  // The real shape: AppError::bad_request("WORKFLOW_INVALID_YAML", …) → the
+  // api-client copies the JSON body's `error` field into the Error message.
+  const error = Object.assign(
+    new Error(
+      'workflow.yaml deserialization failed: steps[1]: unknown field `promt` at line 7 column 5',
+    ),
+    { status: 400, error_code: 'WORKFLOW_INVALID_YAML' },
+  )
+  const shown = humaniseRequestError(error, [], {
+    boundary: 'read',
+    fallback: 'This workflow could not be opened — try again.',
+  })
+
+  assert.match(
+    shown,
+    /promt/,
+    'the ONLY actionable diagnostic (which step/field is malformed) was discarded',
+  )
+  assert.doesNotMatch(shown, /\bchange\b/i)
+  // …and it is attributed, so the machine text is never mistaken for our copy.
+  assert.match(shown, /server reported/i)
+})
+
+test('a server message is preserved at the MUTATION boundary too, not flattened', () => {
+  const error = Object.assign(new Error('This workflow is not editable here'), {
+    status: 400,
+  })
+  const shown = humaniseRequestError(error, steps)
+  assert.match(shown, /not editable here/)
+})
+
+test('preserving the server message did NOT reintroduce the unbounded blob', () => {
+  // The competing constraint: a body the server never wrote as a sentence (a
+  // gateway HTML page) must still be stripped and clipped, at BOTH boundaries.
+  const blob = `<html><body>${'x'.repeat(4000)}</body></html>`
+  for (const boundary of ['read', 'mutation'] as const) {
+    // (a) wrapped by the api-client — the status answers, the body never shows.
+    const wrapped = humaniseRequestError(
+      Object.assign(new Error(`HTTP error! status: 502 - ${blob}`), { status: 502 }),
+      [],
+      { boundary },
+    )
+    assert.doesNotMatch(wrapped, /HTTP error!/)
+    assert.doesNotMatch(wrapped, /[<>]/)
+    assert.ok(wrapped.length <= 160, `${boundary}: ${wrapped.length} chars`)
+
+    // (b) a 400 whose "message" is really a body: stripped + clipped, and the
+    //     lead sentence is the only thing that may exceed the machine clip.
+    const asDetail = humaniseRequestError(
+      Object.assign(new Error(blob), { status: 400 }),
+      [],
+      { boundary },
+    )
+    assert.doesNotMatch(asDetail, /[<>]/, `${boundary}: markup reached the author`)
+    assert.ok(
+      asDetail.length <= 240,
+      `${boundary}: an unbounded body leaked (${asDetail.length} chars)`,
+    )
+    assert.match(asDetail, /…/, `${boundary}: the machine text was not clipped`)
+  }
+})
+
+test('the LOAD boundary in the store asks for READ copy', () => {
+  // A SOURCE guard, like the exactly-once one above: the defect (mutation copy
+  // on a read failure) is invisible to a unit test of either module alone,
+  // because the store's `load` is only reachable through a React hook.
+  const dir = new URL('.', import.meta.url).pathname
+  const store = readFileSync(
+    join(dir, '../../stores/WorkflowBuilder.store.ts'),
+    'utf8',
+  )
+  const loadBody = /load: async \([\s\S]*?\n      \},/.exec(store)?.[0]
+  assert.ok(loadBody, "could not find the store's `load` action — update this guard")
+  assert.match(
+    loadBody,
+    /boundary: 'read'/,
+    "the store's LOAD failure is humanised with the default MUTATION copy, so a " +
+      'failure to OPEN a workflow tells the author their CHANGE was rejected.',
+  )
+})
