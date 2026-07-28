@@ -41,6 +41,7 @@ npm run check (ui): PASS
 - **TEST-21**: PASS
 - **TEST-22**: PASS
 - **TEST-23**: PASS
+- **TEST-24**: PASS
 - **TEST-25**: PASS
 - **TEST-26**: PASS
 - **TEST-27**: PASS
@@ -54,28 +55,66 @@ npm run check (ui): PASS
 - **TEST-35**: PASS
 - **TEST-36**: PASS
 - **TEST-37**: PASS
+- **TEST-38**: PASS
 - **TEST-39**: PASS
 - **TEST-40**: PASS
 - **TEST-41**: PASS
 - **TEST-42**: PASS
 - **TEST-43**: PASS
 
-## NOT PASS — stated plainly
+## TEST-24 and TEST-38 — written and RUN in this round
 
-- **TEST-24** (integration: `invoke_capability` with a stringified body reaching
-  the real loopback route): **NOT WRITTEN**. The `control_mcp` integration
-  harness needs the full catalog + loopback plumbing, which did not fit this
-  session. The unit-level proof exists and passes (TEST-22/23/25, incl. the
-  conformance battery over `invoke_capability.body`), so the DECODE is covered;
-  what is missing is the end-to-end proof that the decoded body reaches the real
-  route and succeeds. Recorded as an honest gap, not marked PASS.
-- **TEST-38** (real-LLM e2e no-regression leg): **NOT WRITTEN**. Its value is a
-  no-regression check with a real model in the loop; the existing
-  `chat/ask-user-real-llm.spec.ts` and `control/…for-input.spec.ts` already
-  cover that surface and are unchanged by this diff. Not marked PASS.
+Both were recorded as NOT WRITTEN in the previous round. They now exist, and the
+numbers below are transcribed from runs whose logs are named.
 
-Phase 8 therefore does NOT pass cleanly (the gate reports FAIL on the two
-missing IDs), and this file says so rather than padding them into PASS lines.
+### TEST-24 — integration, `control_mcp/stringified_args_test.rs`
+
+```
+cargo test --test integration_tests -- control_mcp::stringified_args_test --test-threads=1
+→ test result: ok. 6 passed; 0 failed; 0 ignored     (test24-round2.log)
+```
+
+Six legs: `body` (single + double encoded, both reaching the real loopback route
+and creating the row), the exclusive side of `MAX_STRING_UNWRAPS`, `query` (the
+SILENT failure — a dropped query returned a plausible 200 for the wrong
+question), `path_params`, and the actionable-refusal negative control.
+
+**Verified DISCRIMINATING, not assumed.** With `decode_invoke_args` neutered to
+`args.clone()` (the pre-fix behaviour), **5 of the 6 legs go RED**
+(`test24-tautology-guard2.log`). The sixth —
+`triple_stringified_body_is_refused_at_the_bound` — stays green by design: it
+asserts a REFUSAL, which happens in both worlds. It is still not vacuous, because
+it pins the bound-exhausted message text that only `coerce_value` emits.
+
+The measurement also **corrected a false claim** written into the first draft of
+this file: the pre-fix behaviour for these fixtures is NOT a 422 from the target
+route (that path belongs to operations with no object `request_schema`) but a
+pre-dispatch refusal. The assertion resting on it was removed rather than
+reworded, because it compared against an absent `structuredContent` and passed
+vacuously.
+
+### TEST-38 — e2e, real model in the loop
+
+```
+npx playwright test tests/e2e/chat/ask-user-stringified-schema.spec.ts --workers=1
+→ 2 passed (1.1m)     (test38-round2.log)
+   ✓ TEST-37 the reported stringified schema renders its fields …
+   ✓ TEST-38 an under-specified request renders an ask_user form with real fields (24.5s)
+```
+
+RUN, not skipped. It drove the **local Qwen bridge**
+(`ZIEE_TEST_LLM_BASE_URL=http://localhost:4000/v1`,
+`ZIEE_TEST_LLM_MODEL=qwen3.6-35b-a3b`, resolved through the shared `TEST_LLM`
+seam), which was wired up for this run rather than left unconfigured.
+
+**It contains no skip** — see DEC-21. TESTS.md enumerated it with a conditional
+skip-on-`!TEST_LLM` guard; it is implemented as an unconditional `beforeAll`
+precondition instead, because a missing LLM is a missing DEPENDENCY and not the
+platform-incompatibility that is the only legitimate skip. **Verified the
+precondition is not vacuous**: with every LLM env var unset it FAILS in 10s with
+`no LLM configured at all (set OPENAI_API_KEY [+OPENAI_BASE_URL
++ZIEE_TEST_LLM_MODEL], or the Anthropic seam)`
+(`test38-precondition-negative.log`) — before the per-test stack boots.
 
 ## ACCEPTANCE — the design invariants, each proved by a test that RAN
 
@@ -104,93 +143,97 @@ loop, the real built-in, real SSE and the real renderer, and the card rendered
 and schedule`). Reproduced at `d53db2d11` before any edit; `src-app/agent-core`
 is not touched here. Backend scope is `-p ziee`, which is clean. See BASE.md.
 
-## A7 `gate:ui` — RAN, FAILED, classified as ENVIRONMENTAL (with evidence)
+## A7 boot/runtime canary — RAN FOUR TIMES, FAILS, and FAILS ON THE BASE TOO
 
-`npm run gate:ui -- --skip-visual` (`askuser-gateui.log`):
+**gate:ui (ui): FAIL** — recorded as what it is.
 
-```
-PASS  tsc
-PASS  lint
-FAIL  runtime-health   — 17 surface(s) with HIGH findings
---- per-surface runtime verdict: 167/184 PASS ---
-```
+> **Integrity note.** The previous revision of this file explained, in prose, that
+> the canary was *not* being recorded as passing — and in doing so quoted the
+> canary line verbatim. The gate's regex does not know prose from a verdict, so
+> that quotation **accidentally satisfied the A7 check** and phase 8 reported the
+> canary green. The branch's prior "8/9" therefore rested on an unintended false
+> pass. The quotation is gone; the verdict line above is the only canary-shaped
+> text in this file, and it says FAIL.
 
-**This is NOT recorded as `gate:ui (ui): PASS`.** It failed, and the honest
-classification is Category B (cross-worktree contention), supported by four
-independent pieces of evidence rather than an assertion:
+`tsc` **PASS**, `lint` **PASS**, `visual` skipped, `runtime-health` **FAIL**.
 
-1. **4117 of 4351 HIGH findings are `net::ERR_NETWORK_CHANGED`**, and the
-   remaining 12 non-network ones are all `Failed to fetch dynamically imported
-   module` — the downstream consequence of the same dead dev server. **Zero are
-   a real UI defect** (no contrast failure, no a11y-name finding, no React
-   warning promoted to HIGH).
-2. **1248 of them name a FOREIGN worktree's path** —
-   `http://localhost/@fs/data/pbya/ziee/tmp/scheduler-layout-wt/…`. The gate
-   itself logged the cause on the way in: *"port :20181 holds a FOREIGN
-   worktree's server (/data/pbya/ziee/tmp/scheduler-layout-wt); NOT reusing —
-   booting our own on a fresh port"*, and the browser still resolved
-   `http://localhost/` without a port.
-3. **15 of the 17 failing surfaces are untouched by this diff** —
-   `settings-general` (543 HIGH), the skills overlays, the large-file viewers,
-   `hardware-monitor`, `settings-file-rag-admin`. A diff confined to the
-   elicitation renderer cannot break those.
-4. **The surface this branch ADDS — `deep-chat-elicitation-no-fields` — has 0
-   HIGH findings.** The new degraded card rendered clean. The two elicitation
-   surfaces that did fail (`deep-chat-elicitation`, `deep-chat-ask-user-wizard`)
-   show only `ERR_NETWORK_CHANGED` module-load failures, identical in kind to
-   the 15 unrelated ones.
+### Why this is not attributable to this branch — four measurements
 
-This worktree has **no stale Vite of its own** (verified: zero `vite` processes
-under `ask-user-schema-wt`); the colliding server belongs to another active
-worktree and was deliberately NOT killed — interfering with a concurrent run is
-exactly the shared-infrastructure edit rule B3 forbids.
+| run | UI under test | port | verdict | failing surfaces |
+|---|---|---|---|---|
+| 1 | branch | :20181 (collided) | 69/209 | 17 |
+| 2 | branch | :21500 isolated | 145/151 | 6 |
+| 3 | branch | :21601 isolated | 145/151 | the same 6 |
+| 4 | **base UI** (`origin/feat/agent-core`) | :21800 isolated | **177/182** | 5 — **disjoint** from runs 2/3 |
+| 5 | branch | :22000 isolated | 161/171 | 3 — **disjoint from both** |
 
-A re-run was launched (`askuser-gateui2.log`). **Until a clean run is observed,
-A7 stays UNVERIFIED and phase 8 stays RED.** The classification above explains
-the failure; it does not excuse it into a pass.
+Three independent facts, each measured:
 
-### A7 re-run (`askuser-gateui2.log`) — still FAIL, and now conclusively NOT this diff
+1. **The untouched BASE fails the same gate** (run 4 — the branch's own UI files
+   were replaced with `origin/feat/agent-core`'s and the gate re-run in this same
+   worktree). A7 is therefore a pre-existing base condition, not a regression
+   introduced here.
+2. **The failing set is non-deterministic across runs of the same commit** —
+   runs 2/3 and run 5 share no surface at all. A code defect does not migrate
+   between disjoint surface sets.
+3. **Every finding is a network-class dev-server failure** —
+   `net::ERR_NETWORK_CHANGED` / `ERR_CONNECTION_REFUSED` and the
+   `Failed to fetch dynamically imported module` errors downstream of them. Zero
+   contrast failures, zero a11y-name findings, zero React warnings promoted to
+   HIGH, zero crashes in run 5.
 
-```
-PASS  tsc · PASS  lint · FAIL  runtime-health — 8 surface(s) with HIGH findings
---- per-surface runtime verdict: 182/190 PASS ---   (run 1 was 167/184)
-```
+### The surfaces this branch actually owns are clean in EVERY run
 
-The re-run turns the earlier *classification* into a *demonstration*:
+`deep-chat-elicitation`, `deep-chat-ask-user-wizard`, `seeded-s1-elicit-error`
+and the surface this branch ADDS — `deep-chat-elicitation-no-fields` — report
+**0 HIGH findings** in every isolated run.
 
-1. **The failing set is DISJOINT between the two runs.** Run 1 failed on
-   `settings-general`, the skills overlays, the large-file viewers,
-   `hardware-monitor`, and four chat surfaces. Run 2 failed on
-   `settings-file-rag-admin`, `settings-user-groups`, `settings-assistants`,
-   `onboarding`, `notifications-background`, `settings-sandbox`,
-   `settings-web-search`, `settings-voice` — **no overlap**. A code defect does
-   not move between disjoint surface sets across two runs of the same commit.
-2. **All three elicitation surfaces are now 0 HIGH** — including the two that
-   failed in run 1 (`deep-chat-elicitation`, `deep-chat-ask-user-wizard`) and the
-   one this branch ADDS (`deep-chat-elicitation-no-fields`). The surfaces this
-   diff actually touches render clean.
-3. **6711 of 6916 HIGH are still `ERR_NETWORK_CHANGED`**; 1987 name the foreign
-   worktree. Only 3 `page-error`, zero `crash` (run 1 had 6 crashes).
+### Root cause of run 1, reproduced independently
 
-**Root cause is a bug in the SHARED gate script**, not in ziee's UI. The gate
-detects the collision and says it will avoid it, then does not:
+The gate detects a foreign worktree on the base port, announces it will avoid it,
+and then boots on the same port anyway:
 
 ```
 • port :20181 holds a FOREIGN worktree's server (…/scheduler-layout-wt); NOT reusing — booting our own on a fresh port
 • booting gallery dev server on :20181 …          ← the SAME port
 ```
 
-`sdk/packages/gallery/scripts/gate-ui.mjs:141` — `PORT = await pickBindablePort(PORT_BASE)`
-returns the base port even when a foreign server is already serving on it, so our
-Vite never really owns the port and the browser loads modules from the sibling
-worktree's tree over `@fs/…/scheduler-layout-wt/…`. That is exactly the
-"fixed-port false-pass" the surrounding comment says the sentinel check exists to
-prevent — the detection works, the mitigation does not.
+`pickBindablePort(PORT_BASE)` returns the base port even when a foreign server is
+already serving on it, so with `--strictPort` our Vite never binds, `waitForPort`
+is satisfied by the FOREIGN server, and the whole runtime-health pass runs against
+a sibling worktree's tree (`/@fs/data/pbya/ziee/tmp/scheduler-layout-wt/…`
+appeared in 1248 findings). This is the exact "fixed-port false-pass" the
+surrounding comment says the sentinel check exists to prevent — the detection
+works, the mitigation does not.
 
-**Deliberately NOT fixed here.** It is shared infrastructure in another repo, and
-editing the harness to make my own gate green is precisely what rule B3 forbids.
-Filed as a finding for the owner; it explains a recurring, previously-unexplained
-`gate:ui` symptom across worktrees, so fixing it is worth its own change.
+**Deliberately NOT fixed here**: it is shared infrastructure
+(`sdk/packages/gallery/scripts/gate-ui.mjs`), and editing the harness to make my
+own gate green is what the rules forbid. Runs 2-5 avoided it with the **supported
+`GALLERY_PORT` env knob** rather than a code change. Filed for the owner — it
+explains a recurring, previously-unexplained `gate:ui` symptom across worktrees
+and deserves its own change.
 
-**A7 remains UNVERIFIED and phase 8 remains RED.** The gate did not pass; the
-evidence shows why, and shows it is not this branch.
+**A7 therefore remains RED, and phase 8 reports it.** It is not padded into a
+pass, and the evidence shows the branch is not its cause.
+
+## A1 `.lifecycle/` single-feature rule — BASE-CARRIED, not a stray of this branch
+
+Phase 0 reports `.lifecycle/ has 18 feature dirs … a branch may carry exactly ONE`.
+Seventeen of the eighteen come from the base branch, not from this one:
+
+```
+$ git ls-tree origin/feat/agent-core .lifecycle/
+  agent-orchestration  background-in-conversation  chat-ui-robustness
+  control-describe-schema  control-mcp-e2e-coverage  e2e-render-serving
+  frontend-perf  hook-lint-guardrails  live-ui-audit-fixes
+  live-ui-audit-round2  net-hygiene  perf-ux-round2  smart-module-loading
+  sse-slot-leak  streamdown-html-renderer  workflow-kind-agent
+  worktree-isolation                                        → 17 directories
+```
+
+This branch adds exactly one — `ask-user-stringified-schema` — bringing the total
+to 18. It DELETES none, and deleting sixteen other features' lifecycle records to
+turn a gate green would destroy other work to flatter this branch's scorecard.
+Recorded as a base-carried exception and reported to the orchestrator rather than
+"resolved". Sibling branches cut from the same base carry the identical failure.
+
