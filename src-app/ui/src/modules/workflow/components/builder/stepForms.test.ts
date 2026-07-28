@@ -214,6 +214,85 @@ test('an ABSENT required field reads exactly like an EMPTY one', () => {
   }
 })
 
+// ---------------------------------------------------------------------------
+// THE PROMPT XOR (fix round 6).
+//
+// `validate.rs` (~681-691) requires EXACTLY ONE of a typed prompt or a prompt
+// file on `agent` / `llm` / `llm_map`:
+//   has_prompt = prompt.filter(|s| !s.is_empty()).is_some()
+//   has_file   = prompt_file.is_some()
+//   MISSING fires only on !has_prompt && !has_file
+// The client attached its prompt requirement UNCONDITIONALLY, so a step that
+// supplies its wording from a file — valid to the backend, and with NO `prompt`
+// key at all on the wire (`skip_serializing_if = "Option::is_none"`) — showed a
+// red "is required" under an empty box the author cannot act on, beside a green
+// "No blocking errors." panel and an enabled Save. INV-6: a stated reason must
+// be TRUE.
+// ---------------------------------------------------------------------------
+
+/** The kinds carrying the prompt-XOR rule, with their author-facing copy. */
+const PROMPT_XOR_KINDS = [
+  ['agent', 'A task description is required'],
+  ['llm', 'A prompt is required'],
+  ['llm_map', 'A prompt is required'],
+] as const
+
+test('a step whose wording comes from a FILE is NOT told a prompt is missing', () => {
+  for (const [kind] of PROMPT_XOR_KINDS) {
+    const base = createStep(kind, []) as unknown as Record<string, unknown>
+    // serde omits the key entirely on a `prompt_file:` import.
+    const absent = { ...base }
+    delete absent.prompt
+    // …and the same step after the author cleared the box (`prompt: ''`), which
+    // the backend also reads as "no typed prompt" (the `!s.is_empty()` filter).
+    const shapes: Record<string, unknown>[] = [
+      { ...absent, prompt_file: 'prompts/task.md' },
+      { ...base, prompt: '', prompt_file: 'prompts/task.md' },
+      { ...base, prompt: '   ', prompt_file: 'prompts/task.md' },
+      // `prompt: ~` in YAML → `None` to serde, i.e. no typed prompt either.
+      { ...base, prompt: null, prompt_file: 'prompts/task.md' },
+    ]
+    for (const shape of shapes) {
+      const errs = configErrors(shape as never)
+      assert.ok(
+        !('prompt' in errs),
+        `${kind}: a step supplying its wording from a file is VALID to the ` +
+          `backend, yet the builder demanded a prompt (${JSON.stringify(errs.prompt)}) ` +
+          `for ${JSON.stringify(shape)} — a FALSE requirement the author cannot ` +
+          `act on (the builder renders no prompt-file control).`,
+      )
+    }
+  }
+})
+
+test('a step with NEITHER a prompt nor a file keeps its exact original message', () => {
+  // The e2e specs and the tests above assert these strings byte-for-byte; the
+  // XOR must lift the requirement, never reword it.
+  for (const [kind, message] of PROMPT_XOR_KINDS) {
+    const base = createStep(kind, []) as unknown as Record<string, unknown>
+    const absent = { ...base }
+    delete absent.prompt
+    for (const shape of [base, absent, { ...base, prompt: '   ' }]) {
+      assert.equal(
+        configErrors(shape as never).prompt,
+        message,
+        `${kind}: neither a typed prompt nor a file — the original required ` +
+          `message must survive verbatim for ${JSON.stringify(shape)}`,
+      )
+    }
+    // A `prompt_file` the backend would NOT read as a file (null / absent /
+    // non-string) leaves the requirement in force.
+    for (const promptFile of [null, undefined, 0, false, {}, []]) {
+      assert.equal(
+        configErrors({ ...absent, prompt_file: promptFile } as never).prompt,
+        message,
+        `${kind}: prompt_file ${JSON.stringify(promptFile)} is not a file to ` +
+          `the backend, so the requirement must stay`,
+      )
+    }
+  }
+})
+
 test('buildStepZodSchema returns a schema for each kind (no throw)', () => {
   for (const kind of STEP_KINDS) {
     const schema = buildStepZodSchema(kind)

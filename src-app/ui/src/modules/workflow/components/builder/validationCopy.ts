@@ -91,10 +91,16 @@ const HUMAN_COPY: Record<string, CopyFn> = {
       : step?.kind === 'llm_map'
         ? 'This step needs a prompt to run for each item in the list.'
         : 'This step needs a prompt.',
+  // Only ONE half of this remedy is reachable from the builder: it renders the
+  // typed box but no control for the file. "Keep one of them" therefore asked
+  // for an act the author could only half perform, and did not say which half.
+  // Clearing the box is the reachable fix and it really does resolve the
+  // finding — `validate.rs` reads an empty prompt as no typed prompt
+  // (`prompt.filter(|s| !s.is_empty())`), so the file alone then satisfies it.
   "WORKFLOW_PROMPT_BOTH": ({ step }) =>
     step?.kind === 'agent'
-      ? 'This step has both a typed-in task and a task file — keep one of them.'
-      : 'This step has both a typed-in prompt and a prompt file — keep one of them.',
+      ? 'This step has both a typed-in task and a task file — clear the task box here to use the file, or drop the file from the workflow and import it again.'
+      : 'This step has both a typed-in prompt and a prompt file — clear the prompt box here to use the file, or drop the file from the workflow and import it again.',
   "WORKFLOW_PROMPT_FILE_MISSING": () =>
     "This step points at a prompt file that isn't in the workflow — add the file, or type the prompt in directly.",
   // The two file codes describe DIFFERENT author mistakes and must read

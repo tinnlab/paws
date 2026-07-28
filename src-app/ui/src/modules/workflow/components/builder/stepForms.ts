@@ -184,6 +184,39 @@ const nonEmpty = (label: string) => {
   return z.string({ error: required }).trim().min(1, required)
 }
 
+/** The prompt field on `agent` / `llm` / `llm_map`, which is required only when
+ *  the step does NOT supply its wording from a file.
+ *
+ *  MIRRORS `validate.rs` (~681-691), the sole authority on this rule:
+ *      has_prompt = prompt.filter(|s| !s.is_empty()).is_some()
+ *      has_file   = prompt_file.is_some()
+ *      WORKFLOW_PROMPT_MISSING fires only on `!has_prompt && !has_file`
+ *  So a step with a `prompt_file:` is COMPLETE to the backend with no typed
+ *  prompt at all — and, since `prompt` is declared
+ *  `skip_serializing_if = "Option::is_none"`, it reaches the builder with no
+ *  `prompt` key whatsoever. Requiring one unconditionally showed the author a
+ *  red "is required" under an empty box, beside a green "No blocking errors."
+ *  panel and an enabled Save — a FALSE reason (INV-6) they could not act on,
+ *  because the builder renders no prompt-file control to clear.
+ *
+ *  When the wording comes from a file the field is `nullish`, not dropped: the
+ *  TYPE error keeps its authored copy so no zod diagnostic can reach the author
+ *  (INV-1). `''`/`'   '`/`null` all pass, matching the backend's reading of
+ *  "no typed prompt" — clearing the box is how the author resolves
+ *  `WORKFLOW_PROMPT_BOTH` on this surface. */
+const promptField = (label: string, suppliedByFile: boolean) => {
+  const required = `${label} is required`
+  const text = z.string({ error: required }).trim()
+  return suppliedByFile ? text.nullish() : text.min(1, required)
+}
+
+/** Whether a step supplies its wording from a file, by the backend's rule
+ *  (`prompt_file: Option<String>` → `is_some()`; anything serde would not
+ *  deserialize into `Some(String)` is not a file). */
+function promptSuppliedByFile(step: unknown): boolean {
+  return typeof (step as { prompt_file?: unknown })?.prompt_file === 'string'
+}
+
 const NOT_A_NUMBER = 'Enter a number'
 const NOT_A_WHOLE_NUMBER = 'Enter a whole number'
 
@@ -197,22 +230,28 @@ const choice = <T extends readonly [string, ...string[]]>(
   label: string,
 ) => z.enum(values, { error: `Choose ${label}` })
 
-export function buildStepZodSchema(kind: StepKind): z.ZodTypeAny {
+/** `fromFile` lifts the prompt requirement on the three kinds that accept a
+ *  `prompt_file:` instead (see `promptField`). Defaults to `false`, so the
+ *  single-argument call keeps its original meaning. */
+export function buildStepZodSchema(
+  kind: StepKind,
+  fromFile = false,
+): z.ZodTypeAny {
   switch (kind) {
     case 'agent':
       return z.object({
-        prompt: nonEmpty('A task description'),
+        prompt: promptField('A task description', fromFile),
         max_steps: wholeNumber().min(1, 'Must be at least 1'),
         output_format: choice(['text', 'json'], 'a result format'),
       })
     case 'llm':
       return z.object({
-        prompt: nonEmpty('A prompt'),
+        prompt: promptField('A prompt', fromFile),
         output_format: choice(['text', 'json'], 'a result format'),
       })
     case 'llm_map':
       return z.object({
-        prompt: nonEmpty('A prompt'),
+        prompt: promptField('A prompt', fromFile),
         for_each: nonEmpty('A list to map over'),
         item_var: nonEmpty('An item variable name'),
         max_parallel: wholeNumber()
@@ -241,7 +280,10 @@ export function buildStepZodSchema(kind: StepKind): z.ZodTypeAny {
 /** Run the kind schema against a step and return `{ fieldName: message }` for
  *  the fields that fail. Never throws (unknown-shape input → best-effort). */
 export function configErrors(step: BuilderStep): Record<string, string> {
-  const schema = buildStepZodSchema(step.kind as StepKind)
+  const schema = buildStepZodSchema(
+    step.kind as StepKind,
+    promptSuppliedByFile(step),
+  )
   // `step.kind as StepKind` is an UNCHECKED cast — the wire may carry a kind
   // this build does not know — and the switch, being exhaustive over `StepKind`,
   // returns `undefined` for anything else. Dereferencing that broke the "never

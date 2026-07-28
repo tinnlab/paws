@@ -121,6 +121,32 @@ test('copy that distinguishes two codes must not be byte-identical', () => {
   }
 })
 
+test('a two-option remedy names the option THIS surface can carry out', () => {
+  // WORKFLOW_PROMPT_BOTH offers a choice between dropping the typed prompt and
+  // dropping the prompt file. The builder renders NO prompt-file control (there
+  // is not one render site for it under `components/builder/`), so "keep one of
+  // them" instructs an action the author can only half perform here, and does
+  // not say which half. The copy must name the reachable one — emptying the
+  // prompt/task box, which `validate.rs` reads as "no typed prompt" via its
+  // `prompt.filter(|s| !s.is_empty())` — and place the other where it is done.
+  const cases = [
+    ['agent', /task/i],
+    ['llm', /prompt/i],
+  ] as const
+  for (const [kind, box] of cases) {
+    const step = { ...steps[0], kind } as unknown as BuilderStep
+    const text = humaniseFinding(finding({ code: 'WORKFLOW_PROMPT_BOTH' }), step)
+    assert.match(
+      text,
+      /\bclear\b/i,
+      `${kind}: WORKFLOW_PROMPT_BOTH must name the fix the author can perform ` +
+        `on this screen (clearing the box), not only "keep one of them" — got ` +
+        `${JSON.stringify(text)}`,
+    )
+    assert.match(text, box, `${kind}: the copy must name the box to clear`)
+  }
+})
+
 test('a limit sentence states the limit the backend actually enforces', () => {
   // `validate.rs` rejects only `desc.chars().count() > MAX_STEP_DESCRIPTION_CHARS`,
   // so EXACTLY 200 characters is valid — "under 200" told the author to cut a
