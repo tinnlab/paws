@@ -84,4 +84,31 @@ Recorded as each item landed, not reconstructed afterwards.
   a hasty reading would have "fixed" the production unwrap instead of the
   fixture.
 
+
+## Addendum 2 — a cross-repo change BASE.md said would not happen
+
+- **DRIFT-1.9** — verdict: impl-wins — BASE.md's "Cross-repo note" states *"This
+  branch does **not** modify [`sdk`]; the submodule pointer is left exactly as
+  the base has it."* That is now WRONG and the branch carries a submodule bump.
+
+  Cause: the three new `data-testid`s on the elicitation degraded card
+  (`mcp-elicitation-no-fields-card`, `mcp-elicitation-no-fields-notice`,
+  `elicitation-accept-no-values`) are collected by ziee's
+  `npm run gen:testid-registry` into the SHARED kit registry, which lives in the
+  `sdk` submodule (`packages/kit/src/testIds.generated.ts`). `npm run check`'s
+  `check:testid-registry` FAILS without the regen, so the change is required,
+  not optional — any ziee change that adds a testid touches the SDK by
+  construction. The plan simply did not anticipate that a UI testid is a
+  cross-repo artifact.
+
+  Caught by the phase-8 A2 clean-tree gate flagging `sdk` as dirty, NOT by
+  reading — the submodule's dirtiness is invisible in `git status --short` of the
+  parent beyond a single ` m sdk` line.
+
+  **Action required by the orchestrator at merge:** the SDK commit
+  (`22270e4`, on branch `sdk/agent-core-and-perf`) is LOCAL and UNPUSHED. It must
+  be pushed before (or with) the ziee branch, or the submodule pointer is
+  unresolvable for anyone else. Same handling the sibling
+  `control-describe-schema` round documented for its own SDK commit.
+
 **Unresolved drifts:** 0
