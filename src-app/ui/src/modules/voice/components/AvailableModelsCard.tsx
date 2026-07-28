@@ -20,6 +20,8 @@ import {
 } from '@ziee/kit'
 import { Can } from '@/core/permissions'
 import { formatBytes } from '@/utils/downloadUtils'
+import { DownloadFailureRow } from '@/modules/voice/components/DownloadFailureRow'
+import { progressByteLabel } from '@/modules/voice/stores/downloadProgress.helpers'
 import { VoiceModelUpdate } from '@/modules/voice/stores/voiceModelUpdate'
 import { VoiceModelDownloadProgress as VoiceModelDownloadProgressStore } from '@/modules/voice/stores/voiceModelDownloadProgress'
 import { VoiceUploadModelDrawer } from '@/modules/voice/stores/voiceUploadModelDrawer'
@@ -267,7 +269,12 @@ function AvailableModelRow({
         </Flex>
         {progress && <DownloadProgressLine progress={progress} />}
         {failed && progress?.error && (
-          <Text type="secondary">{progress.error}</Text>
+          <DownloadFailureRow
+            reason={progress.error}
+            onRetry={onDownload}
+            testId={`voice-available-model-failed-${model.name}`}
+            retryLabel={`Retry installing ${model.name}`}
+          />
         )}
       </Flex>
     </div>
@@ -285,6 +292,15 @@ function DownloadProgressLine({ progress }: { progress: SnapshotDto }) {
         : total > 0
           ? Math.round((recv / total) * 100)
           : undefined
+  // `null` → render no byte text at all. A download that failed before
+  // transferring anything must NOT print a bare "0 Bytes" under a row that
+  // advertises the catalog size (INV-6).
+  const byteLabel = progressByteLabel(
+    recv,
+    progress.total_bytes ?? undefined,
+    progress.status,
+    formatBytes,
+  )
   return (
     <Flex vertical className="gap-1">
       <Progress
@@ -301,11 +317,11 @@ function DownloadProgressLine({ progress }: { progress: SnapshotDto }) {
         size="sm"
         aria-label={`Download progress: ${pct ?? 0}%`}
       />
-      <Text type="secondary" className="text-xs">
-        {formatBytes(recv)}
-        {total > 0 ? ` / ${formatBytes(total)}` : ''}
-        {progress.status === 'completed' ? ' — Completed' : ''}
-      </Text>
+      {byteLabel && (
+        <Text type="secondary" className="text-xs">
+          {byteLabel}
+        </Text>
+      )}
     </Flex>
   )
 }

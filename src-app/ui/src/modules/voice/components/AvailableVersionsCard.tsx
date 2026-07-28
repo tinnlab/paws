@@ -18,6 +18,8 @@ import { type AvailableVersion2, type DownloadSnapshot2 } from '@/api-client/typ
 import { Permissions } from '@/api-client/permissions'
 import { VoiceDownloadProgress as VoiceDownloadProgressStore } from '@/modules/voice/stores/voiceDownloadProgress'
 import { VoiceUpdate } from '@/modules/voice/stores/voiceUpdate'
+import { DownloadFailureRow } from '@/modules/voice/components/DownloadFailureRow'
+import { progressByteLabel } from '@/modules/voice/stores/downloadProgress.helpers'
 
 /** Human-readable byte sizes. */
 function formatBytes(n: number): string {
@@ -212,7 +214,14 @@ function AvailableVersionRow({
           </Can>
         </Flex>
         {progress && <DownloadProgressLine progress={progress} />}
-        {failed && progress?.error && <Text type="secondary">{progress.error}</Text>}
+        {failed && progress?.error && (
+          <DownloadFailureRow
+            reason={progress.error}
+            onRetry={onDownload}
+            testId={`voice-version-failed-${v.version}`}
+            retryLabel={`Retry installing ${v.version}`}
+          />
+        )}
       </Flex>
     </div>
   )
@@ -221,6 +230,13 @@ function AvailableVersionRow({
 function DownloadProgressLine({ progress }: { progress: DownloadSnapshot2 }) {
   const total = progress.total_bytes ?? 0
   const recv = progress.bytes_received
+  // `null` → render no byte text (see progressByteLabel / INV-6).
+  const byteLabel = progressByteLabel(
+    recv,
+    progress.total_bytes ?? undefined,
+    progress.status,
+    formatBytes,
+  )
   const pct =
     progress.status === 'completed'
       ? 100
@@ -245,11 +261,11 @@ function DownloadProgressLine({ progress }: { progress: DownloadSnapshot2 }) {
         size="sm"
         aria-label={`Download progress: ${pct ?? 0}%`}
       />
-      <Text type="secondary" className="text-xs">
-        {formatBytes(recv)}
-        {total > 0 ? ` / ${formatBytes(total)}` : ''}
-        {progress.status === 'completed' ? ' — Completed' : ''}
-      </Text>
+      {byteLabel && (
+        <Text type="secondary" className="text-xs">
+          {byteLabel}
+        </Text>
+      )}
     </Flex>
   )
 }

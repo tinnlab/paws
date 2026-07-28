@@ -267,6 +267,13 @@ export interface VoiceApiState {
   modelDownloads: SnapshotDto[]
   /** Captured whisper-server log lines (GET /instance/logs). */
   instanceLogs: VoiceLogsResponse
+  /**
+   * When set, the model-download SSE emits a terminal `failed` frame carrying
+   * this message INSTEAD of progress→complete, and the model is NOT marked
+   * installed. Drives the failed-install presentation specs
+   * (`.lifecycle/voice-model-bad-magic/`, INV-1/INV-2).
+   */
+  failModelDownloadWith?: string
 }
 
 export interface VoiceRouteController {
@@ -525,6 +532,21 @@ export async function routeVoice(
         // key shape is `model@<name>` (see the POST below).
         const name = key.split('@')[1] ?? key
         const modelId = `model-${name}`
+        // Failure path: terminal `failed` frame, nothing installed. Note the
+        // task reports bytes_received: 0 with NO total — the exact shape that
+        // used to render a bare "0 Bytes" under the row.
+        if (state.failModelDownloadWith) {
+          const failBody =
+            `event: connected\ndata: ${JSON.stringify({ key })}\n\n` +
+            `event: failed\ndata: ${JSON.stringify({
+              error: state.failModelDownloadWith,
+            })}\n\n`
+          return route.fulfill({
+            status: 200,
+            contentType: 'text/event-stream',
+            body: failBody,
+          })
+        }
         if (!state.models.some(m => m.name === name)) {
           state.models = [...state.models, mkVoiceModel(name, { id: modelId })]
         }
