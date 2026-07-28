@@ -64,6 +64,17 @@ e2e = `src-app/ui/tests/e2e/`.
 - **TEST-38** (tier: e2e) [covers: ITEM-17] file: `src-app/ui/tests/e2e/chat/ask-user-stringified-schema.spec.ts` — asserts: with a REAL configured LLM (`test.skip(!TEST_LLM, NO_LLM_SKIP)` — a conditional env gate, never an unconditional skip), an under-specified request still renders an `ask_user` form with real fields, i.e. the decode path introduced here does not regress the real-model flow. Retried like its sibling real-LLM control specs.
 - **TEST-39** (tier: unit) [covers: ITEM-18] file: `src-app/ui/src/dev/gallery/fixtures/chat-deep.ts` — asserts: via `npm run check`'s `check:state-matrix` + `check:gallery-coverage` gates, the new conditional render states introduced by ITEM-17 have gallery cells (including a 390px narrow-viewport state), so the state matrix does not drift.
 
+## Closing the test-suite gap (ITEM-19, ITEM-20, ITEM-21)
+
+Ranked by the only criterion that matters — **would this test have caught THIS
+bug before it shipped?** TEST-40 and TEST-41 would have. TEST-42 is the written
+analysis that makes the gap non-recurring.
+
+- **TEST-40** (tier: unit) [acceptance] [invariant: INV-1] [covers: ITEM-19] file: `src-app/server/src/common/tool_args.rs` — asserts: the shared conformance battery itself is sound — driven against a deliberately UNFIXED (pass-the-value-through) extractor closure it FAILS, and against the fixed helper it passes. **This is the anti-tautology check** (D2): a battery that cannot fail on the old behaviour would prove nothing, and the old behaviour is exactly what shipped. WOULD have caught the bug: yes — by construction, it is red on the pre-fix code path.
+- **TEST-41** (tier: unit) [acceptance] [invariant: INV-1] [covers: ITEM-19, ITEM-3, ITEM-7, ITEM-9, ITEM-11, ITEM-12, ITEM-13, ITEM-14, ITEM-15] file: `src-app/server/src/common/tool_args.rs` — asserts: EVERY coerced call site passes the same battery, via one conformance call per site placed in that module's own `#[cfg(test)]`. The battery is applied uniformly rather than per-site ad hoc, so a NEW built-in tool with an object argument inherits the whole shape distribution instead of one author's mental model of it. WOULD have caught the bug: yes, at `ask_user` and at `invoke_capability` simultaneously.
+- **TEST-42** (tier: unit) [covers: ITEM-20] file: `.lifecycle/ask-user-stringified-schema/TEST_GAP_ANALYSIS.md` — asserts: (as a written, evidence-carrying artifact reviewed at phase 8 rather than executed by a runner) what tests existed, why they passed, the CLASS that was missing, and which sibling call sites share the same object-only-fixture weakness — every claim backed by a file:line citation a reader can independently check.
+- **TEST-43** (tier: unit) [covers: ITEM-21] file: `src-app/server/src/modules/mcp/chat_extension/helpers.rs` — asserts: a string `schema` NEVER REACHES `stamp_ask_user_marker` — the end-to-end outcome the pre-existing isolated leaf test traded away when it asserted a string "passes through unchanged". The leaf's own no-panic contract is retained. WOULD have caught the bug: yes — this is the precise assertion whose absence let the isolated test ratify the defect.
+
 ## Coverage map
 
 | ITEM | Covering TESTs |
@@ -86,10 +97,13 @@ e2e = `src-app/ui/tests/e2e/`.
 | ITEM-16 | 33,34,35 |
 | ITEM-17 | 36,37,38 |
 | ITEM-18 | 36,39 |
+| ITEM-19 | 40,41 |
+| ITEM-20 | 42 |
+| ITEM-21 | 43 |
 
 | INV | Pinning `[acceptance]` TESTs |
 |---|---|
-| INV-1 | 1, 17, 22, 26, 37 |
+| INV-1 | 1, 17, 22, 26, 37, 40, 41 |
 | INV-2 | 4 |
 | INV-3 | 3 |
 | INV-4 | 12 |

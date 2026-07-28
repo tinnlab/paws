@@ -203,5 +203,30 @@ the regen runs for BOTH binaries.
   `stateCoverage.ts:282` currently skips `AskUserWizardContent:error`; that skip
   may need revisiting once the named state exists.
 
+- **ITEM-19** — verdict: PASS — a shared conformance battery is the only way the
+  "generalize" instruction survives contact with a 13th call site. Verified that
+  no such battery exists today (repo-wide grep found no shared tool-argument test
+  support), and that each module already has an in-source `#[cfg(test)]` block to
+  host the one-line call. The battery MUST be red on the pre-fix behaviour or it
+  proves nothing — pinned by TEST-40, which drives it against a deliberately
+  unfixed pass-through closure.
+- **ITEM-20** — verdict: PASS — the hypothesis handed down was confirmed with
+  evidence, not accepted on faith: all EIGHT `schema` fixtures in
+  `helpers.rs` (lines 912, 931, 990, 1090, 1296, 1326, 1362, 1397) construct the
+  argument with `serde_json::json!({…})`, i.e. as a well-formed OBJECT. Zero
+  fixtures pass a string. The analysis additionally found a SECOND, sharper
+  mechanism the hypothesis did not name — see ITEM-21.
+- **ITEM-21** — verdict: CONCERN — this is the most uncomfortable finding of the
+  round and it deserves the phase-6 tests-quality angle's attention. The suite
+  did NOT merely omit the string case: `helpers.rs:963-970` FEEDS
+  `json!("just a string")` to `stamp_ask_user_marker` and asserts it "passes
+  through unchanged", and the production comment at `helpers.rs:213-215` states
+  the same as intent ("a non-object schema (which the FE renders as an empty form
+  anyway) is returned unchanged"). So the defective behaviour was *tested and
+  ratified* — a leaf function's local no-panic contract was asserted in place of
+  the end-to-end outcome. The leaf contract is legitimate and is retained; the
+  fix is to ADD the outcome assertion (a string never reaches the stamp) and to
+  correct the production comment, not to delete the leaf test.
+
 **No `BLOCKED` verdicts.** Three `CONCERN`s (ITEM-4, ITEM-7, ITEM-10, ITEM-18 —
 four) are carried into DECISIONS and named as phase-6 focus areas.

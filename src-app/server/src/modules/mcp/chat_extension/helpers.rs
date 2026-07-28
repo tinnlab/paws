@@ -210,9 +210,17 @@ use crate::modules::mcp::elicitation::models::ASK_USER_SCHEMA_MARKER;
 /// is the ONLY place the trusted rich-UX marker is added: `cap_requested_schema`
 /// STRIPS any client/server-supplied copy at every ingress, and this stamp runs
 /// AFTER the cap on the ziee-internal `ask_user` path only, so an external MCP
-/// server can never forge it. Pure + idempotent; a non-object schema (which the
-/// FE renders as an empty form anyway) is returned unchanged so this can never
-/// panic. The few-byte marker cannot push a within-cap schema over the limit.
+/// server can never forge it. Pure + idempotent. The few-byte marker cannot push
+/// a within-cap schema over the limit.
+///
+/// A non-object schema is returned unchanged so this can never panic — but that
+/// arm is now a DEFENSIVE floor, not an expected path. It used to be reached in
+/// production by a model that JSON-encoded its `schema` argument, and the
+/// resulting unmarked string rendered as an empty form; that input is now
+/// decoded (or refused) upstream in [`prepare_ask_user_schema`], so a string can
+/// no longer arrive here. The end-to-end assertion that it cannot is what the
+/// old isolated test of this function was missing — see
+/// `ask_user_string_schema_never_reaches_the_marker_stamp`.
 fn stamp_ask_user_marker(schema: Value) -> Value {
     match schema {
         Value::Object(mut map) => {
@@ -221,6 +229,111 @@ fn stamp_ask_user_marker(schema: Value) -> Value {
         }
         other => other,
     }
+}
+
+/// A copyable, literal-JSON `ask_user` schema the model can adapt. Every
+/// `schema` refusal carries this, so the model is never told only that it was
+/// wrong — it is shown what right looks like.
+const ASK_USER_SCHEMA_EXAMPLE: &str = concat!(
+    r#"{"type":"object","properties":{"name":{"type":"string","title":"Project name"}},"#,
+    r#""required":["name"]}"#
+);
+
+/// Turn the model's raw `schema` argument into the `requested_schema` the
+/// frontend renders, or into an ACTIONABLE refusal.
+///
+/// Extracted from `run_ask_user_elicitation` as a pure function so the
+/// successful outcome is directly assertable: with no interactive stream the
+/// caller returns before the schema is observable, so previously only the ERROR
+/// paths could be unit-tested and the decode could not be covered at all.
+///
+/// Ordering is load-bearing, in this exact sequence:
+///
+/// 1. **Measure the RAW value.** The schema is LLM-generated and arbitrary, and
+///    the frontend renders a form field per property, so a pathologically
+///    large/nested schema can hang the browser. It is measured BEFORE
+///    `cap_requested_schema` because that helper replaces an oversized schema
+///    with a tiny error-marker object — checking the capped value would never
+///    see the original size and the guard would never fire. Measuring the raw
+///    value ALSO means an oversized JSON-encoded string is refused without ever
+///    being handed to a parser.
+/// 2. **Decode** a JSON-encoded string into the object the model meant. A model
+///    that stringifies its object argument is the reported live defect; a value
+///    that cannot become an object is refused, never substituted.
+/// 3. **Re-measure the decoded value**, so the cap is authoritative in both the
+///    encoded and the decoded form.
+/// 4. **Cap + strip** (`cap_requested_schema`), then **stamp** the trusted
+///    rich-UX marker. The stamp must stay AFTER the strip or an external server
+///    could forge it.
+fn prepare_ask_user_schema(input: &Value) -> Result<Value, String> {
+    let raw = input.get("schema");
+
+    // (1) Raw size, before anything parses or caps it.
+    if let Some(raw) = raw {
+        let raw_bytes = serde_json::to_vec(raw).map(|v| v.len()).unwrap_or(usize::MAX);
+        if raw_bytes > MAX_STRUCTURED_CONTENT_BYTES {
+            return Err(format!(
+                "ask_user 'schema' is too large ({raw_bytes} bytes; limit \
+                 {MAX_STRUCTURED_CONTENT_BYTES}). Send a smaller schema with fewer \
+                 or shorter properties. Example: {ASK_USER_SCHEMA_EXAMPLE}"
+            ));
+        }
+    }
+
+    // (2) Decode. Absent / explicit-null keeps the pre-existing default.
+    let decoded = crate::common::tool_args::coerce_arg(
+        input,
+        "schema",
+        crate::common::tool_args::ArgShape::Object,
+        ASK_USER_SCHEMA_EXAMPLE,
+    )
+    .map_err(|e| format!("ask_user {}", e.message()))?
+    .unwrap_or_else(|| serde_json::json!({ "type": "object" }));
+
+    // (3) Decoded size. For JSON this can never exceed the raw measurement (a
+    // JSON-encoded string of a value is always longer than the value's own
+    // serialization, and JSON has no expansion primitive), so this is a guard
+    // that holds even if that argument ever stops being true — not a branch we
+    // expect to reach. See DECISIONS DEC-6.
+    let decoded_bytes = serde_json::to_vec(&decoded)
+        .map(|v| v.len())
+        .unwrap_or(usize::MAX);
+    if decoded_bytes > MAX_STRUCTURED_CONTENT_BYTES {
+        return Err(format!(
+            "ask_user 'schema' is too large ({decoded_bytes} bytes once decoded; limit \
+             {MAX_STRUCTURED_CONTENT_BYTES}). Send a smaller schema with fewer or \
+             shorter properties. Example: {ASK_USER_SCHEMA_EXAMPLE}"
+        ));
+    }
+
+    // A schema the model SUPPLIED that asks nothing renders a card the user
+    // cannot act on. `ask_user`'s own contract is "each entry in `properties` is
+    // ONE question", so this is the same malformed-argument class and the model
+    // can fix it immediately. An ABSENT schema is deliberately NOT an error —
+    // that is the pre-existing "no fields, just accept or decline" contract, and
+    // an external MCP server's zero-property confirmation stays valid too. See
+    // DESIGN §3.3 / DEC-9.
+    if raw.is_some_and(|v| !v.is_null()) {
+        let has_fields = decoded
+            .get("properties")
+            .and_then(|p| p.as_object())
+            .is_some_and(|p| !p.is_empty());
+        if !has_fields {
+            return Err(format!(
+                "ask_user 'schema' has no `properties`, so the form would render zero \
+                 fields and the user could not answer. Each entry in `properties` is ONE \
+                 question. Example: {ASK_USER_SCHEMA_EXAMPLE}"
+            ));
+        }
+    }
+
+    // (4) Cap the untrusted schema, then stamp the ask_user marker so the FE
+    // renders the rich decision UX (cards + wizard + Other-escape). Stamping
+    // AFTER the cap keeps the size/injection guard authoritative — an oversized
+    // schema is already rejected above and never reaches this line.
+    Ok(stamp_ask_user_marker(
+        crate::modules::mcp::elicitation::models::cap_requested_schema(decoded),
+    ))
 }
 
 fn ask_user_tool_result(
@@ -287,41 +400,29 @@ pub(crate) async fn run_ask_user_elicitation(
         .trim()
         .to_string();
     if message.is_empty() {
-        return ask_result("ask_user requires a non-empty 'message'.".to_string(), true);
-    }
-    // The schema is LLM-generated and arbitrary; the FE renders a form field
-    // per property, so a pathologically large/nested schema can hang the
-    // browser. Reject anything over the same 1 MB cap used for structured
-    // content rather than streaming it to the client. The model gets a clean
-    // tool-result error and can retry with a smaller schema.
-    //
-    // Measure the RAW input schema BEFORE `cap_requested_schema`: that helper
-    // replaces an oversized schema with a tiny error-marker object, so checking
-    // the capped value would never see the original size and the guard would
-    // never fire.
-    let raw_schema = input
-        .get("schema")
-        .cloned()
-        .unwrap_or_else(|| serde_json::json!({ "type": "object" }));
-    let schema_bytes = serde_json::to_vec(&raw_schema)
-        .map(|v| v.len())
-        .unwrap_or(usize::MAX);
-    if schema_bytes > MAX_STRUCTURED_CONTENT_BYTES {
+        let received = match input.get("message") {
+            None => "was not supplied",
+            Some(Value::String(_)) => "arrived empty (or only whitespace)",
+            Some(_) => "arrived as a non-string value",
+        };
         return ask_result(
             format!(
-                "ask_user 'schema' is too large ({schema_bytes} bytes; limit \
-                 {MAX_STRUCTURED_CONTENT_BYTES}). Send a smaller schema."
+                "ask_user 'message' {received}, but a non-empty string is required — it is \
+                 the question the user reads. Send `message` as a plain string. Example: \
+                 {{\"message\":\"What would you like to name this project?\",\"schema\":\
+                 {ASK_USER_SCHEMA_EXAMPLE}}}"
             ),
             true,
         );
     }
-    // Cap the untrusted schema, then stamp the ask_user marker so the FE renders
-    // the rich decision UX (cards + wizard + Other-escape). Stamping AFTER the
-    // cap keeps the size/injection guard authoritative — an oversized schema is
-    // already rejected above and never reaches this line.
-    let requested_schema = stamp_ask_user_marker(
-        crate::modules::mcp::elicitation::models::cap_requested_schema(raw_schema),
-    );
+    // Decode / size-guard / cap / stamp the model-supplied schema. Every
+    // refusal is an actionable tool result: the model is told what it sent, what
+    // is required, and shown a schema it can copy — so it can correct itself on
+    // the next turn instead of repeating the same malformed call.
+    let requested_schema = match prepare_ask_user_schema(&input) {
+        Ok(s) => s,
+        Err(msg) => return ask_result(msg, true),
+    };
 
     // No interactive stream (e.g. the before_llm_call no-SSE path) → nobody to ask.
     let Some(sse_tx) = sse_tx else {

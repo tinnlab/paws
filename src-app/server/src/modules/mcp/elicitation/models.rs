@@ -25,6 +25,9 @@ pub const ASK_USER_SCHEMA_MARKER: &str = "x-ziee-askuser";
 /// rich-UX marker can only ever come from the trusted internal re-stamp, never from
 /// an untrusted external server.
 pub fn cap_requested_schema(schema: serde_json::Value) -> serde_json::Value {
+    // (1) Size FIRST, on the value exactly as it arrived. An oversized payload is
+    // dropped without ever being handed to a parser, so a multi-megabyte encoded
+    // string cannot force an allocation here.
     let len = serde_json::to_string(&schema).map(|s| s.len()).unwrap_or(0);
     if len > MAX_REQUESTED_SCHEMA_BYTES {
         tracing::warn!(
@@ -36,8 +39,58 @@ pub fn cap_requested_schema(schema: serde_json::Value) -> serde_json::Value {
             "x-ziee-error": "requested schema exceeded the 1 MiB limit and was dropped"
         });
     }
-    // Strip a forged rich-UX marker from untrusted ingress. The trusted internal
-    // ask_user path re-adds it AFTER this call; external servers never do.
+
+    // (2) Decode a JSON-ENCODED schema. Per SEP-1330 `requestedSchema` is an
+    // object, so a string here is a protocol violation by the remote server —
+    // but the user sees the identical broken empty form either way, and cannot
+    // fix somebody else's server. So we repair AND shout: the form works, and
+    // the operator (and the server's author) get a specific diagnostic instead
+    // of silence. See DESIGN §3.1 / DEC-7.
+    //
+    // SECURITY: this runs BEFORE the marker strip below, deliberately. Decoding
+    // after the strip would let an external server smuggle a forged
+    // `x-ziee-askuser` past the guard by JSON-encoding its schema, and render
+    // its untrusted schema as ziee's trusted internal decision UX.
+    let schema = match schema {
+        serde_json::Value::String(ref s) => {
+            match crate::common::tool_args::coerce_value(
+                schema.clone(),
+                crate::common::tool_args::ArgShape::Object,
+                "requestedSchema",
+                r#"{"type":"object","properties":{"name":{"type":"string"}}}"#,
+            ) {
+                Ok(decoded) => {
+                    tracing::warn!(
+                        "elicitation requestedSchema arrived JSON-ENCODED as a string, not an \
+                         object — the MCP server is violating SEP-1330. Decoded it so the form \
+                         still renders; the server should send `requestedSchema` as an object."
+                    );
+                    decoded
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "elicitation requestedSchema arrived as a string that is not a usable \
+                         object ({}); rendering an explanatory card instead of a form. Raw \
+                         length: {} bytes.",
+                        e,
+                        s.len()
+                    );
+                    return serde_json::json!({
+                        "type": "object",
+                        "properties": {},
+                        "x-ziee-error":
+                            "the MCP server sent `requestedSchema` as a string that is not a \
+                             valid JSON object, so no form could be built"
+                    });
+                }
+            }
+        }
+        other => other,
+    };
+
+    // (3) Strip a forged rich-UX marker from untrusted ingress. The trusted
+    // internal ask_user path re-adds it AFTER this call; external servers never
+    // do. This MUST remain the last step.
     match schema {
         serde_json::Value::Object(mut map) => {
             map.remove(ASK_USER_SCHEMA_MARKER);

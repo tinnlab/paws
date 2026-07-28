@@ -168,6 +168,38 @@ the design of record and this plan is derived from it.
   narrow-viewport (390px) state, so `npm run check`'s `check:state-matrix` and
   `check:gallery-coverage` gates pass.
 
+### Closing the TEST-SUITE gap that let this ship
+
+`ask_user` is a shipped, tested built-in with a substantial `#[cfg(test)]` block
+that already exercises `schema` — yet a stringified `schema` reached a live
+session and every test passed. That is a defect in the suite, and it is the more
+valuable finding: the same blind spot is protecting other bugs right now.
+
+- **ITEM-19**: A shared, reusable **model-supplied-argument conformance battery**
+  in `common/tool_args.rs` (`pub mod conformance`, `#[cfg(any(test, feature = …))]`-free
+  — a plain `#[cfg(test)]`-visible support module used by every module's own
+  tests). It drives ONE canonical set of shapes — well-formed, stringified,
+  double-encoded, over-the-unwrap-bound, decodes-to-wrong-type, not-JSON,
+  wrong-type-outright, absent, explicit-null — through a call-site closure and
+  asserts the contract each site must satisfy, INCLUDING that every refusal
+  message carries received/expected/example. Every coerced site (ITEM-3, 7, 9,
+  11, 12, 13, 14, 15) then adds ONE conformance call. This is the CLASS of test
+  that was missing; a test pinned to the owner's exact payload would let the next
+  variant through.
+- **ITEM-20**: `TEST_GAP_ANALYSIS.md` — the written analysis: what tests existed,
+  why they passed, the class that was missing, and which SIBLING call sites share
+  the same weakness (object-only fixtures) and are therefore where the next
+  instance of this bug is hiding today.
+- **ITEM-21**: Repair the one existing test that actively RATIFIED the bug.
+  `helpers.rs::stamp_ask_user_marker_stamps_objects_idempotently_and_skips_non_objects`
+  feeds `json!("just a string")` to `stamp_ask_user_marker` and asserts it
+  "passes through unchanged" — pinning the defective behaviour as the intended
+  contract (the production comment at `helpers.rs:213-215` says the same:
+  "a non-object schema (which the FE renders as an empty form anyway) is returned
+  unchanged"). The leaf's no-panic contract is legitimate and stays; what must be
+  added is the END-TO-END assertion that a string never REACHES the stamp,
+  because that is the outcome the isolated test silently traded away.
+
 ## Files to touch
 
 Backend:

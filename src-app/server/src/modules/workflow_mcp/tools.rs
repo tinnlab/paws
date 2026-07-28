@@ -377,14 +377,25 @@ pub async fn call_tool(
     .await
 }
 
+/// Copyable literal-JSON example carried by every workflow-inputs refusal.
+const WORKFLOW_INPUTS_EXAMPLE: &str = r#"{"topic":"quarterly sales","limit":10}"#;
+
 /// Parse a workflow inputs object; NULL is tolerated (no inputs).
+///
+/// Despite its name this function used only to VALIDATE — a model that
+/// JSON-encoded its inputs object (which they routinely do) got
+/// `WORKFLOW_INPUTS_NOT_OBJECT` from a function called `coerce_inputs`. It now
+/// actually coerces, and refuses with a message the model can act on.
 fn coerce_inputs(arguments: &Value) -> Result<Value, AppError> {
     match arguments {
         Value::Object(_) | Value::Null => Ok(arguments.clone()),
-        _ => Err(AppError::bad_request(
-            "WORKFLOW_INPUTS_NOT_OBJECT",
-            "tool arguments must be a JSON object",
-        )),
+        other => crate::common::tool_args::coerce_value(
+            other.clone(),
+            crate::common::tool_args::ArgShape::Object,
+            "inputs",
+            WORKFLOW_INPUTS_EXAMPLE,
+        )
+        .map_err(|e| AppError::bad_request("WORKFLOW_INPUTS_NOT_OBJECT", e.into_message())),
     }
 }
 

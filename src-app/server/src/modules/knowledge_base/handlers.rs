@@ -141,7 +141,21 @@ async fn search_knowledge(
     conversation_id: Option<Uuid>,
     args: &Value,
 ) -> Result<Value, AppError> {
-    let args: SearchArgs = serde_json::from_value(args.clone())
+    // `knowledge_base_ids` is a declared ARRAY argument that models routinely
+    // JSON-encode. Undecoded it hard-fails the typed deserialization below with
+    // "invalid type: string … expected a sequence", which ALSO destroys the
+    // otherwise-graceful fallback to the conversation's attached KBs.
+    let mut args_value = args.clone();
+    crate::common::tool_args::coerce_args_in_place(
+        &mut args_value,
+        &[crate::common::tool_args::ArgSpec {
+            key: "knowledge_base_ids",
+            shape: crate::common::tool_args::ArgShape::Array,
+            example: r#"["3f1c2a44-0000-0000-0000-000000000000"]"#,
+        }],
+    )
+    .map_err(|e| AppError::bad_request("INVALID_ARGS", e.into_message()))?;
+    let args: SearchArgs = serde_json::from_value(args_value)
         .map_err(|e| AppError::bad_request("INVALID_ARGS", e.to_string()))?;
 
     // Resolve scope: explicit kb_ids (owner-filtered) OR the conversation's

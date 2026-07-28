@@ -39,6 +39,10 @@ use ziee_notification::create_and_emit;
 const COLLECT_MAX_CHARS_CAP: usize = 100_000;
 const COLLECT_DEFAULT_MAX_CHARS: usize = 20_000;
 
+/// Copyable literal-JSON example carried by every `spec` refusal.
+const BACKGROUND_SPEC_EXAMPLE: &str =
+    r#"{"task":"Summarise the attached report","label":"summary"}"#;
+
 /// Static tool descriptors emitted by `tools/list`.
 pub fn tool_list() -> Value {
     json!({
@@ -167,10 +171,27 @@ async fn spawn_background(
     args: &Value,
 ) -> Result<Value, AppError> {
     let kind_str = args.get("kind").and_then(|v| v.as_str()).unwrap_or("subagent");
-    let spec = args
-        .get("spec")
-        .cloned()
-        .ok_or_else(|| AppError::bad_request("BACKGROUND_SPEC_REQUIRED", "spec is required"))?;
+    // `spec` is a declared object argument, which models routinely JSON-ENCODE.
+    // Left undecoded it survives the presence check below as a `Value::String`,
+    // and the per-kind readers then report "spec.task must be a non-empty
+    // string" / "spec.command is required" — a LIE, since the field was
+    // supplied. Decode it here so the model is told the real problem.
+    let spec = crate::common::tool_args::coerce_arg(
+        args,
+        "spec",
+        crate::common::tool_args::ArgShape::Object,
+        BACKGROUND_SPEC_EXAMPLE,
+    )
+    .map_err(|e| AppError::bad_request("BACKGROUND_SPEC_INVALID", e.into_message()))?
+    .ok_or_else(|| {
+        AppError::bad_request(
+            "BACKGROUND_SPEC_REQUIRED",
+            format!(
+                "`spec` was not supplied, but a JSON object describing the work is \
+                 required. Example: {BACKGROUND_SPEC_EXAMPLE}"
+            ),
+        )
+    })?;
 
     match kind_str {
         "subagent" => spawn_subagent(pool, user_id, conversation_id, spec).await,

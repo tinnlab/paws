@@ -295,6 +295,109 @@ export function finalizeValues(
   return out
 }
 
+/**
+ * What a `requested_schema` actually yields, once every degenerate shape a
+ * server or a model can send has been accounted for.
+ */
+export interface NormalizedElicitationSchema {
+  properties: Record<string, FieldSchema>
+  requiredFields: Set<string>
+  /** The schema carries the backend's trusted rich-`ask_user` marker. */
+  isRich: boolean
+  /**
+   * Set when NO field can be rendered. The card must show this instead of an
+   * empty form with a Submit button, which would fabricate an empty answer.
+   */
+  notice?: string
+}
+
+/**
+ * Normalize a `requested_schema` of unknown shape into something renderable.
+ *
+ * Every guard here corresponds to a shape observed or reachable in production:
+ *
+ * - **a JSON-encoded STRING.** The backend now decodes this at ingress, but
+ *   message-content blocks PERSISTED before that fix still hold strings, so
+ *   reopening an old conversation would otherwise stay permanently broken. We
+ *   parse it here so history renders.
+ * - **`null` / a non-object.** Previously `schema?.properties || {}` quietly
+ *   produced `{}` and the card rendered an empty form the user could submit.
+ * - **no `properties`, or `properties: {}`.** A legitimate MCP confirmation
+ *   elicitation looks like this, so it is NOT an error — but it must be shown
+ *   as a confirmation, not as a form with nothing in it.
+ * - **a non-object `properties`.** `Object.entries("abc")` would invent fields
+ *   named `0`,`1`,`2`.
+ * - **a non-iterable `required`.** `new Set(3)` throws
+ *   `TypeError: number is not iterable` DURING RENDER, and nothing above this
+ *   component catches it (the extension registry's try/catch wraps element
+ *   creation, not render), so the whole chat tree blanked.
+ * - **`x-ziee-error`.** The backend mints this reason when it drops an
+ *   unusable schema, and the UI used to throw it away.
+ */
+export function normalizeElicitationSchema(
+  raw: unknown,
+): NormalizedElicitationSchema {
+  const empty = { properties: {}, requiredFields: new Set<string>() }
+
+  let schema = raw
+  // A schema persisted before the backend decode landed is still a string.
+  if (typeof schema === 'string') {
+    try {
+      schema = JSON.parse(schema)
+    } catch {
+      return {
+        ...empty,
+        isRich: false,
+        notice:
+          'This request could not be displayed as a form — the tool sent its ' +
+          'field description in a format the app could not read.',
+      }
+    }
+  }
+
+  if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) {
+    return {
+      ...empty,
+      isRich: false,
+      notice:
+        'This request could not be displayed as a form — the tool did not ' +
+        'describe any fields to fill in.',
+    }
+  }
+
+  const obj = schema as Record<string, unknown>
+  const isRich = obj[ASK_USER_MARKER] === true
+
+  const rawProps = obj.properties
+  const properties =
+    rawProps !== null && typeof rawProps === 'object' && !Array.isArray(rawProps)
+      ? (rawProps as Record<string, FieldSchema>)
+      : {}
+
+  // `required` must be iterable or `new Set(...)` throws during render.
+  const rawRequired = obj.required
+  const requiredFields = new Set<string>(
+    Array.isArray(rawRequired) ? rawRequired.filter(v => typeof v === 'string') : [],
+  )
+
+  if (Object.keys(properties).length === 0) {
+    const serverReason =
+      typeof obj['x-ziee-error'] === 'string'
+        ? (obj['x-ziee-error'] as string)
+        : undefined
+    return {
+      properties,
+      requiredFields,
+      isRich,
+      notice: serverReason
+        ? `This request could not be displayed as a form — ${serverReason}.`
+        : 'This request has no fields to fill in — you can accept it as-is or decline.',
+    }
+  }
+
+  return { properties, requiredFields, isRich }
+}
+
 /** Build a zod object schema from all property schemas. */
 export function buildFormSchema(
   properties: Record<string, FieldSchema>,
