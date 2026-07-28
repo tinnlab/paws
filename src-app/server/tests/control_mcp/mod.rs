@@ -8,6 +8,7 @@
 //! schema validation, path-param, and kill-switch paths.
 
 mod real_llm_test;
+mod stringified_args_test;
 
 use serde_json::{Value, json};
 use uuid::Uuid;
