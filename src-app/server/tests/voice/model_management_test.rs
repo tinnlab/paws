@@ -1418,9 +1418,28 @@ async fn bad_magic_fix_failures_are_distinct_and_leave_no_artifact() {
         "the message must state what was expected, got: {err}"
     );
 
+    // (c) A body that ends before the 4-byte header → reported as TRUNCATED, not
+    //     as "wrong magic": nothing arrived that could identify a container, so
+    //     telling the user their header is wrong would be a guess.
+    let res = post_download(&server, &admin.token, json!({ "name": "truncated" })).await;
+    assert_eq!(res.status(), 200);
+    let key = res.json::<Value>().await.unwrap()["key"].as_str().unwrap().to_string();
+    let err = drive_model_download(&server, &admin.token, &key, Duration::from_secs(30))
+        .await
+        .expect_err("a sub-header body must fail the download");
+    let lower = err.to_lowercase();
+    assert!(
+        lower.contains("too short") || lower.contains("ended after"),
+        "a sub-header body must be reported as TRUNCATED, got: {err}"
+    );
+    assert!(
+        !lower.contains("bad magic") && !lower.contains("is not a whisper model"),
+        "a sub-header body must NOT be reported as a magic failure, got: {err}"
+    );
+
     // Every failure exit leaves NOTHING behind — no file, no `.tmp` leak.
     let dir = voice_models_dir(&server);
-    for name in ["ggml-emptybody.bin", "ggml-badmagic.bin"] {
+    for name in ["ggml-emptybody.bin", "ggml-badmagic.bin", "ggml-truncated.bin"] {
         assert!(!dir.join(name).exists(), "{name} must not be left on disk");
     }
     let leftovers: Vec<String> = std::fs::read_dir(&dir)
@@ -1435,7 +1454,7 @@ async fn bad_magic_fix_failures_are_distinct_and_leave_no_artifact() {
 
     // And no rows for anything that failed.
     let models = list_models(&server, &admin.token).await;
-    for n in ["emptybody", "badmagic"] {
+    for n in ["emptybody", "badmagic", "truncated"] {
         assert!(
             !models.iter().any(|m| m["name"] == n),
             "a failed download must create no row for {n}"
@@ -1558,7 +1577,17 @@ async fn not_installed_models_never_report_a_file_validation_error() {
         if entry["installed"] == Value::Bool(true) {
             continue;
         }
-        let payload = entry.to_string().to_lowercase();
+        // Scan the entry's VALUES, minus its own identity fields: `name` /
+        // `filename` are chosen by the upstream repo and legitimately contain
+        // arbitrary words (this very mock serves a fixture called `badmagic`).
+        // Matching on them would assert about the catalog's naming, not about
+        // whether we attached a validation error to it.
+        let mut scanned = entry.clone();
+        if let Some(obj) = scanned.as_object_mut() {
+            obj.remove("name");
+            obj.remove("filename");
+        }
+        let payload = scanned.to_string().to_lowercase();
         for forbidden in ["magic", "not a whisper", "corrupt", "invalid file"] {
             assert!(
                 !payload.contains(forbidden),
@@ -1567,13 +1596,21 @@ async fn not_installed_models_never_report_a_file_validation_error() {
                 entry["name"]
             );
         }
-        // The advertised size belongs to the catalog entry and must be the
-        // catalog's number, never an on-disk 0 (INV-6's backend half).
-        if let Some(size) = entry["size_bytes"].as_i64() {
-            assert!(
-                size > 0,
-                "a not-installed catalog entry must advertise its real size, not 0: {entry}"
-            );
-        }
+        // INV-6's backend half: the advertised size is the CATALOG's number for
+        // that file — never an on-disk byte count. Asserted against what the
+        // mirror actually served (an external anchor), not against `> 0`: a
+        // `> 0` check would pass on any nonzero number, including an on-disk one.
+        let filename = entry["filename"].as_str().unwrap_or_default();
+        let fixture = mock
+            .files
+            .iter()
+            .find(|f| f.filename == filename)
+            .unwrap_or_else(|| panic!("catalog listed {filename:?} with no fixture behind it"));
+        assert_eq!(
+            entry["size_bytes"].as_i64(),
+            Some(fixture.bytes.len() as i64),
+            "a not-installed catalog entry must advertise the size the SOURCE \
+             advertised for {filename}, not an on-disk number: {entry}"
+        );
     }
 }

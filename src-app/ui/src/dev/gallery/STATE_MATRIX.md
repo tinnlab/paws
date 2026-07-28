@@ -7,8 +7,8 @@
 
 ## Summary
 
-- **338** surfaces carry at least one renderable-state signal.
-- **2067** signals total: 1618 branch, 137 empty, 119 error, 93 loading, 96 overlay, 4 panel.
+- **339** surfaces carry at least one renderable-state signal.
+- **2070** signals total: 1621 branch, 137 empty, 119 error, 93 loading, 96 overlay, 4 panel.
 - **4** right-panel renderers registered (each a right-panel-open state).
 - **35** slot registrations (sidebar / settings / chat mount points).
 
@@ -3996,18 +3996,19 @@ Required states: `empty`, `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `sourceRepo` | 106 |
-| branch | `checking && !hasLoaded` | 119 |
-| error | `error && !hasLoaded` | 121 |
-| branch | `!sourceReachable` | 133 |
-| empty | `total === 0` | 138 |
-| branch | `total > PAGE_SIZE` | 155 |
-| branch | `model.size_bytes != null && !model.installed` | 212 |
-| branch | `model.quantization` | 217 |
-| branch | `model.sha256` | 232 |
-| branch | `model.installed` | 241 |
-| branch | `progress` | 268 |
-| error | `failed && progress?.error` | 269 |
+| branch | `sourceRepo` | 108 |
+| branch | `checking && !hasLoaded` | 121 |
+| error | `error && !hasLoaded` | 123 |
+| branch | `!sourceReachable` | 135 |
+| empty | `total === 0` | 140 |
+| branch | `total > PAGE_SIZE` | 157 |
+| branch | `model.size_bytes != null && model.size_bytes > 0 && !model.installed` | 218 |
+| branch | `model.quantization` | 223 |
+| branch | `model.sha256` | 238 |
+| branch | `model.installed` | 247 |
+| branch | `progress` | 274 |
+| error | `failed && progress?.error` | 275 |
+| branch | `byteLabel` | 324 |
 
 ### `modules/voice/components/AvailableVersionsCard`
 
@@ -4015,18 +4016,27 @@ Required states: `empty`, `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `platform && arch` | 107 |
-| branch | `checking && !updateCheck` | 118 |
-| error | `error && !updateCheck` | 120 |
-| branch | `!updateCheck` | 128 |
-| empty | `readyUpstream.length === 0` | 130 |
-| branch | `readyUpstream.length > 10` | 145 |
-| branch | `v.size_bytes != null && !v.installed` | 180 |
-| branch | `isLatest` | 185 |
-| branch | `v.installed` | 190 |
-| branch | `v.prerelease` | 195 |
-| branch | `progress` | 214 |
-| error | `failed && progress?.error` | 215 |
+| branch | `platform && arch` | 109 |
+| branch | `checking && !updateCheck` | 120 |
+| error | `error && !updateCheck` | 122 |
+| branch | `!updateCheck` | 130 |
+| empty | `readyUpstream.length === 0` | 132 |
+| branch | `readyUpstream.length > 10` | 147 |
+| branch | `v.size_bytes != null && !v.installed` | 182 |
+| branch | `isLatest` | 187 |
+| branch | `v.installed` | 192 |
+| branch | `v.prerelease` | 197 |
+| branch | `progress` | 216 |
+| error | `failed && progress?.error` | 217 |
+| branch | `byteLabel` | 264 |
+
+### `modules/voice/components/DownloadFailureRow`
+
+Required states: _(branch-only — proven via dynamic coverage)_
+
+| kind | condition | line |
+|---|---|---|
+| branch | `onRetry` | 50 |
 
 ### `modules/voice/components/InstalledModelsCard`
 

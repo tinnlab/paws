@@ -274,6 +274,12 @@ export interface VoiceApiState {
    * (`.lifecycle/voice-model-bad-magic/`, INV-1/INV-2).
    */
   failModelDownloadWith?: string
+  /**
+   * How many times POST /models/download was called (mirrors `transcribeCount`).
+   * Lets a spec prove a Retry control actually re-issued the install rather than
+   * asserting a failure row is still on screen — which it would be either way.
+   */
+  modelDownloadStartCount: number
 }
 
 export interface VoiceRouteController {
@@ -457,6 +463,7 @@ export function defaultVoiceState(
     models: [],
     catalog: bigCatalog(),
     modelDownloads: [],
+    modelDownloadStartCount: 0,
     instanceLogs: {
       lines: [
         'whisper_init_from_file_with_params_no_state: loading model',
@@ -654,6 +661,7 @@ export async function routeVoice(
       } catch {
         /* ignore */
       }
+      state.modelDownloadStartCount++
       const name = (body.name as string) || 'large-v3'
       const key = `model@${name}`
       const snap: SnapshotDto = {

@@ -211,7 +211,11 @@ function AvailableModelRow({
         <Flex justify="between" align="center" gap="small" wrap>
           <Space wrap>
             <Text strong>{model.name}</Text>
-            {model.size_bytes != null && !model.installed && (
+            {/* Only a REAL catalog size is worth showing. A source that
+                advertises 0 (or omits the size) would otherwise render a naked
+                "0 Bytes" on the row — the same meaningless zero, from the other
+                direction. See `.lifecycle/voice-model-bad-magic/` (INV-6). */}
+            {model.size_bytes != null && model.size_bytes > 0 && !model.installed && (
               <Text type="secondary" className="text-xs">
                 {formatBytes(model.size_bytes)}
               </Text>

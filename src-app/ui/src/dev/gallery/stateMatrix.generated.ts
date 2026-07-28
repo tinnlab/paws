@@ -4,7 +4,7 @@
 // renders + overlay triggers + panel/slot registrations) that the reconciliation
 // gate (scripts/reconcile-state-matrix.mjs) checks the gallery entries against.
 //
-// 338 surfaces carry renderable-state signals; 2067 signals total.
+// 339 surfaces carry renderable-state signals; 2070 signals total.
 
 /** A signal is one mechanically-detected render fork (a state the surface can be in). */
 export interface StateSignal {
@@ -3653,36 +3653,45 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/voice/components/AvailableModelsCard",
     requiredStates: ["empty","error"],
     signals: [
-      { kind: "branch", condition: "sourceRepo", line: 106 },
-      { kind: "branch", condition: "checking && !hasLoaded", line: 119 },
-      { kind: "error", condition: "error && !hasLoaded", line: 121 },
-      { kind: "branch", condition: "!sourceReachable", line: 133 },
-      { kind: "empty", condition: "total === 0", line: 138 },
-      { kind: "branch", condition: "total > PAGE_SIZE", line: 155 },
-      { kind: "branch", condition: "model.size_bytes != null && !model.installed", line: 212 },
-      { kind: "branch", condition: "model.quantization", line: 217 },
-      { kind: "branch", condition: "model.sha256", line: 232 },
-      { kind: "branch", condition: "model.installed", line: 241 },
-      { kind: "branch", condition: "progress", line: 268 },
-      { kind: "error", condition: "failed && progress?.error", line: 269 },
+      { kind: "branch", condition: "sourceRepo", line: 108 },
+      { kind: "branch", condition: "checking && !hasLoaded", line: 121 },
+      { kind: "error", condition: "error && !hasLoaded", line: 123 },
+      { kind: "branch", condition: "!sourceReachable", line: 135 },
+      { kind: "empty", condition: "total === 0", line: 140 },
+      { kind: "branch", condition: "total > PAGE_SIZE", line: 157 },
+      { kind: "branch", condition: "model.size_bytes != null && model.size_bytes > 0 && !model.installed", line: 218 },
+      { kind: "branch", condition: "model.quantization", line: 223 },
+      { kind: "branch", condition: "model.sha256", line: 238 },
+      { kind: "branch", condition: "model.installed", line: 247 },
+      { kind: "branch", condition: "progress", line: 274 },
+      { kind: "error", condition: "failed && progress?.error", line: 275 },
+      { kind: "branch", condition: "byteLabel", line: 324 },
     ],
   },
   "modules/voice/components/AvailableVersionsCard": {
     surface: "modules/voice/components/AvailableVersionsCard",
     requiredStates: ["empty","error"],
     signals: [
-      { kind: "branch", condition: "platform && arch", line: 107 },
-      { kind: "branch", condition: "checking && !updateCheck", line: 118 },
-      { kind: "error", condition: "error && !updateCheck", line: 120 },
-      { kind: "branch", condition: "!updateCheck", line: 128 },
-      { kind: "empty", condition: "readyUpstream.length === 0", line: 130 },
-      { kind: "branch", condition: "readyUpstream.length > 10", line: 145 },
-      { kind: "branch", condition: "v.size_bytes != null && !v.installed", line: 180 },
-      { kind: "branch", condition: "isLatest", line: 185 },
-      { kind: "branch", condition: "v.installed", line: 190 },
-      { kind: "branch", condition: "v.prerelease", line: 195 },
-      { kind: "branch", condition: "progress", line: 214 },
-      { kind: "error", condition: "failed && progress?.error", line: 215 },
+      { kind: "branch", condition: "platform && arch", line: 109 },
+      { kind: "branch", condition: "checking && !updateCheck", line: 120 },
+      { kind: "error", condition: "error && !updateCheck", line: 122 },
+      { kind: "branch", condition: "!updateCheck", line: 130 },
+      { kind: "empty", condition: "readyUpstream.length === 0", line: 132 },
+      { kind: "branch", condition: "readyUpstream.length > 10", line: 147 },
+      { kind: "branch", condition: "v.size_bytes != null && !v.installed", line: 182 },
+      { kind: "branch", condition: "isLatest", line: 187 },
+      { kind: "branch", condition: "v.installed", line: 192 },
+      { kind: "branch", condition: "v.prerelease", line: 197 },
+      { kind: "branch", condition: "progress", line: 216 },
+      { kind: "error", condition: "failed && progress?.error", line: 217 },
+      { kind: "branch", condition: "byteLabel", line: 264 },
+    ],
+  },
+  "modules/voice/components/DownloadFailureRow": {
+    surface: "modules/voice/components/DownloadFailureRow",
+    requiredStates: [],
+    signals: [
+      { kind: "branch", condition: "onRetry", line: 50 },
     ],
   },
   "modules/voice/components/InstalledModelsCard": {

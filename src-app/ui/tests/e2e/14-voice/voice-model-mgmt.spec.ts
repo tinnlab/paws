@@ -307,9 +307,16 @@ test.describe('Voice — failed install presentation', () => {
     const retry = byTestId(page, 'voice-available-model-failed-base-retry')
     await expect(retry).toBeVisible()
     await expect(retry).toBeEnabled()
+    const startsBeforeRetry = state.modelDownloadStartCount
+    expect(startsBeforeRetry).toBe(1)
     await retry.click()
-    // Retrying re-runs the install (and fails again, with the same framing) —
-    // proving the control is wired, not decorative.
+    // Retrying really RE-ISSUES the install — asserted on the request count, not
+    // on the failure row still being on screen (which it would be either way, so
+    // that assertion could not fail and would not prove the control is wired).
+    await expect
+      .poll(() => state.modelDownloadStartCount, { timeout: 15000 })
+      .toBe(startsBeforeRetry + 1)
+    // …and it fails again, with the same framing.
     await expect(failure).toBeVisible({ timeout: 15000 })
     await expect(failure).toContainText(/install failed/i)
   })

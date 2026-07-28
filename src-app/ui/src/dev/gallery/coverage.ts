@@ -434,6 +434,7 @@ export const GALLERY_COVERAGE = {
   "modules/voice/components/AvailableVersionsCard": { kind: 'pending', reason: 'voice admin card — gallery cell deferred (DRIFT-1); flow covered by the 14-voice/voice-runtime-admin e2e spec' },
   "modules/voice/components/InstalledVersionsCard": { kind: 'pending', reason: 'voice admin card — gallery cell deferred (DRIFT-1); flow covered by the 14-voice/voice-runtime-admin e2e spec' },
   "modules/voice/components/AvailableModelsCard": { kind: 'pending', reason: 'voice admin card — gallery cell deferred (DRIFT-1); flow covered by the 14-voice/voice-settings-admin e2e spec' },
+  "modules/voice/components/DownloadFailureRow": { kind: 'via', reason: 'inline failure line rendered within AvailableModelsCard + AvailableVersionsCard; never a standalone surface. Its failed/retry states are asserted in the 14-voice/voice-model-mgmt e2e specs (TEST-11/TEST-12)' },
   "modules/voice/components/InstalledModelsCard": { kind: 'pending', reason: 'voice admin card — gallery cell deferred (DRIFT-1); flow covered by the 14-voice/voice-settings-admin e2e spec' },
   "modules/voice/components/UploadModelDrawer": { kind: 'pending', reason: 'voice admin drawer — gallery cell deferred (DRIFT-1); flow covered by the 14-voice/voice-settings-admin e2e spec' },
   "modules/voice/components/VoiceConfigCard": { kind: 'pending', reason: 'voice admin card — gallery cell deferred (DRIFT-1); flow covered by the 14-voice/voice-settings-admin e2e spec' },
