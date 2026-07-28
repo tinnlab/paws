@@ -60,3 +60,9 @@ src-app/ui/tests/e2e/14-voice/voice-helpers.ts	550	564	test-faithfulness,test-co
 src-app/ui/tests/e2e/14-voice/voice-helpers.ts	597	610	test-faithfulness,test-coverage-claims,correctness,api-contract
 src-app/ui/tests/e2e/14-voice/voice-helpers.ts	686	686	test-faithfulness,test-coverage-claims,correctness,api-contract
 src-app/ui/tests/e2e/14-voice/voice-model-mgmt.spec.ts	195	366	test-coverage-claims,test-faithfulness,ui-presentation,accessibility
+src-app/ui/src/modules/voice/components/AvailableVersionsCard.tsx	179	192	ui-presentation,correctness,plan-fidelity,design-system
+src-app/ui/src/modules/voice/components/DownloadFailureRow.tsx	1	80	ui-presentation,accessibility,design-system,correctness,plan-fidelity,permission-gating
+src-app/ui/tests/e2e/14-voice/voice-model-permissions.spec.ts	70	145	test-coverage-claims,test-faithfulness,permission-gating,cosmetic-assertions
+src-app/ui/tests/e2e/14-voice/voice-model-mgmt.spec.ts	190	395	test-coverage-claims,test-faithfulness,ui-presentation,accessibility,cosmetic-assertions
+src-app/ui/src/dev/gallery/STATE_MATRIX.md	4015	4045	plan-fidelity,dead-code,correctness,docs-accuracy
+src-app/ui/src/dev/gallery/stateMatrix.generated.ts	3670	3700	plan-fidelity,dead-code,correctness,docs-accuracy
