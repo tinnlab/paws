@@ -75,6 +75,111 @@ are `*.store.test.ts` / barrel-import specs failing with `ERR_MODULE_NOT_FOUND` 
 - **TEST-41**: PASS
 - **TEST-42**: PASS
 
+## Re-verification after the base merge + FIX_ROUND-3/4 (this session)
+
+The branch merged `origin/feat/agent-core` (8 commits) and then took two more fix
+rounds, so every load-bearing result above was RE-RUN rather than inherited. Each
+line below was watched to completion; logs under
+`/data/pbya/ziee/tmp/lifecycle-logs/`.
+
+| suite | command | observed |
+|---|---|---|
+| `npm run check` (ui) | `npm run check` in `src-app/ui` | **exit 0** |
+| `npm run check` (desktop/ui) | `npm run check` in `src-app/desktop/ui` | **exit 0** |
+| `just openapi-regen` (BOTH binaries) | after the merge | **exit 0**; spec verified semantically, both sides' content present |
+| `cargo check --workspace` (lib + bin) | | **exit 0** |
+| Rust lib — tool_calls | `cargo test -p ziee --lib mcp::tool_calls::` | **18 passed, 0 failed** |
+| Rust integration — feature scope | `cargo test -p ziee --test integration_tests -- mcp::tool_call bio_mcp::tool_names chat::showcase_seed chat::stream_tool_timing` | **33 passed, 0 failed** (31 before the pg_indexes guard + its negative control) |
+| UI unit — full | `npm run test:unit` | **825 tests, 811 pass, 14 fail** (baseline; see below) |
+| UI unit — chat family | `node --test "src/modules/chat/**/*.test.ts"` | **334 tests, 330 pass, 4 fail** — all 4 among the same 14 |
+| Rail unit family | `node --test .../components/rail/*.test.ts` | **39 passed, 0 failed** |
+| `transport.test.ts` (new) | `node --test .../elicitation/transport.test.ts` | **8 passed, 0 failed** |
+| **e2e — rail family + run_js, bridge ON** | `playwright test activity-rail-*.spec.ts run-js-inner-approval.spec.ts --workers=1` | **21 passed, 0 failed** — re-run to green after EACH of FIX_ROUND-4 (8.5m), FIX_ROUND-5 (8.5m), FIX_ROUND-6 (8.3m), FIX_ROUND-7 (7.0m), FIX_ROUND-8 (8.8m), FIX_ROUND-9 (8.8m), FIX_ROUND-10 (6.4m), FIX_ROUND-11 (6.9m), FIX_ROUND-12 (6.9m), FIX_ROUND-13 (6.8m), FIX_ROUND-14 (6.9m) and FIX_ROUND-15 (6.5m) |
+| e2e — the two specs touched last | same, scoped | **3 passed, 0 failed (1.3m)** |
+| Rust lib — after FIX_ROUND-6 | `cargo test -p ziee --lib mcp::tool_calls::` | **18 passed, 0 failed** |
+| **Rust integration — the `pg_indexes` owner-leading guard + its COMMITTED negative control** | `cargo test -p ziee --test integration_tests mcp::tool_call_index -- --test-threads=1` | **2 passed, 0 failed** |
+| …**MUTATION** controls (FIX_ROUND-8): weaken the rule to `cols.first().is_some()`; a stale allowlist entry | **each RED** (both were GREEN before this round) |
+| …compliant vs non-compliant EXPRESSION index | compliant **passes**; `lower(tool_use_id)` **RED** |
+| …drift control: an existing narrowing moved onto the `WHERE` line, its column removed from the const | **RED** (silently green before) |
+| seam-guard mutations | local shadow of `withSegmentationShape` **RED**; inline revert **RED**; line-wrapped revert **RED**; multi-branch body putting the revert past the old window **RED** (FIX_ROUND-9) |
+| tooltip-guard evasions (FIX_ROUND-9) | boolean-shorthand `disabled`; a spread carrying it; a `>` inside an earlier quoted attribute; renaming the scanned file | **each RED** (all four were GREEN before) |
+| call-site latch mutation (FIX_ROUND-9) | both `disabled` props → `disabled={blocked !== null}` (the FIX_ROUND-7 latch verbatim) | **RED** (green before) |
+| predicate mutations (FIX_ROUND-10) | revert the tone rule (`elicitationIsError`); revert the failure judgement (`resolveDidFail`) | **each RED** — both were GREEN before, with the whole suite unchanged |
+| guard-precision controls (FIX_ROUND-10) | rename the scanned `<Button>` element; rename a TEST-36 file with the forbidden import; a spread placed AFTER a conforming `disabled` | **each RED** |
+| guard FALSE-POSITIVE controls (FIX_ROUND-10) | hoist the predicate to a local; an apostrophe in JSX text | **each correctly GREEN** |
+| latch-spelling controls (FIX_ROUND-11) | `blocked != null`; `!!blocked`; `Boolean(blocked)`; `blocked ? true : false`; a spread after the conforming prop | **each RED** — the first four were GREEN under FIX_ROUND-10 |
+| call-site controls (FIX_ROUND-11) | revert the tone to an inline `blocked !== null`; revert the failure judgement to the inline form | **each RED** — both were GREEN |
+| predicate control (FIX_ROUND-11) | drop the `hadEntry &&` conjunct from `resolveDidFail` | **RED** — GREEN before the discriminating cell was added |
+| scanner controls (FIX_ROUND-11) | a `}` inside a string inside a prop expression, with a violation after it; an apostrophe in JSX text | violation **RED**; apostrophe correctly **GREEN** |
+| determinism controls (FIX_ROUND-12) | `pred(x) \|\| blocked !== null`; a full inversion `!pred(x)`; a conforming `type={}` on an earlier element plus a revert of the status region; a second `setResolveFailed` beside the conforming one; a hoist carrying a latch | **each RED** — all five were GREEN under FIX_ROUND-11 |
+| FALSE-POSITIVE controls (FIX_ROUND-12) | a Prettier-wrapped hoist; `'til` / `'90s` in JSX text; a `<ButtonGroup disabled tooltip>` | **each correctly GREEN** |
+| **AST-guard decisive run (FIX_ROUND-13)** | ALL 14 evasions accumulated across rounds 8-13, re-applied against the TypeScript-AST guards | **each RED** |
+| …and the legitimate refactors | a Prettier-wrapped hoist; a braced `if` consequent; an element-valued prop before the status testid; `'til '90s, don't` in JSX text | **each correctly GREEN** |
+| round-14 controls | the `else`-branch polarity inversion; the `resolve()` handler latch; constant `resolveDidFail` args; a same-named local predicate | **each RED** |
+| …and the rename control | `blocked` → `blockedReason` throughout | **correctly GREEN** (it false-RED before) |
+| round-15 controls | the gate polarity inversion; four latch operands (`\|\| blocked`, `\|\| Boolean(blocked)`, `\|\| resolveFailed`, `\|\| healExhausted`); a fake classifier; a reassigned binding | **each RED** |
+| …and its false-RED controls | splitting the guard clauses; `function resolve(…)`; renaming the unrelated local `submitting` | **each correctly GREEN** |
+| `repository.rs` formatting | lines with a single-space indent | **0** — FIX_ROUND-8 had mangled 222; the delta vs FIX_ROUND-7 is back to 22 insertions / 10 deletions |
+| …ad-hoc controls incl. both bypasses that defeated the deleted parser | `ALTER … ADD CONSTRAINT UNIQUE(message_id)`; the multi-action `ALTER` bypass; UPPERCASE table; lowercase DDL; a `DO $$` block; an expression index; filtered-column drift | **each turns the guard RED**, green on removal |
+| …INCLUDE-column control (must NOT false-RED) | `CREATE INDEX … (created_at) INCLUDE (server_id)` | **stays green** (it did not before FIX_ROUND-7) |
+| a11y negative control | re-add FIX_ROUND-5's CONDITIONAL `tooltip` to the approve/deny buttons | **RED** — `a <Button> takes BOTH \`disabled\` and \`tooltip\`` (the source guard) |
+| `withSegmentationShape` mutation controls | drop the `consumed` term, then the `blocking` term, from `shapeIntact` | **each RED**, green on restore |
+| seam-guard control | the real `resolveStep` revert spelling | **RED**, green on restore |
+| `liveSteps.test.ts` (new, FIX_ROUND-5) | `node --test .../core/rail/liveSteps.test.ts` | **6 passed, 0 failed** |
+| chat unit family — after FIX_ROUND-5 | `node --test "src/modules/chat/**/*.test.ts"` | **341 tests, 337 pass, 4 fail** (the same pre-existing loader failures) |
+
+### The two `[acceptance]` skips were resolved by supplying the dependency, not accepted
+
+A first e2e pass reported **17 passed, 2 skipped**. The two skips were
+`activity-rail-breakout-real` (INV-3) and `activity-rail-lifecycle` (INV-4) — both
+`[acceptance]` tests, where a skip is not an acceptable result. The local bridge
+(`localhost:4000`, `qwen3.6-35b-a3b`) was reachable; only the env seam
+(`OPENAI_BASE_URL` / `ZIEE_TEST_LLM_MODEL`) was unset. With it set, both **ran for
+real and passed** (19.1s and 34.2s), and every subsequent run was made with the
+bridge on. **All 9 invariants' acceptance tests are PASS on a real run.**
+
+### The single integration failure FIX_ROUND-2 recorded is gone
+
+FIX_ROUND-2 saw `mcp::tool_call_history_test::chat_path_tool_call_records_source_chat`
+panic on `ANTHROPIC_API_KEY … NotPresent` because `server/tests/.env.test` does not
+exist in a fresh worktree. Copying the repo's env file in makes the scoped run
+**31 passed, 0 failed** — it was an environment gap, not a defect. (The file is
+gitignored; nothing was committed.)
+
+### A recorded control that was WRONG, and is corrected here
+
+FIX_ROUND-7 recorded an e2e assertion (`toHaveAccessibleName(/approve/i)`) as the
+negative control for the tooltip regression, and recorded it as RED. A round-8
+auditor showed that result could only have come from an UNCONDITIONAL tooltip —
+FIX_ROUND-5's actual regression was **conditional** on the degraded state, and the
+spec only ever reaches the healthy state, where the tooltip is `undefined` and the
+name is "Approve". So the control was **mis-designed**: it went red for a
+mutation that was not the regression.
+
+The e2e assertions are kept (they do pin the accessible names and the conditional
+`aria-describedby`), and the actual property is now pinned by a SOURCE guard —
+`no tooltip on a Button that can be disabled` — which was run against
+FIX_ROUND-5's verbatim conditional form and **is** RED. The reason the e2e cannot
+be the guard is stated in the test: no spec can reach a state that needs mcp's
+transport to be absent mid-conversation.
+
+### The 14 UI-unit failures are still baseline
+
+Same 14 files, all failing at IMPORT with `ERR_MODULE_NOT_FOUND` /
+`ERR_UNSUPPORTED_DIR_IMPORT` / `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX` — the
+`node-test-loader` vs store-kit directory-import defect. None is a file this
+feature owns; the branch adds tests without adding failures (825/811/14 here
+vs 824/810/14 recorded before this session's two rounds).
+
+### One pre-existing compile failure, proven not ours
+
+`cargo check --workspace --all-targets` fails in
+`agent-core/tests/real_llm_loop.rs` (`missing fields isolate_children and
+schedule`). `git diff --stat origin/feat/agent-core...HEAD -- src-app/agent-core`
+is **empty**, so those sources are byte-identical to the base and the error exists
+there too; both responsible commits are ancestors of the base. Left alone — it is
+another feature's test target.
+
 ## Notes that qualify a PASS
 
 Three results deserve their qualification stated rather than buried.
