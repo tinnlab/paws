@@ -1157,24 +1157,15 @@ const INVOKE_BODY_EXAMPLE: &str = r#"{"name":"My project","description":"..."}"#
 const INVOKE_QUERY_EXAMPLE: &str = r#"{"page":1,"per_page":50}"#;
 const INVOKE_PATH_PARAMS_EXAMPLE: &str = r#"{"id":"3f1c…-uuid"}"#;
 
-async fn invoke_capability(
-    user: &User,
-    groups: &[Group],
-    catalog: &ControlCatalog,
-    headers: &HeaderMap,
-    args: &Value,
-) -> Result<Value, AppError> {
-    // Models routinely JSON-ENCODE a nested object argument one level too many.
-    // Decode `body` / `query` / `path_params` BEFORE the typed deserialization
-    // below, which would otherwise: hard-fail on `path_params` naming the whole
-    // args blob; SILENTLY DROP a stringified `query` (the loopback call then ran
-    // with no query params and returned a plausible 200 for the wrong query);
-    // and POST a stringified `body` as a JSON string literal, so the real route
-    // answered 422 and blamed the wrong layer. Each refusal names what arrived,
-    // what is required, and shows a body the model can copy.
-    let mut args_value = args.clone();
+/// Decode the JSON-ENCODED object arguments of an `invoke_capability` call.
+///
+/// Extracted as a pure function so the whole shape distribution can be driven
+/// through it directly — the defect this fixes shipped because every existing
+/// fixture built these arguments as well-formed objects.
+fn decode_invoke_args(args: &Value) -> Result<Value, AppError> {
+    let mut out = args.clone();
     crate::common::tool_args::coerce_args_in_place(
-        &mut args_value,
+        &mut out,
         &[
             crate::common::tool_args::ArgSpec {
                 key: "body",
@@ -1194,6 +1185,25 @@ async fn invoke_capability(
         ],
     )
     .map_err(|e| AppError::bad_request("INVALID_PARAMS", e.into_message()))?;
+    Ok(out)
+}
+
+async fn invoke_capability(
+    user: &User,
+    groups: &[Group],
+    catalog: &ControlCatalog,
+    headers: &HeaderMap,
+    args: &Value,
+) -> Result<Value, AppError> {
+    // Models routinely JSON-ENCODE a nested object argument one level too many.
+    // Decode `body` / `query` / `path_params` BEFORE the typed deserialization
+    // below, which would otherwise: hard-fail on `path_params` naming the whole
+    // args blob; SILENTLY DROP a stringified `query` (the loopback call then ran
+    // with no query params and returned a plausible 200 for the wrong query);
+    // and POST a stringified `body` as a JSON string literal, so the real route
+    // answered 422 and blamed the wrong layer. Each refusal names what arrived,
+    // what is required, and shows a body the model can copy.
+    let args_value = decode_invoke_args(args)?;
 
     let args: InvokeArgs = serde_json::from_value(args_value)
         .map_err(|e| AppError::bad_request("INVALID_PARAMS", format!("invoke args: {e}")))?;
@@ -2133,4 +2143,113 @@ mod tests {
         assert!(!d.contains("JSON Schema"), "{d}");
     }
 
+
+    // ── stringified object arguments (the ask_user twin) ─────────────────────
+
+    /// `invoke_capability`'s three object arguments each decode when the model
+    /// JSON-ENCODES them — the same mistake that broke `ask_user`.
+    ///
+    /// `query` is the worst of the three: it used to fail the
+    /// `if let Some(Value::Object(q))` match and be **silently dropped**, so the
+    /// loopback call ran with NO query params and returned a plausible 200 for
+    /// the wrong query. Nothing anywhere reported a problem. (TEST-22, INV-1)
+    #[test]
+    fn invoke_args_decode_stringified_body_query_and_path_params() {
+        let decoded = decode_invoke_args(&json!({
+            "operation_id": "Project.create",
+            "body": r#"{"name":"My project"}"#,
+            "query": r#"{"page":1}"#,
+            "path_params": r#"{"id":"abc"}"#,
+        }))
+        .expect("stringified object arguments must decode");
+
+        assert_eq!(decoded["body"], json!({ "name": "My project" }));
+        assert_eq!(
+            decoded["query"],
+            json!({ "page": 1 }),
+            "a stringified query must reach the URL, not be silently dropped"
+        );
+        assert_eq!(decoded["path_params"], json!({ "id": "abc" }));
+        assert_eq!(
+            decoded["operation_id"],
+            json!("Project.create"),
+            "scalar arguments must never be reparsed"
+        );
+
+        // A well-formed call is untouched (no regression), and the typed
+        // deserialization still succeeds afterwards.
+        let well_formed = json!({
+            "operation_id": "Project.create",
+            "body": { "name": "My project" },
+        });
+        assert_eq!(decode_invoke_args(&well_formed).unwrap(), well_formed);
+        let parsed: InvokeArgs =
+            serde_json::from_value(decode_invoke_args(&well_formed).unwrap()).unwrap();
+        assert_eq!(parsed.operation_id, "Project.create");
+    }
+
+    /// A `body` that cannot be an object is refused with feedback the model can
+    /// act on — what it sent, what is required, and a body it can copy — not
+    /// with serde's "invalid type" naming the whole args blob. Asserts the TEXT.
+    /// (TEST-23, INV-5)
+    #[test]
+    fn invoke_args_refusals_tell_the_model_how_to_fix_the_call() {
+        for bad in [json!("not json {"), json!("[1,2]"), json!(7)] {
+            let err = decode_invoke_args(&json!({ "operation_id": "X", "body": bad.clone() }))
+                .expect_err("a non-object body must be refused");
+            let msg = format!("{err}");
+            assert!(msg.contains("body"), "must name the argument: {msg}");
+            assert!(msg.contains("JSON object"), "must say what is expected: {msg}");
+            assert!(
+                msg.contains(INVOKE_BODY_EXAMPLE),
+                "must carry a copyable example: {msg}"
+            );
+        }
+    }
+
+    /// A scalar body is now rejected even when the operation declares NO request
+    /// schema. `validate_body` short-circuited on the schema first, so that case
+    /// skipped validation entirely and a JSON-encoded body was POSTed as a
+    /// string literal — the target route answered 422 and the model was blamed
+    /// by the wrong layer. Arrays stay allowed (a `Json<Vec<T>>` route takes
+    /// one) unless the schema says `object`. (TEST-25, ITEM-10)
+    #[test]
+    fn validate_body_rejects_a_scalar_body_even_without_a_schema() {
+        let c = json!({});
+        let err = validate_body(&Value::Null, &json!("{\"name\":\"x\"}"), &c).unwrap_err();
+        assert!(err.contains("JSON object"), "got: {err}");
+        assert!(err.contains(INVOKE_BODY_EXAMPLE), "must show a body to copy: {err}");
+
+        // No regression: a well-formed object body against a schema-less
+        // operation still passes, and so does an array.
+        assert!(validate_body(&Value::Null, &json!({ "name": "x" }), &c).is_ok());
+        assert!(validate_body(&Value::Null, &json!([1, 2]), &c).is_ok());
+        assert!(validate_body(&Value::Null, &Value::Null, &c).is_ok());
+        // …but an array IS rejected when the schema says object.
+        assert!(validate_body(&schema_obj(), &json!([1, 2]), &c).is_err());
+    }
+
+    /// The shared model-supplied-argument conformance battery, applied to
+    /// `invoke_capability.body` — the site the gap analysis named as the prime
+    /// suspect, whose own `validate_body_*` fixtures are all well-formed
+    /// objects. (TEST-41)
+    #[test]
+    fn invoke_body_passes_the_shared_argument_conformance_battery() {
+        use crate::common::tool_args::conformance::{assert_arg_conformance, ArgSite};
+        use crate::common::tool_args::ArgShape;
+
+        assert_arg_conformance(ArgSite {
+            site: "invoke_capability.body",
+            arg: "body",
+            shape: ArgShape::Object,
+            canonical: json!({ "name": "My project" }),
+            example: INVOKE_BODY_EXAMPLE,
+            absent_yields: None,
+            extract: |args: Value| {
+                decode_invoke_args(&args)
+                    .map(|v| v.get("body").cloned().filter(|b| !b.is_null()))
+                    .map_err(|e| format!("{e}"))
+            },
+        });
+    }
 }

@@ -43,6 +43,28 @@ const COLLECT_DEFAULT_MAX_CHARS: usize = 20_000;
 const BACKGROUND_SPEC_EXAMPLE: &str =
     r#"{"task":"Summarise the attached report","label":"summary"}"#;
 
+/// Decode the `spec` object argument, which models routinely JSON-ENCODE.
+///
+/// Extracted so the shape distribution can be driven through it directly.
+fn decode_spec_arg(args: &Value) -> Result<Value, AppError> {
+    crate::common::tool_args::coerce_arg(
+        args,
+        "spec",
+        crate::common::tool_args::ArgShape::Object,
+        BACKGROUND_SPEC_EXAMPLE,
+    )
+    .map_err(|e| AppError::bad_request("BACKGROUND_SPEC_INVALID", e.into_message()))?
+    .ok_or_else(|| {
+        AppError::bad_request(
+            "BACKGROUND_SPEC_REQUIRED",
+            format!(
+                "`spec` was not supplied, but a JSON object describing the work is \
+                 required. Example: {BACKGROUND_SPEC_EXAMPLE}"
+            ),
+        )
+    })
+}
+
 /// Static tool descriptors emitted by `tools/list`.
 pub fn tool_list() -> Value {
     json!({
@@ -176,22 +198,7 @@ async fn spawn_background(
     // and the per-kind readers then report "spec.task must be a non-empty
     // string" / "spec.command is required" — a LIE, since the field was
     // supplied. Decode it here so the model is told the real problem.
-    let spec = crate::common::tool_args::coerce_arg(
-        args,
-        "spec",
-        crate::common::tool_args::ArgShape::Object,
-        BACKGROUND_SPEC_EXAMPLE,
-    )
-    .map_err(|e| AppError::bad_request("BACKGROUND_SPEC_INVALID", e.into_message()))?
-    .ok_or_else(|| {
-        AppError::bad_request(
-            "BACKGROUND_SPEC_REQUIRED",
-            format!(
-                "`spec` was not supplied, but a JSON object describing the work is \
-                 required. Example: {BACKGROUND_SPEC_EXAMPLE}"
-            ),
-        )
-    })?;
+    let spec = decode_spec_arg(args)?;
 
     match kind_str {
         "subagent" => spawn_subagent(pool, user_id, conversation_id, spec).await,
@@ -1080,5 +1087,50 @@ mod tests {
         let s = sandbox_notification_summary(&failed);
         assert!(s.contains("exited with code 1"), "failure summary names the code: {s}");
         assert!(s.contains("nope"), "failure summary carries the stderr head: {s}");
+    }
+}
+
+#[cfg(test)]
+mod stringified_arg_tests {
+    use super::*;
+    use crate::common::tool_args::conformance::{assert_arg_conformance, ArgSite};
+    use crate::common::tool_args::ArgShape;
+    use serde_json::json;
+
+    /// A double-encoded `spec` used to produce the LIE "spec.task must be a
+    /// non-empty string" — `task` was supplied, just one level too deep.
+    /// (TEST-29)
+    #[test]
+    fn background_spec_decodes_instead_of_blaming_a_missing_task() {
+        let spec = decode_spec_arg(&json!({ "spec": r#"{"task":"Summarise it"}"# }))
+            .expect("a stringified spec must decode");
+        assert_eq!(spec["task"], json!("Summarise it"));
+
+        let err = decode_spec_arg(&json!({ "spec": "not json {" })).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("spec") && msg.contains("JSON object"), "got: {msg}");
+        assert!(msg.contains(BACKGROUND_SPEC_EXAMPLE), "must show a spec to copy: {msg}");
+    }
+
+    /// The shared conformance battery, applied to `spawn_background.spec`.
+    /// (TEST-41)
+    #[test]
+    fn background_spec_passes_the_shared_argument_conformance_battery() {
+        assert_arg_conformance(ArgSite {
+            site: "spawn_background.spec",
+            arg: "spec",
+            shape: ArgShape::Object,
+            canonical: json!({ "task": "Summarise it" }),
+            example: BACKGROUND_SPEC_EXAMPLE,
+            absent_yields: None,
+            extract: |args: serde_json::Value| match decode_spec_arg(&args) {
+                Ok(v) => Ok(Some(v)),
+                // `spec` is REQUIRED here, so "absent" is its own error. Map it
+                // back to the battery's absent contract rather than weakening
+                // the battery for every other site.
+                Err(e) if format!("{e}").contains("was not supplied") => Ok(None),
+                Err(e) => Err(format!("{e}")),
+            },
+        });
     }
 }

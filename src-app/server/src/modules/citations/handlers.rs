@@ -846,3 +846,69 @@ fn item_source(input: &CitationInput) -> &'static str {
 fn internal(e: crate::common::AppError) -> (StatusCode, JsonRpcError) {
     (StatusCode::OK, JsonRpcError::from_app_error(&e))
 }
+
+#[cfg(test)]
+mod stringified_arg_tests {
+    use super::*;
+    use crate::common::tool_args::conformance::{assert_arg_conformance, ArgSite};
+    use crate::common::tool_args::ArgShape;
+    use serde_json::json;
+
+    /// The two SILENT WRONG ANSWERS this round fixes, pinned.
+    ///
+    /// A stringified `format_citations.items` used to fall to
+    /// `unwrap_or_default()` and the empty-vec branch then formatted the user's
+    /// ENTIRE library; a stringified `remove_citations.ids` used to report
+    /// "0 citation(s) deleted." as SUCCESS. Both now decode; an undecodable one
+    /// is an actionable refusal rather than a plausible wrong answer.
+    /// (TEST-26 / TEST-27, INV-1)
+    #[test]
+    fn citations_array_args_decode_instead_of_silently_selecting_everything() {
+        let decoded = array_arg(
+            &json!({ "items": r#"[{"doi":"10.1000/xyz"}]"# }),
+            "items",
+            CITATION_ITEMS_EXAMPLE,
+        )
+        .expect("a stringified items array must decode")
+        .expect("must not read as absent");
+        assert_eq!(decoded, vec![json!({ "doi": "10.1000/xyz" })]);
+
+        let ids = array_arg(
+            &json!({ "ids": r#"["3f1c2a44-0000-0000-0000-000000000000"]"# }),
+            "ids",
+            CITATION_IDS_EXAMPLE,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(ids.len(), 1, "a stringified ids array must select those entries");
+
+        // Absent still reads as absent, so the documented "no ids → whole
+        // library" behaviour is untouched.
+        assert!(array_arg(&json!({}), "ids", CITATION_IDS_EXAMPLE).unwrap().is_none());
+
+        // Undecodable is refused with actionable text, not a silent empty vec.
+        let err = array_arg(&json!({ "ids": "not json {" }), "ids", CITATION_IDS_EXAMPLE)
+            .expect_err("an undecodable ids must be refused, never treated as absent");
+        let msg = format!("{:?}", err.1);
+        assert!(msg.contains("ids") && msg.contains("JSON array"), "got: {msg}");
+        assert!(msg.contains("3f1c2a44"), "must carry a copyable example: {msg}");
+    }
+
+    /// The shared conformance battery, applied to `citations.items`. (TEST-41)
+    #[test]
+    fn citations_items_passes_the_shared_argument_conformance_battery() {
+        assert_arg_conformance(ArgSite {
+            site: "citations.items",
+            arg: "items",
+            shape: ArgShape::Array,
+            canonical: json!([{ "doi": "10.1000/xyz" }]),
+            example: CITATION_ITEMS_EXAMPLE,
+            absent_yields: None,
+            extract: |args: serde_json::Value| {
+                array_arg(&args, "items", CITATION_ITEMS_EXAMPLE)
+                    .map(|o| o.map(serde_json::Value::Array))
+                    .map_err(|e| format!("{:?}", e.1))
+            },
+        });
+    }
+}

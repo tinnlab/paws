@@ -1507,3 +1507,52 @@ mod tests {
         assert_eq!(sc["skipped"], 1, "the null decision is skipped");
     }
 }
+
+#[cfg(test)]
+mod stringified_arg_tests {
+    use super::*;
+    use crate::common::tool_args::conformance::{assert_arg_conformance, ArgSite};
+    use crate::common::tool_args::ArgShape;
+    use serde_json::json;
+
+    /// All five lit_search array arguments decode before their typed
+    /// deserialization, which used to hard-fail with serde's "expected a
+    /// sequence". (TEST-32)
+    #[test]
+    fn lit_search_array_args_decode_before_typed_deserialization() {
+        let out = decode_array_args(
+            &json!({ "queries": r#"["CRISPR","base editing"]"# }),
+            &[("queries", LIT_QUERIES_EXAMPLE)],
+        )
+        .unwrap();
+        let parsed: SearchArgs = serde_json::from_value(out).expect("typed parse must now succeed");
+        assert_eq!(parsed.queries.unwrap().len(), 2);
+
+        let err = decode_array_args(
+            &json!({ "ids": "not json {" }),
+            &[("ids", LIT_IDS_EXAMPLE)],
+        )
+        .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("ids") && msg.contains("JSON array"), "got: {msg}");
+        assert!(msg.contains("PMID"), "must carry a copyable example: {msg}");
+    }
+
+    /// The shared conformance battery. (TEST-41)
+    #[test]
+    fn lit_search_ids_pass_the_shared_argument_conformance_battery() {
+        assert_arg_conformance(ArgSite {
+            site: "lit_search.ids",
+            arg: "ids",
+            shape: ArgShape::Array,
+            canonical: json!(["PMID:31978945"]),
+            example: LIT_IDS_EXAMPLE,
+            absent_yields: None,
+            extract: |args: serde_json::Value| {
+                decode_array_args(&args, &[("ids", LIT_IDS_EXAMPLE)])
+                    .map(|v| v.get("ids").cloned().filter(|x| !x.is_null()))
+                    .map_err(|e| format!("{e}"))
+            },
+        });
+    }
+}

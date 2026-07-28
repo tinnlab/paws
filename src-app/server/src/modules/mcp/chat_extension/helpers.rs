@@ -940,9 +940,9 @@ pub fn build_query_input(schema: &serde_json::Value, query_text: &str) -> Option
 mod tests {
     use super::{
         ask_user_tool_result, build_query_input, cap_structured_content,
-        convert_mcp_tool_to_ai_tool, run_ask_user_elicitation, stamp_ask_user_marker,
-        McpContentData, ASK_USER_SCHEMA_MARKER, MAX_ANTHROPIC_TOOL_NAME_LEN,
-        MAX_STRUCTURED_CONTENT_BYTES,
+        convert_mcp_tool_to_ai_tool, prepare_ask_user_schema, run_ask_user_elicitation,
+        stamp_ask_user_marker, McpContentData, ASK_USER_SCHEMA_EXAMPLE,
+        ASK_USER_SCHEMA_MARKER, MAX_ANTHROPIC_TOOL_NAME_LEN, MAX_STRUCTURED_CONTENT_BYTES,
     };
 
     use crate::modules::mcp::client::traits::Tool as McpToolDef;
@@ -1505,5 +1505,270 @@ mod tests {
         let (content, is_error) = tool_result_parts(&result);
         assert!(is_error, "oversized schema must be a tool error");
         assert!(content.contains("too large"), "got: {content}");
+    }
+
+    // ── stringified-argument decode (the reported live defect) ───────────────
+
+    /// The EXACT payload observed in the live session: the model sent
+    /// `ask_user`'s object `schema` argument as a JSON-ENCODED STRING. Before
+    /// the fix this stayed a string all the way to the browser, which rendered
+    /// a card with zero fields, and the turn blocked for the full 300s timeout.
+    ///
+    /// It must now become a usable OBJECT carrying every question the model
+    /// asked — AND the trusted rich-UX marker, which proves the decode happened
+    /// early enough to be stamped. (TEST-1 / TEST-10, INV-1 + INV-6)
+    #[test]
+    fn ask_user_reported_stringified_schema_becomes_a_usable_marked_object() {
+        let input = serde_json::json!({
+            "message": "What would you like to name this new project?",
+            "schema": r#"{"properties": {"name": {"title": "Project name", "type": "string"}, "description": {"title": "Brief description (optional)", "type": "string"}, "instructions": {"title": "System instructions for conversations in this project (optional)", "type": "string"}}, "required": ["name"], "type": "object"}"#
+        });
+        let out = prepare_ask_user_schema(&input).expect("the reported payload must be accepted");
+
+        assert!(out.is_object(), "the schema must be an OBJECT, not a string");
+        let props = out["properties"]
+            .as_object()
+            .expect("a usable form needs `properties`");
+        assert_eq!(props.len(), 3, "all three questions must survive");
+        for key in ["name", "description", "instructions"] {
+            assert!(props.contains_key(key), "missing question `{key}`");
+        }
+        assert_eq!(props["name"]["title"], serde_json::json!("Project name"));
+        assert_eq!(out["required"], serde_json::json!(["name"]));
+        assert_eq!(
+            out[ASK_USER_SCHEMA_MARKER],
+            serde_json::json!(true),
+            "the decode must happen before the stamp, or the FE never enters rich mode"
+        );
+    }
+
+    /// The end-to-end assertion the pre-existing isolated leaf test traded away.
+    ///
+    /// `stamp_ask_user_marker_stamps_objects_idempotently_and_skips_non_objects`
+    /// feeds `json!("just a string")` to the stamp and asserts it passes through
+    /// unchanged — a correct statement about the LEAF that silently ratified the
+    /// broken SYSTEM. The leaf's no-panic contract is still right and is kept;
+    /// what was missing is this: a string must never REACH the stamp, because by
+    /// then the only outcomes left are "unmarked empty form" or "panic".
+    /// (TEST-43, ITEM-21)
+    #[test]
+    fn ask_user_string_schema_never_reaches_the_marker_stamp() {
+        // Decodable → the stamp sees an OBJECT.
+        let decodable = serde_json::json!({
+            "message": "Pick",
+            "schema": r#"{"type":"object","properties":{"c":{"type":"string"}}}"#
+        });
+        let out = prepare_ask_user_schema(&decodable).unwrap();
+        assert!(
+            out.is_object() && out[ASK_USER_SCHEMA_MARKER] == serde_json::json!(true),
+            "a decodable string must arrive at the stamp as a marked object, got: {out}"
+        );
+
+        // Undecodable → refused OUTRIGHT, so the stamp is never called with a
+        // string at all. Either way the non-object arm of the stamp is now
+        // unreachable from this path.
+        let undecodable = serde_json::json!({ "message": "Pick", "schema": "not json {" });
+        assert!(
+            prepare_ask_user_schema(&undecodable).is_err(),
+            "an undecodable string must be refused, never forwarded to the stamp"
+        );
+    }
+
+    /// No-regression: a well-formed object schema produces EXACTLY what the
+    /// pre-existing `cap_requested_schema` → `stamp_ask_user_marker` composition
+    /// produced, byte for byte; and an ABSENT schema still defaults to
+    /// `{"type":"object"}` + marker rather than erroring. (TEST-11, INV-8)
+    #[test]
+    fn ask_user_well_formed_and_absent_schemas_are_unchanged() {
+        use crate::modules::mcp::elicitation::models::cap_requested_schema;
+
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": { "color": { "type": "string", "enum": ["red", "green"] } }
+        });
+        let expected = stamp_ask_user_marker(cap_requested_schema(schema.clone()));
+        let got = prepare_ask_user_schema(
+            &serde_json::json!({ "message": "Pick a color", "schema": schema }),
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_vec(&got).unwrap(),
+            serde_json::to_vec(&expected).unwrap(),
+            "a well-formed schema must be byte-identical to the pre-change composition"
+        );
+
+        let absent = prepare_ask_user_schema(&serde_json::json!({ "message": "Proceed?" }))
+            .expect("an ABSENT schema must NOT be an error");
+        assert_eq!(absent["type"], serde_json::json!("object"));
+        assert_eq!(absent[ASK_USER_SCHEMA_MARKER], serde_json::json!(true));
+    }
+
+    /// The size guard stays authoritative in BOTH forms.
+    ///
+    /// A 2 MB JSON-ENCODED STRING must be refused just as an oversized object
+    /// is — and it must be refused on the RAW measurement, before anything
+    /// parses it. The ordering invariant that makes the raw-first check
+    /// sufficient is asserted alongside: a JSON-encoded string of a value is
+    /// always at least as long as the value's own serialization, so the raw
+    /// measurement can never under-report. (TEST-12, INV-4)
+    #[test]
+    fn ask_user_size_guard_covers_the_encoded_form_too() {
+        let big = serde_json::json!({
+            "type": "object",
+            "properties": { "x": { "type": "string", "description": "A".repeat(MAX_STRUCTURED_CONTENT_BYTES + 1024) } }
+        });
+        let encoded = serde_json::to_string(&big).unwrap();
+        assert!(encoded.len() > MAX_STRUCTURED_CONTENT_BYTES, "fixture must clear the cap");
+
+        let err = prepare_ask_user_schema(
+            &serde_json::json!({ "message": "Pick", "schema": encoded }),
+        )
+        .expect_err("an oversized ENCODED schema must be refused");
+        assert!(err.contains("too large"), "got: {err}");
+        assert!(
+            err.contains(&MAX_STRUCTURED_CONTENT_BYTES.to_string()),
+            "the refusal must name the limit: {err}"
+        );
+
+        // The ordering invariant: encoded length >= decoded length, always.
+        for v in [
+            serde_json::json!({ "type": "object" }),
+            serde_json::json!({ "type": "object", "properties": { "a": { "type": "string" } } }),
+            serde_json::json!({ "a": [1, 2, 3], "b": { "c": "d\"e" } }),
+        ] {
+            let enc = serde_json::to_vec(&serde_json::Value::String(
+                serde_json::to_string(&v).unwrap(),
+            ))
+            .unwrap()
+            .len();
+            let dec = serde_json::to_vec(&v).unwrap().len();
+            assert!(
+                enc >= dec,
+                "encoded ({enc}) must never measure smaller than decoded ({dec}) for {v}"
+            );
+        }
+    }
+
+    /// EVERY `ask_user` rejection — the new decode paths AND the pre-existing
+    /// ones — must tell the model what it sent, what is required, and show a
+    /// schema it can copy. An error the model cannot act on leaves it repeating
+    /// the same malformed call, which is what the user experiences as a dead
+    /// card. Asserts the TEXT, not merely that it is an error. (TEST-14 /
+    /// TEST-15 / TEST-16, INV-5)
+    #[tokio::test]
+    async fn ask_user_every_rejection_is_actionable() {
+        let deep = {
+            let mut d = r#"{"type":"object","properties":{"a":{"type":"string"}}}"#.to_string();
+            for _ in 0..4 {
+                d = serde_json::to_string(&d).unwrap();
+            }
+            d
+        };
+        let cases: Vec<(&str, serde_json::Value)> = vec![
+            ("message-missing", serde_json::json!({ "schema": { "type": "object", "properties": { "a": { "type": "string" } } } })),
+            ("message-blank", serde_json::json!({ "message": "   ", "schema": { "type": "object", "properties": { "a": { "type": "string" } } } })),
+            ("schema-not-json", serde_json::json!({ "message": "Pick", "schema": "not json {" })),
+            ("schema-decodes-to-array", serde_json::json!({ "message": "Pick", "schema": "[1,2,3]" })),
+            ("schema-decodes-to-number", serde_json::json!({ "message": "Pick", "schema": "42" })),
+            ("schema-over-unwrap-bound", serde_json::json!({ "message": "Pick", "schema": deep })),
+            ("schema-wrong-type", serde_json::json!({ "message": "Pick", "schema": 7 })),
+            ("schema-no-properties", serde_json::json!({ "message": "Pick", "schema": { "type": "object" } })),
+            ("schema-empty-properties", serde_json::json!({ "message": "Pick", "schema": { "type": "object", "properties": {} } })),
+        ];
+
+        for (label, input) in cases {
+            let result = run_ask_user_elicitation(input, None, None, None, None).await;
+            let (content, is_error) = tool_result_parts(&result);
+            assert!(is_error, "[{label}] must be a tool error");
+            // (a) what was RECEIVED — the argument is named.
+            assert!(
+                content.contains("'schema'") || content.contains("`schema`")
+                    || content.contains("'message'") || content.contains("`message`"),
+                "[{label}] must name the offending argument: {content}"
+            );
+            // (b) what is EXPECTED.
+            assert!(
+                content.contains("required") || content.contains("must") || content.contains("Send"),
+                "[{label}] must say what is expected: {content}"
+            );
+            // (c) a concrete corrective EXAMPLE the model can copy.
+            assert!(
+                content.contains("Example: "),
+                "[{label}] must carry a copyable example: {content}"
+            );
+            assert!(
+                content.contains("\"type\":\"object\"") || content.contains("\"schema\":"),
+                "[{label}] the example must be literal JSON, not prose: {content}"
+            );
+            // …and a rejected schema must never leak the trusted rich-UX marker
+            // into model-visible text.
+            assert!(
+                !content.contains(ASK_USER_SCHEMA_MARKER),
+                "[{label}] a rejection must never carry the rich-mode marker: {content}"
+            );
+        }
+    }
+
+    /// The zero-`properties` split of DESIGN §3.3 / DEC-9, pinned because it is
+    /// deliberately ASYMMETRIC and would otherwise look like an inconsistency:
+    /// a schema the model SUPPLIED that asks nothing is a correctable mistake,
+    /// while an ABSENT schema is the pre-existing "no fields, just accept or
+    /// decline" contract and must keep working. (TEST-15)
+    #[test]
+    fn ask_user_zero_properties_is_an_error_only_when_the_model_supplied_it() {
+        assert!(
+            prepare_ask_user_schema(
+                &serde_json::json!({ "message": "Pick", "schema": { "type": "object", "properties": {} } })
+            )
+            .is_err(),
+            "an explicitly supplied schema that asks nothing must be correctable"
+        );
+        assert!(
+            prepare_ask_user_schema(&serde_json::json!({ "message": "Proceed?" })).is_ok(),
+            "an ABSENT schema must remain valid — that is the pre-existing contract"
+        );
+        assert!(
+            prepare_ask_user_schema(&serde_json::json!({ "message": "Proceed?", "schema": null }))
+                .is_ok(),
+            "an explicit null must behave as absent"
+        );
+    }
+
+    /// The shared model-supplied-argument conformance battery, applied to THIS
+    /// call site. This is the class of test whose absence let the bug ship —
+    /// see `.lifecycle/ask-user-stringified-schema/TEST_GAP_ANALYSIS.md`.
+    /// (TEST-41)
+    #[test]
+    fn ask_user_schema_passes_the_shared_argument_conformance_battery() {
+        use crate::common::tool_args::conformance::{assert_arg_conformance, ArgSite};
+        use crate::common::tool_args::ArgShape;
+
+        let canonical =
+            serde_json::json!({ "type": "object", "properties": { "name": { "type": "string" } } });
+        // The site stamps the trusted marker, so compare against the stamped
+        // form: the battery asserts WHAT THE MODEL MEANT survives, not that the
+        // pipeline is a no-op.
+        let strip = |v: serde_json::Value| -> serde_json::Value {
+            match v {
+                serde_json::Value::Object(mut m) => {
+                    m.remove(ASK_USER_SCHEMA_MARKER);
+                    serde_json::Value::Object(m)
+                }
+                other => other,
+            }
+        };
+        assert_arg_conformance(ArgSite {
+            site: "ask_user.schema",
+            arg: "schema",
+            shape: ArgShape::Object,
+            canonical,
+            example: ASK_USER_SCHEMA_EXAMPLE,
+            absent_yields: Some(serde_json::json!({ "type": "object" })),
+            extract: move |args: serde_json::Value| {
+                prepare_ask_user_schema(&args)
+                    .map(|v| Some(strip(v)))
+                    .map_err(|e| e)
+            },
+        });
     }
 }
