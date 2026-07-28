@@ -202,3 +202,29 @@ export function spanHasFailure(steps: readonly PlacedRailStep[]): boolean {
 export function isQuietSingle(steps: readonly PlacedRailStep[]): boolean {
   return steps.length === 1
 }
+
+/**
+ * Merge a RE-RESOLVED step back onto its placed one, keeping SEGMENTATION's key.
+ *
+ * `ChatMessage` re-resolves each step through the contribution registry on every
+ * render so live status/timing refresh (`ActivityRail` is subscribed to the
+ * live-step seam; the memoised message is not). But `segmentRail` above
+ * disambiguates a REPEATED key to `${key}#${i}`, and the contribution — which
+ * knows nothing about how many times its `tool_use_id` appears in this message —
+ * always returns the bare key. Taking the resolved key wholesale therefore threw
+ * the disambiguation away on exactly the replayed-call case it exists for,
+ * colliding the React key in `ActivityRail` and the per-message expansion state
+ * (`stepStateKey`) in `RailStep`, and splitting a breakout's `data-step-key` from
+ * a rail row's into two namespaces.
+ *
+ * Segmentation owns the SHAPE and the identity; re-resolution owns the STATE.
+ * Extracted (FIX_ROUND-4) so that rule is pinned by a test rather than living
+ * inline where a one-line revert turned nothing red.
+ */
+export function withSegmentationKey(
+  placed: PlacedRailStep,
+  resolved: RailStepDescriptor | undefined | null,
+): RailStepDescriptor {
+  if (!resolved) return placed.step
+  return resolved.key === placed.step.key ? resolved : { ...resolved, key: placed.step.key }
+}

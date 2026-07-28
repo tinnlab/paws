@@ -455,14 +455,31 @@ mod tests {
     ///    not cause. Anything NEW on those columns must still be owner-leading.
     #[test]
     fn tool_call_lookup_indexes_are_owner_leading() {
-        let modules = concat!(env!("CARGO_MANIFEST_DIR"), "/src/modules");
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        // The set actually applied at boot is `build.rs::compose_merged_migrations`:
+        // every module's own dir UNION the five named SDK crates UNION desktop.
+        // FIX_ROUND-4: the first widening stopped at `src/modules/*` and so still
+        // missed 8 of the 109 applied files — an index on `mcp_tool_calls`
+        // authored from an SDK crate migration escaped the guard entirely.
+        let mut roots: Vec<std::path::PathBuf> = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(manifest.join("src/modules")) {
+            roots.extend(entries.filter_map(|e| e.ok().map(|e| e.path().join("migrations"))));
+        }
+        let sdk_crates = manifest.join("../../sdk/crates");
+        for c in [
+            "ziee-auth",
+            "ziee-file",
+            "ziee-notification",
+            "ziee-onboarding",
+            "ziee-seed",
+        ] {
+            roots.push(sdk_crates.join(c).join("migrations"));
+        }
+        roots.push(manifest.join("../desktop/tauri/migrations"));
+
         let mut files: Vec<std::path::PathBuf> = Vec::new();
-        for module in std::fs::read_dir(modules).expect("read the modules dir") {
-            let migrations = match module {
-                Ok(m) => m.path().join("migrations"),
-                Err(_) => continue,
-            };
-            let Ok(entries) = std::fs::read_dir(&migrations) else {
+        for dir in &roots {
+            let Ok(entries) = std::fs::read_dir(dir) else {
                 continue;
             };
             files.extend(
@@ -472,7 +489,7 @@ mod tests {
             );
         }
         assert!(
-            files.len() > 50,
+            files.len() > 100,
             "expected to find every module's migrations, found {} — the walk is \
              looking in the wrong place and the guard would be vacuous",
             files.len()
@@ -485,8 +502,22 @@ mod tests {
         let mut indexes: std::collections::BTreeMap<String, Vec<String>> = Default::default();
         for path in &files {
             let raw = std::fs::read_to_string(path).expect("read a migration");
-            // Strip `--` comments: the rationale prose quotes this very DDL.
-            let sql: String = raw
+            // Strip `--` line comments AND `/* … */` block comments: the
+            // rationale prose in these very files quotes the DDL, and a
+            // commented-out CREATE INDEX must not register as a real one
+            // (FIX_ROUND-4 — block comments were not stripped, and at least one
+            // migration already uses them).
+            let mut sql = String::with_capacity(raw.len());
+            let mut rest = raw.as_str();
+            while let Some(open) = rest.find("/*") {
+                sql.push_str(&rest[..open]);
+                rest = match rest[open + 2..].find("*/") {
+                    Some(close) => &rest[open + 2 + close + 2..],
+                    None => "",
+                };
+            }
+            sql.push_str(rest);
+            let sql: String = sql
                 .lines()
                 .map(|l| l.split("--").next().unwrap_or(""))
                 .collect::<Vec<_>>()
@@ -494,16 +525,36 @@ mod tests {
             for stmt in sql.split(';').map(str::trim).filter(|s| !s.is_empty()) {
                 let flat = stmt.split_whitespace().collect::<Vec<_>>().join(" ");
                 let upper = flat.to_uppercase();
+                // FIX_ROUND-4: an `ALTER TABLE … ADD CONSTRAINT … UNIQUE (col)`
+                // creates a REAL single-column index on `mcp_tool_calls` and was
+                // invisible here. Refuse it outright rather than half-parse it —
+                // the owner-leading rule has no exception for a constraint.
+                if upper.starts_with("ALTER TABLE")
+                    && flat.contains("mcp_tool_calls")
+                    && upper.contains("UNIQUE")
+                {
+                    panic!(
+                        "{}: an ALTER TABLE … UNIQUE on mcp_tool_calls creates a \
+                         backing index this guard cannot inspect. Express it as an \
+                         explicit owner-leading CREATE [UNIQUE] INDEX instead.",
+                        path.display()
+                    );
+                }
+                // Name extraction reads the UPPERCASED form so a lowercase
+                // `create index …` does not get recorded under the name "create"
+                // (FIX_ROUND-4), then maps back to the original spelling.
                 if upper.starts_with("CREATE INDEX") || upper.starts_with("CREATE UNIQUE INDEX") {
                     if !flat.contains("mcp_tool_calls") {
                         continue;
                     }
-                    let name = flat
+                    let head = upper
                         .trim_start_matches("CREATE ")
                         .trim_start_matches("UNIQUE ")
                         .trim_start_matches("INDEX ")
                         .trim_start_matches("CONCURRENTLY ")
-                        .trim_start_matches("IF NOT EXISTS ")
+                        .trim_start_matches("IF NOT EXISTS ");
+                    let offset = flat.len() - head.len();
+                    let name = flat[offset..]
                         .split_whitespace()
                         .next()
                         .expect("index name")
@@ -524,14 +575,22 @@ mod tests {
                         .collect::<Vec<_>>();
                     indexes.insert(name, cols);
                 } else if upper.starts_with("DROP INDEX") {
-                    let name = flat
+                    // Same uppercase-then-map-back treatment, and CONCURRENTLY
+                    // is trimmed HERE too (FIX_ROUND-4: it was added to the
+                    // CREATE chain only, so `DROP INDEX CONCURRENTLY idx_x`
+                    // parsed the name as "CONCURRENTLY" and silently failed to
+                    // remove the index — a false RED).
+                    let head = upper
                         .trim_start_matches("DROP INDEX ")
-                        .trim_start_matches("IF EXISTS ")
+                        .trim_start_matches("CONCURRENTLY ")
+                        .trim_start_matches("IF EXISTS ");
+                    let offset = flat.len() - head.len();
+                    let name = flat[offset..]
                         .trim_end_matches(';')
-                        .rsplit('.')
+                        .split_whitespace()
                         .next()
                         .unwrap_or_default()
-                        .split_whitespace()
+                        .rsplit('.')
                         .next()
                         .unwrap_or_default()
                         .to_string();
@@ -540,28 +599,41 @@ mod tests {
             }
         }
 
-        // EVERY column `list_calls_for_user` narrows on under `user_id = $1`.
+        // EVERY column `list_calls_for_user` narrows on under `user_id = $1` —
+        // read off the query at the top of this file, NOT off the table's column
+        // list. FIX_ROUND-4: the first widening got this wrong in BOTH
+        // directions — it added `workflow_run_id`, which the query never filters
+        // on (it is INSERT-only), and dropped `is_built_in`, which it does
+        // (`$4::bool IS NULL OR is_built_in = $4`). The fictional entry is what
+        // then forced a third exemption below, hiding the real gap.
         const FILTERED: [&str; 5] = [
             "server_id",
             "conversation_id",
-            "workflow_run_id",
+            "is_built_in",
             "tool_use_id",
             "message_id",
         ];
         /// Single-column indexes on a filtered column that PRE-DATE this rule
         /// (`202607140180_mcp_schema.sql`). Named, not silently excluded, so the
         /// assertion's scope is legible: nothing NEW may join this list.
-        const LEGACY_SINGLE_COLUMN: [&str; 3] = [
-            "idx_mcp_tool_calls_server",
-            "idx_mcp_tool_calls_conv",
-            "idx_mcp_tool_calls_workflow_run",
+        ///
+        /// Pinned to the EXACT column vector, not just the name: an exemption
+        /// keyed on a name alone would silently survive a future migration that
+        /// drops one of these and re-creates the same NAME over a different,
+        /// wider, still-not-owner-leading column set.
+        const LEGACY_SINGLE_COLUMN: [(&str, &str); 2] = [
+            ("idx_mcp_tool_calls_server", "server_id"),
+            ("idx_mcp_tool_calls_conv", "conversation_id"),
         ];
         let mut owner_leading = 0usize;
         for (name, cols) in &indexes {
             if !cols.iter().any(|c| FILTERED.contains(&c.as_str())) {
                 continue;
             }
-            if LEGACY_SINGLE_COLUMN.contains(&name.as_str()) {
+            if LEGACY_SINGLE_COLUMN
+                .iter()
+                .any(|(n, col)| n == name && cols.as_slice() == [col.to_string()])
+            {
                 continue;
             }
             assert_eq!(

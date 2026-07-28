@@ -179,7 +179,13 @@ export function elicitationStatus(elicitationId: string): ElicitationStatus | un
  */
 export function registerElicitation(init: ElicitationRequestInit): boolean {
   if (!transport) {
-    console.error(
+    // FIX_ROUND-4: `warn`, not `error`. "No transport installed" is the module's
+    // DOCUMENTED degraded state (a gallery render, a unit test, mcp disabled) and
+    // has a designed UI for it — `runtime-health.mjs` classifies a console ERROR
+    // as a HIGH GATING finding, so logging it at error level would fail
+    // `gate:ui` on the very gallery state that exists to show the degradation.
+    // A provider that THROWS is a different thing and stays at error level.
+    console.warn(
       '[elicitation] no transport installed; dropping request',
       init.elicitation_id,
     )
@@ -205,7 +211,9 @@ export async function resolveElicitationVia(
   content?: Record<string, unknown>,
 ): Promise<boolean> {
   if (!transport) {
-    console.error('[elicitation] no transport installed; cannot resolve', elicitationId)
+    // warn, not error — see registerElicitation: this is the documented
+    // degraded state with a designed UI, not a fault (gate:ui gates on error).
+    console.warn('[elicitation] no transport installed; cannot resolve', elicitationId)
     return false
   }
   // FIX_ROUND-3: this was the one seam call with no guard. The current provider
@@ -237,7 +245,14 @@ export function subscribeElicitation(onChange: () => void): () => void {
 
 /** Test-only reset so specs don't leak a transport across files. */
 export function __resetElicitationTransportForTests(): void {
-  unsubscribeTransport?.()
+  // Guarded like the production path (FIX_ROUND-4): an unguarded throw here
+  // would abort the reset with `transport` still set and leak an installed
+  // transport into the next spec in the file.
+  try {
+    unsubscribeTransport?.()
+  } catch {
+    /* the reset must always complete */
+  }
   unsubscribeTransport = null
   transport = null
   transportOwner = null

@@ -414,14 +414,14 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `isStreaming \|\| wasStreamingRef.current \|\| isActiveMatch` | 65 |
-| empty | `contents.length === 0 && !showEmptyCompletionNotice` | 93 |
-| branch | `!resolved` | 198 |
-| branch | `attachmentBlocks.length > 0` | 286 |
-| branch | `bubbleBlocks.length > 0` | 315 |
-| branch | `offerCollapse` | 341 |
-| branch | `showEmptyCompletionNotice` | 361 |
-| branch | `renderAsUser` | 380 |
+| branch | `isStreaming \|\| wasStreamingRef.current \|\| isActiveMatch` | 66 |
+| empty | `contents.length === 0 && !showEmptyCompletionNotice` | 94 |
+| branch | `!resolved` | 186 |
+| branch | `attachmentBlocks.length > 0` | 274 |
+| branch | `bubbleBlocks.length > 0` | 303 |
+| branch | `offerCollapse` | 329 |
+| branch | `showEmptyCompletionNotice` | 349 |
+| branch | `renderAsUser` | 368 |
 
 ### `modules/chat/components/CollapsibleBlock`
 
@@ -2165,13 +2165,12 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `submitting \|\| resolved !== null` | 65 |
-| branch | `resolved === 'approved'` | 82 |
-| branch | `resolved === 'denied'` | 82 |
-| branch | `serverParenLabel(data.server)` | 93 |
-| branch | `data.input !== undefined` | 105 |
-| branch | `resolved === null` | 115 |
-| branch | `(unresolvable \|\| !hasElicitationTransport())` | 117 |
+| branch | `submitting \|\| resolved !== null \|\| unresolvable` | 96 |
+| branch | `resolved === 'approved'` | 113 |
+| branch | `resolved === 'denied'` | 113 |
+| branch | `serverParenLabel(data.server)` | 124 |
+| branch | `data.input !== undefined` | 136 |
+| branch | `resolved === null` | 171 |
 
 ### `modules/js-tool/components/JsToolSettingsSection`
 
@@ -2973,10 +2972,11 @@ Required states: `error`
 | branch | `toolResultData` | 230 |
 | branch | `toolResultData.is_error` | 233 |
 | branch | `!call` | 273 |
-| branch | `next === last` | 321 |
-| branch | `!mcpStore` | 339 |
-| branch | `!streamingMessage` | 716 |
-| branch | `!toolUseId` | 728 |
+| branch | `next === last` | 292 |
+| branch | `next === last` | 337 |
+| branch | `!mcpStore` | 355 |
+| branch | `!streamingMessage` | 732 |
+| branch | `!toolUseId` | 744 |
 
 ### `modules/mcp/components/McpConfigModal`
 

@@ -45,9 +45,20 @@ function sourceFiles(dir: string): string[] {
  * exactly the syntax these modules already write.
  */
 function importsOf(file: string): string[] {
+  // Strip comments first (FIX_ROUND-4): otherwise a commented-out or
+  // documentation-example import registers as a real edge — a FALSE POSITIVE
+  // that would fail the guard for prose. `railIsolation`'s sibling tool-name
+  // guard already strips comments for exactly this reason.
   const text = readFileSync(file, 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split(/\r?\n/)
+    .map(l => l.replace(/\/\/.*$/, ''))
+    .join('\n')
   const specs: string[] = []
-  const re = /(?:from\s+|import\s*\(\s*|^\s*import\s+)['"]([^'"]+)['"]/gm
+  // `(?:^|[;}\s])import` rather than `^\s*import` (FIX_ROUND-4): a side-effect
+  // import is valid JS anywhere a statement is, including `foo();import 'x'` on
+  // one line, which the line-anchored form missed.
+  const re = /(?:from\s+|import\s*\(\s*|(?:^|[;}\s])import\s*)['"]([^'"]+)['"]/gm
   for (const m of text.matchAll(re)) specs.push(m[1])
   return specs
 }

@@ -7,6 +7,7 @@ import {
   isQuietSingle,
   segmentRail,
   spanHasFailure,
+  withSegmentationKey,
   type RailSegment,
 } from './railSegmentation.ts'
 import type { RailStepDescriptor } from './railTypes.ts'
@@ -189,4 +190,58 @@ test('isQuietSingle: one step renders without rail ceremony (DEC-3)', () => {
   const s = { index: 0, step: { key: 'k', label: 'l', status: 'success' as const, consumed: 1 } }
   assert.equal(isQuietSingle([s]), true)
   assert.equal(isQuietSingle([s, s]), false)
+})
+
+/**
+ * FIX_ROUND-4 (regression for the FIX_ROUND-3 fix).
+ *
+ * `segmentRail` disambiguates a REPEATED key to `${key}#${i}` — two steps
+ * sharing one would collide on the React key in `ActivityRail` and on the
+ * per-message expansion state (`stepStateKey`) in `RailStep`. `ChatMessage`
+ * re-resolves each step through the contribution registry for live status, and
+ * that re-resolution returns the CONTRIBUTION's key, which never carries the
+ * suffix. FIX_ROUND-3 made `resolveStep` pin segmentation's key back on; nothing
+ * pinned that, so the one-line revert `return resolved` turned nothing red.
+ *
+ * The two tests below are the missing halves: that segmentation disambiguates at
+ * all, and that re-resolution preserves it.
+ */
+test('segmentRail disambiguates a REPEATED step key (replayed tool_use_id)', () => {
+  // A describe that returns the SAME key for every block — a replayed call.
+  const describeSameKey = (ctx: { content: MessageContent }): RailStepDescriptor | null =>
+    ctx.content.content_type !== 'tool_use'
+      ? null
+      : { key: 'dup', label: 'tool', status: 'success', consumed: 1 }
+
+  const segs = segmentRail([blk('tool_use'), blk('tool_use')], describeSameKey)
+  const keys = segs
+    .filter((s): s is Extract<RailSegment, { kind: 'span' }> => s.kind === 'span')
+    .flatMap(s => s.steps.map(p => p.step.key))
+
+  assert.equal(keys.length, 2, 'both replayed calls must be present')
+  assert.equal(keys[0], 'dup')
+  assert.notEqual(keys[1], keys[0], 'the second must be disambiguated, not a duplicate')
+  assert.equal(new Set(keys).size, keys.length, 'keys must be unique within a span')
+})
+
+test('withSegmentationKey PRESERVES the segmentation key across re-resolution', () => {
+  const placed = {
+    index: 1,
+    step: { key: 'dup#1', label: 'l', status: 'success' as const, consumed: 1 },
+  }
+  // What the registry hands back: fresh live STATE, but the bare (undisambiguated)
+  // key, because a contribution cannot know its tool_use_id repeats in this message.
+  const resolved: RailStepDescriptor = { key: 'dup', label: 'l', status: 'failed', consumed: 1 }
+
+  const merged = withSegmentationKey(placed, resolved)
+  assert.equal(merged.key, 'dup#1', 'segmentation owns the identity')
+  assert.equal(merged.status, 'failed', 're-resolution owns the state')
+
+  // Unchanged key -> the SAME object, no needless copy on the common path.
+  const same: RailStepDescriptor = { key: 'dup#1', label: 'l', status: 'success', consumed: 1 }
+  assert.equal(withSegmentationKey(placed, same), same)
+
+  // No resolution at all -> fall back to the placed step, never undefined.
+  assert.equal(withSegmentationKey(placed, null), placed.step)
+  assert.equal(withSegmentationKey(placed, undefined), placed.step)
 })

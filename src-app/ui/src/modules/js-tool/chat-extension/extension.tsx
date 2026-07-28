@@ -64,8 +64,17 @@ const jsToolExtension: ChatExtension = createExtension({
       // resolved state survives a component remount. Guard on !has() so a
       // double-delivered SSE frame can't reset an already-resolved entry to
       // 'pending' (which would re-show the buttons + allow a duplicate POST).
+      //
+      // FIX_ROUND-4: the registration's outcome is CARRIED ONTO THE CARD. The
+      // card below is injected unconditionally, so a registration that failed —
+      // no transport installed, or a provider whose `register` threw while
+      // `hasElicitationTransport()` is still true — used to leave live
+      // Approve/Deny buttons over an elicitation the provider has no entry for,
+      // which is precisely the "pending forever, silently" case the boolean
+      // return was introduced to expose. `unresolvable` makes the card say so.
+      let registered = true
       if (!elicitationExists(data.elicitation_id)) {
-        registerElicitation({
+        registered = registerElicitation({
           elicitation_id: data.elicitation_id,
           message: `run_js wants to call ${data.tool_name}`,
           server: data.server,
@@ -88,6 +97,7 @@ const jsToolExtension: ChatExtension = createExtension({
           tool_name: data.tool_name,
           server: data.server,
           input: data.input,
+          unresolvable: !registered,
         },
         sequence_order: 0,
         created_at: now,

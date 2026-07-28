@@ -277,7 +277,23 @@ const mcpExtension: ChatExtension = createExtension({
           durationMs: call.duration_ms,
         }
       },
-      subscribe: onChange => useMcpComposerStore.subscribe(onChange),
+      // FIX_ROUND-4: narrowed in step with the elicitation seam below, for the
+      // same reason and with more at stake. Forwarding the WHOLE store bumped
+      // `railLiveVersion` on every `configModalVisible` toggle, `userDefaults`
+      // load, server-selection change and elicitation mutation — re-rendering
+      // every mounted ActivityRail in the transcript, each of which re-runs
+      // `resolveStep` over every step through the whole contribution registry.
+      // The live source reads nothing but `toolCalls`, and the store is
+      // immer + enableMapSet, so Map identity is a sound and complete trigger.
+      subscribe: onChange => {
+        let last = McpComposer.$.toolCalls
+        return useMcpComposerStore.subscribe(() => {
+          const next = McpComposer.$.toolCalls
+          if (next === last) return
+          last = next
+          onChange()
+        })
+      },
     }, 'mcp')
 
     // Feed the CORE-owned ELICITATION seam (FIX_ROUND-2 #3 / AP-4).

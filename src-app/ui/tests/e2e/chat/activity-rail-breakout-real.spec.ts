@@ -199,15 +199,26 @@ test.describe('Activity rail — a request for input breaks OUT of the rail, on 
     //
     //       FIX_ROUND-3: comparing the breakout to its own parent only restated
     //       `w-full`, a class this same change added — the assertion could not
-    //       fail for any reason INV-3 is about. Compare it to the width a rail
-    //       row actually gets when one is present, and otherwise to the message
-    //       bubble; both are widths INV-3 governs rather than CSS restated.
+    //       fail for any reason INV-3 is about.
+    //
+    //       FIX_ROUND-4: the rail-row comparison FR3 added to fix that was
+    //       itself wrong twice over — it used a document-wide
+    //       `querySelector('[data-testid="rail-step"]')`, so it could pick a row
+    //       from another message, and the QUIET-SINGLE rail shape renders its
+    //       row at full bubble width (DEC-3), making `breakout > railRow` go RED
+    //       on a design-conformant render. Scope it to an INDENTED rail
+    //       (`data-rail-shape="rail"`) inside the SAME message bubble — the only
+    //       shape for which "the breakout is not laid out as a rail row" is a
+    //       claim at all.
     const widths = await breakout.evaluate(el => {
       const b = el as HTMLElement
-      const row = document.querySelector('[data-testid="rail-step"]') as HTMLElement | null
+      const bubble = b.parentElement as HTMLElement
+      const row = bubble.querySelector(
+        '[data-rail-shape="rail"] [data-testid="rail-step"]',
+      ) as HTMLElement | null
       return {
         breakout: b.getBoundingClientRect().width,
-        parent: (b.parentElement as HTMLElement).getBoundingClientRect().width,
+        parent: bubble.getBoundingClientRect().width,
         railRow: row ? row.getBoundingClientRect().width : null,
       }
     })
@@ -274,13 +285,24 @@ test.describe('Activity rail — a request for input breaks OUT of the rail, on 
       .filter({ has: page.getByTestId('activity-rail-summary') })
       .first()
     if (await rail.isVisible().catch(() => false)) {
-      const isSibling = await page.evaluate(() => {
+      // FIX_ROUND-4: evaluate on THE SAME rail the block selected. The first cut
+      // narrowed the `rail` locator but left this probe on a document-wide
+      // `querySelector('[data-testid="activity-rail"]')`, so it could assert
+      // siblinghood of a DIFFERENT rail (possibly the quiet-single the filter
+      // just excluded) than the one every other assertion here operates on.
+      const isSibling = await rail.evaluate(r => {
         const b = document.querySelector('[data-testid="rail-breakout"]')
-        const r = document.querySelector('[data-testid="activity-rail"]')
-        return !!b && !!r && b.parentElement === r.parentElement
+        return !!b && b.parentElement === r.parentElement
       })
       expect(isSibling, 'the breakout must be a sibling of the rail').toBe(true)
 
+      // Collapsing is only assertable when the rail is TOGGLEABLE
+      // (`!hasFailure && !isStreaming`). At the pending-approval moment the turn
+      // is usually still streaming, so INV-4/INV-5 render the summary as a plain
+      // div with no `aria-expanded` and no collapse control — there is nothing
+      // to click. Stated here rather than left implicit: the DETERMINISTIC
+      // "collapsing the rail does not hide the request" proof is owned by the
+      // mocked sibling spec, which can guarantee a settled, toggleable rail.
       const summary = rail.getByTestId('activity-rail-summary')
       if (await summary.isVisible().catch(() => false)) {
         if ((await summary.getAttribute('aria-expanded')) === 'true') {

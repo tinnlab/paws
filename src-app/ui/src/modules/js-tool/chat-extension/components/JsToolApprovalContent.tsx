@@ -1,4 +1,4 @@
-import { useState, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Alert, Button, Space, Text } from '@ziee/kit'
 import { Check, Clock, X } from 'lucide-react'
 import type { ContentRendererProps } from '@/modules/chat/core/extensions/types'
@@ -25,6 +25,11 @@ interface JsToolApprovalData {
   tool_name: string
   server: string
   input?: Record<string, unknown>
+  /** Set by the SSE handler when the elicitation could not be REGISTERED at all
+   *  (no transport, or the provider's `register` threw). The card is injected
+   *  unconditionally, so without this it would render live buttons over an
+   *  elicitation the provider has no entry for. */
+  unresolvable?: boolean
 }
 
 export function JsToolApprovalContent({ content }: ContentRendererProps) {
@@ -41,7 +46,8 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
    * was discarded, so a click on Approve/Deny flipped a spinner and did nothing,
    * with no message, no error and no state change. Surface it instead.
    */
-  const [unresolvable, setUnresolvable] = useState(false)
+  const [resolveFailed, setResolveFailed] = useState(false)
+  const statusRef = useRef<HTMLElement>(null)
 
   // Derive the resolved state from the CORE-owned elicitation seam (the live
   // source of truth), NOT local state: the provider flips the entry
@@ -60,11 +66,36 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
   const resolved: 'approved' | 'denied' | null =
     status === 'accepted' ? 'approved' : status === 'declined' || status === 'cancelled' ? 'denied' : null
 
+  /**
+   * FIX_ROUND-4: the decision genuinely cannot be carried — either the SSE
+   * handler could not register it at all, or the transport is gone now, or a
+   * resolve attempt came back `false`. Derived (not latched) from
+   * `hasElicitationTransport()`, which re-reads on every seam bump, so the
+   * banner CLEARS by itself the moment mcp installs a transport rather than
+   * stranding the card behind a message that is no longer true.
+   */
+  const unresolvable = data.unresolvable === true || resolveFailed || !hasElicitationTransport()
+
+  /**
+   * Focus the outcome when the buttons unmount. Without this, resolving destroys
+   * the focused element and focus falls to `<body>` — a keyboard or
+   * screen-reader user loses their place in a long transcript. Focusing a
+   * `tabIndex={-1}` live region both restores position AND makes the outcome
+   * announced reliably, which a region mounted together with its own text is
+   * not (the region must pre-exist the text change — see the always-mounted
+   * container below).
+   */
+  const wasResolved = useRef<'approved' | 'denied' | null>(null)
+  useEffect(() => {
+    if (resolved && !wasResolved.current) statusRef.current?.focus()
+    wasResolved.current = resolved
+  }, [resolved])
+
   const resolve = async (action: 'accept' | 'decline') => {
     // Re-entrancy guard: never POST twice to a single-use elicitation.
-    if (submitting || resolved !== null) return
+    if (submitting || resolved !== null || unresolvable) return
     setSubmitting(true)
-    setUnresolvable(false)
+    setResolveFailed(false)
     try {
       // The transport reflects success/failure in its own entry; the derived
       // `resolved` above reacts (rollback → buttons return for retry). A `false`
@@ -72,7 +103,7 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
       // failure from "the POST was rejected", and the only one the transport can
       // report, so it gets its own user-visible message.
       const carried = await resolveElicitationVia(data.elicitation_id, action)
-      if (!carried) setUnresolvable(true)
+      if (!carried) setResolveFailed(true)
     } finally {
       setSubmitting(false)
     }
@@ -112,24 +143,46 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
                 </pre>
               </div>
             )}
-            {resolved === null ? (
+            {/*
+              ONE live region, mounted for the whole life of the card, whose
+              CONTENTS change (FIX_ROUND-4). A `role=status` element that enters
+              the accessibility tree already carrying its text is announced
+              unreliably by NVDA/JAWS/VoiceOver — the region has to pre-exist the
+              change. It is also the focus target when the buttons unmount, hence
+              `tabIndex={-1}` and `outline-none`.
+            */}
+            <Text
+              ref={statusRef}
+              tabIndex={-1}
+              role="status"
+              type={unresolvable && !resolved ? 'danger' : 'secondary'}
+              className="mt-2 block text-xs outline-none"
+              data-testid={`run-js-approval-status-${data.elicitation_id}`}
+              data-status={resolved ?? (unresolvable ? 'unresolvable' : 'pending')}
+            >
+              {resolved === 'approved'
+                ? 'Approved — script resumed.'
+                : resolved === 'denied'
+                  ? 'Denied.'
+                  : unresolvable
+                    ? 'This request cannot be answered right now — the approval channel is unavailable. Reload the conversation and try again.'
+                    : ''}
+            </Text>
+            {resolved === null && (
               <div className="mt-3">
-                {(unresolvable || !hasElicitationTransport()) && (
-                  <Text
-                    type="danger"
-                    role="status"
-                    className="mb-2 block text-xs"
-                    data-testid={`run-js-approval-unresolvable-${data.elicitation_id}`}
-                  >
-                    This request cannot be answered right now — the approval channel is
-                    unavailable. Reload the conversation and try again.
-                  </Text>
-                )}
                 <Space>
+                  {/*
+                    DISABLED, not merely explained (FIX_ROUND-4). The first cut
+                    rendered the notice above live, still-clickable buttons —
+                    contradicting this seam's own docstring ("disable + explain")
+                    and leaving the user clicking a control that spins and does
+                    nothing, which is the exact symptom being fixed.
+                  */}
                   <Button
                     icon={<Check />}
                     onClick={() => resolve('accept')}
                     loading={submitting}
+                    disabled={unresolvable}
                     size="default"
                     data-testid={`run-js-approval-approve-${data.elicitation_id}`}
                   >
@@ -140,6 +193,7 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
                     icon={<X />}
                     onClick={() => resolve('decline')}
                     loading={submitting}
+                    disabled={unresolvable}
                     size="default"
                     data-testid={`run-js-approval-deny-${data.elicitation_id}`}
                   >
@@ -147,19 +201,6 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
                   </Button>
                 </Space>
               </div>
-            ) : (
-              <Text
-                type="secondary"
-                // The buttons are UNMOUNTED when the decision lands, so whatever
-                // had keyboard focus is destroyed. `role=status` announces the
-                // outcome to a screen reader that would otherwise get nothing.
-                role="status"
-                className="mt-2 block text-xs"
-                data-testid={`run-js-approval-status-${data.elicitation_id}`}
-                data-status={resolved}
-              >
-                {resolved === 'approved' ? 'Approved — script resumed.' : 'Denied.'}
-              </Text>
             )}
           </div>
         }

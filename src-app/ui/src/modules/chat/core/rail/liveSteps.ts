@@ -54,11 +54,32 @@ function bump(): void {
  */
 export function setRailLiveSource(next: RailLiveSource | null, owner?: string): void {
   if (source === next) return
-  unsubscribeSource?.()
+  try {
+    unsubscribeSource?.()
+  } catch (e) {
+    console.error('[rail] live-source unsubscribe threw', e)
+  }
   unsubscribeSource = null
   source = next
   sourceOwner = next ? owner ?? null : null
-  if (source) unsubscribeSource = source.subscribe(bump)
+  if (source) {
+    // FIX_ROUND-4: hardened in step with its twin, `elicitation/transport.ts`.
+    // Both are registered from the SAME `mcp` extension's `initialize`, two
+    // statements apart, so a throwing `subscribe` here left an INSTALLED source
+    // with no change subscription (every rail step frozen at the status it first
+    // read) AND aborted the rest of mcp's wiring — including the elicitation
+    // transport registered immediately after. Refusing the install is what
+    // "core declares the shape, the extension pushes one in" has to mean when
+    // the pushed implementation is broken.
+    try {
+      unsubscribeSource = source.subscribe(bump)
+    } catch (e) {
+      console.error('[rail] live-source subscribe threw; refusing the install', e)
+      source = null
+      sourceOwner = null
+      unsubscribeSource = null
+    }
+  }
   bump()
 }
 
