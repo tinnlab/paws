@@ -12,7 +12,7 @@ session limit). All of it is now written and executed.
 ## Tier 1 — backend unit (`cargo test -p ziee --lib workflow::validate::`)
 
 ```
-test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 1362 filtered out; finished in 0.10s
+test result: ok. 37 passed; 0 failed; 0 ignored; 0 measured; 1362 filtered out; finished in 0.08s
 ```
 Includes `humanisation_contract::validation_codes_are_registered_and_humanised`,
 `::validation_codes_registry_is_well_formed`, and the round-2 addition
@@ -29,9 +29,9 @@ Includes `humanisation_contract::validation_codes_are_registered_and_humanised`,
 ## Tier 1 — frontend unit (node:test)
 
 ```
-validationCopy.test.ts       pass 22   fail 0
-toolSchemaForm.test.ts       pass 25   fail 0
-noFreeTextEntityRef.test.ts  pass  3   fail 0
+node --test src/modules/workflow/components/builder/*.test.ts
+  tests 91   pass 91   fail 0
+(validationCopy · toolSchemaForm · noFreeTextEntityRef · stepForms · agentStepForm · refInsert)
 ```
 - **TEST-3**: PASS — acceptance (INV-3), the class scan + its negative control.
 - **TEST-8**: PASS
@@ -48,7 +48,7 @@ noFreeTextEntityRef.test.ts  pass  3   fail 0
 npx vitest run src/modules/workflow/stores/ToolCatalog.store.test.ts \
                src/modules/workflow/stores/WorkflowBuilder.store.test.ts
 Test Files  2 passed (2)
-     Tests  49 passed (49)
+     Tests  61 passed (61)
 ```
 - **TEST-16**: PASS — the earlier SCOPE NOTE (which claimed the fetch-once cache
   and in-flight guard could not be proven headlessly) was wrong and has been
@@ -232,3 +232,22 @@ and remain:
   addon (`sdk/packages/kit/src/shadcn/input-group.tsx`) overflows its group by 4px
   at 390px. Bounded at exactly the observed value, so a 5px regression still
   fails. **New finding for the kit owner.**
+
+## Phase-7 convergence (for the record)
+
+The blind fix/re-audit loop ran to convergence. Confirmed findings per round:
+
+| round | confirmed | notes |
+|---|---|---|
+| 1 | 96 | 5 blind agents, 27 angles — incl. INV-1 and INV-6 violated |
+| 2 | 20 | defects round 1's OWN fixes introduced |
+| 3 | 7 | + a dedicated blind test-quality audit (16 more) |
+| 4 | 7 | the `/validate-def` false `prompt_file` verdict |
+| 5 | 2 | 5 high-severity candidates rejected |
+| 6 | 2 | same root cause: `prompt` XOR `prompt_file` |
+| 7 | 1 | the false required marker, not just the error |
+| 8 | 1 | HIGH — the branch's own remedy broke the run |
+| 9 | **0** | **converged** — 21 rejections, 5 of them high-severity candidates |
+
+`LEDGER.jsonl` carries all 323 rows across 34 distinct angles;
+`AUDIT_COVERAGE.tsv` maps all 210 diff hunks.
