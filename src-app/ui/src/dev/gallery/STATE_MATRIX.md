@@ -8,7 +8,7 @@
 ## Summary
 
 - **338** surfaces carry at least one renderable-state signal.
-- **2067** signals total: 1618 branch, 137 empty, 119 error, 93 loading, 96 overlay, 4 panel.
+- **2069** signals total: 1620 branch, 137 empty, 119 error, 93 loading, 96 overlay, 4 panel.
 - **4** right-panel renderers registered (each a right-panel-open state).
 - **35** slot registrations (sidebar / settings / chat mount points).
 
@@ -2780,11 +2780,13 @@ Required states: _(branch-only — proven via dynamic coverage)_
 |---|---|---|
 | branch | `isSelectField` | 69 |
 | branch | `isMultiSelect` | 71 |
-| branch | `status === 'accepted'` | 208 |
-| branch | `items.length > 0` | 237 |
-| branch | `status === 'declined'` | 251 |
-| branch | `status === 'cancelled'` | 271 |
-| branch | `isRichAskUser` | 302 |
+| branch | `status === 'accepted'` | 215 |
+| branch | `items.length > 0` | 244 |
+| branch | `status === 'declined'` | 258 |
+| branch | `status === 'cancelled'` | 278 |
+| branch | `schemaNotice` | 308 |
+| branch | `elicitation.message` | 346 |
+| branch | `isRichAskUser` | 366 |
 
 ### `modules/mcp/chat-extension/components/JsToolApprovalContent`
 

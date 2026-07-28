@@ -4,7 +4,7 @@
 // renders + overlay triggers + panel/slot registrations) that the reconciliation
 // gate (scripts/reconcile-state-matrix.mjs) checks the gallery entries against.
 //
-// 338 surfaces carry renderable-state signals; 2067 signals total.
+// 338 surfaces carry renderable-state signals; 2069 signals total.
 
 /** A signal is one mechanically-detected render fork (a state the surface can be in). */
 export interface StateSignal {
@@ -2529,11 +2529,13 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     signals: [
       { kind: "branch", condition: "isSelectField", line: 69 },
       { kind: "branch", condition: "isMultiSelect", line: 71 },
-      { kind: "branch", condition: "status === 'accepted'", line: 208 },
-      { kind: "branch", condition: "items.length > 0", line: 237 },
-      { kind: "branch", condition: "status === 'declined'", line: 251 },
-      { kind: "branch", condition: "status === 'cancelled'", line: 271 },
-      { kind: "branch", condition: "isRichAskUser", line: 302 },
+      { kind: "branch", condition: "status === 'accepted'", line: 215 },
+      { kind: "branch", condition: "items.length > 0", line: 244 },
+      { kind: "branch", condition: "status === 'declined'", line: 258 },
+      { kind: "branch", condition: "status === 'cancelled'", line: 278 },
+      { kind: "branch", condition: "schemaNotice", line: 308 },
+      { kind: "branch", condition: "elicitation.message", line: 346 },
+      { kind: "branch", condition: "isRichAskUser", line: 366 },
     ],
   },
   "modules/mcp/chat-extension/components/JsToolApprovalContent": {

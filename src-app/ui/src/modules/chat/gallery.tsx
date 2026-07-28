@@ -36,6 +36,7 @@ import {
   literaturePanelData,
   liveAskUser,
   liveElicitation,
+  liveElicitationNoFields,
   rightPanelFile,
   streamingCassette,
 } from '@/dev/gallery/fixtures/chat-deep'
@@ -449,6 +450,16 @@ export const gallery: ModuleGallery = {
         // The block's own `status: 'pending'` already renders the form; seeding the
         // McpComposer live entry (matching id) makes it the freshest-status source too.
         useMcpComposerStore.getState().addElicitationRequest(liveElicitation)
+      },
+    },
+    {
+      slug: 'deep-chat-elicitation-no-fields',
+      title: 'Conversation — elicitation with no renderable fields (degraded)',
+      conversationId: CHAT_DEEP_CONVERSATION_IDS.elicitation,
+      note: 'the honest degraded state: a schema that yields zero fields shows WHY and offers Decline / Accept-without-values, instead of an empty form with a Submit that fabricates an empty answer',
+      setup: async () => {
+        await whenLoaded(CHAT_DEEP_CONVERSATION_IDS.elicitation)
+        useMcpComposerStore.getState().addElicitationRequest(liveElicitationNoFields)
       },
     },
     {

@@ -233,6 +233,27 @@ export const liveElicitation: SSEChatStreamMcpElicitationRequiredData = {
   },
 }
 
+/** The DEGRADED elicitation: a request whose schema yields no renderable field.
+ *
+ *  Before the stringified-schema fix this rendered as a normal-looking card with
+ *  a message, an EMPTY form, and a working Submit that POSTed `content: {}` as
+ *  if the user had answered — a card that lies. It now states why there is
+ *  nothing to fill in and offers the two real choices. `x-ziee-error` is the
+ *  reason the backend mints when it drops an unusable schema (which the UI
+ *  previously threw away). Seeded so the degraded state is REVIEWABLE with real
+ *  content, not only reachable in an error path nobody looks at. */
+export const liveElicitationNoFields: SSEChatStreamMcpElicitationRequiredData = {
+  elicitation_id: 'elicit-live-nofields-0001',
+  message: 'Which output format do you want for the export?',
+  server: 'Code Sandbox',
+  requested_schema: {
+    type: 'object',
+    properties: {},
+    'x-ziee-error':
+      'the MCP server sent `requestedSchema` as a string that is not a valid JSON object, so no form could be built',
+  },
+}
+
 // A DEDICATED conversation ending in a pending ziee-internal `ask_user`
 // elicitation (marked `x-ziee-askuser`), so the RICH decision UX renders: a
 // 2-question wizard of selectable option cards with per-option descriptions, a
