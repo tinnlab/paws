@@ -56,14 +56,21 @@ test.describe('ask_user — a JSON-encoded schema still renders a real form', ()
       await loginAsAdmin(page, baseURL)
       const token = await getAdminToken(apiURL)
 
-      // A `custom` provider pointing at the loopback stub. `custom` routes to the
+      // An `openai` provider whose base_url points at the loopback stub — the
+      // established BRIDGE pattern (`agent-llm-helpers.ts::createBridgeToolModel`,
+      // and how every local-bridge spec wires a self-hosted endpoint).
+      //
+      // NOT `provider_type: 'custom'`: the row is created and the API accepts
+      // it, but no model under it reaches the chat model dropdown, so the spec
+      // fails at model selection before it can prove anything. Observed, not
+      // assumed. `openai` + an explicit `base_url` routes to the same
       // OpenAI-compatible client, and `validate_base_url` uses the DEV_LOCAL
       // policy, which allows 127.0.0.1.
       const providerRes = await page.request.post(`${apiURL}/api/llm-providers`, {
         headers: { Authorization: `Bearer ${token}` },
         data: {
           name: `stub-oai-${Date.now()}`,
-          provider_type: 'custom',
+          provider_type: 'openai',
           enabled: true,
           api_key: 'stub-key',
           base_url: stub.baseUrl(),
