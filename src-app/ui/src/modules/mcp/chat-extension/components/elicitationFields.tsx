@@ -1,11 +1,11 @@
 import {
-  DatePicker,
   FormField,
   Input,
   InputNumber,
   PasswordInput,
   Switch,
 } from '@ziee/kit'
+import { LazyDatePicker } from '@/components/common/LazyDatePicker'
 import type { FieldSchema } from './elicitationOptions'
 
 /**
@@ -72,7 +72,7 @@ export function renderInputField(
         required={required}
         description={fieldSchema.description}
       >
-        <DatePicker
+        <LazyDatePicker
           placeholder={`Select ${label.toLowerCase()}`}
           aria-label={label}
           valueFormat="yyyy-MM-dd"
@@ -94,7 +94,7 @@ export function renderInputField(
         required={required}
         description={fieldSchema.description}
       >
-        <DatePicker
+        <LazyDatePicker
           placeholder={`Select ${label.toLowerCase()}`}
           aria-label={label}
           valueFormat="yyyy-MM-dd'T'HH:mm:ss"

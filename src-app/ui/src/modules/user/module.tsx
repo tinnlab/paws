@@ -1,15 +1,9 @@
 import { User as UserIcon, Users as UsersIcon } from 'lucide-react'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { createModule } from '@ziee/framework'
 import { SettingsLayoutDef } from '@/modules/settings/SettingsLayout'
-import { useUserGroupDrawerStore } from '@/modules/user/components/group/EditUserGroupDrawer.store'
-import { useGroupMembersDrawerStore } from '@/modules/user/components/group/GroupMembersDrawer.store'
-import { useAssignGroupDrawerStore } from '@/modules/user/components/user/AssignGroupDrawer.store'
-import { useCreateUserDrawerStore } from '@/modules/user/components/user/CreateUserDrawer.store'
-import { useEditUserDrawerStore } from '@/modules/user/components/user/EditUserDrawer.store'
-import { useResetPasswordDrawerStore } from '@/modules/user/components/user/ResetPasswordDrawer.store'
-import { useUserGroupsDrawerStore } from '@/modules/user/components/user/UserGroupsDrawer.store'
-import { useUserGroupsStore, useUsersStore } from '@/modules/user/stores'
+// NOTE: the `Users` store is NOT imported/registered here — it is whole-store-lazy
+// (self-registers from its own chunk when a consumer imports it). See Users.store.ts.
 import '@/modules/user/types' // Import type augmentation
 import '@/modules/user/types/GroupWidget' // Register userGroup widget slot
 import { lazyWithPreload } from '@/utils/lazyWithPreload'
@@ -32,6 +26,8 @@ export default createModule({
     version: '1.0.0',
     description: 'User and user group management',
   },
+  // smart-loading gate (build-lifted into the manifest)
+  shouldLoad: (ctx) => ctx.isAuthenticated && ctx.can(Permissions.UsersRead),
   dependencies: ['router'],
   routes: [
     {
@@ -50,42 +46,6 @@ export default createModule({
     },
   ],
   stores: [
-    {
-      name: 'Users',
-      store: useUsersStore,
-    },
-    {
-      name: 'UserGroups',
-      store: useUserGroupsStore,
-    },
-    {
-      name: 'EditUserGroupDrawer',
-      store: useUserGroupDrawerStore,
-    },
-    {
-      name: 'GroupMembersDrawer',
-      store: useGroupMembersDrawerStore,
-    },
-    {
-      name: 'CreateUserDrawer',
-      store: useCreateUserDrawerStore,
-    },
-    {
-      name: 'EditUserDrawer',
-      store: useEditUserDrawerStore,
-    },
-    {
-      name: 'ResetPasswordDrawer',
-      store: useResetPasswordDrawerStore,
-    },
-    {
-      name: 'UserGroupsDrawer',
-      store: useUserGroupsDrawerStore,
-    },
-    {
-      name: 'AssignGroupDrawer',
-      store: useAssignGroupDrawerStore,
-    },
   ],
   slots: {
     settingsAdminPages: [

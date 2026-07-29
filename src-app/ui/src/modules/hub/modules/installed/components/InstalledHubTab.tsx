@@ -14,11 +14,15 @@ import {
   Text,
   message,
 } from '@ziee/kit'
-import { Stores } from '@ziee/framework/stores'
 import { ApiClient } from '@/api-client'
 import { emitMcpServerDeleted } from '@/modules/mcp/events/emitters'
 import { emitAssistantDeleted } from '@/modules/assistant/events/emitters'
 import type { HubInstalledRow } from '@/api-client/types'
+import { Skill } from '@/modules/skill/stores/skill'
+import { Workflow } from '@/modules/workflow/stores/workflow'
+import { HubInstalled } from '@/modules/hub/stores/hub-installed-store'
+import { HubAssistants } from '@/modules/hub/modules/assistants/stores/hub-assistants-store'
+import { HubMcpServers } from '@/modules/hub/modules/mcp/stores/hub-mcp-servers-store'
 
 // Three section cards, data-driven so the row-render loop stays
 // flat. Icons match the per-category icon used elsewhere in the
@@ -67,10 +71,10 @@ const CATEGORY_CARDS: Array<{
  * between rows, action buttons right-aligned in the row.
  */
 export function InstalledHubTab() {
-  const items = Stores.HubInstalled.items
-  const loading = Stores.HubInstalled.loading
-  const error = Stores.HubInstalled.error
-  const catalogVersion = Stores.HubInstalled.catalogVersion
+  const items = HubInstalled.items
+  const loading = HubInstalled.loading
+  const error = HubInstalled.error
+  const catalogVersion = HubInstalled.catalogVersion
   const [busyId, setBusyId] = useState<string | null>(null)
 
   // Group rows by hub_category. Done in useMemo so the three cards
@@ -104,24 +108,24 @@ export function InstalledHubTab() {
     try {
       if (row.hub_category === 'assistant') {
         if (row.is_template_install) {
-          await Stores.HubAssistants.createTemplateFromHub({
+          await HubAssistants.createTemplateFromHub({
             hub_id: row.hub_id,
             replace_existing: true,
           })
         } else {
-          await Stores.HubAssistants.createFromHub({
+          await HubAssistants.createFromHub({
             hub_id: row.hub_id,
             replace_existing: true,
           })
         }
       } else if (row.hub_category === 'mcp_server') {
         if (row.is_system_mcp_install) {
-          await Stores.HubMcpServers.createSystemFromHub({
+          await HubMcpServers.createSystemFromHub({
             hub_id: row.hub_id,
             replace_existing: true,
           })
         } else {
-          await Stores.HubMcpServers.createFromHub({
+          await HubMcpServers.createFromHub({
             hub_id: row.hub_id,
             replace_existing: true,
           })
@@ -130,9 +134,9 @@ export function InstalledHubTab() {
         // Only USER-scope skills reach here — system skills disable the
         // Re-install button (they need group choices; see the button gate).
         // The backend re-install path replaces the prior install for this hub_id.
-        await Stores.Skill.installFromHub(row.hub_id)
+        await Skill.installFromHub(row.hub_id)
       } else if (row.hub_category === 'workflow') {
-        await Stores.Workflow.installFromHub(row.hub_id)
+        await Workflow.installFromHub(row.hub_id)
       } else {
         // Unhandled category — surface an error instead of a false success.
         throw new Error(`Re-install not supported for ${row.hub_category}`)
@@ -140,7 +144,7 @@ export function InstalledHubTab() {
       message.success(
         `Re-installed ${row.name || row.hub_id} from v${catalogVersion ?? '?'}`,
       )
-      await Stores.HubInstalled.loadInstalled()
+      await HubInstalled.loadInstalled()
     } catch (e) {
       message.error(
         `Failed to re-install ${row.hub_id}: ${(e as Error)?.message ?? e}`,
@@ -195,7 +199,7 @@ export function InstalledHubTab() {
         throw new Error(`Remove not supported for ${row.hub_category}`)
       }
       message.success(`Removed ${row.name || row.hub_id}`)
-      await Stores.HubInstalled.loadInstalled()
+      await HubInstalled.loadInstalled()
     } catch (e) {
       message.error(
         `Failed to remove ${row.hub_id}: ${(e as Error)?.message ?? e}`,
@@ -220,7 +224,7 @@ export function InstalledHubTab() {
           resource="installed items"
           description="Your installed hub items couldn't be loaded. Check your connection and try again."
           details={error}
-          onRetry={() => void Stores.HubInstalled.loadInstalled()}
+          onRetry={() => void HubInstalled.loadInstalled()}
           data-testid="hub-installed-error"
         />
       </div>

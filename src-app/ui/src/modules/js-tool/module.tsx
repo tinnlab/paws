@@ -1,10 +1,9 @@
 import { Braces } from 'lucide-react'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { createModule } from '@ziee/framework'
 import { SettingsLayoutDef } from '@/modules/settings/SettingsLayout'
 import { lazyWithPreload } from '@/utils/lazyWithPreload'
 import '@/modules/settings/types/SettingsSlots' // Register settings slot types
-import { useJsToolSettingsStore } from './stores/JsToolSettings.store'
 import './types' // CRITICAL: enable store type declaration merging
 
 const JsToolSettingsPage = lazyWithPreload(() =>
@@ -19,6 +18,8 @@ export default createModule({
     version: '1.0.0',
     description: 'Admin-configurable resource limits for the built-in run_js tool',
   },
+  // smart-loading gate (build-lifted into the manifest)
+  shouldLoad: (ctx) => ctx.isAuthenticated && ctx.can(Permissions.JsToolSettingsRead),
   dependencies: ['router'],
   routes: [
     {
@@ -30,10 +31,6 @@ export default createModule({
     },
   ],
   stores: [
-    {
-      name: 'JsToolSettings',
-      store: useJsToolSettingsStore,
-    },
   ],
   slots: {
     settingsAdminPages: [

@@ -206,6 +206,172 @@ async fn t2_run_from_workspace_rejects_traversal() {
     }
 }
 
+/// **TEST-26** — the tier-2 assertion of the narrowing, at the surface that
+/// actually consumes it.
+///
+/// A `dir` with exactly ONE component still reaches a NESTED root when that
+/// component is a symlink, because the resolver canonicalizes. The nested root
+/// is the whole problem: its intermediate component lives inside the read-write
+/// bind-mounted workspace, so a later sandbox step can swap it for a symlink to
+/// `/` and re-anchor every subsequent confined read. The bundle authored here is
+/// otherwise perfectly VALID, so only the confinement can refuse it — a
+/// rejection for any other reason would show up as a different code.
+///
+/// `#[cfg(unix)]` only because the test needs `symlink` to build the attack
+/// (on Windows it needs a privilege the test user does not have).
+#[cfg(unix)]
+#[tokio::test]
+async fn t2_workspace_dir_reaching_a_nested_root_via_symlink_is_refused() {
+    let server = TestServer::start().await;
+    let (token, _uid, conv) = user_with_conversation(&server, "wf_ws_symlink").await;
+    author_workspace(conv, "a/etc", SANDBOX_WF, &[]);
+    std::os::unix::fs::symlink("a/etc", workspace_dir_for(conv, "proj")).unwrap();
+
+    for verb in ["validate_from_workspace", "run_from_workspace"] {
+        let resp = jsonrpc(
+            &server,
+            &token,
+            Some(conv),
+            "tools/call",
+            json!({ "name": verb, "arguments": { "dir": "proj" } }),
+        )
+        .await;
+        assert_eq!(resp.status(), 200);
+        let body: Json = resp.json().await.unwrap();
+        assert_eq!(body["result"]["isError"], json!(true), "{verb}: {body}");
+        assert_eq!(
+            body["result"]["structuredContent"]["code"],
+            json!("WORKFLOW_WORKSPACE_ESCAPE"),
+            "{verb}: a single-component dir that RESOLVES to a nested root must be \
+             refused as an escape: {body}"
+        );
+    }
+
+    // Control on the same tree: the nested bundle IS valid when reached the
+    // legitimate way, so the rejection above is the confinement and not the
+    // bundle's contents.
+    author_workspace(conv, "flow", SANDBOX_WF, &[]);
+    let resp = jsonrpc(
+        &server,
+        &token,
+        Some(conv),
+        "tools/call",
+        json!({ "name": "validate_from_workspace", "arguments": { "dir": "flow" } }),
+    )
+    .await;
+    let body: Json = resp.json().await.unwrap();
+    assert_eq!(
+        body["result"]["structuredContent"]["valid"],
+        json!(true),
+        "{body}"
+    );
+}
+
+/// **TEST-28** — the USE-time half of the rule, on a persisted row.
+///
+/// `resolve_conversation_workspace_dir` can only vet a root at the moment it
+/// mints one. The ephemeral row stores that root in `workflows.extracted_path`
+/// and `spawn_run` / `resume_run` / `run_for_test` read it back out of the DB,
+/// so a row written BEFORE the rule existed (or by any future writer that skips
+/// the resolver) would run unvetted. This inserts exactly such a legacy row —
+/// a nested `extracted_path` the resolver would no longer mint — and drives the
+/// real `POST /workflows/{id}/run`.
+///
+/// The bundle at that nested path is VALID, so a refusal cannot come from the
+/// workflow's contents; and the control below runs the identical bundle from a
+/// direct-child path, which must succeed in reaching the runner. Without the
+/// `check_persisted_workspace_root` call in `preflight` this test goes green on
+/// the first leg.
+#[tokio::test]
+async fn t2_persisted_nested_extracted_path_is_refused_at_run_time() {
+    let server = TestServer::start().await;
+    let (token, uid, conv) = user_with_conversation(&server, "wf_ws_persisted").await;
+    let pool = db_pool(&server).await;
+    let pool2 = db_pool(&server).await;
+
+    // Two identical bundles: one nested (the legacy shape), one legal.
+    author_workspace(conv, "a/etc", SANDBOX_WF, &[]);
+    author_workspace(conv, "legal", SANDBOX_WF, &[]);
+
+    let mut ids = Vec::new();
+    for (name, dir) in [("legacy-nested", "a/etc"), ("legacy-legal", "legal")] {
+        let id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO workflows (id, name, version, extracted_path, bundle_sha256, \
+             bundle_size_bytes, file_count, entry_point, scope, owner_user_id, created_by, \
+             enabled, is_dev, ephemeral, conversation_id) \
+             VALUES ($1,$2,'0.0.0',$3,'0',0,1,'workflow.yaml','user',$4,$4,TRUE,FALSE,TRUE,$5)",
+        )
+        .bind(id)
+        .bind(name)
+        .bind(workspace_dir_for(conv, dir).to_string_lossy().to_string())
+        .bind(Uuid::parse_str(&uid).unwrap())
+        .bind(conv)
+        .execute(&pool)
+        .await
+        .expect("insert legacy ephemeral row");
+        ids.push(id);
+    }
+    pool.close().await;
+
+    let run = |id: Uuid| {
+        let server = &server;
+        let token = &token;
+        async move {
+            reqwest::Client::new()
+                .post(server.api_url(&format!("/workflows/{id}/run")))
+                .header("Authorization", format!("Bearer {token}"))
+                .json(&json!({ "conversation_id": conv, "inputs": { "name": "x" } }))
+                .send()
+                .await
+                .unwrap()
+        }
+    };
+
+    let nested = run(ids[0]).await;
+    let status = nested.status();
+    let body: Json = nested.json().await.unwrap_or(Json::Null);
+    assert!(
+        status.is_client_error(),
+        "a persisted NESTED extracted_path must be refused at run time, got {status}: {body}"
+    );
+    assert_eq!(
+        body["error_code"],
+        json!("WORKFLOW_WORKSPACE_ESCAPE"),
+        "and refused by the workspace shape rule specifically: {body}"
+    );
+    // ORDERING, pinned: `spawn_run` validates the bundle (reading every
+    // `prompt_file:` through the confined open this shape is what makes sound)
+    // and inserts the run row BEFORE it reaches `preflight`. So "no run row
+    // exists" is the observable proof that the refusal happened at the top of
+    // `spawn_run` rather than in `preflight` — the guard's own doc claims it is
+    // asserted before the first use, and this is what falsifies that claim if
+    // only the `preflight` copy survives.
+    let sql = "SELECT COUNT(*) FROM workflow_runs WHERE workflow_id = $1";
+    let runs: i64 = sqlx::query_scalar(sql)
+        .bind(ids[0])
+        .fetch_one(&pool2)
+        .await
+        .unwrap();
+    pool2.close().await;
+    assert_eq!(
+        runs, 0,
+        "the refusal must precede the validate + insert_run pass, leaving no run row"
+    );
+
+    // Control: the same bundle at a legal direct-child path is NOT refused by
+    // this rule — so the rejection above is the shape, not the row or the yaml.
+    let legal = run(ids[1]).await;
+    let legal_status = legal.status();
+    let legal_body: Json = legal.json().await.unwrap_or(Json::Null);
+    assert_ne!(
+        legal_body["error_code"],
+        json!("WORKFLOW_WORKSPACE_ESCAPE"),
+        "a direct-child extracted_path must not trip the shape rule \
+         (status {legal_status}): {legal_body}"
+    );
+}
+
 /// Conversation A cannot ingest a dir that only exists under conversation B's
 /// workspace — the dir is always resolved against the CALLER's conversation.
 #[tokio::test]

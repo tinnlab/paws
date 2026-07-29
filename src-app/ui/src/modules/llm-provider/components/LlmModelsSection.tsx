@@ -15,10 +15,15 @@ import { message } from '@ziee/kit'
 import { Loading } from '@/core/components/Loading'
 import { useParams } from 'react-router-dom'
 import { useState } from 'react'
-import { Stores } from '@ziee/framework/stores'
 import { ApiClient } from '@/api-client'
 import { usePermission } from '@/core/permissions'
-import { Permissions, type LlmModel } from '@/api-client/types'
+import { type LlmModel } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
+import { LlmProvider } from '@/modules/llm-provider/stores/llmProvider'
+import { AddLocalLlmModelUploadDrawer } from '@/modules/llm-provider/stores/llmModelDrawers/addLocalLlmModelUploadDrawer'
+import { AddRemoteLlmModelDrawer } from '@/modules/llm-provider/stores/llmModelDrawers/addRemoteLlmModelDrawer'
+import { EditLlmModelDrawer } from '@/modules/llm-provider/stores/llmModelDrawers/editLlmModelDrawer'
+import { AddLocalLlmModelDownloadDrawer } from '@/modules/llm-provider/stores/llmModelDrawers/addLocalLlmModelDownloadDrawer'
 
 export function LlmModelsSection() {
   const { providerId } = useParams<{ providerId?: string }>()
@@ -28,13 +33,18 @@ export function LlmModelsSection() {
   >({})
 
   // Store data
-  const { llmModelsLoading } = Stores.LlmProvider
+  // `refreshingModels` is read HERE, in the component body, not inside the
+  // `getRefreshButton` render helper below: a store-proxy field read IS a hook
+  // (useEffect + useStore — see framework/src/stores.ts), and inside that helper
+  // it sat behind two early returns, so the hook count varied with the provider
+  // type / edit permission (taxonomy O2).
+  const { llmModelsLoading, refreshingModels } = LlmProvider
   const canEditModels = usePermission(Permissions.LlmModelsEdit)
   const canDeleteModels = usePermission(Permissions.LlmModelsDelete)
   const canCreateModels = usePermission(Permissions.LlmModelsCreate)
 
   // Get current provider and its models
-  const currentProvider = Stores.LlmProvider.providers.find(
+  const currentProvider = LlmProvider.providers.find(
     p => p.id === providerId,
   )
   const llmModels = currentProvider?.llm_models || []
@@ -45,9 +55,9 @@ export function LlmModelsSection() {
 
     try {
       if (enabled) {
-        await Stores.LlmProvider.enableLlmModel(modelId)
+        await LlmProvider.enableLlmModel(modelId)
       } else {
-        await Stores.LlmProvider.disableLlmModel(modelId)
+        await LlmProvider.disableLlmModel(modelId)
       }
 
       // Check if this was the last enabled model being disabled
@@ -59,7 +69,7 @@ export function LlmModelsSection() {
         // If no models remain enabled and provider is currently enabled, disable the provider
         if (remainingEnabledModels.length === 0 && currentProvider.enabled) {
           try {
-            await Stores.LlmProvider.updateLlmProvider(currentProvider.id, {
+            await LlmProvider.updateLlmProvider(currentProvider.id, {
               enabled: false,
             })
             const modelName =
@@ -102,7 +112,7 @@ export function LlmModelsSection() {
     if (!currentProvider) return
 
     try {
-      await Stores.LlmProvider.deleteLlmModel(modelId)
+      await LlmProvider.deleteLlmModel(modelId)
       message.success('Model deleted')
     } catch (error) {
       console.error('Failed to delete model:', error)
@@ -123,7 +133,7 @@ export function LlmModelsSection() {
         await ApiClient.LocalRuntime.stopModel({ model_id: modelId }, undefined)
         message.success('Model stopped')
       }
-      await Stores.LlmProvider.loadModelsForProvider(currentProvider.id)
+      await LlmProvider.loadModelsForProvider(currentProvider.id)
     } catch (error) {
       console.error('Failed to start/stop model:', error)
       message.error(
@@ -140,11 +150,11 @@ export function LlmModelsSection() {
     if (!currentProvider) return
     if (currentProvider.provider_type === 'local') {
       // For local providers, open the upload drawer by default
-      Stores.AddLocalLlmModelUploadDrawer.openAddLocalLlmModelUploadDrawer(
+      AddLocalLlmModelUploadDrawer.openAddLocalLlmModelUploadDrawer(
         currentProvider.id,
       )
     } else {
-      Stores.AddRemoteLlmModelDrawer.openAddRemoteLlmModelDrawer(
+      AddRemoteLlmModelDrawer.openAddRemoteLlmModelDrawer(
         currentProvider.id,
         currentProvider.provider_type,
       )
@@ -153,7 +163,7 @@ export function LlmModelsSection() {
 
   const handleEditLlmModel = (modelId: string) => {
     if (!currentProvider) return
-    Stores.EditLlmModelDrawer.openEditLlmModelDrawer(modelId)
+    EditLlmModelDrawer.openEditLlmModelDrawer(modelId)
   }
 
   // Reconcile this remote provider's saved models against its live model list —
@@ -161,7 +171,7 @@ export function LlmModelsSection() {
   const handleRefreshModels = async () => {
     if (!currentProvider) return
     try {
-      const models = await Stores.LlmProvider.refreshProviderModels(currentProvider.id)
+      const models = await LlmProvider.refreshProviderModels(currentProvider.id)
       const deprecated = models.filter(m => m.is_deprecated).length
       message.success(
         deprecated > 0
@@ -267,7 +277,7 @@ export function LlmModelsSection() {
                   label: 'Upload from Files',
                   icon: <Upload />,
                   onClick: () =>
-                    Stores.AddLocalLlmModelUploadDrawer.openAddLocalLlmModelUploadDrawer(
+                    AddLocalLlmModelUploadDrawer.openAddLocalLlmModelUploadDrawer(
                       currentProvider.id,
                     ),
                 },
@@ -276,7 +286,7 @@ export function LlmModelsSection() {
                   label: 'Download from Repository',
                   icon: <Plus />,
                   onClick: () =>
-                    Stores.AddLocalLlmModelDownloadDrawer.openAddLocalLlmModelDownloadDrawer(
+                    AddLocalLlmModelDownloadDrawer.openAddLocalLlmModelDownloadDrawer(
                       currentProvider.id,
                     ),
                 },
@@ -318,7 +328,7 @@ export function LlmModelsSection() {
     // Refresh mutates is_deprecated → gate on edit (matches the backend's
     // llm_models::edit on POST /refresh-models), not create.
     if (!canEditModels) return null
-    const refreshing = Boolean(Stores.LlmProvider.refreshingModels[currentProvider.id])
+    const refreshing = Boolean(refreshingModels[currentProvider.id])
     return (
       <Tooltip content="Refresh models from provider">
         <span className="inline-flex">

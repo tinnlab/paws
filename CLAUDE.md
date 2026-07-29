@@ -949,6 +949,19 @@ nothing sensitive.
   broadcast pool used by download/hardware SSE). Caps: `512` global / `12`
   per-user / `1024` bounded channel depth (a stalled reader is pruned →
   the client reconnects + resyncs). Mutex is poison-recovering.
+  **Slot release is RAII**: the subscribe handler constructs its `ConnGuard`
+  eagerly, the instant `register()` succeeds, and only MOVES it into the
+  `async_stream::stream!` body — declaring it *inside* that body makes it a
+  local of a generator that never runs until the stream's first poll, so a
+  stream dropped before that poll would hold its slot for the life of the
+  process. `register()` additionally sweeps connections whose channel is closed
+  before each cap check, so a cap is never charged for a stream that is gone and
+  a user cannot be permanently 429'd out of their own account. A connection is
+  **never** reclaimed merely for being OLD (no TTL, no deadline reaping): that
+  would free the accounting slot while the stream, task and socket survive, so
+  the cap would bound bookkeeping instead of real resources. The chat-token
+  registry (`chat/stream/registry.rs`) is the same design with
+  config-driven caps.
 - **`handlers.rs`** — `GET /api/sync/subscribe`, gated by `profile::read`.
   Sends a `connected{connection_id}` handshake, keep-alive, then a
   `tokio::select!` over {channel recv, 60s re-check, JWT `exp` deadline}. The

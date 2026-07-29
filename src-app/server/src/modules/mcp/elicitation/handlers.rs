@@ -54,12 +54,33 @@ pub async fn respond_to_elicitation(
         Some(true) => {}
     }
 
+    // The user's answer is a JSON OBJECT of field values. Our own frontend
+    // always sends one (`resolveElicitation` is typed
+    // `content?: Record<string, unknown>`), but this is a public REST route that
+    // accepts any `Value`, and a JSON-ENCODED object here would reach the model
+    // double-encoded through `ask_user_tool_result`'s `to_string`, and would be
+    // POSTed back to an external MCP server as a non-conformant JSON-RPC result.
+    // Same one rule as every model-facing argument: decode it, or refuse with a
+    // message the caller can act on. Only `accept` carries content; `decline` /
+    // `cancel` and an absent content are untouched.
+    let content = match (request.action.as_str(), request.content.clone()) {
+        ("accept", Some(v)) if !v.is_null() => Some(
+            crate::common::tool_args::coerce_value(
+                v,
+                crate::common::tool_args::ArgShape::Object,
+                "content",
+                r#"{"name":"My project","confirm":true}"#,
+            )
+            .map_err(|e| AppError::bad_request("INVALID_CONTENT", e.into_message()))?,
+        ),
+        (_, other) => other,
+    };
+
     let action = request.action.clone();
-    let content = request.content.clone();
 
     let response = models::ElicitationResponse {
         action: request.action,
-        content: request.content,
+        content: content.clone(),
     };
 
     let (found, content_id_opt) = registry::respond(elicitation_id, response);

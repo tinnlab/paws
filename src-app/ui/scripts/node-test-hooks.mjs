@@ -1,54 +1,58 @@
 import { pathToFileURL } from 'node:url'
-import { existsSync, realpathSync, statSync } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
 import { dirname, resolve as presolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const SRC = presolve(HERE, '../src') + '/'
+const SDK_SRC = presolve(HERE, '../../../sdk/packages') + '/'
 const STUBS = {
   '@/core/module-system': SRC + 'core/__test-stubs__/module-system.ts',
   '@/core/events': SRC + 'core/__test-stubs__/events.ts',
+  // The permissions BARREL re-exports `Can.tsx` (JSX), which node's
+  // type-stripping runtime cannot parse — any spec that transitively imports it
+  // dies before a single assertion. Concrete `.ts` members
+  // (`permissions/authView.ts`, `permissions/evaluatePermission.ts`) still
+  // resolve normally.
+  '@ziee/framework/permissions': SRC + 'core/__test-stubs__/framework-permissions.ts',
 }
+// `@ziee/<pkg>/<subpath>` → `sdk/packages/<pkg>/src/<subpath>`. The workspace
+// packages publish an EXTENSIONLESS export map (`"./*": "./src/*"`), which Vite
+// resolves but node's ESM resolver cannot, so a unit spec importing a framework
+// module (directly, or transitively through the app module under test) fails
+// with ERR_MODULE_NOT_FOUND. Same probe order as the `@/` branch below.
+const SDK = SDK_SRC
 const isFile = p => existsSync(p) && statSync(p).isFile()
-const CANDIDATES = ['.ts', '.tsx', '/index.ts', '/index.tsx']
-
+const probe = base => {
+  for (const c of [base + '.ts', base + '.tsx', base + '/index.ts', base + '/index.tsx', base]) {
+    if (isFile(c)) return { url: pathToFileURL(c).href, shortCircuit: true }
+  }
+  return null
+}
 export async function resolve(spec, ctx, next) {
   if (STUBS[spec]) return { url: pathToFileURL(STUBS[spec]).href, shortCircuit: true }
   if (spec.startsWith('@/')) {
-    const base = SRC + spec.slice(2)
-    for (const c of [...CANDIDATES.map(e => base + e), base]) {
-      if (isFile(c)) return { url: pathToFileURL(c).href, shortCircuit: true }
+    const hit = probe(SRC + spec.slice(2))
+    if (hit) return hit
+  }
+  if (spec.startsWith('@ziee/')) {
+    const [pkg, ...rest] = spec.slice('@ziee/'.length).split('/')
+    const hit = probe(`${SDK}${pkg}/src/${rest.join('/') || 'index'}`)
+    if (hit) return hit
+  }
+  // Extensionless RELATIVE specifiers INSIDE the sdk packages (`./x`, `../y/z`).
+  // The sdk sources are written for Vite, which fills in `.ts` / `/index.ts`;
+  // node's ESM resolver does not, so a spec that reaches an sdk module through
+  // one of those hops dies with ERR_MODULE_NOT_FOUND before any assertion runs.
+  //
+  // Deliberately scoped to the SDK tree: the app tree (`src-app/ui/src`) resolves
+  // exactly as it did before, so no existing app spec's behaviour — including its
+  // failure signature — changes.
+  if ((spec.startsWith('./') || spec.startsWith('../')) && ctx.parentURL?.startsWith('file:')) {
+    const parentFile = fileURLToPath(ctx.parentURL)
+    if (parentFile.startsWith(SDK_SRC)) {
+      const hit = probe(presolve(dirname(parentFile), spec))
+      if (hit) return hit
     }
   }
-  try {
-    return await next(spec, ctx)
-  } catch (err) {
-    // Extensionless subpath of a workspace package (`@ziee/framework/store-kit`
-    // → exports `"./*": "./src/*"` → `…/src/store-kit`, with no extension).
-    // Vite resolves that; Node's ESM resolver requires the exact filename, so
-    // every spec importing a store that pulls in `store-kit` died at import time
-    // with ERR_MODULE_NOT_FOUND — 10 files, none of which had anything wrong
-    // with them. Retry the resolved path with the same extension candidates
-    // used for `@/` above.
-    // ERR_MODULE_NOT_FOUND: an extensionless file (`…/src/store-kit`).
-    // ERR_UNSUPPORTED_DIR_IMPORT: a directory needing `/index.ts` (`…/src/events`).
-    // Both are "Vite would have resolved this" cases; both carry the resolved
-    // `url` we need to retry from.
-    if (
-      (err?.code !== 'ERR_MODULE_NOT_FOUND' &&
-        err?.code !== 'ERR_UNSUPPORTED_DIR_IMPORT') ||
-      !err.url
-    ) {
-      throw err
-    }
-    const base = fileURLToPath(err.url).replace(/\/$/, '')
-    for (const c of CANDIDATES.map(e => base + e)) {
-      // realpath, NOT the resolved path: a workspace package is a SYMLINK under
-      // node_modules (`@ziee/framework` → `sdk/packages/framework`), and Node
-      // refuses to strip types for anything under node_modules
-      // (ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING). Handing back the real
-      // source location makes it plain TypeScript source again.
-      if (isFile(c)) return { url: pathToFileURL(realpathSync(c)).href, shortCircuit: true }
-    }
-    throw err
-  }
+  return next(spec, ctx)
 }

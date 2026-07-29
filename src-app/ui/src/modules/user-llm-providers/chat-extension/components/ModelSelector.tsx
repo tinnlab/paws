@@ -1,11 +1,12 @@
 import { useState, useMemo } from 'react'
 import { Button, Select, Tooltip } from '@ziee/kit'
 import { TriangleAlert } from 'lucide-react'
-import { Stores } from '@ziee/framework/stores'
 import type { ProviderWithModels } from '@/api-client/types'
-import { newChatModelKey } from '@/modules/user-llm-providers/ModelPicker.store'
+import { newChatModelKey } from '@/modules/user-llm-providers/modelPicker'
 import { useChatPaneOrNull } from '@/modules/chat/core/pane/ChatPaneContext'
 import { ProviderApiKeyModal } from './ProviderApiKeyModal'
+import { ModelPicker } from '@/modules/user-llm-providers/modelPicker'
+import { Chat } from '@/modules/chat/core/stores/chatBridge'
 
 /**
  * ModelSelector Component
@@ -35,11 +36,11 @@ function providerNeedsApiKey(
 
 export function ModelSelector() {
   const { selectedByConversation, providers, error, loading } =
-    Stores.ModelPicker
-  // Key the selection by THIS pane's conversation (resolved via the Stores.Chat
+    ModelPicker
+  // Key the selection by THIS pane's conversation (resolved via the Chat
   // bridge → the pane's own conversation in split; the shared new-chat key when
   // there's no conversation yet), so each pane keeps its own model. (ITEM-5)
-  const { sending, conversation } = Stores.Chat
+  const { sending, conversation } = Chat
   // Per-pane new-chat key (ITEM-37): two new-chat panes keep independent models.
   const pane = useChatPaneOrNull()
   const modelKey = conversation?.id ?? newChatModelKey(pane?.paneId)
@@ -103,12 +104,12 @@ export function ModelSelector() {
         }
       }
     }
-    Stores.ModelPicker.setModelId(modelKey, value)
+    ModelPicker.setModelId(modelKey, value)
   }
 
   const handleKeyProvided = (modelId: string) => {
     setPendingProviderForKey(null)
-    Stores.ModelPicker.setModelId(modelKey, modelId)
+    ModelPicker.setModelId(modelKey, modelId)
   }
 
   // Provider load failed and there's nothing to pick from: a persistent,
@@ -121,7 +122,7 @@ export function ModelSelector() {
           <Button
             variant="ghost"
             icon={<TriangleAlert className="text-destructive" />}
-            onClick={() => void Stores.ModelPicker.loadProviders()}
+            onClick={() => void ModelPicker.loadProviders()}
             loading={loading}
             data-testid="ullm-model-retry"
             // These width classes are what bound this button; a `min-w-0` on the
@@ -144,7 +145,14 @@ export function ModelSelector() {
   }
 
   return (
-    <div data-testid="model-selector">
+    // `min-w-0`: this wrapper is a flex item in the composer's right toolbar
+    // group. Without it its automatic minimum is the trigger's min-content —
+    // i.e. the whole model name — so the trigger refuses to shrink and instead
+    // overflows across the toolbar's LEFT actions, painting over the mic /
+    // schedule / compact buttons and making them unclickable in a narrow pane.
+    // The name is what must give way (see the layout comment in ChatInput.tsx);
+    // `truncate` on the label below is what makes that legible.
+    <div data-testid="model-selector" className="min-w-0">
       <Select
         data-testid="ullm-model-select"
         value={selectedModelId ?? undefined}

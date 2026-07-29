@@ -1,13 +1,19 @@
-import { Import as ImportIcon, Workflow as WorkflowIcon } from 'lucide-react'
+import {
+  Import as ImportIcon,
+  Plus,
+  Workflow as WorkflowIcon,
+} from 'lucide-react'
 import { Button, Card, Empty, ErrorState, Flex, Text } from '@ziee/kit'
 import { useState } from 'react'
-import { Permissions } from '@/api-client/types'
+import { useNavigate } from 'react-router-dom'
+import { Permissions } from '@/api-client/permissions'
 import { Can } from '@/core/permissions'
-import { Stores } from '@ziee/framework/stores'
 import { SettingsPageContainer } from '@/modules/settings/components/SettingsPageContainer'
 import { ImportWorkflowDialog } from './ImportWorkflowDialog'
 import { WorkflowDetailDrawer } from './WorkflowDetailDrawer'
 import { WorkflowScopeBadge } from './WorkflowScopeBadge'
+import { Workflow as WorkflowStore } from '@/modules/workflow/stores/workflow'
+import { WorkflowDrawer } from '@/modules/workflow/stores/workflowDrawer'
 
 /**
  * `/workflows` page — lists the user's own + accessible system
@@ -15,8 +21,9 @@ import { WorkflowScopeBadge } from './WorkflowScopeBadge'
  * drawer (steps + run / dry-run / test).
  */
 export function WorkflowsList() {
-  const { workflows, loading, error } = Stores.Workflow
+  const { workflows, loading, error } = WorkflowStore
   const [importOpen, setImportOpen] = useState(false)
+  const navigate = useNavigate()
 
   return (
     <SettingsPageContainer
@@ -25,10 +32,19 @@ export function WorkflowsList() {
       subtitle="Declarative multi-step LLM chains you can run on demand"
     >
       <div className="flex flex-col gap-3">
-        <Flex justify="end">
+        <Flex justify="end" gap="small">
           <Can permission={Permissions.WorkflowsInstall}>
             <Button
+              data-testid="wf-list-new-btn"
+              variant="default"
+              icon={<Plus />}
+              onClick={() => navigate('/settings/workflows/builder')}
+            >
+              New workflow
+            </Button>
+            <Button
               data-testid="wf-list-import-btn"
+              variant="outline"
               icon={<ImportIcon />}
               onClick={() => setImportOpen(true)}
             >
@@ -46,7 +62,7 @@ export function WorkflowsList() {
               data-testid={`wf-list-card-${workflow.id}`}
               hoverable
               size="sm"
-              onClick={() => Stores.WorkflowDrawer.open(workflow)}
+              onClick={() => WorkflowDrawer.open(workflow)}
               data-workflow-id={workflow.id}
               title={
                 <div className="flex items-center gap-2 flex-wrap min-w-0">
@@ -73,7 +89,7 @@ export function WorkflowsList() {
             resource="workflows"
             description="Something went wrong while loading your workflows."
             details={error}
-            onRetry={() => Stores.Workflow.loadWorkflows()}
+            onRetry={() => WorkflowStore.loadWorkflows()}
             data-testid="wf-list-error"
           />
         ) : (

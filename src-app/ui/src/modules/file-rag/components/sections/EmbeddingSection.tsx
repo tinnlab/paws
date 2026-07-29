@@ -16,11 +16,11 @@ import {
 } from '@ziee/kit'
 import { z } from 'zod'
 import { RotateCw } from 'lucide-react'
-import { Stores } from '@ziee/framework/stores'
 import { SettingsSectionStatus } from '@/components/common/SettingsSectionStatus'
 import { usePermission } from '@/core/permissions'
 import { SettingsFormActions } from '@/modules/settings/components/SettingsFormActions'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
+import { FileRagAdmin } from '@/modules/file-rag/stores/fileRagAdmin'
 
 const READ_PERM = Permissions.FileRagAdminRead
 const MANAGE_PERM = Permissions.FileRagAdminManage
@@ -46,8 +46,12 @@ const schema = z.object({
  * Setting/changing the model re-embeds the whole corpus in the background.
  */
 export function EmbeddingSection() {
-  const canRead = usePermission(READ_PERM) || usePermission(MANAGE_PERM)
+  // Both permission hooks must be called UNCONDITIONALLY every render — a
+  // `usePermission(A) || usePermission(B)` short-circuits the second hook when
+  // the first is true, so the hook COUNT varies with permission state and React
+  // throws "Rendered more hooks than during the previous render" when it flips.
   const canManage = usePermission(MANAGE_PERM)
+  const canRead = usePermission(READ_PERM) || canManage
   const {
     settings,
     embeddingModels,
@@ -55,7 +59,7 @@ export function EmbeddingSection() {
     loadingModels,
     triggeringReembed,
     error,
-  } = Stores.FileRagAdmin
+  } = FileRagAdmin
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
     defaultValues: {
@@ -94,7 +98,7 @@ export function EmbeddingSection() {
       <SettingsSectionStatus
         title="Embedding (semantic search)"
         error={error}
-        onRetry={() => Stores.FileRagAdmin.load()}
+        onRetry={() => FileRagAdmin.load()}
       />
     )
 
@@ -102,7 +106,7 @@ export function EmbeddingSection() {
 
   const persist = async (values: FormValues, modelChanged: boolean) => {
     try {
-      await Stores.FileRagAdmin.update({
+      await FileRagAdmin.update({
         semantic_enabled: values.semantic_enabled,
         embedding_model_id: values.embedding_model_id ?? null,
         cosine_threshold: values.cosine_threshold,
@@ -135,7 +139,7 @@ export function EmbeddingSection() {
     if (!settings.embedding_model_id) return
     setReembedConfirmOpen(false)
     try {
-      await Stores.FileRagAdmin.triggerReembed()
+      await FileRagAdmin.triggerReembed()
       message.info('Re-embed dispatched in the background.')
     } catch (error) {
       message.error(

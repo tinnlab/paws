@@ -7,7 +7,6 @@
  */
 import type { ModuleGallery } from '@/dev/gallery/support'
 import { holdPatch, lazyBound, lazyNamed } from '@/dev/gallery/support'
-import { Stores } from '@ziee/framework/stores'
 import {
   DEEP_PROJECT_ID,
   deepProject,
@@ -15,6 +14,7 @@ import {
   deepProjectFiles,
   projectDeepCassette,
 } from '@/dev/gallery/fixtures/project-deep'
+import { ProjectDrawer } from '@/modules/projects/stores/projectDrawer'
 
 const noop = () => {}
 
@@ -30,14 +30,14 @@ async function seedProjectDetail(patch: {
   files?: (typeof deepProjectFiles)[number][]
   error?: string | null
 }): Promise<void> {
-  const { ProjectDetail } = await import(
-    '@/modules/projects/stores/ProjectDetail.store'
+  const { ProjectDetailDef } = await import(
+    '@/modules/projects/stores/projectDetail'
   )
-  const { ProjectFiles } = await import(
-    '@/modules/file/project-extension/stores/ProjectFiles.store'
+  const { ProjectFilesDef } = await import(
+    '@/modules/file/project-extension/stores/projectFiles'
   )
   await holdPatch(() => {
-    ProjectDetail.store.setState({
+    ProjectDetailDef.store.setState({
       project: patch.project,
       loading: false,
       error: patch.error ?? null,
@@ -47,7 +47,7 @@ async function seedProjectDetail(patch: {
       conversationsHasMore: false,
       conversationsError: null,
     } as any)
-    ProjectFiles.store.setState({
+    ProjectFilesDef.store.setState({
       currentProjectId: patch.project?.id ?? null,
       files: patch.files ?? [],
       filesLoading: false,
@@ -67,7 +67,7 @@ export const gallery: ModuleGallery = {
         () => import('@/modules/projects/components/ProjectFormDrawer'),
         'ProjectFormDrawer',
       ),
-      open: () => Stores.ProjectDrawer.openProjectDrawer(),
+      open: () => ProjectDrawer.openProjectDrawer(),
     },
     {
       slug: 'overlay-add-to-project-modal',
@@ -142,11 +142,11 @@ export const gallery: ModuleGallery = {
         'ProjectFormDrawer',
       ),
       setup: async () => {
-        const { ProjectDrawer } = await import(
-          '@/modules/projects/stores/ProjectDrawer.store'
+        const { useProjectDrawerStore } = await import(
+          '@/modules/projects/stores/projectDrawer'
         )
         const seed = () =>
-          ProjectDrawer.store.setState({
+          useProjectDrawerStore.setState({
             open: true,
             loading: true,
             editingProject: null,

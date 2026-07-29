@@ -2,10 +2,11 @@ import { useState } from 'react'
 import { Button, Popover, Tooltip, message } from '@ziee/kit'
 import { Plus, SendHorizontal as SendIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { Stores } from '@ziee/framework/stores'
-import { ExtensionSlot, chatExtensionRegistry } from '@/modules/chat/core/extensions'
+import { ExtensionSlot, useSendBlocked } from '@/modules/chat/core/extensions'
 import { PlusDropdownContext } from '@/modules/chat/components/PlusDropdownContext'
 import { EditingMessageBanner } from '@/modules/chat/components/EditingMessageBanner'
+import { Chat } from '@/modules/chat/core/stores/chatBridge'
+import { useChatExtensionsReady } from '@/modules/chat/extensions'
 
 interface ChatInputProps {
   disabled?: boolean
@@ -17,7 +18,44 @@ interface ChatInputProps {
  * ChatInput Component
  * Orchestrates message sending using extension stores
  */
-export function ChatInput({
+export function ChatInput(props: ChatInputProps) {
+  // Chat extensions (text input, file/MCP/memory composers, toolbar pills)
+  // register asynchronously on first chat mount. Gate the real composer on
+  // readiness so its extension slots are populated before it paints — otherwise
+  // the toolbar pills flash in a beat after the composer appears. (Hook-count
+  // safety is NOT the reason: send-blocking now runs each extension's hook in its
+  // own probe via `useSendBlocked`, so it's stable regardless of the set.)
+  const extensionsReady = useChatExtensionsReady()
+  if (!extensionsReady) {
+    // Composer-shaped skeleton — matches the card outline + toolbar row so there
+    // is no layout jump when the real, extension-populated composer swaps in.
+    return (
+      <div
+        className={`w-full relative ${props.className ?? ''}`}
+        style={props.style}
+        data-chat-composer
+        data-testid="chat-composer-loading"
+      >
+        <div className="rounded-lg bg-card border border-border">
+          <div className="px-3 pt-2.5 pb-1 min-h-14" />
+          <div className="flex justify-between items-center gap-2 px-2 pt-1 pb-2">
+            <div className="h-8 w-8 rounded-md bg-muted animate-pulse" />
+            <div className="h-8 w-8 rounded-md bg-muted animate-pulse" />
+          </div>
+        </div>
+      </div>
+    )
+  }
+  return <ChatInputInner {...props} />
+}
+
+/**
+ * The real composer. Extensions can block the Send button via `useSendBlocker`;
+ * `useSendBlocked` runs each extension's hook in its OWN probe (no hooks in a
+ * loop), returning both the aggregate `isBlocked` flag and the probe nodes to
+ * render — so a changing extension set never varies this component's hook count.
+ */
+function ChatInputInner({
   disabled = false,
   className = '',
   style,
@@ -26,14 +64,13 @@ export function ChatInput({
   const [plusOpen, setPlusOpen] = useState(false)
 
   // Get stores
-  const { sendMessage, sending, isStreaming } = Stores.Chat
+  const { sendMessage, sending, isStreaming } = Chat
 
   // Extensions can block the Send button via `useSendBlocker`. File's
   // chat-extension uses this to gate Send while uploads are in flight
   // — chat itself stays file-agnostic. Click-time defense lives in the
   // `beforeSendMessage` aggregator (called inside sendMessage).
-  const sendBlockers = chatExtensionRegistry.useSendBlockers()
-  const isBlockedByExtension = sendBlockers.length > 0
+  const [isBlockedByExtension, sendBlockerProbes] = useSendBlocked()
 
   const handleSend = async () => {
     if (sending || isStreaming || disabled || isBlockedByExtension) return
@@ -51,6 +88,9 @@ export function ChatInput({
 
   return (
     <div className={`w-full relative ${className}`} style={style} data-chat-composer>
+      {/* Send-blocker probes: one per extension, each runs its useSendBlocker in
+          isolation (return null). Mounted here so the aggregate flag stays live. */}
+      {sendBlockerProbes}
 
       <div
         onFocus={() => setFocused(true)}
@@ -78,28 +118,32 @@ export function ChatInput({
         {/* Toolbar — the left (secondary) group yields space first so the right
             send group is never clipped on narrow widths (chat panel or mobile). */}
         <div className="flex justify-between items-center gap-2 px-2 pt-1 pb-2">
-          {/* Left: + dropdown + other toolbar actions. `min-w-10` (40px) floors
-              the group at the "+" button it must always show (38px: a `size-4`
-              icon + `px-2.5` + the kit Button's 1px transparent border).
+          {/* Left: + dropdown + other toolbar actions. NO explicit `min-w-*`:
+              the group's AUTOMATIC (content-derived) minimum is what protects
+              its buttons, and an explicit min-width would replace it.
 
-              A plain `min-w-0` was the bug: this group's basis is 0, so it never
-              competes for space and only receives what the right group leaves
-              over — a long model name squeezed it to ~2px and its `shrink-0` "+"
-              button overflowed. Dropping the override entirely does NOT work
-              either (measured: Send pushed 150px outside the composer): a flex
-              container's min-content sums its children's MIN-CONTENT sizes, and
-              `min-width:0` on the keyboard-tips only permits it to be shrunk
-              during layout — it does not reduce that contribution, so the
-              group floored at the full `nowrap` width of the tips text.
+              History. `min-w-0` was the first bug: basis 0 meant the group never
+              competed for space, so a long model name squeezed it to ~2px and
+              its `shrink-0` "+" overflowed. `min-w-10` (a 40px floor for the "+"
+              alone) was the second: an explicit min-width still REPLACES the
+              automatic minimum, so the group could shrink to 40px and every
+              OTHER `shrink-0` button in `toolbar_actions` — MicButton, Schedule,
+              Compact — overflowed to the right and was painted over by the model
+              select, making the mic literally unclickable in a narrow pane (a
+              3-way split). That was the "KNOWN LIMIT" noted here; this is its
+              durable fix.
 
-              KNOWN LIMIT: this floor covers the always-present "+" only. With
-              the voice extension enabled, MicButton adds another `shrink-0`
-              38px button into `toolbar_actions`, so at extreme narrowness it can
-              still overflow. Protecting it would need a floor that knows which
-              extensions are registered; the durable fix is for the tips element
-              to contribute 0 (e.g. `w-0 flex-1`), which lives in the keyboard
-              extension and is out of scope here. */}
-          <div className="flex items-center gap-1 min-w-10 flex-1">
+              Dropping the override only works once nothing inside contributes a
+              text-width minimum: a flex container's min-content sums its
+              children's MIN-CONTENT contributions, and `min-width:0` alone does
+              NOT reduce a text element's contribution (that is why removing the
+              override used to push Send ~150px outside the composer). The
+              keyboard-tips element therefore now carries `w-0 flex-1`, whose
+              flex base size of 0 makes its contribution genuinely 0. With that,
+              this group's automatic minimum is exactly its un-shrinkable icon
+              buttons — no more, no less — and the deficit lands where the design
+              always intended: on the model NAME, which truncates. */}
+          <div className="flex items-center gap-1 flex-1">
             {/* Tooltip anchors to the wrapper span (a distinct DOM node), not
                 the Popover-trigger button — two triggers on ONE node thrash and
                 flicker. The button suppresses its own aria-label auto-tooltip via
@@ -129,7 +173,13 @@ export function ChatInput({
                 </Popover>
               </span>
             </Tooltip>
-            <ExtensionSlot name="toolbar_actions" className="flex items-center gap-1 min-w-0" />
+            {/* NO `min-w-0` here either: this slot holds the `shrink-0` icon
+                buttons (mic / schedule / compact), so it must keep its automatic
+                content-derived minimum — with `min-w-0` it collapses to 0 and
+                those buttons overflow it, which is what made the mic
+                unclickable. The tips element inside contributes 0 (see the
+                keyboard extension), so this minimum is just the buttons. */}
+            <ExtensionSlot name="toolbar_actions" className="flex items-center gap-1" />
           </div>
 
           {/* Right: model selector + send button. `shrink-0` sits on the SEND

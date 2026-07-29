@@ -190,6 +190,20 @@ server:
 # occasional real-LLM agentic hang; 6-8 is the sweet spot (raise if the host is
 # idle, drop to 1 to debug a suspected race). Override: `just test THREADS=8`.
 THREADS := "6"
+
+# Prove concurrent-worktree resource isolation (the acceptance gate for the
+# isolation layer). Launches K throwaway worktrees running the matrix
+# simultaneously and asserts ZERO cross-run interference (disjoint ports, no
+# foreign gallery-server reuse, own-sentinel provenance, no ERR_ABORTED/
+# ECONNREFUSED/EADDRINUSE/port-alloc/ENOENT-config/55006/3D000/42P04, intact
+# extracted binaries, no ~/.ziee writes). Green at K=8 COLD=1 = exit condition.
+#   just prove-isolation                 # K=8 default (gate:ui + dev-pair)
+#   just prove-isolation K=8 COLD=1      # cold: wipe .ziee-cache + vite cache
+#   just prove-isolation K=4 FULL=1      # also run `just test` + web e2e legs
+# Runs ONLY its own runId-scoped resources — never a broad docker/pkill/rm.
+prove-isolation *ARGS:
+    bash scripts/prove-worktree-isolation.sh {{ARGS}}
+
 test:
     cd src-app/server && \
         bash -c 'source tests/.env.test && cargo test --test integration_tests -- --test-threads={{THREADS}}'
@@ -218,12 +232,13 @@ antd-check:
 # See src-app/ui/src/dev/gallery/README.md. Backend-free (Vite-only).
 
 # Layer A (layout invariants + axe a11y) + the detector meta-test. Deterministic,
-# no baseline — the same checks the visual-tests.yml CI workflow runs.
+# no baseline. (The visual-tests.yml CI workflow was removed; this is now the
+# only place these run.)
 visual:
     cd src-app/ui && npx playwright test -c playwright.visual.config.ts
 
 # (Re)bless Layer B pixel baselines locally (machine-specific — prefer the
-# visual-snapshots.yml container workflow for committable baselines).
+# removed visual-snapshots.yml container workflow; baselines are now local-only).
 visual-bless:
     cd src-app/ui && VISUAL_SNAPSHOTS=1 npx playwright test -c playwright.visual.config.ts --update-snapshots
 
@@ -543,22 +558,21 @@ check-updater: workspace-cargo-pin-sqlx
     cd src-app/desktop/tauri && cargo test --test updater_signing_test -- --test-threads=1
     @echo "✓ updater: Tier 1 (store) + Tier 2 (manifest) + Tier 3 (signing) green"
 
-# Tier 4 — release/Pages workflow exercised locally with `act` (Docker)
-# against a temp bare repo, plus a dockerized actionlint over both
-# workflows. Self-asserting: the workflow fails if the published
-# latest.json is wrong, so act's exit code is the signal. Needs Docker
-# + act (external deps; own recipe like the sandbox external-dep tiers).
+# Tier 4 — dockerized actionlint over the release workflows.
+#
+# REDUCED: this recipe used to ALSO run `desktop-updater-pages-test.yml` under
+# `act` against a temp bare repo, which was the self-asserting half (the
+# workflow failed if the published latest.json was wrong, so act's exit code
+# was the signal). That workflow was removed from this repo, so the act step is
+# gone with it — what remains is a lint, not an end-to-end proof. Tiers 1-3
+# (`check-updater`) still cover the store, the manifest and signing for real.
 check-updater-ci:
-    @echo "==> actionlint (dockerized) over updater workflows"
+    @echo "==> actionlint (dockerized) over the release workflows"
     docker run --rm -v "{{justfile_directory()}}":/repo --workdir /repo \
         rhysd/actionlint:latest -color \
         .github/workflows/desktop-release.yml \
-        .github/workflows/desktop-updater-pages-test.yml
-    @echo "==> act: run desktop-updater-pages-test.yml (publishes to a temp bare repo, self-asserts)"
-    act workflow_dispatch \
-        -W .github/workflows/desktop-updater-pages-test.yml \
-        --bind --rm
-    @echo "✓ updater Tier 4: workflow + manifest + gh-pages publish verified via act"
+        .github/workflows/server-release.yml
+    @echo "✓ updater Tier 4: release workflows lint clean (no act e2e — see note above)"
 
 # Everything testable locally for the updater (Tiers 1-3 + 4).
 check-updater-all: check-updater check-updater-ci

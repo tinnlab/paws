@@ -5,15 +5,20 @@ import type { DropdownItem } from '@ziee/kit'
 import type { Conversation } from '@/api-client/types'
 import { useNavigate } from 'react-router-dom'
 import { ApiClient } from '@/api-client'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import type { Project } from '@/api-client/types'
 import { hasPermissionNow, usePermission } from '@/core/permissions'
-import { Stores } from '@ziee/framework/stores'
 import {
   createExtension,
   type ChatExtension,
 } from '@/modules/chat/core/extensions'
 import { AddToProjectModal } from '@/modules/projects/components/AddToProjectModal'
+import { createBatchLoader } from '@/modules/projects/chat-extension/projectLookupBatch'
+import { SplitView } from '@/modules/chat/core/stores/splitView'
+import { Chat as ChatStore } from '@/modules/chat/core/stores/chatBridge'
+import { AssistantPicker } from '@/modules/assistant/stores/assistantPicker'
+import { Projects as ProjectsStore } from '@/modules/projects/stores/projects'
+import { EventBus } from '@ziee/framework/stores'
 
 /**
  * Frontend bridge between chat (project-unaware) and the projects
@@ -23,7 +28,7 @@ import { AddToProjectModal } from '@/modules/projects/components/AddToProjectMod
  *
  * Responsibilities:
  *   - `afterCreateConversation`: attach a freshly-created chat into
- *     the active project (via Projects.store).
+ *     the active project (via the Projects store).
  *   - `onConversationLoad`: resolve the conversation's project and
  *     cache it so the synchronous URL hooks can read it without a
  *     network call.
@@ -51,6 +56,32 @@ const conversationProjectCache = new Map<string, Project | null>()
 //      the same conversation simultaneously.
 const inflightProjectLookups = new Map<string, Promise<Project | null>>()
 
+// Request BATCHING. A conversation list mounts one membership badge per row, so
+// the per-id endpoint produced one request per conversation in a single burst
+// (the live-ui-audit `n+1` finding: 19-42 distinct
+// `GET /api/projects/by-conversation/{id}` in one step). Every id asked for
+// inside one short window is now answered by ONE
+// `POST /api/projects/by-conversations`. The cache + in-flight maps above are
+// unchanged — batching sits underneath them.
+const projectLookupBatch = createBatchLoader<Project>({
+  fetchChunk: async ids => {
+    const body = await ApiClient.Project.forConversations({
+      conversation_ids: ids,
+    })
+    // The response is de-duplicated: `links` carries {conversation_id,
+    // project_id} and each referenced project appears ONCE in `projects`.
+    // Re-join them here. Only ATTACHED conversations have a link; the rest are
+    // unfiled → the loader resolves them as null.
+    const byId = new Map(body.projects.map(p => [p.id, p]))
+    const out = new Map<string, Project>()
+    for (const link of body.links) {
+      const project = byId.get(link.project_id)
+      if (project) out.set(link.conversation_id, project)
+    }
+    return out
+  },
+})
+
 function getCached(id: string): Project | null | undefined {
   return conversationProjectCache.get(id)
 }
@@ -69,13 +100,13 @@ function loadProjectForConversation(
   conversationId: string,
   forceRefresh = false,
 ): Promise<Project | null> {
-  // `GET /api/projects/by-conversation/{id}` requires projects::read, which
-  // is granted to Administrators only (Chat Projects is opt-in per deployment,
-  // migration 54) — NOT the default Users group. This lookup runs on EVERY
-  // conversation load, so without this gate every non-projects chat user fired
-  // a 403 on each open (swallowed by the catch below, but still a failed
-  // request the runtime-health gate flags). A user without projects::read has
-  // no projects, so the answer is always "unfiled" → cache null, skip the call.
+  // The lookup requires projects::read, which is granted to Administrators
+  // only (Chat Projects is opt-in per deployment, migration 54) — NOT the
+  // default Users group. This lookup runs on EVERY conversation load, so
+  // without this gate every non-projects chat user fired a 403 on each open
+  // (swallowed, but still a failed request the runtime-health gate flags). A
+  // user without projects::read has no projects, so the answer is always
+  // "unfiled" → cache null, skip the call.
   if (!hasPermissionNow(Permissions.ProjectsRead)) {
     setCached(conversationId, null)
     return Promise.resolve(null)
@@ -91,24 +122,30 @@ function loadProjectForConversation(
     conversationProjectCache.delete(conversationId)
   }
 
-  const promise = ApiClient.Project.forConversation({
-    conversation_id: conversationId,
-  })
-    .then(project => {
-      // Backend returns Option<Project> — `null` means unfiled. Always
-      // a 200; no catch needed for the normal "no project" case.
-      const value = project ?? null
-      setCached(conversationId, value)
+  const promise = projectLookupBatch
+    .load(conversationId)
+    .then(({ value, failed }) => {
+      // Cache only a real ANSWER. `failed` means we never heard back: caching
+      // it would mislabel the conversation as unfiled permanently, and with
+      // batching one bad request would do that to a whole screenful of rows.
+      // The badge still degrades to "Add to project" for this render (the
+      // resolved value is null), but the next mount retries.
+      if (!failed) setCached(conversationId, value)
       return value
     })
     .catch(() => {
-      // Real network / auth errors only — treat as null so the trailing
-      // falls back to "Add to project" rather than spinning forever.
-      setCached(conversationId, null)
+      // Defence in depth: `load()` is documented never to reject, but a caller
+      // must never be handed a rejected promise — a rejected trailing lookup
+      // leaves the badge spinning and logs an unhandled rejection.
       return null
     })
     .finally(() => {
-      inflightProjectLookups.delete(conversationId)
+      // Only clear the slot if it is still OURS: a force-refresh may have
+      // replaced it, and evicting the newer entry would let a concurrent
+      // reader start a third lookup.
+      if (inflightProjectLookups.get(conversationId) === promise) {
+        inflightProjectLookups.delete(conversationId)
+      }
     })
 
   inflightProjectLookups.set(conversationId, promise)
@@ -132,7 +169,7 @@ function projectIdFromUrl(): string | null {
  * `projectId` (null for a plain new-chat pane). Single-pane → the URL, unchanged.
  */
 function sendingPaneProjectId(): string | null {
-  const sv = Stores.SplitView.$
+  const sv = SplitView.$
   if (sv.panes.length >= 2) {
     const focused = sv.panes.find((p) => p.paneId === sv.focusedPaneId)
     return focused?.projectId ?? null
@@ -140,6 +177,60 @@ function sendingPaneProjectId(): string | null {
   return projectIdFromUrl()
 }
 
+
+/**
+ * Persistent "In project: NAME" chip pinned at the top of the message list
+ * (the `message_list_header` slot). When the open conversation is filed into a
+ * project, renders a clickable Tag that routes to `/projects/{id}` — the ONLY
+ * in-conversation affordance for seeing/reaching a conversation's project (the
+ * card trailing tag is hover-only and lives in the sidebar list, not here).
+ * Returns null for unfiled conversations, so the context-chrome bar collapses
+ * to zero height. Reads the primary pane's conversation reactively via the
+ * migrated `ChatStore` proxy (mirrors the old `Stores.Chat.conversation`).
+ */
+function ProjectChipForConversationHeader() {
+  const conversation = ChatStore.conversation
+  const navigate = useNavigate()
+  const [project, setProject] = useState<Project | null>(() => {
+    if (!conversation?.id) return null
+    return getCached(conversation.id) ?? null
+  })
+
+  useEffect(() => {
+    let cancelled = false
+    setProject(() => {
+      if (!conversation?.id) return null
+      return getCached(conversation.id) ?? null
+    })
+    if (!conversation?.id) return
+    if (getCached(conversation.id) !== undefined) return
+    loadProjectForConversation(conversation.id).then(p => {
+      if (cancelled) return
+      setProject(p)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [conversation?.id])
+
+  if (!conversation?.id || !project?.name) return null
+
+  return (
+    <div className="px-4 pt-2">
+      <Tag
+        variant="outline"
+        tone="info"
+        icon={<FolderOpen />}
+        className="cursor-pointer max-w-[16rem]"
+        title={project.name}
+        data-testid="project-header-chip-tag"
+        onClick={() => navigate(`/projects/${project.id}`)}
+      >
+        <span className="truncate">In project: {project.name}</span>
+      </Tag>
+    </div>
+  )
+}
 
 const projectExtension: ChatExtension = createExtension({
   name: 'project',
@@ -154,8 +245,8 @@ const projectExtension: ChatExtension = createExtension({
       // Seed the assistant picker with the project's default when the user
       // hasn't picked one, keyed by THIS conversation so it's pane-scoped
       // (ITEM-5). One-shot — won't override an explicit user choice.
-      const picker = Stores.AssistantPicker
-      if (!picker.getAssistantId(conversation.id)) {
+      const picker = AssistantPicker
+      if (!(await picker.getAssistantId(conversation.id))) {
         picker.selectAssistant(conversation.id, project.default_assistant_id)
       }
     }
@@ -165,7 +256,7 @@ const projectExtension: ChatExtension = createExtension({
     const projectId = sendingPaneProjectId()
     if (!projectId) return
     try {
-      const response = await Stores.Projects.attachConversation(
+      const response = await ProjectsStore.attachConversation(
         projectId,
         conversation.id,
       )
@@ -203,6 +294,17 @@ const projectExtension: ChatExtension = createExtension({
     <ProjectMembershipTrailing conversationId={conversation.id} />
   ),
 
+  // Always-visible chip at the top of the message list naming the project that
+  // owns the current conversation (renders nothing when unfiled). Distinct from
+  // renderConversationCardTrailing (hover-only, on sidebar cards) — this is the
+  // persistent "you are in a project" marker + navigation on the chat page.
+  slots: {
+    message_list_header: {
+      component: ProjectChipForConversationHeader,
+      order: 10,
+    },
+  },
+
   // Dropdown contributions for the sidebar's RecentConversationsWidget
   // (and any future conversation menu). Provides:
   //   - In-project conv: "Open project: NAME" + "Remove from project"
@@ -236,7 +338,7 @@ function ProjectTagWithRemove({
   const handleRemove = async () => {
     setRemoving(true)
     try {
-      await Stores.Projects.detachConversation(project.id, conversationId)
+      await ProjectsStore.detachConversation(project.id, conversationId)
       message.success('Removed from project')
     } catch (err) {
       message.error(
@@ -345,7 +447,7 @@ function ProjectMembershipTrailing({
   // React to attach/detach happening elsewhere.
   useEffect(() => {
     const GROUP = `ProjectMembershipTrailing:${conversationId}`
-    const bus = Stores.EventBus
+    const bus = EventBus
 
     const offAttached = bus.on(
       'project.conversation_attached',
@@ -482,7 +584,7 @@ function useProjectMenuContribution(conversation: Conversation): {
   // current state next time it opens.
   useEffect(() => {
     const GROUP = `useProjectMenuContribution:${conversation.id}`
-    const bus = Stores.EventBus
+    const bus = EventBus
     const offAttached = bus.on(
       'project.conversation_attached',
       async event => {
@@ -526,7 +628,7 @@ function useProjectMenuContribution(conversation: Conversation): {
     }).then(async (ok) => {
       if (!ok) return
       try {
-        await Stores.Projects.detachConversation(project.id, conversation.id)
+        await ProjectsStore.detachConversation(project.id, conversation.id)
         message.success('Removed from project')
       } catch (err) {
         message.error(

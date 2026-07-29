@@ -104,27 +104,27 @@ export const STATE_COVERAGE = {
   'modules/literature/chat-extension/extension:panel-open': {
     via: 'deep:deep-chat-right-panel-literature',
   },
-  "components/ui/kit/button:delayed": { skip: true, reason: "via surface — rendered within its page; 'delayed' branch proven by Part 2 runtime coverage" },
-  "components/ui/kit/card:delayed": { skip: true, reason: "via surface — rendered within its page; 'delayed' branch proven by Part 2 runtime coverage" },
-  "components/ui/kit/checkbox:delayed": { skip: true, reason: "via surface — rendered within its page; 'delayed' branch proven by Part 2 runtime coverage" },
-  "components/ui/kit/combobox:delayed": { skip: true, reason: "via surface — rendered within its page; 'delayed' branch proven by Part 2 runtime coverage" },
-  "components/ui/kit/date-picker:delayed": { skip: true, reason: "via surface — rendered within its page; 'delayed' branch proven by Part 2 runtime coverage" },
-  "components/ui/kit/dialog-host:open": { skip: true, reason: "via surface — rendered within its page; 'open' branch proven by Part 2 runtime coverage" },
-  "components/ui/kit/image:error": { skip: true, reason: "via surface — rendered within its page; 'error' branch proven by Part 2 runtime coverage" },
-  "components/ui/kit/input:delayed": { skip: true, reason: "via surface — rendered within its page; 'delayed' branch proven by Part 2 runtime coverage" },
-  "components/ui/kit/list:empty": { skip: true, reason: "via surface — rendered within its page; 'empty' branch proven by Part 2 runtime coverage" },
-  "components/ui/kit/multi-select:delayed": { skip: true, reason: "via surface — rendered within its page; 'delayed' branch proven by Part 2 runtime coverage" },
-  "components/ui/kit/multi-select:empty": { skip: true, reason: "via surface — rendered within its page; 'empty' branch proven by Part 2 runtime coverage" },
-  "components/ui/kit/radio-group:delayed": { skip: true, reason: "via surface — rendered within its page; 'delayed' branch proven by Part 2 runtime coverage" },
-  "components/ui/kit/segmented:delayed": { skip: true, reason: "via surface — rendered within its page; 'delayed' branch proven by Part 2 runtime coverage" },
-  "components/ui/kit/select:delayed": { skip: true, reason: "via surface — rendered within its page; 'delayed' branch proven by Part 2 runtime coverage" },
-  "components/ui/kit/sheet:delayed": { skip: true, reason: "via surface — rendered within its page; 'delayed' branch proven by Part 2 runtime coverage" },
-  "components/ui/kit/switch:delayed": { skip: true, reason: "via surface — rendered within its page; 'delayed' branch proven by Part 2 runtime coverage" },
-  "components/ui/kit/table:empty": { skip: true, reason: "via surface — rendered within its page; 'empty' branch proven by Part 2 runtime coverage" },
-  "components/ui/kit/textarea:delayed": { skip: true, reason: "via surface — rendered within its page; 'delayed' branch proven by Part 2 runtime coverage" },
-  "components/ui/kit/tree:delayed": { skip: true, reason: "via surface — rendered within its page; 'delayed' branch proven by Part 2 runtime coverage" },
-  "components/ui/shadcn/field:error": { skip: true, reason: "via surface — rendered within its page; 'error' branch proven by Part 2 runtime coverage" },
-  "components/ui/shadcn/sidebar:open": { skip: true, reason: "via surface — rendered within its page; 'open' branch proven by Part 2 runtime coverage" },
+  // The in-conversation background surfaces (there is no global page).
+  'modules/background/chat-extension/extension:panel-open': {
+    via: 'deep:deep-chat-right-panel-background',
+  },
+  'modules/background/components/BackgroundRunsPanel:empty': {
+    // Real delivery, not a claim: the background cassette resolves the designated
+    // GALLERY_EMPTY_TASKS_CONVERSATION_ID (read off `ctx.query`, where a query
+    // param actually lives) to a zero-run page, so this deep state renders the
+    // genuine empty branch.
+    via: 'deep:deep-chat-background-empty',
+  },
+  'modules/background/components/BackgroundRunsPanel:error': {
+    skip: true,
+    reason:
+      "fetch-failure panel with Retry, shown when GET /api/background/runs fails for this conversation; a transient transport-failure state the seeded cassette (which always 200s) cannot drive, and the mock's global error mode is a page-level switch. The store-side half — the error is recorded WITHOUT clearing an already-loaded list — is pinned by TEST-8 in BackgroundRuns.store.test.ts",
+  },
+  'modules/background/components/BackgroundRunsFooter:empty': {
+    skip: true,
+    reason:
+      "the footer renders NULL for a conversation with no background runs — its 'empty' state is the deliberate absence of any chrome, so there is nothing to snapshot; the absence is asserted by the 15-background/background-in-conversation e2e (TEST-15)",
+  },
   "modules/assistant/chat-extension/components/AssistantMenuItem:empty": { skip: true, reason: "via surface — rendered within its page; 'empty' branch proven by Part 2 runtime coverage" },
   "modules/assistant/chat-extension/components/AssistantSelector:empty": { skip: true, reason: "via surface — rendered within its page; 'empty' branch proven by Part 2 runtime coverage" },
   "modules/assistant/components/AssistantFormDrawer:open": { via: 'overlay' },
@@ -152,6 +152,18 @@ export const STATE_COVERAGE = {
   "modules/auth/SessionSettingsPage:error": { via: 'page-state-mode' },
   "modules/chat/components/ChatInput:open": { skip: true, reason: "via surface — rendered within its page; 'open' branch proven by Part 2 runtime coverage" },
   "modules/chat/components/ChatMessage:empty": { skip: true, reason: "via surface — rendered within its page; 'empty' branch proven by Part 2 runtime coverage" },
+  // ── activity rail ────────────────────────────────────────────────────────
+  // Every rail surface is rendered INSIDE a ChatMessage inside ConversationPage
+  // — the same "via surface" shape as ChatMessage itself directly above, and
+  // covered by the same Part 2 runtime pass. The behavioural branches are
+  // additionally pinned by dedicated e2e specs, named per entry so a reader can
+  // check the claim rather than take it.
+  "modules/chat/components/rail/ActivityRail:empty": { skip: true, reason: "via surface — rendered within ChatMessage; the no-steps branch returns null by construction (ActivityRail returns null for an empty span) and the populated shapes are proven by tests/e2e/chat/activity-rail-seeded.spec.ts" },
+  "modules/chat/components/rail/RailStepDetail:error": { skip: true, reason: "via surface — the step's expanded body; the is_error branch is proven by tests/e2e/chat/activity-rail-failure.spec.ts" },
+  "modules/chat/components/toolCallPanel/ToolCallPanel:delayed": { skip: true, reason: "via surface — rendered inside ChatRightPanel (itself { via: 'overlay' }); the loading branch is a Skeleton on a single GET, exercised by tests/e2e/chat/activity-rail-detail.spec.ts" },
+  "modules/chat/components/toolCallPanel/ToolCallPanel:error": { skip: true, reason: "via surface — rendered inside ChatRightPanel; the fetch-error and no-stored-record branches are proven by Part 2 runtime coverage" },
+  "modules/chat/extensions/tool-call/extension:panel-open": { via: 'overlay' },
+  "modules/file/chat-extension/railContribution:empty": { skip: true, reason: "not a rendered surface — a rail contribution module (describeActivity + a detail body); its behaviour is unit-covered by modules/file/chat-extension/describeActivity.test.ts" },
   "modules/chat/components/ConversationCard:open": { skip: true, reason: "via surface — rendered within its page; 'open' branch proven by Part 2 runtime coverage" },
   "modules/chat/components/ConversationList:delayed": { skip: true, reason: "via surface — rendered within its page; 'delayed' branch proven by Part 2 runtime coverage" },
   "modules/chat/components/ConversationList:error": { skip: true, reason: "via surface — rendered within its page; 'error' branch proven by Part 2 runtime coverage" },
@@ -159,7 +171,6 @@ export const STATE_COVERAGE = {
   "modules/chat/components/MessageList:empty": { skip: true, reason: "the dedicated 'seeded-message-list-empty' gallery surface renders this empty (!loading && count===0) branch directly" },
   "modules/chat/core/components/ChatRightPanel:empty": { skip: true, reason: "via surface — rendered within its page; 'empty' branch proven by Part 2 runtime coverage" },
   "modules/chat/core/extensions/registry:empty": { skip: true, reason: "nonvisual surface — rendered within its page; 'empty' branch proven by Part 2 runtime coverage" },
-  "modules/chat/core/extensions/slots:empty": { skip: true, reason: "via surface — rendered within its page; 'empty' branch proven by Part 2 runtime coverage" },
   "modules/chat/core/utils/StreamdownErrorBoundary:error": { skip: true, reason: "nonvisual surface — rendered within its page; 'error' branch proven by Part 2 runtime coverage" },
   "modules/chat/core/utils/useStreamdownComponents:empty": { skip: true, reason: "via surface — rendered within its page; 'empty' branch proven by Part 2 runtime coverage" },
   "modules/chat/extensions/export/extension:empty": { skip: true, reason: "via surface — rendered within its page; 'empty' branch proven by Part 2 runtime coverage" },
@@ -240,9 +251,6 @@ export const STATE_COVERAGE = {
   "modules/hub/modules/workflow/components/WorkflowHubCard:open": { skip: true, reason: "via surface — rendered within its page; 'open' branch proven by Part 2 runtime coverage" },
   "modules/hub/modules/workflow/components/WorkflowsHubTab:delayed": { skip: true, reason: "via surface — rendered within its page; 'delayed' branch proven by Part 2 runtime coverage" },
   "modules/hub/modules/workflow/components/WorkflowsHubTab:empty": { skip: true, reason: "via surface — rendered within its page; 'empty' branch proven by Part 2 runtime coverage" },
-  "modules/layouts/app-layout/AppLayout:open": { skip: true, reason: "via surface — rendered within its page; 'open' branch proven by Part 2 runtime coverage" },
-  "modules/layouts/app-layout/components/Drawer:empty": { skip: true, reason: "static surface — rendered within its page; 'empty' branch proven by Part 2 runtime coverage" },
-  "modules/layouts/app-layout/components/ResizeHandle:empty": { skip: true, reason: "via surface — rendered within its page; 'empty' branch proven by Part 2 runtime coverage" },
   "modules/literature/components/LiteratureScreeningPanel:empty": { skip: true, reason: "via surface — rendered within its page; 'empty' branch proven by Part 2 runtime coverage" },
   "modules/literature/components/LiteratureToolResultCard:empty": { skip: true, reason: "via surface — rendered within its page; 'empty' branch proven by Part 2 runtime coverage" },
   "modules/literature/components/settings/LitSearchConnectorsSection:delayed": { skip: true, reason: "via surface — rendered within its page; 'delayed' branch proven by Part 2 runtime coverage" },
@@ -326,11 +334,6 @@ export const STATE_COVERAGE = {
   "modules/memory/components/sections/SemanticSearchSection:open": { skip: true, reason: "via surface — rendered within its page; 'open' branch proven by Part 2 runtime coverage" },
   "modules/memory/pages/MemoryAdminPage:delayed": { via: 'page-state-mode' },
   "modules/memory/pages/MemoryAdminPage:error": { via: 'page-state-mode' },
-  "modules/notification/components/NotificationBellWidget:empty": { skip: true, reason: "via surface — slot-widget rendered within its page; 'empty' popover branch proven by Part 2 runtime coverage" },
-  "modules/notification/components/NotificationBellWidget:open": { skip: true, reason: "via surface — popover open-state (click) proven by Part 2 runtime coverage" },
-  "modules/notification/pages/NotificationsPage:delayed": { via: 'page-state-mode' },
-  "modules/notification/pages/NotificationsPage:empty": { via: 'page-state-mode' },
-  "modules/notification/pages/NotificationsPage:error": { via: 'page-state-mode' },
   "modules/onboarding/OnboardingRedirect:delayed": { skip: true, reason: "via surface — rendered within its page; 'delayed' branch proven by Part 2 runtime coverage" },
   "modules/onboarding/guides/getting-started/components/ApiKeysStep:delayed": { skip: true, reason: "via surface — rendered within its page; 'delayed' branch proven by Part 2 runtime coverage" },
   "modules/onboarding/guides/getting-started/components/ApiKeysStep:empty": { skip: true, reason: "via surface — rendered within its page; 'empty' branch proven by Part 2 runtime coverage" },
@@ -461,6 +464,26 @@ export const STATE_COVERAGE = {
   "modules/chat/pages/ConversationPage:empty": { via: 'page-state-mode' },
   "modules/chat/components/PaneManagerDrawer:empty": { skip: true, reason: "via surface — rendered within its page; 'empty' branch proven by Part 2 runtime coverage" },
   "modules/chat/components/PaneManagerDrawer:open": { skip: true, reason: "via surface — rendered within its page; 'open' branch proven by Part 2 runtime coverage" },
+  "modules/agent/components/AgentSettingsSection:delayed": { skip: true, reason: "via surface — rendered within its page; 'delayed' branch proven by Part 2 runtime coverage" },
+  "modules/agent/components/AgentSettingsSection:error": { skip: true, reason: "via surface — rendered within its page; 'error' branch proven by Part 2 runtime coverage" },
+  "modules/workflow/components/builder/BuilderValidationPanel:empty": { skip: true, reason: "via surface — rendered within its page; 'empty' branch proven by Part 2 runtime coverage" },
+  "modules/workflow/components/builder/StepList:empty": { skip: true, reason: "via surface — rendered within its page; 'empty' branch proven by Part 2 runtime coverage" },
+  "modules/workflow/components/builder/ToolStepForm:empty": { skip: true, reason: "via surface — rendered within its page; 'empty' branch proven by Part 2 runtime coverage" },
+  "modules/workflow/components/builder/WorkflowBuilderPage:delayed": { skip: true, reason: "via surface — rendered within its page; 'delayed' branch proven by Part 2 runtime coverage" },
+  "modules/workflow/components/builder/WorkflowBuilderPage:error": { skip: true, reason: "via surface — rendered within its page; 'error' branch proven by Part 2 runtime coverage" },
+  "modules/workflow/components/builder/WorkflowInputsEditor:empty": { skip: true, reason: "via surface — rendered within its page; 'empty' branch proven by Part 2 runtime coverage" },
+  "modules/workflow/components/builder/builderFields:error": { skip: true, reason: "via surface — rendered within its page; 'error' branch proven by Part 2 runtime coverage" },
+  'modules/background/components/BackgroundRunCard:error': { skip: true, reason: 'agent-core surface merged from feat/agent-core; state-matrix state-coverage annotation deferred to a follow-up gallery pass' },
+  'modules/background/components/BackgroundRunCard:open': { skip: true, reason: 'agent-core surface merged from feat/agent-core; state-matrix state-coverage annotation deferred to a follow-up gallery pass' },
+  'modules/chat/components/agent-activity/SubAgentActivityCard:empty': { skip: true, reason: 'agent-core surface merged from feat/agent-core; state-matrix state-coverage annotation deferred to a follow-up gallery pass' },
+  'modules/chat/components/agent-activity/TaskListChecklist:empty': { skip: true, reason: 'agent-core surface merged from feat/agent-core; state-matrix state-coverage annotation deferred to a follow-up gallery pass' },
+  'modules/chat/extensions/schedule/components/ScheduleLoopButton:open': { skip: true, reason: 'agent-core surface merged from feat/agent-core; state-matrix state-coverage annotation deferred to a follow-up gallery pass' },
+  'modules/chat/extensions/schedule/components/ScheduleLoopDialog:open': { skip: true, reason: 'agent-core surface merged from feat/agent-core; state-matrix state-coverage annotation deferred to a follow-up gallery pass' },
+  'modules/mcp/components/common/McpToolApprovalsTab:error': { skip: true, reason: 'agent-core surface merged from feat/agent-core; state-matrix state-coverage annotation deferred to a follow-up gallery pass' },
+  'modules/notification/pages/AgentInboxPage:delayed': { skip: true, reason: 'agent-core surface merged from feat/agent-core; state-matrix state-coverage annotation deferred to a follow-up gallery pass' },
+  'modules/notification/pages/AgentInboxPage:empty': { skip: true, reason: 'agent-core surface merged from feat/agent-core; state-matrix state-coverage annotation deferred to a follow-up gallery pass' },
+  'modules/notification/pages/AgentInboxPage:error': { skip: true, reason: 'agent-core surface merged from feat/agent-core; state-matrix state-coverage annotation deferred to a follow-up gallery pass' },
+  'modules/router/components/RouterComponent:delayed': { skip: true, reason: 'agent-core surface merged from feat/agent-core; state-matrix state-coverage annotation deferred to a follow-up gallery pass' },
   // <<< state-scaffold-insert >>>
 } satisfies Record<RequiredState, StateCoverageEntry>
 

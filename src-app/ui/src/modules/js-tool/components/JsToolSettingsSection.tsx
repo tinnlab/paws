@@ -14,14 +14,11 @@ import {
   message,
 } from '@ziee/kit'
 import { z } from 'zod'
-import { Stores } from '@ziee/framework/stores'
 import { usePermission } from '@/core/permissions'
 import { SettingsFormActions } from '@/modules/settings/components/SettingsFormActions'
-import {
-  Permissions,
-  type JsToolSettings as JsToolSettingsRow,
-  type UpdateJsToolSettings,
-} from '@/api-client/types'
+import { type JsToolSettings as JsToolSettingsRow, type UpdateJsToolSettings } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
+import { JsToolSettings as JsToolSettingsStore } from '@/modules/js-tool/stores/jsToolSettings'
 
 const MANAGE_PERM = Permissions.JsToolSettingsManage
 const READ_PERM = Permissions.JsToolSettingsRead
@@ -103,7 +100,7 @@ function formToPatch(v: FormValues): UpdateJsToolSettings {
  * Mirrors `SandboxResourceLimitsSection`.
  */
 export function JsToolSettingsSection() {
-  const { settings, loading, saving, error } = Stores.JsToolSettings
+  const { settings, loading, saving, error } = JsToolSettingsStore
   const canManage = usePermission(MANAGE_PERM)
   const canRead = usePermission(READ_PERM) || canManage
 
@@ -127,7 +124,7 @@ export function JsToolSettingsSection() {
 
   const onSubmit = async (v: FormValues) => {
     try {
-      await Stores.JsToolSettings.saveSettings(formToPatch(v))
+      await JsToolSettingsStore.saveSettings(formToPatch(v))
       message.success('run_js limits saved')
     } catch (e: any) {
       message.error(e?.message ?? 'Failed to save')

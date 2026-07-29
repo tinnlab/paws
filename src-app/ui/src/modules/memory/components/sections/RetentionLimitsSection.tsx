@@ -10,11 +10,11 @@ import {
   message,
 } from '@ziee/kit'
 import { z } from 'zod'
-import { Stores } from '@ziee/framework/stores'
 import { usePermission } from '@/core/permissions'
 import { SettingsSectionStatus } from '@/components/common/SettingsSectionStatus'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { SettingsFormActions } from '@/modules/settings/components/SettingsFormActions'
+import { MemoryAdmin } from '@/modules/memory/stores/memoryAdmin'
 
 const READ_PERM = Permissions.MemoryAdminRead
 const MANAGE_PERM = Permissions.MemoryAdminManage
@@ -30,9 +30,13 @@ type FormValues = z.infer<typeof schema>
  * Retention + extraction quota. Own form.
  */
 export function RetentionLimitsSection() {
-  const canRead = usePermission(READ_PERM) || usePermission(MANAGE_PERM)
+  // Both permission hooks must be called UNCONDITIONALLY every render — a
+  // `usePermission(A) || usePermission(B)` short-circuits the second hook when
+  // the first is true, so the hook COUNT varies with permission state and React
+  // throws "Rendered more hooks than during the previous render" when it flips.
   const canManage = usePermission(MANAGE_PERM)
-  const { settings, saving, error } = Stores.MemoryAdmin
+  const canRead = usePermission(READ_PERM) || canManage
+  const { settings, saving, error } = MemoryAdmin
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
     defaultValues: {
@@ -66,13 +70,13 @@ export function RetentionLimitsSection() {
       <SettingsSectionStatus
         title="Retention & extraction limits"
         error={error}
-        onRetry={() => Stores.MemoryAdmin.load()}
+        onRetry={() => MemoryAdmin.load()}
       />
     )
 
   const handleSubmit = async (values: FormValues) => {
     try {
-      await Stores.MemoryAdmin.update({
+      await MemoryAdmin.update({
         soft_delete_grace_days: values.soft_delete_grace_days,
         daily_extraction_quota: values.daily_extraction_quota,
       })

@@ -27,6 +27,13 @@ pub enum MessageContentDataVariants {
         #[serde(skip_serializing_if = "Option::is_none")]
         metadata: Option<crate::modules::chat::extensions::text::types::ThinkingMetadata>,
     },
+
+    /// System/observation content injected by ziee (e.g. a completed background
+    /// sub-agent result). Renders as a distinct observation card; wire-maps to a
+    /// plain-text block so the model sees it as context.
+    Observation {
+        text: String,
+    },
 }
 
 /// Extension factory function

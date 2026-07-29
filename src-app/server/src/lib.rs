@@ -60,6 +60,11 @@ pub use modules::user::models::User;
 pub use modules::llm_provider::events::LlmProviderEvent;
 pub use modules::llm_provider::UserKeyRepository;
 pub use modules::mcp::events::McpServerEvent;
+/// The columns `list_calls_for_user` narrows on. Re-exported for the
+/// integration-test crate, which owns the authoritative owner-leading index
+/// guard (`tests/mcp/tool_call_index_test.rs`) and must read the SAME list the
+/// query is pinned to rather than a copy of it.
+pub use modules::mcp::tool_calls::repository::FILTERED_LOOKUP_COLUMNS;
 // Re-exported so integration tests can drive the REAL retention reaper tick
 // (`memory::reaper::run_once`) instead of mirroring its SQL.
 pub use modules::memory::reaper::run_once as memory_reaper_run_once;
@@ -307,6 +312,7 @@ pub mod workflow {
     pub use crate::modules::workflow::models::WorkflowRunStatus;
     pub use crate::modules::workflow::repository::{
         cancel_cas, heartbeat, insert_run, mark_running, mark_status, persist_step_meta,
+        append_agent_activity, AGENT_ACTIVITY_MAX_ENTRIES,
     };
     pub use crate::modules::workflow::models::CreateWorkflowRun;
     // The run staging root, so a test can delete a run's on-disk logs to

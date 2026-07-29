@@ -1,10 +1,12 @@
 import { Button, Form, FormField, useForm, zodResolver, Input, Switch, message } from '@ziee/kit'
 import { z } from 'zod'
 import { Drawer } from '@/modules/layouts/app-layout/components/Drawer'
-import { Stores } from '@ziee/framework/stores'
+import { Users } from '@/modules/user/stores/users'
 import { usePermission } from '@/core/permissions'
-import { Permissions, type UpdateUserRequest } from '@/api-client/types'
+import { type UpdateUserRequest } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { useEffect } from 'react'
+import { EditUserDrawer as EditUserDrawerStore } from '@/modules/user/components/user/editUserDrawer'
 
 const editUserSchema = z.object({
   username: z.string().min(1, 'Please enter username'),
@@ -14,7 +16,7 @@ const editUserSchema = z.object({
 type EditUserValues = z.infer<typeof editUserSchema>
 
 export function EditUserDrawer() {
-  const { isOpen, editingUser } = Stores.EditUserDrawer
+  const { isOpen, editingUser } = EditUserDrawerStore
   const editForm = useForm<EditUserValues>({
     resolver: zodResolver(editUserSchema),
     defaultValues: { username: '', display_name: '', is_active: true },
@@ -49,10 +51,10 @@ export function EditUserDrawer() {
         is_active: values.is_active,
       }
 
-      await Stores.Users.updateUser(editingUser.id, updateData)
+      await Users.updateUser(editingUser.id, updateData)
 
       message.success('User updated successfully')
-      Stores.EditUserDrawer.closeEditUserDrawer()
+      EditUserDrawerStore.closeEditUserDrawer()
       editForm.reset()
     } catch (error) {
       console.error('Failed to update user:', error)
@@ -65,7 +67,7 @@ export function EditUserDrawer() {
       title="Edit User"
       open={isOpen}
       onClose={() => {
-        Stores.EditUserDrawer.closeEditUserDrawer()
+        EditUserDrawerStore.closeEditUserDrawer()
         editForm.reset()
       }}
       footer={
@@ -73,7 +75,7 @@ export function EditUserDrawer() {
           <Button
             variant="outline"
             onClick={() => {
-              Stores.EditUserDrawer.closeEditUserDrawer()
+              EditUserDrawerStore.closeEditUserDrawer()
               editForm.reset()
             }}
             data-testid="user-edit-cancel-button"

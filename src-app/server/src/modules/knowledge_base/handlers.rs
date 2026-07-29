@@ -136,12 +136,36 @@ fn rpc_err(e: AppError) -> (StatusCode, JsonRpcError) {
     (StatusCode::OK, JsonRpcError::internal(e.to_string()))
 }
 
+const KB_IDS_EXAMPLE: &str = r#"["3f1c2a44-0000-0000-0000-000000000000"]"#;
+
+/// Decode the `knowledge_base_ids` ARRAY argument before the typed
+/// deserialization, which would otherwise hard-fail on a JSON-encoded array
+/// AND destroy the graceful fallback to the conversation's attached KBs.
+fn decode_search_args(args: &Value) -> Result<Value, AppError> {
+    let mut out = args.clone();
+    crate::common::tool_args::coerce_args_in_place(
+        &mut out,
+        &[crate::common::tool_args::ArgSpec {
+            key: "knowledge_base_ids",
+            shape: crate::common::tool_args::ArgShape::Array,
+            example: KB_IDS_EXAMPLE,
+        }],
+    )
+    .map_err(|e| AppError::bad_request("INVALID_ARGS", e.into_message()))?;
+    Ok(out)
+}
+
 async fn search_knowledge(
     user_id: Uuid,
     conversation_id: Option<Uuid>,
     args: &Value,
 ) -> Result<Value, AppError> {
-    let args: SearchArgs = serde_json::from_value(args.clone())
+    // `knowledge_base_ids` is a declared ARRAY argument that models routinely
+    // JSON-encode. Undecoded it hard-fails the typed deserialization below with
+    // "invalid type: string … expected a sequence", which ALSO destroys the
+    // otherwise-graceful fallback to the conversation's attached KBs.
+    let args_value = decode_search_args(args)?;
+    let args: SearchArgs = serde_json::from_value(args_value)
         .map_err(|e| AppError::bad_request("INVALID_ARGS", e.to_string()))?;
 
     // Resolve scope: explicit kb_ids (owner-filtered) OR the conversation's
@@ -632,4 +656,48 @@ pub async fn list_project_kbs(
 }
 pub fn list_project_kbs_docs(op: TransformOperation) -> TransformOperation {
     with_permission::<(KnowledgeBaseUse,)>(op).id("KnowledgeBase.listProject").summary("List KBs attached to a project.").response::<200, Json<Vec<KnowledgeBase>>>()
+}
+
+#[cfg(test)]
+mod stringified_arg_tests {
+    use super::*;
+    use crate::common::tool_args::conformance::{assert_arg_conformance, ArgSite};
+    use crate::common::tool_args::ArgShape;
+    use serde_json::json;
+
+    /// A stringified `knowledge_base_ids` used to hard-fail serde AND destroy
+    /// the graceful fallback to the conversation's attached KBs. (TEST-31)
+    #[test]
+    fn knowledge_base_ids_decode_before_typed_deserialization() {
+        let out = decode_search_args(&json!({
+            "query": "cell cycle",
+            "knowledge_base_ids": r#"["3f1c2a44-0000-0000-0000-000000000000"]"#
+        }))
+        .unwrap();
+        let parsed: SearchArgs = serde_json::from_value(out).expect("typed parse must now succeed");
+        assert_eq!(parsed.knowledge_base_ids.unwrap().len(), 1);
+        assert_eq!(parsed.query, "cell cycle");
+
+        // The scalar sibling is never reparsed.
+        let out = decode_search_args(&json!({ "query": "{\"looks\":\"like json\"}" })).unwrap();
+        assert_eq!(out["query"], json!("{\"looks\":\"like json\"}"));
+    }
+
+    /// The shared conformance battery. (TEST-41)
+    #[test]
+    fn knowledge_base_ids_pass_the_shared_argument_conformance_battery() {
+        assert_arg_conformance(ArgSite {
+            site: "search_knowledge.knowledge_base_ids",
+            arg: "knowledge_base_ids",
+            shape: ArgShape::Array,
+            canonical: json!(["3f1c2a44-0000-0000-0000-000000000000"]),
+            example: KB_IDS_EXAMPLE,
+            absent_yields: None,
+            extract: |args: serde_json::Value| {
+                decode_search_args(&args)
+                    .map(|v| v.get("knowledge_base_ids").cloned().filter(|x| !x.is_null()))
+                    .map_err(|e| format!("{e}"))
+            },
+        });
+    }
 }

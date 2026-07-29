@@ -1,10 +1,7 @@
 import { Download, RotateCw, Upload as UploadIcon } from 'lucide-react'
 import { useState } from 'react'
-import {
-  Permissions,
-  type SnapshotDto,
-  type VoiceCatalogModel,
-} from '@/api-client/types'
+import { type SnapshotDto, type VoiceCatalogModel } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { ListPagination } from '@/components/common/ListPagination'
 import {
   Button,
@@ -22,8 +19,12 @@ import {
   Text,
 } from '@ziee/kit'
 import { Can } from '@/core/permissions'
-import { Stores } from '@ziee/framework/stores'
 import { formatBytes } from '@/utils/downloadUtils'
+import { DownloadFailureRow } from '@/modules/voice/components/DownloadFailureRow'
+import { progressByteLabel } from '@/modules/voice/stores/downloadProgress.helpers'
+import { VoiceModelUpdate } from '@/modules/voice/stores/voiceModelUpdate'
+import { VoiceModelDownloadProgress as VoiceModelDownloadProgressStore } from '@/modules/voice/stores/voiceModelDownloadProgress'
+import { VoiceUploadModelDrawer } from '@/modules/voice/stores/voiceUploadModelDrawer'
 
 const PAGE_SIZE = 10
 
@@ -35,13 +36,13 @@ const PAGE_SIZE = 10
  */
 export function AvailableModelsCard() {
   const { catalog, sourceReachable, sourceRepo, checking, error, hasLoaded } =
-    Stores.VoiceModelUpdate
-  const { activeByKey } = Stores.VoiceModelDownloadProgress
+    VoiceModelUpdate
+  const { activeByKey } = VoiceModelDownloadProgressStore
   const [page, setPage] = useState(1)
 
   const handleDownload = async (m: VoiceCatalogModel) => {
     try {
-      await Stores.VoiceModelDownloadProgress.startDownload({ name: m.name })
+      await VoiceModelDownloadProgressStore.startDownload({ name: m.name })
     } catch (e) {
       message.error(e instanceof Error ? e.message : 'Failed to start download')
     }
@@ -49,7 +50,7 @@ export function AvailableModelsCard() {
 
   const handleCheckForUpdates = async () => {
     try {
-      const result = await Stores.VoiceModelUpdate.checkForUpdates()
+      const result = await VoiceModelUpdate.checkForUpdates()
       const newCount = (result?.models ?? []).filter(m => !m.installed).length
       if (newCount === 0) {
         message.success("No new models — you're up to date.")
@@ -81,7 +82,7 @@ export function AvailableModelsCard() {
               icon={<UploadIcon />}
               variant="outline"
               onClick={() =>
-                Stores.VoiceUploadModelDrawer.openUploadModelDrawer()
+                VoiceUploadModelDrawer.openUploadModelDrawer()
               }
               data-testid="voice-model-upload-open-btn"
               aria-label="Upload a model file"
@@ -125,7 +126,7 @@ export function AvailableModelsCard() {
             description="Couldn't reach the model source."
             details={error}
             onRetry={() =>
-              void Stores.VoiceModelUpdate.checkForUpdates().catch(() => {
+              void VoiceModelUpdate.checkForUpdates().catch(() => {
                 /* non-fatal */
               })
             }
@@ -210,7 +211,11 @@ function AvailableModelRow({
         <Flex justify="between" align="center" gap="small" wrap>
           <Space wrap>
             <Text strong>{model.name}</Text>
-            {model.size_bytes != null && !model.installed && (
+            {/* Only a REAL catalog size is worth showing. A source that
+                advertises 0 (or omits the size) would otherwise render a naked
+                "0 Bytes" on the row — the same meaningless zero, from the other
+                direction. See `.lifecycle/voice-model-bad-magic/` (INV-6). */}
+            {model.size_bytes != null && model.size_bytes > 0 && !model.installed && (
               <Text type="secondary" className="text-xs">
                 {formatBytes(model.size_bytes)}
               </Text>
@@ -268,7 +273,12 @@ function AvailableModelRow({
         </Flex>
         {progress && <DownloadProgressLine progress={progress} />}
         {failed && progress?.error && (
-          <Text type="secondary">{progress.error}</Text>
+          <DownloadFailureRow
+            reason={progress.error}
+            onRetry={onDownload}
+            testId={`voice-available-model-failed-${model.name}`}
+            retryLabel={`Retry installing ${model.name}`}
+          />
         )}
       </Flex>
     </div>
@@ -286,6 +296,15 @@ function DownloadProgressLine({ progress }: { progress: SnapshotDto }) {
         : total > 0
           ? Math.round((recv / total) * 100)
           : undefined
+  // `null` → render no byte text at all. A download that failed before
+  // transferring anything must NOT print a bare "0 Bytes" under a row that
+  // advertises the catalog size (INV-6).
+  const byteLabel = progressByteLabel(
+    recv,
+    progress.total_bytes ?? undefined,
+    progress.status,
+    formatBytes,
+  )
   return (
     <Flex vertical className="gap-1">
       <Progress
@@ -302,11 +321,11 @@ function DownloadProgressLine({ progress }: { progress: SnapshotDto }) {
         size="sm"
         aria-label={`Download progress: ${pct ?? 0}%`}
       />
-      <Text type="secondary" className="text-xs">
-        {formatBytes(recv)}
-        {total > 0 ? ` / ${formatBytes(total)}` : ''}
-        {progress.status === 'completed' ? ' — Completed' : ''}
-      </Text>
+      {byteLabel && (
+        <Text type="secondary" className="text-xs">
+          {byteLabel}
+        </Text>
+      )}
     </Flex>
   )
 }
@@ -328,7 +347,7 @@ function AddFromUrlForm() {
 
   const handleAdd = async () => {
     try {
-      await Stores.VoiceModelDownloadProgress.startDownload({
+      await VoiceModelDownloadProgressStore.startDownload({
         name: name.trim(),
         url: url.trim() || undefined,
         repository: repository.trim() || undefined,

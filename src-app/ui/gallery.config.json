@@ -2,7 +2,6 @@
   "galleryDir": "src/dev/gallery",
   "surfaceRoots": ["src/modules", "src/components/ui"],
   "kitImport": "@ziee/kit",
-  "port": 1420,
   "galleryUrl": "/gallery.html",
   "prodMarker": "ZIEE_GALLERY_SEED_MARKER",
   "distDir": "../../dist/ui",
@@ -15,9 +14,11 @@
   "visualConfig": "playwright.visual.config.ts",
   "visualSpecs": [
     "layout.spec.ts",
+    "form-label-starvation.spec.ts",
     "states.spec.ts",
     "overlays.spec.ts",
-    "chat-collapse-borders.spec.ts"
+    "chat-collapse-borders.spec.ts",
+    "input-group-overflow.spec.ts"
   ],
   "visualSnapshotSpecs": ["gallery.spec.ts"]
 }

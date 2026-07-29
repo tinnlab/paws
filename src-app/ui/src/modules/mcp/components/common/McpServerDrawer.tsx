@@ -18,21 +18,17 @@ import {
 } from '@ziee/kit'
 import { Drawer } from '@/modules/layouts/app-layout/components/Drawer'
 import { McpToolCallsTab } from '@/modules/mcp/components/common/McpToolCallsTab'
+import { McpToolApprovalsTab } from '@/modules/mcp/components/common/McpToolApprovalsTab'
 import { useEffect, useMemo, useState } from 'react'
-import { Stores } from '@ziee/framework/stores'
 import { usePermission } from '@/core/permissions'
-import {
-  Permissions,
-  type CreateMcpServerRequest,
-  type UpdateMcpServerRequest,
-  type TestMcpConnectionRequest,
-  type McpServer,
-  type EnvVarEntry,
-  type HeaderEntry,
-  type UsageMode,
-  type TransportType,
-} from '@/api-client/types'
+import { type CreateMcpServerRequest, type UpdateMcpServerRequest, type TestMcpConnectionRequest, type McpServer, type EnvVarEntry, type HeaderEntry, type UsageMode, type TransportType } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { KeyValueSecretEditor } from '@/modules/mcp/components/common/KeyValueSecretEditor'
+import { SystemMcpServer } from '@/modules/mcp/stores/systemMcpServer'
+import { McpUserPolicy } from '@/modules/mcp/stores/mcpUserPolicy'
+import { McpServer as McpServerStore } from '@/modules/mcp/stores/mcpServer'
+import { McpServerDrawer as McpServerDrawerStore } from '@/modules/mcp/stores/mcpServerDrawer'
+import { SandboxFlavors as SandboxFlavorsStore } from '@/modules/code-sandbox/stores/sandboxFlavors'
 
 /// Form-state row shape for env vars and HTTP headers in this drawer.
 /// `_was_saved_secret` is a hidden field set by the form initializer
@@ -104,16 +100,16 @@ export function McpServerDrawer() {
 
   // Read the drawer state via the Stores proxy (not the raw zustand hook) so
   // render subscribes through the meta-framework's per-field proxy, matching
-  // how the rest of this component drives the store (Stores.McpServerDrawer.*).
+  // how the rest of this component drives the store (McpServerDrawerStore.*).
   const { open, loading, mode, editingServer, prefillData } =
-    Stores.McpServerDrawer
+    McpServerDrawerStore
   // Read the policy state property (not the function accessors) so
   // the React proxy installs a useStore subscription — without this
   // the drawer's transport dropdown + user-mode sandbox info Alert
   // would NOT re-render when the admin saves a new policy
   // (function-typed proxy properties don't subscribe; see
   // core/stores.ts:250-280).
-  const { policy: userPolicy } = Stores.McpUserPolicy
+  const { policy: userPolicy } = McpUserPolicy
   // Memoize so the derived array is reference-stable across renders
   // when `userPolicy` hasn't actually changed. Without this, the
   // useEffect below that depends on the array's stringified contents
@@ -146,12 +142,18 @@ export function McpServerDrawer() {
   // FALLBACK_* constants the store ships with cover the offline /
   // pre-load case so the form is usable before the fetch resolves.
   const { selectOptions: flavorOptions, hostCommands } =
-    Stores.SandboxFlavors
+    SandboxFlavorsStore
 
   // OAuth is configurable only for user-owned HTTP servers (the endpoints are
   // owner-scoped). Built-in/system servers authenticate differently.
   const isUserMode = mode === 'create' || mode === 'edit'
   const isSystemMode = mode === 'create-system' || mode === 'edit-system'
+  // Read-only call-history mode (ITEM-16). Opened from the card's "Calls"
+  // button, which is gated on `mcp_servers::read` — NOT on the edit perms — so
+  // a non-admin can audit their own calls against a built-in / system server.
+  // Nothing mutable is mounted in this mode: no form, no save, no test, no
+  // enable switch (`canManage` is false below and the form body isn't rendered).
+  const isHistoryMode = mode === 'history'
 
   // Mirror the user/ + assistants/ pattern (audit I-3): gate the form
   // by mode-specific manage permissions so the drawer becomes read-
@@ -170,6 +172,9 @@ export function McpServerDrawer() {
         return canCreateSystem
       case 'edit-system':
         return canEditSystem
+      // `history` is read-only by construction — never manageable.
+      case 'history':
+        return false
       default:
         return false
     }
@@ -184,7 +189,7 @@ export function McpServerDrawer() {
       open &&
       editingServer.transport_type === 'http'
     ) {
-      Stores.McpServer.getMcpServerOAuthConfig(editingServer.id)
+      McpServerStore.getMcpServerOAuthConfig(editingServer.id)
         .then(cfg => {
           if (cancelled) return
           setHasExistingOAuth(!!cfg)
@@ -531,7 +536,7 @@ export function McpServerDrawer() {
 
     let saved: McpServer
     if (mode === 'create') {
-      const wrapped = await Stores.McpServer.createMcpServer(
+      const wrapped = await McpServerStore.createMcpServer(
         serverData as CreateMcpServerRequest,
       )
       // Wrapper is flattened: McpServer fields at top level +
@@ -548,10 +553,10 @@ export function McpServerDrawer() {
         message.success('MCP server created successfully')
       }
     } else if (mode === 'edit' && editingServer) {
-      saved = await Stores.McpServer.updateMcpServer(editingServer.id, updateData)
+      saved = await McpServerStore.updateMcpServer(editingServer.id, updateData)
       message.success('MCP server updated successfully')
     } else if (mode === 'create-system') {
-      const wrapped = await Stores.SystemMcpServer.createSystemServer(
+      const wrapped = await SystemMcpServer.createSystemServer(
         serverData as CreateMcpServerRequest,
       )
       const { connection_warning, ...row } = wrapped
@@ -562,7 +567,7 @@ export function McpServerDrawer() {
         message.success('System MCP server created successfully')
       }
     } else if (mode === 'edit-system' && editingServer) {
-      saved = await Stores.SystemMcpServer.updateSystemServer(
+      saved = await SystemMcpServer.updateSystemServer(
         editingServer.id,
         updateData,
       )
@@ -578,7 +583,7 @@ export function McpServerDrawer() {
     // duplicate. Used by the post-create OAuth failure paths below.
     const flipToEditIfFreshCreate = () => {
       if (mode === 'create' || mode === 'create-system') {
-        Stores.McpServerDrawer.openMcpServerDrawer(
+        McpServerDrawerStore.openMcpServerDrawer(
           saved,
           saved.is_system ? 'edit-system' : 'edit',
         )
@@ -595,10 +600,10 @@ export function McpServerDrawer() {
         if (!oauthEnabled) {
           // Section toggled off — clear any existing config.
           if (hasExistingOAuth) {
-            await Stores.McpServer.deleteMcpServerOAuthConfig(saved.id)
+            await McpServerStore.deleteMcpServerOAuthConfig(saved.id)
           }
         } else if (clientId && clientSecret) {
-          await Stores.McpServer.setMcpServerOAuthConfig(saved.id, {
+          await McpServerStore.setMcpServerOAuthConfig(saved.id, {
             client_id: clientId,
             client_secret: clientSecret,
             scopes,
@@ -610,7 +615,7 @@ export function McpServerDrawer() {
         } else if (!clientId && hasExistingOAuth) {
           // Cleared the client id (with section still enabled) →
           // remove the stored config.
-          await Stores.McpServer.deleteMcpServerOAuthConfig(saved.id)
+          await McpServerStore.deleteMcpServerOAuthConfig(saved.id)
         }
         // (oauthEnabled + clientId set + secret blank + config exists
         //  → keep the current secret)
@@ -637,7 +642,7 @@ export function McpServerDrawer() {
       if (!saved) return
 
       if (mode === 'create' || mode === 'create-system') {
-        Stores.McpServerDrawer.openMcpServerDrawer(
+        McpServerDrawerStore.openMcpServerDrawer(
           saved,
           saved.is_system ? 'edit-system' : 'edit',
         )
@@ -660,8 +665,8 @@ export function McpServerDrawer() {
         id: saved.id,
       }
       const result = saved.is_system
-        ? await Stores.SystemMcpServer.testSystemServerConnection(payload)
-        : await Stores.McpServer.testMcpServerConnection(payload)
+        ? await SystemMcpServer.testSystemServerConnection(payload)
+        : await McpServerStore.testMcpServerConnection(payload)
       if (result.success) {
         message.success(result.message || 'Connection successful')
       } else {
@@ -675,10 +680,10 @@ export function McpServerDrawer() {
       // (it renders only on `last_health_check_status === 'unhealthy'`).
       try {
         const fresh = saved.is_system
-          ? await Stores.SystemMcpServer.getSystemServerById(saved.id)
-          : await Stores.McpServer.getMcpServer(saved.id)
+          ? await SystemMcpServer.getSystemServerById(saved.id)
+          : await McpServerStore.getMcpServer(saved.id)
         if (fresh) {
-          Stores.McpServerDrawer.openMcpServerDrawer(
+          McpServerDrawerStore.openMcpServerDrawer(
             fresh,
             fresh.is_system ? 'edit-system' : 'edit',
           )
@@ -697,10 +702,10 @@ export function McpServerDrawer() {
 
   const handleSubmit = async () => {
     try {
-      Stores.McpServerDrawer.setMcpServerDrawerLoading(true)
+      McpServerDrawerStore.setMcpServerDrawerLoading(true)
       const saved = await persistServer()
       if (!saved) return
-      Stores.McpServerDrawer.closeMcpServerDrawer()
+      McpServerDrawerStore.closeMcpServerDrawer()
       form.reset()
     } catch (error) {
       console.error('Failed to save MCP server:', error)
@@ -726,22 +731,22 @@ export function McpServerDrawer() {
       ) {
         if (mode === 'edit' && editingServer) {
           try {
-            const fresh = await Stores.McpServer.getMcpServer(editingServer.id)
+            const fresh = await McpServerStore.getMcpServer(editingServer.id)
             form.setValue('enabled' as any, fresh.enabled)
             setEnabledValue(!!fresh.enabled)
-            Stores.McpServerDrawer.openMcpServerDrawer(fresh, 'edit')
+            McpServerDrawerStore.openMcpServerDrawer(fresh, 'edit')
           } catch (e) {
             console.warn('Failed to refresh server after health check:', e)
           }
         } else if (mode === 'edit-system' && editingServer) {
           try {
-            const fresh = await Stores.SystemMcpServer.getSystemServerById(
+            const fresh = await SystemMcpServer.getSystemServerById(
               editingServer.id,
             )
             if (fresh) {
               form.setValue('enabled' as any, fresh.enabled)
               setEnabledValue(!!fresh.enabled)
-              Stores.McpServerDrawer.openMcpServerDrawer(fresh, 'edit-system')
+              McpServerDrawerStore.openMcpServerDrawer(fresh, 'edit-system')
             }
           } catch (e) {
             console.warn('Failed to refresh system server after health check:', e)
@@ -749,12 +754,12 @@ export function McpServerDrawer() {
         }
       }
     } finally {
-      Stores.McpServerDrawer.setMcpServerDrawerLoading(false)
+      McpServerDrawerStore.setMcpServerDrawerLoading(false)
     }
   }
 
   const handleClose = () => {
-    Stores.McpServerDrawer.closeMcpServerDrawer()
+    McpServerDrawerStore.closeMcpServerDrawer()
     form.reset()
   }
 
@@ -768,6 +773,10 @@ export function McpServerDrawer() {
         return 'Add System Server'
       case 'edit-system':
         return 'Edit System Server'
+      case 'history':
+        return editingServer
+          ? `Tool calls — ${editingServer.display_name}`
+          : 'Tool calls'
       default:
         return 'MCP Server'
     }
@@ -930,8 +939,8 @@ export function McpServerDrawer() {
         }
         const result =
           mode === 'create-system'
-            ? await Stores.SystemMcpServer.testSystemServerConnection(payload)
-            : await Stores.McpServer.testMcpServerConnection(payload)
+            ? await SystemMcpServer.testSystemServerConnection(payload)
+            : await McpServerStore.testMcpServerConnection(payload)
         if (result.success) {
           setEnabledValue(true)
           form.setValue('enabled' as any, true)
@@ -967,14 +976,14 @@ export function McpServerDrawer() {
         const payload: UpdateMcpServerRequest = { enabled: false }
         const updated =
           mode === 'edit'
-            ? await Stores.McpServer.updateMcpServer(editingServer.id, payload)
-            : await Stores.SystemMcpServer.updateSystemServer(
+            ? await McpServerStore.updateMcpServer(editingServer.id, payload)
+            : await SystemMcpServer.updateSystemServer(
                 editingServer.id,
                 payload,
               )
         setEnabledValue(false)
         form.setValue('enabled' as any, false)
-        Stores.McpServerDrawer.openMcpServerDrawer(updated, mode)
+        McpServerDrawerStore.openMcpServerDrawer(updated, mode)
         message.success('Server disabled')
         return
       }
@@ -992,7 +1001,7 @@ export function McpServerDrawer() {
           form.setValue('enabled' as any, false)
           return
         }
-        Stores.McpServerDrawer.openMcpServerDrawer(saved, mode)
+        McpServerDrawerStore.openMcpServerDrawer(saved, mode)
         message.success('Server enabled — connection test passed')
       } catch (error) {
         // Most likely cause: MCP_ENABLE_FAILED_HEALTH_CHECK from
@@ -1006,12 +1015,12 @@ export function McpServerDrawer() {
         try {
           const fresh =
             mode === 'edit'
-              ? await Stores.McpServer.getMcpServer(editingServer.id)
-              : Stores.SystemMcpServer.getSystemServerById(editingServer.id)
+              ? await McpServerStore.getMcpServer(editingServer.id)
+              : SystemMcpServer.getSystemServerById(editingServer.id)
           if (fresh) {
             setEnabledValue(!!fresh.enabled)
             form.setValue('enabled' as any, fresh.enabled)
-            Stores.McpServerDrawer.openMcpServerDrawer(fresh, mode)
+            McpServerDrawerStore.openMcpServerDrawer(fresh, mode)
           } else {
             setEnabledValue(false)
             form.setValue('enabled' as any, false)
@@ -1413,6 +1422,8 @@ export function McpServerDrawer() {
 
   // In edit mode, surface a per-server tool-call history tab beside the form.
   // Create mode has no server id yet, so just render the form.
+  // In `history` mode (read-only, `mcp_servers::read`) the history body is the
+  // ONLY thing mounted — see the render below.
   const isEditMode = mode === 'edit' || mode === 'edit-system'
   return (
     <Drawer
@@ -1453,7 +1464,11 @@ export function McpServerDrawer() {
         </div>
       }
     >
-      {isEditMode && editingServer ? (
+      {isHistoryMode && editingServer ? (
+        // Read-only: the history body ONLY. No Tabs strip (there is nothing to
+        // switch to), no details form, no tool-approvals tab.
+        <McpToolCallsTab serverId={editingServer.id} />
+      ) : isEditMode && editingServer ? (
         <Tabs
           defaultValue="details"
           data-testid="mcp-drawer-tabs"
@@ -1464,6 +1479,23 @@ export function McpServerDrawer() {
               label: 'Calls',
               children: <McpToolCallsTab serverId={editingServer.id} />,
             },
+            // Per-tool approval overrides are a SYSTEM-server-only admin control
+            // (the backend PUT rejects non-system servers), so the tab is shown
+            // only in edit-system mode.
+            ...(isSystemMode
+              ? [
+                  {
+                    key: 'tool-approvals',
+                    label: 'Tool approvals',
+                    children: (
+                      <McpToolApprovalsTab
+                        serverId={editingServer.id}
+                        canManage={canManage}
+                      />
+                    ),
+                  },
+                ]
+              : []),
           ]}
         />
       ) : (

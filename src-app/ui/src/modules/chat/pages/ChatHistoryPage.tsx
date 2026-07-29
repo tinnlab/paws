@@ -2,13 +2,14 @@ import { useEffect, useRef, useState } from 'react'
 import { Button, Tooltip, Text, Title } from '@ziee/kit'
 import { MessageSquare, Plus, Search as SearchIcon } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
-import { Stores } from '@ziee/framework/stores'
 import { ConversationList } from '@/modules/chat/components/ConversationList'
 import { ChatHistorySortControl } from '@/modules/chat/components/ChatHistorySortControl'
 import { HeaderBarContainer } from '@/modules/layouts/app-layout/components/HeaderBarContainer'
 import { useElementMinSize } from '@/modules/layouts/app-layout/hooks/useWindowMinSize'
 import { useNativeScroll } from '@/modules/layouts/app-layout/hooks/useNativeScroll'
 import { cn } from '@/lib/utils'
+import { AppLayout } from '@/modules/layouts/app-layout/appLayout'
+import { ChatHistory } from '@/modules/chat/stores/chatHistory'
 
 /**
  * ChatHistoryPage
@@ -41,8 +42,8 @@ export default function ChatHistoryPage() {
   // Chat history store for empty state detection
   // Native document-scroll on mobile (iOS toolbar collapse + under-notch flow).
   useNativeScroll(true)
-  const { nativeScroll } = Stores.AppLayout
-  const { conversations, loading, error, searchQuery } = Stores.ChatHistory
+  const { nativeScroll } = AppLayout
+  const { conversations, loading, error, searchQuery } = ChatHistory
   // A non-empty search must keep ConversationList mounted even when it returns
   // zero rows: search is server-side now, so `conversations` becomes empty on a
   // no-match — but the list owns the search box and the "no results matching
@@ -50,15 +51,29 @@ export default function ChatHistoryPage() {
   // wrong "No chat history yet" page state and no way to edit the query.
   const hasSearch = searchQuery.trim().length > 0
 
-  // Refetch on mount. The sidebar's RecentConversationsWidget may have
-  // eager-primed the store with an empty list at login (before any
-  // conversations existed), leaving `isInitialized=true` and the
-  // render below short-circuiting into the empty state — which means
-  // `<ConversationList>` never mounts and its own load-on-mount
-  // useEffect never fires. Trigger the refetch here so newly-created
-  // conversations always appear.
+  // SINGLE OWNER of the route-level `conversations` fetch. Refetch on mount,
+  // unconditionally (not guarded by `isInitialized`): the sidebar's
+  // RecentConversationsWidget may have eager-primed the store with an empty list
+  // at login (before any conversations existed), leaving `isInitialized=true` and
+  // the render below short-circuiting into the empty state — so a conversation
+  // created later (by another tab, an MCP tool, or a test seeding before it
+  // navigates here) must still show up.
+  //
+  // This page is the only owner BECAUSE it is the only mount site that covers
+  // every case: `<ConversationList>` does not mount at all in the empty state, so
+  // a fetch living only in the list would never run there. The list therefore
+  // deliberately does NOT fetch (it used to, and the duplicate cost a real extra
+  // round-trip via `loadConversations`' `reloadQueued` replay — see the comment
+  // there). Do not add a second caller.
+  //
+  // Note the ordering is NOT "the list always mounts after this fetch starts":
+  // React runs CHILD effects before PARENT effects, so on an SPA re-entry where
+  // the store still holds rows, the render predicate below is already true on the
+  // first render and `<ConversationList>`'s effects run BEFORE this one. That is
+  // harmless (the stale rows paint, then this refetch refreshes them) — but the
+  // reason a second caller is unnecessary is COVERAGE, not ordering.
   useEffect(() => {
-    Stores.ChatHistory.loadConversations()
+    ChatHistory.loadConversations()
   }, [])
 
   // Closing the body search affordance when the page grows back to

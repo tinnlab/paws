@@ -6,8 +6,14 @@
 //! limited user does not), and the real loopback round-trip (`invoke_capability`
 //! actually creates/does not create a row, with NO mocked authz). Denylist,
 //! schema validation, path-param, and kill-switch paths.
+//!
+//! Submodules:
+//!   - `real_llm_test` — tier 4, a real model driving the control tools.
+//!   - `stringified_args_test` — tier 3, JSON-ENCODED `body`/`query`/`path_params`
+//!     surviving the decode all the way to the real loopback route.
 
 mod real_llm_test;
+mod stringified_args_test;
 
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -617,4 +623,571 @@ async fn kill_switch_removes_surface() {
         .await
         .unwrap();
     assert_eq!(res.status(), 404);
+}
+
+/// TEST-4 — the live-session regression, through the REAL JSON-RPC surface
+/// against the REAL catalog (300+ operations built from the finished OpenAPI
+/// document), not a fixture.
+///
+/// A user asked "create a new project please"; the model sent
+/// `list_capabilities{query:"create project"}` and the shipped whole-phrase
+/// matcher returned **0 operations**, after which it flailed. The multi-word
+/// query must match, and the operation the phrase names must come FIRST.
+#[tokio::test]
+async fn multi_word_query_finds_and_ranks_the_named_operation() {
+    let server = TestServer::start().await;
+    let admin = create_user_with_permissions(&server, "ctl_search", &["*"]).await;
+
+    let ops_for = |res: &Value| -> Vec<String> {
+        structured(res)["operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|o| o["operation_id"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    let res =
+        call_tool(&server, &admin.token, "list_capabilities", json!({ "query": "create project" }))
+            .await;
+    let total = structured(&res)["total"].as_u64().unwrap();
+    let ops = ops_for(&res);
+    assert!(total > 0, "'create project' must match at least one operation (got {total})");
+    assert_eq!(
+        ops.first().map(String::as_str),
+        Some("Project.create"),
+        "'create project' must rank Project.create first; got {ops:?}"
+    );
+
+    // The same phrasing a model reaches for, for a different entity.
+    let res = call_tool(
+        &server,
+        &admin.token,
+        "list_capabilities",
+        json!({ "query": "create assistant" }),
+    )
+    .await;
+    let ops = ops_for(&res);
+    assert_eq!(
+        ops.first().map(String::as_str),
+        Some("Assistant.create"),
+        "'create assistant' must rank Assistant.create first; got {ops:?}"
+    );
+
+    // Single-term behavior is unchanged (the counts the live session saw).
+    for term in ["project", "create"] {
+        let res =
+            call_tool(&server, &admin.token, "list_capabilities", json!({ "query": term })).await;
+        assert!(
+            structured(&res)["total"].as_u64().unwrap() > 0,
+            "single-term '{term}' must still match"
+        );
+    }
+
+    // A query in which NOTHING is known still returns nothing — dropping
+    // vocabulary-absent terms must never degenerate into "list the catalog".
+    for q in ["zzzznotathing", "zzzznotathing qqqnope"] {
+        let res =
+            call_tool(&server, &admin.token, "list_capabilities", json!({ "query": q })).await;
+        assert_eq!(
+            structured(&res)["total"].as_u64().unwrap(),
+            0,
+            "a query with no known terms must return nothing, got {q:?}"
+        );
+    }
+
+    // …but a filler noun the catalog has never heard of must not VETO a query
+    // that otherwise names its operation exactly (the e2e prompts say
+    // 'called "Foo"' / 'named "Bar"').
+    for q in ["create a new project called Foo", "create a project named Zaphod"] {
+        let res =
+            call_tool(&server, &admin.token, "list_capabilities", json!({ "query": q })).await;
+        let ops = ops_for(&res);
+        assert_eq!(
+            ops.first().map(String::as_str),
+            Some("Project.create"),
+            "query {q:?} must still rank Project.create first; got {ops:?}"
+        );
+    }
+
+    // The operation the phrase NAMES must beat an alphabetically-luckier
+    // near-miss: a pure operation_id tie-break put LitSearch.deleteUserKey above
+    // User.delete for "delete user", offering the model a destructive near-miss.
+    let res =
+        call_tool(&server, &admin.token, "list_capabilities", json!({ "query": "delete user" }))
+            .await;
+    let ops = ops_for(&res);
+    assert_eq!(
+        ops.first().map(String::as_str),
+        Some("User.delete"),
+        "'delete user' must rank User.delete first; got {ops:?}"
+    );
+
+    // …and the model is TOLD why, so a retry is informed rather than random.
+    let res = call_tool(
+        &server,
+        &admin.token,
+        "list_capabilities",
+        json!({ "query": "zzzznotathing" }),
+    )
+    .await;
+    let text = res["result"]["content"][0]["text"].as_str().unwrap_or_default();
+    assert!(
+        text.contains("EVERY search term must match"),
+        "a zero-result list must explain the all-terms rule, got: {text}"
+    );
+
+    // A natural SENTENCE still finds the operation: punctuation and closed-class
+    // words are stripped query-side, so "please"/"a"/"for me" cannot empty it.
+    for q in ["please create a new project for me", "can you create a project?"] {
+        let res =
+            call_tool(&server, &admin.token, "list_capabilities", json!({ "query": q })).await;
+        let ops = ops_for(&res);
+        assert_eq!(
+            ops.first().map(String::as_str),
+            Some("Project.create"),
+            "query {q:?} must rank Project.create first; got {ops:?}"
+        );
+    }
+
+    // The regression the round-2 audit found on the REAL catalog: a filler word
+    // used to substring-match an unrelated id, so "delete a project" strictly
+    // matched exactly ONE operation — `Citations.delete` — and the model was
+    // handed a confident, wrong, DESTRUCTIVE candidate. Stopword filtering plus
+    // the minimum substring length must put the named operation first.
+    for (q, expected) in [
+        ("delete a project", "Project.delete"),
+        ("delete the project", "Project.delete"),
+        ("update a project", "Project.update"),
+    ] {
+        let res =
+            call_tool(&server, &admin.token, "list_capabilities", json!({ "query": q })).await;
+        let ops = ops_for(&res);
+        assert_eq!(
+            ops.first().map(String::as_str),
+            Some(expected),
+            "query {q:?} must rank {expected} first; got {ops:?}"
+        );
+    }
+
+    // A hyphenated term must be split like the corpus, not kept whole.
+    let res = call_tool(
+        &server,
+        &admin.token,
+        "list_capabilities",
+        json!({ "query": "update mcp-settings" }),
+    )
+    .await;
+    let ops = ops_for(&res);
+    assert!(
+        !ops.is_empty() && ops.iter().any(|id| id.ends_with("updateMcpSettings")),
+        "a hyphenated term must be split like the corpus; got {ops:?}"
+    );
+
+    // A multi-term query must be NARROWER than its broadest single term.
+    let strict = call_tool(
+        &server,
+        &admin.token,
+        "list_capabilities",
+        json!({ "query": "create project" }),
+    )
+    .await;
+    let broad =
+        call_tool(&server, &admin.token, "list_capabilities", json!({ "query": "project" })).await;
+    assert!(
+        structured(&strict)["total"].as_u64().unwrap()
+            < structured(&broad)["total"].as_u64().unwrap(),
+        "a multi-term query must narrow, not widen"
+    );
+}
+
+// ── describe_capability: a self-contained contract (INV-1) + the real
+//    required_permission (INV-4) ────────────────────────────────────────────
+//
+// The live defect: `describe_capability` for `Project.create` returned
+//   { "request_schema": { "$ref": "#/components/schemas/CreateProjectRequest" },
+//     "required_permission": null, … }
+// The model cannot dereference `#/components/…` (that document is in-process),
+// so it could not see a single field name; and the permission was silently lost
+// because a hand-written `.description()` overwrote the one `with_permission`
+// had put in the operation description.
+
+/// The whole tool result (text + structuredContent) as one string — the payload
+/// the model actually receives.
+fn result_text(res: &Value) -> String {
+    res["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// TEST-20 — the reported defect, fixed: the real fields of
+/// `CreateProjectRequest` are visible and no `$ref` survives anywhere.
+#[tokio::test]
+async fn describe_inlines_the_request_schema_no_ref_survives() {
+    let server = TestServer::start().await;
+    let admin = create_user_with_permissions(&server, "ctl_inline", &["*"]).await;
+    let res = call_tool(
+        &server,
+        &admin.token,
+        "describe_capability",
+        json!({ "operation_id": "Project.create" }),
+    )
+    .await;
+
+    let sc = structured(&res);
+    let schema = &sc["request_schema"];
+    assert!(schema.is_object(), "a schema must be returned: {res}");
+
+    // The REAL field of CreateProjectRequest — this is what the model needs and
+    // what a bare `$ref` withheld.
+    assert!(
+        schema["properties"].get("name").is_some(),
+        "the inlined schema must expose the real `name` field: {schema}"
+    );
+    assert_eq!(schema["properties"]["name"]["type"], "string");
+
+    // Nothing anywhere in the payload may still point at the components
+    // document, and for this (acyclic, small) operation nothing needs `$defs`
+    // either — so the string `$ref` must not occur at all.
+    let whole = serde_json::to_string(&res).unwrap();
+    assert!(
+        !whole.contains("#/components/"),
+        "no component pointer may reach the model: {whole}"
+    );
+    assert!(
+        !whole.contains("\"$ref\""),
+        "Project.create is acyclic and small — it must inline completely: {whole}"
+    );
+
+    // The text channel is a readable digest, not a JSON dump of the structure.
+    let text = result_text(&res);
+    assert!(text.contains("Request body fields:"), "digest expected: {text}");
+    // `CreateProjectRequest` declares no JSON-Schema `required` array (serde
+    // supplies the default) but constrains `name` with `minLength: 1` — so the
+    // digest must surface the CONSTRAINT, or the model reads `default=""` and
+    // concludes the field is optional.
+    assert!(
+        text.contains("- name (string) len 1..255"),
+        "the digest must carry `name` with its length constraint: {text}"
+    );
+    assert!(
+        text.contains("JSON Schema (exact"),
+        "the exact schema must accompany the digest: {text}"
+    );
+}
+
+/// TEST-21 (acceptance, INV-1) — the invariant across a broad slice of the LIVE
+/// catalog, not one hand-picked operation: no described payload may carry a
+/// `#/components/` pointer, and the slice really does contain many operations
+/// with a request body (so this cannot pass vacuously).
+#[tokio::test]
+async fn describe_is_self_contained_across_the_catalog() {
+    let server = TestServer::start().await;
+    let admin = create_user_with_permissions(&server, "ctl_sweep", &["*"]).await;
+
+    // Union an unfiltered page with several topic queries to reach well past the
+    // single-call cap.
+    let mut ids: std::collections::BTreeSet<String> = Default::default();
+    let mut queries: Vec<Value> = vec![json!({})];
+    for q in [
+        "create", "update", "delete", "settings", "project", "assistant", "mcp", "model",
+        "workflow", "user", "file", "memory", "conversation", "provider",
+    ] {
+        queries.push(json!({ "query": q }));
+    }
+    for args in queries {
+        let res = call_tool(&server, &admin.token, "list_capabilities", args).await;
+        for op in structured(&res)["operations"].as_array().unwrap_or(&vec![]) {
+            if let Some(id) = op["operation_id"].as_str() {
+                ids.insert(id.to_string());
+            }
+        }
+    }
+    assert!(
+        ids.len() >= 250,
+        "the sweep must cover a broad slice of the catalog, got {}",
+        ids.len()
+    );
+
+    let mut with_body = 0usize;
+    for id in &ids {
+        let res = call_tool(
+            &server,
+            &admin.token,
+            "describe_capability",
+            json!({ "operation_id": id }),
+        )
+        .await;
+        let sc = structured(&res);
+        if sc["request_schema"].is_object() {
+            with_body += 1;
+        }
+        let whole = serde_json::to_string(&res).unwrap();
+        assert!(
+            !whole.contains("#/components/"),
+            "{id}: a component pointer reached the model: {whole}"
+        );
+    }
+    assert!(
+        with_body >= 40,
+        "the sweep must include many body-carrying operations or it proves \
+         nothing, got {with_body} of {}",
+        ids.len()
+    );
+}
+
+/// TEST-22 — the transformation is reported, not hidden. On the shipped spec
+/// every operation inlines completely, which is exactly why the degradation
+/// paths are provable only by the unit fixtures.
+#[tokio::test]
+async fn describe_reports_schema_form_and_truncation() {
+    let server = TestServer::start().await;
+    let admin = create_user_with_permissions(&server, "ctl_form", &["*"]).await;
+
+    for id in ["Project.create", "Assistant.create", "LlmModel.create"] {
+        let res = call_tool(
+            &server,
+            &admin.token,
+            "describe_capability",
+            json!({ "operation_id": id }),
+        )
+        .await;
+        let sc = structured(&res);
+        assert_eq!(sc["schema_form"], json!("inline"), "{id}: {res}");
+        assert_eq!(sc["schema_truncated"], json!(false), "{id}: {res}");
+    }
+
+    // An operation with no JSON body reports null for both rather than lying.
+    let res = call_tool(
+        &server,
+        &admin.token,
+        "describe_capability",
+        json!({ "operation_id": "Project.list" }),
+    )
+    .await;
+    let sc = structured(&res);
+    assert!(sc["request_schema"].is_null(), "{res}");
+    assert!(sc["schema_form"].is_null(), "{res}");
+}
+
+/// TEST-23 (acceptance, INV-4) — `Project.create` reported
+/// `required_permission: null` to the model even though it is gated on
+/// `projects::create`. It is non-null only if the permission is read from a
+/// source a hand-written `.description()` cannot overwrite.
+#[tokio::test]
+async fn describe_reports_the_real_required_permission() {
+    let server = TestServer::start().await;
+    let admin = create_user_with_permissions(&server, "ctl_perm", &["*"]).await;
+    let res = call_tool(
+        &server,
+        &admin.token,
+        "describe_capability",
+        json!({ "operation_id": "Project.create" }),
+    )
+    .await;
+    let sc = structured(&res);
+    assert_eq!(
+        sc["required_permission"], json!("projects::create"),
+        "Project.create must advertise the permission its route enforces: {res}"
+    );
+    assert!(
+        result_text(&res).contains("Required permission: projects::create"),
+        "the digest must state it too: {}",
+        result_text(&res)
+    );
+
+    // Not a one-off: another operation whose description was likewise replaced.
+    let res2 = call_tool(
+        &server,
+        &admin.token,
+        "describe_capability",
+        json!({ "operation_id": "Project.update" }),
+    )
+    .await;
+    assert_eq!(
+        structured(&res2)["required_permission"], json!("projects::edit"),
+        "{res2}"
+    );
+}
+
+/// TEST-24 — and the restored permission actually GATES. Without this, TEST-23
+/// only proves a string reached the payload: a user holding nothing but
+/// `control::use` must neither see nor be able to describe `Project.create`,
+/// while an admin can do both.
+#[tokio::test]
+async fn restored_permission_actually_filters_a_limited_user() {
+    let server = TestServer::start().await;
+    let admin = create_user_with_permissions(&server, "ctl_gate_admin", &["*"]).await;
+    let limited =
+        create_user_with_only_permissions(&server, "ctl_gate_ltd", &["control::use"]).await;
+
+    async fn project_ops(server: &TestServer, token: &str) -> Vec<String> {
+        let res = call_tool(server, token, "list_capabilities", json!({ "query": "project" })).await;
+        structured(&res)["operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|o| o["operation_id"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    let admin_ops = project_ops(&server, &admin.token).await;
+    assert!(
+        admin_ops.iter().any(|o| o == "Project.create"),
+        "admin must see Project.create: {admin_ops:?}"
+    );
+
+    let limited_ops = project_ops(&server, &limited.token).await;
+    assert!(
+        !limited_ops.iter().any(|o| o == "Project.create"),
+        "a control::use-only user must NOT see Project.create — before the fix its \
+         permission was null, so the filter let it through: {limited_ops:?}"
+    );
+
+    let res = call_tool(
+        &server,
+        &limited.token,
+        "describe_capability",
+        json!({ "operation_id": "Project.create" }),
+    )
+    .await;
+    assert!(
+        res["error"].is_object(),
+        "describing an unpermitted operation must be refused: {res}"
+    );
+}
+
+/// TEST-26 — the catalog-wide invariant behind INV-4, which the per-operation
+/// tests above cannot express: **no operation the spec declares a permission for
+/// may report `required_permission: null`.**
+///
+/// This is the test that would have caught the residual class. The first fix
+/// read the permission out of the 403 example, which closed the
+/// `.description("…")` clobber — but a handler that attaches its OWN
+/// `.response_with::<403, …>` replaces that response wholesale and takes the
+/// example with it, leaving 18 genuinely-gated operations (Skill.delete,
+/// Workflow.update, McpServerToolApprovals.set, …) still reporting null, and
+/// `user_may_run` reads null as "anyone may run it". Every per-operation test
+/// stayed green throughout. This one does not.
+#[tokio::test]
+async fn every_permission_gated_operation_reports_its_permission() {
+    let server = TestServer::start().await;
+    let admin = create_user_with_permissions(&server, "ctl_permsweep", &["*"]).await;
+
+    // Sweep broadly (the same union the schema sweep uses — `list_capabilities`
+    // caps a single call well below the catalog size).
+    let mut ids: std::collections::BTreeSet<String> = Default::default();
+    let mut queries: Vec<Value> = vec![json!({})];
+    for q in [
+        "create", "update", "delete", "settings", "project", "assistant", "mcp", "model",
+        "workflow", "user", "file", "memory", "conversation", "provider", "skill", "hub",
+    ] {
+        queries.push(json!({ "query": q }));
+    }
+    for args in queries {
+        let res = call_tool(&server, &admin.token, "list_capabilities", args).await;
+        for op in structured(&res)["operations"].as_array().unwrap_or(&vec![]) {
+            if let Some(id) = op["operation_id"].as_str() {
+                ids.insert(id.to_string());
+            }
+        }
+    }
+    assert!(ids.len() >= 250, "sweep too narrow: {}", ids.len());
+
+    // The routes that genuinely require NO permission: unauthenticated auth /
+    // first-run setup / health / liveness, plus the local-LLM proxy and the
+    // token-bearing download, which carry their own credential rather than a
+    // permission. Anything NOT on this list that reports null is a regression —
+    // either a route lost its declaration or a new unauthenticated route was
+    // added without being considered here.
+    const GENUINELY_PUBLIC: &[&str] = &[
+        "Auth.register",
+        "Auth.login",
+        "Auth.refresh",
+        "Auth.logout",
+        "Auth.me",
+        "Auth.listProviders",
+        "Auth.linkAccount",
+        "App.getSetupStatus",
+        "App.setupAdmin",
+        "Health.check",
+        "Onboarding.getProgress",
+        "Hub.getInstalled",
+        "File.downloadWithToken",
+        "LocalLlmProxy.chatCompletions",
+        "LocalLlmProxy.embeddings",
+        "LocalLlmProxy.rerank",
+        "LocalLlmProxy.listModels",
+    ];
+
+    let mut unexplained = Vec::new();
+    for id in &ids {
+        let res = call_tool(
+            &server,
+            &admin.token,
+            "describe_capability",
+            json!({ "operation_id": id }),
+        )
+        .await;
+        let sc = structured(&res);
+        if sc["required_permission"].is_null() && !GENUINELY_PUBLIC.contains(&id.as_str()) {
+            unexplained.push(id.clone());
+        }
+    }
+    assert!(
+        unexplained.is_empty(),
+        "these operations report no required permission, so the per-user filter \
+         offers them to EVERY user: {unexplained:?}"
+    );
+}
+
+/// TEST-27 — an ALL-of operation advertises EVERY permission it requires, and
+/// the filter demands all of them. Reporting only the first under-gates: a user
+/// holding one of the pair is offered an operation the real route refuses, and
+/// is shown a contract that is incomplete.
+#[tokio::test]
+async fn multi_permission_operation_reports_and_requires_all() {
+    let server = TestServer::start().await;
+    let admin = create_user_with_permissions(&server, "ctl_multi", &["*"]).await;
+    let res = call_tool(
+        &server,
+        &admin.token,
+        "describe_capability",
+        // Declares BOTH projects::create and projects::read.
+        json!({ "operation_id": "Project.duplicate" }),
+    )
+    .await;
+    let sc = structured(&res);
+    let perms: Vec<String> = sc["required_permissions"]
+        .as_array()
+        .expect("required_permissions array")
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        perms.len() >= 2 && perms.contains(&"projects::create".to_string())
+            && perms.contains(&"projects::read".to_string()),
+        "Project.duplicate must advertise BOTH permissions, got {perms:?}"
+    );
+
+    // Holding only ONE of them is not enough to be offered the operation.
+    let partial = create_user_with_only_permissions(
+        &server,
+        "ctl_multi_partial",
+        &["control::use", "projects::read"],
+    )
+    .await;
+    let res = call_tool(
+        &server,
+        &partial.token,
+        "describe_capability",
+        json!({ "operation_id": "Project.duplicate" }),
+    )
+    .await;
+    assert!(
+        res["error"].is_object(),
+        "holding one permission of an ALL-of pair must not unlock the operation: {res}"
+    );
+    assert!(res["result"].is_null(), "and nothing may leak alongside the error: {res}");
 }

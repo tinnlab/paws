@@ -12,15 +12,14 @@ import { renderGfmAlert } from '@/components/common/gfmAlert'
 import { BlockedImage } from '@/components/common/BlockedImage'
 import { preprocessMarkdown } from '@/components/common/markdownPreprocess'
 import { Streamdown } from '@/modules/chat/core/utils/LazyStreamdown'
-import { Component, createElement, type ComponentProps, type JSX, type ReactNode } from 'react'
+import { Component, createElement, type JSX, type ReactNode } from 'react'
 import type { FileViewerSlotProps } from '../../types/viewer'
-import { Stores } from '@ziee/framework/stores'
 import { useFileTextContent, useFileViewMode } from '../shared/hooks'
 import { useResourceLinkContent } from '../../hooks/useResourceLinkContent'
 import { RawCodeView } from '../shared/RawCodeView'
 import { FindableRegion } from '../shared/find/FindableRegion'
 import { getSource } from '../shared/source'
-import { STREAMDOWN_PLUGINS } from '@/components/common/streamdownPlugins'
+import { File } from '@/modules/file/stores/file'
 // ----- Inlined from @/modules/chat/core/utils/ (generic utilities, no chat deps) -----
 
 function isLocalImageUrl(url: string): boolean {
@@ -178,14 +177,6 @@ const SAFE_IMG_COMPONENTS = {
   h6: makeHeading(6),
 }
 
-// Hoisted to module scope — a literal `[...]` in the JSX below would create a
-// fresh array reference on every render, defeating any prop-equality check
-// Streamdown does internally for its (expensive) shiki syntax-highlighting.
-const SHIKI_THEME: ComponentProps<typeof Streamdown>['shikiTheme'] = [
-  'github-light-high-contrast',
-  'github-dark-high-contrast',
-]
-
 // Windowing note (file-viewer-virtualization): the RENDERED markdown path below
 // is intentionally NOT windowed — it keeps the FilePanel 10 MB byte cap as its
 // only boundary. `Streamdown` exposes no block-level windowing seam, and
@@ -205,7 +196,7 @@ export function MarkdownBody(props: FileViewerSlotProps) {
   const inlineContent = useResourceLinkContent(url, !!file)
   const content = file ? rightPanelContent : inlineContent
   const mode = useFileViewMode(file?.id ?? '')
-  const wordWrap = file ? Stores.File.fileWordWrap.get(file.id) ?? false : false
+  const wordWrap = file ? File.fileWordWrap.get(file.id) ?? false : false
 
   if (content === '__error__') {
     return (
@@ -233,8 +224,7 @@ export function MarkdownBody(props: FileViewerSlotProps) {
       <div className="p-4">
         <StreamdownErrorBoundary fallbackText={content}>
           <Streamdown
-            shikiTheme={SHIKI_THEME}
-            plugins={STREAMDOWN_PLUGINS}
+            variant="base"
             urlTransform={streamdownUrlTransform}
             components={SAFE_IMG_COMPONENTS}
           >

@@ -7,11 +7,16 @@ import {
 } from '@/modules/chat/core/extensions'
 import { TextContent } from '@/modules/chat/extensions/text/components/TextContent'
 import { ThinkingContent } from '@/modules/chat/extensions/text/components/ThinkingContent'
+import { textRailContributions } from '@/modules/chat/extensions/text/railContribution'
+import { ObservationContent } from '@/modules/chat/extensions/text/components/ObservationContent'
 import { TextInput } from '@/modules/chat/extensions/text/components/TextInput'
-import { createTextStore } from '@/modules/chat/extensions/text/Text.store'
+import { createTextStore } from '@/modules/chat/extensions/text/textStore'
 import { clearDraft, getDraft, makeDraftKey } from '@/modules/chat/extensions/text/chatDrafts'
 import { PaneDraftKeys } from '@/modules/chat/extensions/text/paneDraftKeys'
 import type { MessageContent } from '@/api-client/types'
+import { SplitView } from '@/modules/chat/core/stores/splitView'
+import { Auth } from '@/modules/auth/Auth.store'
+import { Chat as ChatStore } from '@/modules/chat/core/stores/chatBridge'
 
 // The composer draft key captured at send START (before a new-chat conversation
 // is created), so onMessageSent — which runs AFTER creation — clears exactly the
@@ -26,8 +31,13 @@ import type { MessageContent } from '@/api-client/types'
 // extension's ownerPaneId threading).
 const capturedDraftKeys = new PaneDraftKeys()
 
+/** Per-pane capture of the text this send SUBMITTED, recorded synchronously in
+ * `beforeSendMessage` and consumed by the async `onMessageSent`. Same
+ * clobber-safe per-pane shape as `capturedDraftKeys` (a plain string slot). */
+const submittedTexts = new PaneDraftKeys()
+
 /** The OWNING pane's Chat state (its own TextStore), not the focused-pane bridge.
- * `TextStore` is declaration-merged onto the `Stores.Chat` proxy, not the raw
+ * `TextStore` is declaration-merged onto the `ChatStore` proxy, not the raw
  * store's `getState()` return, so we narrow to the fields this extension uses. */
 async function ownerChatState(
   ownerPaneId?: string | null,
@@ -36,7 +46,7 @@ async function ownerChatState(
   pendingBranchFromMessageId: string | null
 }> {
   const { paneRegistry } = await import('@/modules/chat/core/stores/chatBridge')
-  const { Chat } = await import('@/modules/chat/core/stores/Chat.store')
+  const { Chat } = await import('@/modules/chat/core/stores/chat')
   const api = ownerPaneId ? paneRegistry.get(ownerPaneId)?.api : undefined
   return (api?.getState() ?? Chat.store.getState()) as unknown as {
     TextStore: ReturnType<typeof createTextStore>
@@ -147,15 +157,22 @@ const textExtension: ChatExtension = createExtension({
   contentTypes: {
     text: TextContent as React.ComponentType<ContentRendererProps>,
     thinking: ThinkingContent as React.ComponentType<ContentRendererProps>,
+    observation: ObservationContent as React.ComponentType<ContentRendererProps>,
   },
+
+  /**
+   * Reasoning as a rail step (DEC-13). `ThinkingContent` stays registered above:
+   * it is still the renderer for any `thinking` block that reaches the content
+   * path outside a rail span.
+   */
+  railContributions: textRailContributions,
 
   /**
    * Compose request fields
    * Returns content field with text from TextStore
    */
   composeRequestFields: async () => {
-    const { Stores } = await import('@ziee/framework/stores')
-    const content = Stores.Chat.$.TextStore.getText()
+    const content = ChatStore.$.TextStore.getText()
     return { content: content?.trim() || '' }
   },
 
@@ -164,12 +181,18 @@ const textExtension: ChatExtension = createExtension({
    * Only validates - does not return message (that's handled by composeRequestFields)
    */
   beforeSendMessage: async () => {
-    const { Stores } = await import('@ziee/framework/stores')
-    const content = Stores.Chat.$.TextStore.getText()
+    const content = ChatStore.$.TextStore.getText()
 
     if (!content || !content.trim()) {
+      // A SILENT cancel: submitting an empty composer is a no-op keypress, not a
+      // failure, so `sendMessage` returns without throwing and without touching
+      // state. Previously this threw, and the Enter path had no catch — which
+      // surfaced as an uncaught `Message cannot be empty` page error on every
+      // stray Enter. `errorMessage` is kept for diagnostics; a silent cancel is
+      // never shown to the user.
       return {
         cancel: true,
+        silent: true,
         errorMessage: 'Message cannot be empty',
       }
     }
@@ -183,9 +206,17 @@ const textExtension: ChatExtension = createExtension({
     // send on another pane can't clobber it; onMessageSent reads it back by the
     // owning pane's id (which equals this focused id).
     capturedDraftKeys.set(
-      Stores.SplitView.$.focusedPaneId,
-      makeDraftKey(Stores.Auth.$.user?.id, Stores.Chat.$.conversation?.id),
+      SplitView.$.focusedPaneId,
+      makeDraftKey(Auth.$.user?.id, ChatStore.$.conversation?.id),
     )
+    // Also capture WHAT was submitted, keyed the same way. `onMessageSent` runs
+    // asynchronously (it awaits two dynamic `import()`s inside `ownerChatState`,
+    // which under code-splitting are real network fetches on first call), so it
+    // can land HUNDREDS of ms after the send. By then the user may already have
+    // typed their next message into the composer — and an unconditional
+    // `clearText()` silently destroys it. Recording the submitted text lets
+    // `onMessageSent` clear only if the composer still holds what was sent.
+    submittedTexts.set(SplitView.$.focusedPaneId, content)
 
     return { cancel: false }
   },
@@ -201,12 +232,28 @@ const textExtension: ChatExtension = createExtension({
     const state = await ownerChatState(ownerPaneId)
     const textStore = state.TextStore
 
-    // Backup text before clearing
+    // What this send actually submitted (captured synchronously in
+    // `beforeSendMessage`). The composer may have moved on since.
+    const submittedText = submittedTexts.take(ownerPaneId)
     const currentText = textStore.getText()
-    textStore.setBackupMessage(currentText)
 
-    // Clear the visible composer text.
-    textStore.clearText()
+    // Back up the SUBMITTED text, not whatever happens to be in the composer
+    // now — `onStreamError` restores this, and restoring the user's *next*
+    // half-typed message in place of the failed one would be wrong.
+    textStore.setBackupMessage(submittedText ?? currentText)
+
+    // Clear the visible composer text — but ONLY if it still holds what was
+    // sent. This hook is async (see the `submittedTexts` note in
+    // `beforeSendMessage`); by the time it runs the user may have started
+    // typing their next message, and clearing unconditionally erases it. That
+    // is a real data-loss bug for a fast typist, and it also breaks any
+    // send-then-immediately-send-again flow: the second submit reads an empty
+    // composer and is cancelled as "Message cannot be empty".
+    const composerMovedOn =
+      submittedText != null && currentText !== '' && currentText !== submittedText
+    if (!composerMovedOn) {
+      textStore.clearText()
+    }
 
     // A normal send's composer text IS the draft → clear the persisted draft
     // (the captured pre-creation key). An edit/regen submit instead OVERWROTE
@@ -220,8 +267,10 @@ const textExtension: ChatExtension = createExtension({
     const capturedDraftKey = capturedDraftKeys.take(ownerPaneId)
     if (capturedDraftKey) {
       if (isBranchSend) {
+        // Same guard as the clear above: never overwrite text the user typed
+        // after the send with the restored pre-edit draft.
         const draft = getDraft(capturedDraftKey)
-        if (draft) textStore.setText(draft)
+        if (draft && !composerMovedOn) textStore.setText(draft)
       } else {
         clearDraft(capturedDraftKey)
       }

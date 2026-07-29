@@ -14,12 +14,14 @@ import { useEffect, useMemo, useState } from 'react'
 import { Streamdown } from '@/modules/chat/core/utils/LazyStreamdown'
 import { ApiClient } from '@/api-client'
 import type { Skill } from '@/api-client/types'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { usePermission } from '@/core/permissions'
-import { Stores } from '@ziee/framework/stores'
 import { StreamdownErrorBoundary } from '@/modules/chat/core/utils/StreamdownErrorBoundary'
-import { STREAMDOWN_PLUGINS } from '@/components/common/streamdownPlugins'
 import { SkillScopeBadge } from './SkillScopeBadge'
+import { SystemSkill } from '@/modules/skill/stores/systemSkill'
+import { SkillDrawer } from '@/modules/skill/stores/skillDrawer'
+import { Skill as SkillStore } from '@/modules/skill/stores/skill'
+import { ConversationSkills } from '@/modules/skill/stores/conversationSkills'
 
 /** Build a readable markdown summary from the skill's persisted
  *  metadata. This renders the parsed FRONTMATTER only (`description`,
@@ -42,7 +44,7 @@ function buildSkillMarkdown(skill: Skill): string {
 }
 
 export function SkillDetailDrawer() {
-  const { isOpen, skill, conversationId } = Stores.SkillDrawer
+  const { isOpen, skill, conversationId } = SkillDrawer
   // No dedicated `skills::manage` permission is generated; a user can
   // manage their OWN user-scope skills (any installer can), while
   // system skills require `skills::manage_system`.
@@ -57,7 +59,7 @@ export function SkillDetailDrawer() {
   // the conversation's available listing loads — reading
   // `$.available` (non-reactive) meant the checkbox stayed false
   // for an actually-hidden skill if `available` wasn't loaded yet.
-  const availableMap = Stores.ConversationSkills.available
+  const availableMap = ConversationSkills.available
   const conversationAvailable = conversationId
     ? availableMap[conversationId]
     : undefined
@@ -73,7 +75,7 @@ export function SkillDetailDrawer() {
     if (conversationAvailable) {
       setHidden(!conversationAvailable.some(s => s.id === skill.id))
     } else {
-      void Stores.ConversationSkills.loadAvailable(conversationId)
+      void ConversationSkills.loadAvailable(conversationId)
     }
   }, [isOpen, skill, conversationId, conversationAvailable])
 
@@ -115,7 +117,7 @@ export function SkillDetailDrawer() {
       <Drawer
         open={isOpen}
         data-testid="skill-detail-sheet"
-        onClose={() => Stores.SkillDrawer.close()}
+        onClose={() => SkillDrawer.close()}
         title="Skill details"
       />
     )
@@ -134,9 +136,9 @@ export function SkillDetailDrawer() {
     if (!conversationId) return
     try {
       if (next) {
-        await Stores.ConversationSkills.hide(skill.id, conversationId)
+        await ConversationSkills.hide(skill.id, conversationId)
       } else {
-        await Stores.ConversationSkills.unhide(skill.id, conversationId)
+        await ConversationSkills.unhide(skill.id, conversationId)
       }
       setHidden(next)
     } catch {
@@ -147,12 +149,12 @@ export function SkillDetailDrawer() {
   const handleDelete = async () => {
     try {
       if (skill.scope === 'system') {
-        await Stores.SystemSkill.deleteSystemSkill(skill.id)
+        await SystemSkill.deleteSystemSkill(skill.id)
       } else {
-        await Stores.Skill.deleteSkill(skill.id)
+        await SkillStore.deleteSkill(skill.id)
       }
       message.success('Skill deleted')
-      Stores.SkillDrawer.close()
+      SkillDrawer.close()
     } catch {
       message.error('Failed to delete skill')
     }
@@ -162,7 +164,7 @@ export function SkillDetailDrawer() {
     <Drawer
       open={isOpen}
       data-testid="skill-detail-sheet-loaded"
-      onClose={() => Stores.SkillDrawer.close()}
+      onClose={() => SkillDrawer.close()}
       title={
         <Space>
           <Title level={5} className="!m-0">
@@ -222,7 +224,7 @@ export function SkillDetailDrawer() {
 
         <div className="overflow-auto">
           <StreamdownErrorBoundary fallbackText={markdown}>
-            <Streamdown shikiTheme={['github-light-high-contrast', 'github-dark-high-contrast']} plugins={STREAMDOWN_PLUGINS}>
+            <Streamdown variant="base">
               {markdown}
             </Streamdown>
           </StreamdownErrorBoundary>
@@ -247,7 +249,7 @@ export function SkillDetailDrawer() {
           <div className="overflow-auto" data-testid="skill-detail-body">
             <Title level={5}>Skill content (SKILL.md)</Title>
             <StreamdownErrorBoundary fallbackText={body}>
-              <Streamdown shikiTheme={['github-light-high-contrast', 'github-dark-high-contrast']} plugins={STREAMDOWN_PLUGINS}>
+              <Streamdown variant="base">
                 {body}
               </Streamdown>
             </StreamdownErrorBoundary>

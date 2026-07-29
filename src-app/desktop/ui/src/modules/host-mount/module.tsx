@@ -8,18 +8,18 @@
  *   - per-conversation "Mounted folders" header control,
  *   - admin "Host Mount Policy" settings page.
  * Backed by the desktop-only `/api/host-mounts/*` routes. The native folder
- * picker is `Stores.FileDialog.openFolder`.
+ * picker is `FileDialog.openFolder`.
  */
 
 import { lazy } from 'react'
 import { FolderOpen } from 'lucide-react'
 import { createModule, type AppModule } from '@ziee/ui-core'
 import { SettingsLayoutDef } from '@ziee/ui-core/modules/settings/SettingsLayout'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 
-import { useProjectHostMountsStore } from './project-extension/stores/ProjectHostMounts.store'
-import { useConversationHostMountsStore } from './conversation-extension/stores/ConversationHostMounts.store'
-import { useHostMountPolicyStore } from './stores/HostMountPolicy.store'
+import { useProjectHostMountsStore } from './project-extension/stores/projectHostMounts'
+import { useConversationHostMountsStore } from './conversation-extension/stores/conversationHostMounts'
+import { useHostMountPolicyStore } from './stores/hostMountPolicy'
 import { ConversationMountsControl } from './conversation-extension/components/ConversationMountsControl'
 // Side-effect import: registers the project advanced-settings panel at boot.
 import './project-extension/extension'

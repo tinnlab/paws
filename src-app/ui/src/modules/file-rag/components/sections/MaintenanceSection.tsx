@@ -1,10 +1,10 @@
 import { Alert, Button, Card, Paragraph } from '@ziee/kit'
 import { message } from '@ziee/kit'
 import { Database } from 'lucide-react'
-import { Stores } from '@ziee/framework/stores'
 import { usePermission } from '@/core/permissions'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { SettingsSectionStatus } from '@/components/common/SettingsSectionStatus'
+import { FileRagAdmin } from '@/modules/file-rag/stores/fileRagAdmin'
 
 const READ_PERM = Permissions.FileRagAdminRead
 const MANAGE_PERM = Permissions.FileRagAdminManage
@@ -15,9 +15,13 @@ const MANAGE_PERM = Permissions.FileRagAdminManage
  * server boot; this is the manual trigger.
  */
 export function MaintenanceSection() {
-  const canRead = usePermission(READ_PERM) || usePermission(MANAGE_PERM)
+  // Both permission hooks must be called UNCONDITIONALLY every render — a
+  // `usePermission(A) || usePermission(B)` short-circuits the second hook when
+  // the first is true, so the hook COUNT varies with permission state and React
+  // throws "Rendered more hooks than during the previous render" when it flips.
   const canManage = usePermission(MANAGE_PERM)
-  const { settings, triggeringBackfill, error } = Stores.FileRagAdmin
+  const canRead = usePermission(READ_PERM) || canManage
+  const { settings, triggeringBackfill, error } = FileRagAdmin
 
   if (!canRead) {
     return (
@@ -35,13 +39,13 @@ export function MaintenanceSection() {
       <SettingsSectionStatus
         title="Maintenance"
         error={error}
-        onRetry={() => Stores.FileRagAdmin.load()}
+        onRetry={() => FileRagAdmin.load()}
       />
     )
 
   const handleBackfill = async () => {
     try {
-      await Stores.FileRagAdmin.triggerBackfill()
+      await FileRagAdmin.triggerBackfill()
       message.info('Backfill dispatched in the background.')
     } catch (error) {
       message.error(

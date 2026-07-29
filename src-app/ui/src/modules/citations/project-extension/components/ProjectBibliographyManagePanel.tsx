@@ -2,19 +2,20 @@ import { useCallback, useEffect, useState } from 'react'
 import { Import } from 'lucide-react'
 import { Button, Empty, message, Spin, Tag, Text } from '@ziee/kit'
 import { ApiClient } from '@/api-client'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import type { BibliographyEntry } from '@/api-client/types'
 import { usePermission } from '@/core/permissions'
-import { Stores } from '@ziee/framework/stores'
 import { CitationCard } from '../../components/CitationCard'
 import { ImportCitationsModal } from '../../components/ImportCitationsModal'
+import { ProjectDetail } from '@/modules/projects/stores/projectDetail'
+import { EventBus as EventBusStore } from '@ziee/framework/stores'
 
 /** Full management of a project's reference list — inside the knowledge drawer. */
 export function ProjectBibliographyManagePanel() {
   // Import-into-project + per-card Delete require manage; gate them so a
   // read-only (`citations::use`) viewer doesn't see actions that would 403.
   const canManage = usePermission(Permissions.CitationsManage)
-  const project = Stores.ProjectDetail.project
+  const project = ProjectDetail.project
   const projectId = project?.id ?? null
   const [entries, setEntries] = useState<BibliographyEntry[]>([])
   const [loading, setLoading] = useState(false)
@@ -37,7 +38,7 @@ export function ProjectBibliographyManagePanel() {
     void reload()
     // Stay current when the library changes elsewhere (import/attach/detach/delete).
     // Group-named subscription (the project's EventBus idiom) auto-dedups.
-    const unsub = Stores.EventBus.on(
+    const unsub = EventBusStore.on(
       'sync:bibliography_entry',
       () => void reload(),
       'ProjectBibliographyManagePanel',

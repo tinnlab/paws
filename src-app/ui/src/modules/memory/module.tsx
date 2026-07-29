@@ -1,13 +1,8 @@
-import { Brain } from 'lucide-react'
-import { Permissions } from '@/api-client/types'
 import { createModule } from '@ziee/framework'
+import { Brain } from 'lucide-react'
+import { Permissions } from '@/api-client/permissions'
 import { SettingsLayoutDef } from '@/modules/settings/SettingsLayout'
 import { lazyWithPreload } from '@/utils/lazyWithPreload'
-import { useCoreMemoryBlocksStore } from './stores/CoreMemoryBlocks.store'
-import { useMemoriesStore } from './stores/Memories.store'
-import { useMemoryAdminStore } from './stores/MemoryAdmin.store'
-import { useMemoryAuditStore } from './stores/MemoryAudit.store'
-import { useMemorySettingsStore } from './stores/MemorySettings.store'
 import './types'
 
 // The user page renders sections for each memory mechanism. A user
@@ -33,6 +28,8 @@ export default createModule({
     version: '1.0.0',
     description: 'Per-user persistent memory: settings + admin.',
   },
+  // smart-loading gate (build-lifted into the manifest)
+  shouldLoad: (ctx) => ctx.isAuthenticated,
   dependencies: ['router'],
   routes: [
     {
@@ -51,11 +48,6 @@ export default createModule({
     },
   ],
   stores: [
-    { name: 'Memories', store: useMemoriesStore },
-    { name: 'MemorySettings', store: useMemorySettingsStore },
-    { name: 'MemoryAdmin', store: useMemoryAdminStore },
-    { name: 'MemoryAudit', store: useMemoryAuditStore },
-    { name: 'CoreMemoryBlocks', store: useCoreMemoryBlocksStore },
   ],
   slots: {
     settingsUserPages: [

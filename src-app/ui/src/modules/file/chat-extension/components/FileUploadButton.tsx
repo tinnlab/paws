@@ -1,22 +1,22 @@
 import { Paperclip } from 'lucide-react'
 import { Button, Tooltip, Upload, message } from '@ziee/kit'
-import { Stores } from '@ziee/framework/stores'
 import { useChatPaneOrNull } from '@/modules/chat/core/pane/ChatPaneContext'
-import { composerPaneKey } from '@/modules/file/stores/File.store'
+import { composerPaneKey } from '@/modules/file/stores/file'
 import { usePermission } from '@/core/permissions'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import {
   MAX_FILE_UPLOAD_BYTES as MAX_FILE_SIZE,
   MAX_FILE_UPLOAD_LABEL,
 } from '@/modules/file/constants'
+import { File as FileStore } from '@/modules/file/stores/file'
 
 /**
  * FileUploadButton Component
  * Toolbar button that triggers file picker for uploading files
  */
 export function FileUploadButton() {
-  // Access file extension store directly via Stores.Chat (reactive via store proxy)
-  const { uploadFiles } = Stores.File
+  // Access file extension store directly via Chat (reactive via store proxy)
+  const { uploadFiles } = FileStore
   const paneKey = composerPaneKey(useChatPaneOrNull()?.paneId)
   const canUpload = usePermission(Permissions.FilesUpload)
 

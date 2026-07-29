@@ -15,7 +15,14 @@ import { defineConfig, devices } from '@playwright/test'
  *   npx playwright test -c playwright.visual.config.ts --list     # resolve only
  *   npx playwright test -c playwright.visual.config.ts --update-snapshots  # bless B
  */
-const PORT = Number(process.env.GALLERY_PORT || 1420)
+// @ts-ignore — unified run-key: key-derived port (audit §7, no fixed 1420).
+// gate:ui passes GALLERY_PORT (its finalized bind-verified port); a standalone
+// visual run derives the same per-worktree key-based port.
+import { resolveGalleryPort } from '@ziee/gallery/scripts/lib/run-key.mjs'
+const PORT = Number(
+  process.env.GALLERY_PORT ||
+    resolveGalleryPort({ env: undefined, cfgPort: null, which: 'webGallery' }),
+)
 const BASE_URL = `http://localhost:${PORT}`
 
 export default defineConfig({

@@ -37,6 +37,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isRuntimeBaselined } from '../src/dev/gallery/runtime-baseline.js'
 import { enumerateSurfaces } from './lib/gallery-surfaces.mjs'
+import { resolveGalleryPort } from '@ziee/gallery/scripts/lib/run-key.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const GALLERY_DIR = path.resolve(__dirname, '../src/dev/gallery')
@@ -48,7 +49,11 @@ const arg = (n, d) =>
     .join('=')
 const flag = n => process.argv.includes(`--${n}`)
 
-const PORT = process.env.GALLERY_PORT || '1420'
+// gate-ui always passes GALLERY_PORT; standalone, derive the same per-worktree
+// desktop key-based port (audit §7; no fixed 1420).
+const PORT =
+  process.env.GALLERY_PORT ||
+  String(resolveGalleryPort({ env: undefined, cfgPort: null, which: 'desktopGallery' }))
 const BASE = arg('url', `http://localhost:${PORT}/gallery.html`)
 const OUT = arg('out', GALLERY_DIR)
 const STATES = arg('states', 'loaded,empty,error').split(',').filter(Boolean)

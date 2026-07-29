@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react'
 import {
   Button,
   Card,
+  CardActions,
   Descriptions,
   Form,
   FormField,
@@ -17,16 +18,16 @@ import {
   SquarePen,
   Ban,
 } from 'lucide-react'
-import { Stores } from '@ziee/framework/stores'
 import type { ContentRendererProps } from '@/modules/chat/core/extensions'
 import {
-  ASK_USER_MARKER,
   buildFormSchema,
   getOptions,
+  normalizeElicitationSchema,
   type FieldSchema,
 } from './elicitationOptions'
 import { renderInputField } from './elicitationFields'
 import { AskUserWizardContent } from './AskUserWizardContent'
+import { McpComposer } from '@/modules/mcp/stores/mcpComposer'
 
 interface ElicitationData {
   type: 'elicitation_request'
@@ -137,16 +138,23 @@ export function ElicitationFormContent({
   // persisted DB status in that case — a `pending` block is still answerable
   // (the form submits by `elicitation_id`); only show cancelled/declined/accepted
   // when the DB itself records that terminal state.
-  const mcpEntry = Stores.McpComposer.elicitationRequests.get(
+  const mcpEntry = McpComposer.elicitationRequests.get(
     elicitation.elicitation_id,
   )
   const status = mcpEntry?.status ?? elicitation.status ?? 'pending'
   const responseContent =
     mcpEntry?.response_content ?? elicitation.response_content
 
-  const schema = elicitation.requested_schema
-  const properties = schema?.properties || {}
-  const requiredFields = new Set(schema?.required || [])
+  // Every degenerate `requested_schema` shape — a JSON-encoded string, null, a
+  // missing/empty/non-object `properties`, a non-iterable `required` — is
+  // resolved here rather than by a chain of `?.`/`|| {}` fallthroughs, which is
+  // what used to render a card with a Submit button and zero fields.
+  const {
+    properties,
+    requiredFields,
+    isRich: isRichAskUser,
+    notice: schemaNotice,
+  } = normalizeElicitationSchema(elicitation.requested_schema)
 
   // Build a dynamic zod schema from the elicitation field specs.
   const formSchema = buildFormSchema(properties, requiredFields)
@@ -168,7 +176,7 @@ export function ElicitationFormContent({
   const handleDecline = async () => {
     setIsSubmitting(true)
     try {
-      await Stores.McpComposer.resolveElicitation(elicitation.elicitation_id, 'decline')
+      await McpComposer.resolveElicitation(elicitation.elicitation_id, 'decline')
     } finally {
       setIsSubmitting(false)
     }
@@ -179,7 +187,7 @@ export function ElicitationFormContent({
   const onValid = async (values: Record<string, unknown>) => {
     setIsSubmitting(true)
     try {
-      await Stores.McpComposer.resolveElicitation(
+      await McpComposer.resolveElicitation(
         elicitation.elicitation_id,
         'accept',
         values,
@@ -196,7 +204,12 @@ export function ElicitationFormContent({
   // Shared card header — a status icon + server name + short state label, matching
   // the tool-call Card's header row (both are chat "status cards").
   const cardHeader = (icon: ReactNode, label: string) => (
-    <div className="flex items-center gap-2 min-w-0">
+    // `flex-wrap`: the trailing label is `whitespace-nowrap`, so on one line it
+    // starves the `truncate` server name to a rendered width of 0 in a narrow card
+    // (the measured failure on the sibling approval card — a `truncate` element is
+    // `overflow:hidden` and so has an automatic minimum size of zero, so it always
+    // loses to a nowrap sibling). Same class as the footer row: wrap, don't clip.
+    <div className="flex flex-wrap items-center gap-2 min-w-0">
       {icon}
       <Text strong className="truncate">{elicitation.server}</Text>
       <Text type="secondary" className="text-xs whitespace-nowrap">{label}</Text>
@@ -293,12 +306,73 @@ export function ElicitationFormContent({
 
   // --- Pending state: interactive form ---
 
+  // No field can be rendered. Showing the normal form here would be a card that
+  // LIES: it looks answerable, and its Submit silently POSTs `content: {}` as if
+  // the user had answered. Say what happened and offer the two real choices
+  // instead. This runs BEFORE the rich/flat branch so it covers the ask_user
+  // wizard and the external-MCP form with one guard.
+  if (schemaNotice) {
+    return (
+      <div
+        className="my-2"
+        data-testid={`elicitation-pending-${elicitation.elicitation_id}`}
+      >
+        <Card
+          size="sm"
+          className="mb-2"
+          data-testid="mcp-elicitation-no-fields-card"
+          footer={
+            // `CardActions`, not a hand-rolled `flex justify-end` row: "Accept
+            // without values" is a long label, and Decline + it exceed one line
+            // in a narrow card — where a non-wrapping `justify-end` row pushes
+            // the overflow out the unreachable inline-START edge.
+            <CardActions>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleDecline}
+                loading={isSubmitting}
+                size="default"
+                data-testid="elicitation-decline"
+              >
+                Decline
+              </Button>
+              <Button
+                type="button"
+                loading={isSubmitting}
+                size="default"
+                onClick={() => onValid({})}
+                data-testid="elicitation-accept-no-values"
+              >
+                Accept without values
+              </Button>
+            </CardActions>
+          }
+        >
+          {cardHeader(
+            <SquarePen className="size-4 shrink-0 text-primary" />,
+            'is requesting input',
+          )}
+          {elicitation.message ? (
+            <Text className="text-sm mt-2 block">{elicitation.message}</Text>
+          ) : null}
+          <Text
+            type="secondary"
+            className="text-sm mt-2 block"
+            data-testid="mcp-elicitation-no-fields-notice"
+          >
+            {schemaNotice}
+          </Text>
+        </Card>
+      </div>
+    )
+  }
+
   // Rich decision UX (per-option cards + 1–4 question wizard + Other-escape) is
   // enabled ONLY for the ziee-internal `ask_user` path, which the backend marks
-  // with ASK_USER_MARKER. External MCP-server elicitation is never marked and
-  // renders the flat, spec-compliant form below (unchanged).
-  const isRichAskUser =
-    (schema as Record<string, unknown> | undefined)?.[ASK_USER_MARKER] === true
+  // with ASK_USER_MARKER (read by `normalizeElicitationSchema`). External
+  // MCP-server elicitation is never marked and renders the flat,
+  // spec-compliant form below (unchanged).
   if (isRichAskUser) {
     return (
       <div
@@ -326,7 +400,10 @@ export function ElicitationFormContent({
         className="mb-2"
         data-testid="mcp-elicitation-pending-card"
         footer={
-          <div className="flex w-full justify-end gap-2">
+          // Decline + Submit fit one line today, but the row stays on the shared
+          // `CardActions` primitive so a longer label (or a narrower pane) wraps
+          // instead of silently pushing a control out of reach.
+          <CardActions>
             <Button
               type="button"
               variant="outline"
@@ -345,7 +422,7 @@ export function ElicitationFormContent({
             >
               Submit
             </Button>
-          </div>
+          </CardActions>
         }
       >
         {cardHeader(

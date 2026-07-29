@@ -2,9 +2,10 @@ import React from 'react'
 import { z } from 'zod'
 import { Card, Form, FormField, useForm, zodResolver, Input, Button, Alert, Title, Paragraph } from '@ziee/kit'
 import { useNavigate } from 'react-router-dom'
-import { Stores } from '@ziee/framework'
 import { AuthScreenLayout } from '@/modules/auth/AuthScreenLayout'
 import { EMAIL_RE } from '@/lib/validation'
+import { App } from '@/modules/app/stores/app'
+import { Auth as AuthStore } from '@/modules/auth/Auth.store'
 
 const setupSchema = z
   .object({
@@ -37,7 +38,7 @@ const setupSchema = z
 type SetupValues = z.infer<typeof setupSchema>
 
 export default function SetupPage() {
-  const { needsSetup, isSettingUpAdmin, setupError } = Stores.App
+  const { needsSetup, isSettingUpAdmin, setupError } = App
   const navigate = useNavigate()
   const form = useForm<SetupValues>({
     resolver: zodResolver(setupSchema),
@@ -68,7 +69,7 @@ export default function SetupPage() {
 
   const onSubmit = async (values: SetupValues) => {
     try {
-      await Stores.App.setupAdmin({
+      await App.setupAdmin({
         username: values.username,
         email: values.email,
         password: values.password,
@@ -76,7 +77,7 @@ export default function SetupPage() {
       })
 
       // Use the login credentials to authenticate
-      await Stores.Auth.authenticateUser({
+      await AuthStore.authenticateUser({
         username: values.username,
         password: values.password,
       })
@@ -122,7 +123,7 @@ export default function SetupPage() {
             data-testid="app-setup-error-alert"
             title={setupError}
             className="mb-4"
-            onClose={Stores.App.clearSetupError}
+            onClose={App.clearSetupError}
             closeLabel="Close"
           />
         )}

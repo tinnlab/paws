@@ -16,10 +16,11 @@ import {
 import { ListPagination } from '@/components/common/ListPagination'
 import { Loading } from '@/core/components/Loading'
 import { useEffect, useState } from 'react'
-import { Stores } from '@ziee/framework/stores'
+import { Users as UsersStore } from '@/modules/user/stores/users'
 import { AddButton } from '@/modules/settings/components/AddButton'
 import { Can, usePermission } from '@/core/permissions'
-import { Permissions, type User } from '@/api-client/types'
+import { type User } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { SettingsPageContainer } from '@/modules/settings/components/SettingsPageContainer.tsx'
 // UserRegistrationSettings — temporarily un-imported; see comment in JSX.
 // import { UserRegistrationSettings } from '@/modules/user/components/user/UserRegistrationSettings.tsx'
@@ -28,6 +29,12 @@ import { EditUserDrawer } from '@/modules/user/components/user/EditUserDrawer.ts
 import { ResetPasswordDrawer } from '@/modules/user/components/user/ResetPasswordDrawer.tsx'
 import { UserGroupsDrawer } from '@/modules/user/components/user/UserGroupsDrawer.tsx'
 import { AssignGroupDrawer } from '@/modules/user/components/user/AssignGroupDrawer.tsx'
+import { EditUserDrawer as EditUserDrawerStore } from '@/modules/user/components/user/editUserDrawer'
+import { ResetPasswordDrawer as ResetPasswordDrawerStore } from '@/modules/user/components/user/resetPasswordDrawer'
+import { UserGroupsDrawer as UserGroupsDrawerStore } from '@/modules/user/components/user/userGroupsDrawer'
+import { CreateUserDrawer as CreateUserDrawerStore } from '@/modules/user/components/user/createUserDrawer'
+import { UserGroups } from '@/modules/user/stores/userGroups'
+import { Auth } from '@/modules/auth/Auth.store'
 
 export function UsersSettings() {
   // Stores
@@ -38,9 +45,9 @@ export function UsersSettings() {
     pageSize: storePageSize,
     loading: loadingUsers,
     error: usersError,
-  } = Stores.Users
-  const { error: groupsError } = Stores.UserGroups
-  const { user: currentUser } = Stores.Auth
+  } = UsersStore
+  const { error: groupsError } = UserGroups
+  const { user: currentUser } = Auth
   // Which user's activate/deactivate confirmation is open (shared by the status
   // Switch + the Activate/Deactivate Button — both open the same Confirm).
   const [activeConfirmUserId, setActiveConfirmUserId] = useState<string | null>(
@@ -66,17 +73,17 @@ export function UsersSettings() {
     if (users.length === 0) return
     if (usersError) {
       message.error(usersError)
-      Stores.Users.clearError()
+      UsersStore.clearError()
     }
     if (groupsError) {
       message.error(groupsError)
-      Stores.UserGroups.clearError()
+      UserGroups.clearError()
     }
   }, [usersError, groupsError, users.length])
 
   const handleToggleActive = async (userId: string) => {
     try {
-      await Stores.Users.toggleUserActiveStatus(userId)
+      await UsersStore.toggleUserActiveStatus(userId)
       message.success('User status updated successfully')
     } catch (error) {
       console.error('Failed to update user status:', error)
@@ -86,7 +93,7 @@ export function UsersSettings() {
 
   const handleDelete = async (userId: string) => {
     try {
-      await Stores.Users.deleteUser(userId)
+      await UsersStore.deleteUser(userId)
       message.success('User deleted successfully')
     } catch (error) {
       console.error('Failed to delete user:', error)
@@ -127,7 +134,7 @@ export function UsersSettings() {
             cancelText="Cancel"
             data-testid={`user-toggle-active-confirm-${user.id}`}
           >
-            <Button variant="ghost" size="default" data-testid={`user-toggle-active-button-${user.id}`}>
+            <Button variant="ghost" size="default" onMouseEnter={() => void UsersStore.toggleUserActiveStatus.preload()} data-testid={`user-toggle-active-button-${user.id}`}>
               {user.is_active ? 'Deactivate' : 'Activate'}
             </Button>
           </Confirm>
@@ -141,7 +148,8 @@ export function UsersSettings() {
           key="edit"
           variant="ghost"
           icon={<Pencil />}
-          onClick={() => Stores.EditUserDrawer.openEditUserDrawer(user)}
+          onClick={() => EditUserDrawerStore.openEditUserDrawer(user)}
+          onMouseEnter={() => void UsersStore.updateUser.preload()}
           data-testid={`user-edit-button-${user.id}`}
         >
           Edit
@@ -156,8 +164,9 @@ export function UsersSettings() {
           variant="ghost"
           icon={<Lock />}
           onClick={() =>
-            Stores.ResetPasswordDrawer.openResetPasswordDrawer(user)
+            ResetPasswordDrawerStore.openResetPasswordDrawer(user)
           }
+          onMouseEnter={() => void UsersStore.resetUserPassword.preload()}
           data-testid={`user-reset-password-button-${user.id}`}
         >
           Reset Password
@@ -171,7 +180,7 @@ export function UsersSettings() {
           key="groups"
           variant="ghost"
           icon={<Users />}
-          onClick={() => Stores.UserGroupsDrawer.openUserGroupsDrawer(user)}
+          onClick={() => UserGroupsDrawerStore.openUserGroupsDrawer(user)}
           data-testid={`user-groups-button-${user.id}`}
         >
           Groups
@@ -193,6 +202,7 @@ export function UsersSettings() {
               variant="ghost"
               icon={<Trash2 aria-hidden="true" />}
               aria-label={`Delete ${user.username}`}
+              onMouseEnter={() => void UsersStore.deleteUser.preload()}
               data-testid={`user-delete-button-${user.id}`}
             >
               Delete
@@ -209,7 +219,7 @@ export function UsersSettings() {
     const newPageSize = size || storePageSize
     const newPage = size && size !== storePageSize ? 1 : page // Reset to page 1 if page size changes
 
-    Stores.Users.loadUsers(newPage, newPageSize)
+    UsersStore.loadUsers(newPage, newPageSize)
   }
 
   return (
@@ -232,7 +242,8 @@ export function UsersSettings() {
               <Can permission={Permissions.UsersCreate}>
                 <AddButton
                   label="Create user"
-                  onClick={() => Stores.CreateUserDrawer.openCreateUserDrawer()}
+                  onClick={() => CreateUserDrawerStore.openCreateUserDrawer()}
+                  onMouseEnter={() => void UsersStore.createUser.preload()}
                   data-testid="user-create-open-button"
                 />
               </Can>
@@ -246,7 +257,7 @@ export function UsersSettings() {
                   resource="users"
                   description="The user list couldn't be loaded. Check your connection and try again."
                   details={usersError}
-                  onRetry={() => Stores.Users.loadUsers(storePage, storePageSize)}
+                  onRetry={() => UsersStore.loadUsers(storePage, storePageSize)}
                   data-testid="user-list-error"
                 />
               ) : (

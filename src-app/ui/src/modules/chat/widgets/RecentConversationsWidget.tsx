@@ -16,7 +16,6 @@ import {
 import type { DropdownItem } from '@ziee/kit'
 import { MessageSquare, Trash2, MoreVertical, Columns2 } from 'lucide-react'
 import { useLocation } from 'react-router-dom'
-import { Stores } from '@ziee/framework/stores'
 import type { ConversationResponse } from '@/api-client/types'
 import { DivScrollY } from '@/components/common/DivScrollY'
 import { SidebarSectionTitle } from '@/components/common/SidebarSectionTitle'
@@ -26,8 +25,9 @@ import { useConversationTearOff } from '@/modules/chat/core/popout/useConversati
 import { conversationDisplayLabel } from '@/modules/chat/core/utils/conversationDisplayLabel'
 import {
   chatExtensionRegistry,
-  useConversationMenuContributions,
+  ConversationMenuContributions,
 } from '@/modules/chat/core/extensions'
+import { ChatHistory } from '@/modules/chat/stores/chatHistory'
 
 // INITIAL height estimate for one recent-chat row: the Menu row button is
 // `px-3 py-1.5 text-sm` (~32px) + a 2px inter-row gap ≈ 34px. This is only the
@@ -42,7 +42,7 @@ const RECENT_ITEM_TESTID_PREFIX = 'chat-recent-conversations-menu-item-'
 
 /**
  * Sidebar list of the user's recent conversations, backed by
- * `Stores.ChatHistory.recentConversations`. INFINITE-SCROLL + VIRTUALIZED: the
+ * `ChatHistory.recentConversations`. INFINITE-SCROLL + VIRTUALIZED: the
  * first page loads on mount and the next page auto-loads as the last virtual row
  * nears the end (a nav-feed idiom); only the visible window is ever in the DOM,
  * so a user with thousands of chats scrolls in O(viewport). Row styling is shared
@@ -69,11 +69,11 @@ export function RecentConversationsWidget() {
     recentHasMore,
     recentLoadingMore,
     recentError,
-  } = Stores.ChatHistory
+  } = ChatHistory
 
   useEffect(() => {
     if (!recentInitialized) {
-      Stores.ChatHistory.loadRecentConversations()
+      ChatHistory.loadRecentConversations()
     }
   }, [recentInitialized])
 
@@ -109,7 +109,7 @@ export function RecentConversationsWidget() {
       !recentLoadingMore &&
       !recentError
     ) {
-      void Stores.ChatHistory.loadMoreRecent()
+      void ChatHistory.loadMoreRecent()
     }
   }, [lastIndex, recentConversations.length, recentHasMore, recentLoadingMore, recentError])
 
@@ -117,8 +117,8 @@ export function RecentConversationsWidget() {
   // affordance — NOT scroll-to-clear — because a loaded page that fits the
   // viewport can't be scrolled, which would otherwise strand paging silently.
   const retryLoadMore = () => {
-    Stores.ChatHistory.clearRecentError()
-    void Stores.ChatHistory.loadMoreRecent()
+    ChatHistory.clearRecentError()
+    void ChatHistory.loadMoreRecent()
   }
 
   // The currently-open conversation (for the `aria-current` selected row).
@@ -157,7 +157,7 @@ export function RecentConversationsWidget() {
             resource="recent chats"
             description="Your recent chats couldn't be loaded."
             details={recentError}
-            onRetry={() => Stores.ChatHistory.loadRecentConversations(1)}
+            onRetry={() => ChatHistory.loadRecentConversations(1)}
           />
         </div>
       </div>
@@ -359,10 +359,40 @@ export function RecentConversationsWidget() {
  * The wrapper has `onClick={e => e.stopPropagation()}` so opening the dropdown
  * does NOT bubble up to any ancestor row handler.
  */
+/**
+ * Per-row ⋯ menu. Extension menu items come from `ConversationMenuContributions`,
+ * which runs each extension's `useConversationMenu` in its OWN probe component
+ * (no hooks-in-a-loop), so the extension set can change at any time without a
+ * Rules-of-Hooks violation. Overlays render inside the collector; this component
+ * consumes only the aggregated items + keepMenuOpen.
+ */
 function ConversationRowActions({
   conversation,
 }: {
   conversation: ConversationResponse
+}) {
+  return (
+    <ConversationMenuContributions conversation={conversation}>
+      {({ items, keepMenuOpen }) => (
+        <ConversationRowActionsView
+          conversation={conversation}
+          extensionItems={items}
+          keepMenuOpen={keepMenuOpen}
+        />
+      )}
+    </ConversationMenuContributions>
+  )
+}
+
+/** Presentational — no extension hooks; contributions arrive as props. */
+function ConversationRowActionsView({
+  conversation,
+  extensionItems,
+  keepMenuOpen,
+}: {
+  conversation: ConversationResponse
+  extensionItems: DropdownItem[]
+  keepMenuOpen: boolean
 }) {
   const [deleting, setDeleting] = useState(false)
   // Controlled dropdown open so we can suppress closing while an
@@ -370,9 +400,6 @@ function ConversationRowActions({
   const [menuOpen, setMenuOpen] = useState(false)
   // Split-chat: the ⋯ menu offers an explicit "Open in split pane" action.
   const openConversation = useOpenConversationInWorkspace()
-
-  const { items: extensionItems, overlays, keepMenuOpen } =
-    useConversationMenuContributions(conversation)
 
   const confirmDelete = async () => {
     const title = conversationDisplayLabel(conversation)
@@ -387,7 +414,7 @@ function ConversationRowActions({
     if (ok) {
       setDeleting(true)
       try {
-        await Stores.ChatHistory.deleteConversation(conversation.id)
+        await ChatHistory.deleteConversation(conversation.id)
       } finally {
         setDeleting(false)
       }
@@ -470,9 +497,8 @@ function ConversationRowActions({
           </Dropdown>
         </span>
       </Tooltip>
-      {/* Extension overlays (modals, popconfirms). Render alongside
-          the row trigger; menu items above toggle their state. */}
-      {overlays}
+      {/* Extension overlays (modals, popconfirms) render inside
+          ConversationMenuContributions' probes, next to this view. */}
     </div>
   )
 }

@@ -13,6 +13,12 @@
  * Scan the kit package source too (four-up = repo root from desktop/ui/src).
  * Mirrors the same fix in src-app/ui/src/index.css. */
 @source "../../../../sdk/packages/kit/src/**/*.{ts,tsx}";
+/* @ziee/shell + @ziee/notification-ui — same class of bug as the kit above, and
+ * it had shipped: utilities used ONLY inside the sdk shell were never emitted,
+ * so `AppLayout`'s "Skip to content" bypass link stayed 1x1 and invisible even
+ * when focused. Mirrors the same fix in src-app/ui/src/index.css. */
+@source "../../../../sdk/packages/shell/src/**/*.{ts,tsx}";
+@source "../../../../sdk/packages/notification-ui/src/**/*.{ts,tsx}";
 
 @theme inline {
   --color-background: var(--background);

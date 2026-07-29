@@ -1,8 +1,11 @@
+import { useEffect } from 'react'
 import { Pin, PinOff } from 'lucide-react'
 import { Button, message } from '@ziee/kit'
-import { Stores } from '@ziee/framework/stores'
-import { Permissions, type File as FileEntity } from '@/api-client/types'
+import { type File as FileEntity } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { usePermission } from '@/core/permissions'
+import { Deliverables } from '@/modules/file/stores/deliverables'
+import { Chat } from '@/modules/chat/core/stores/chatBridge'
 
 /**
  * Pin/unpin a file as a deliverable of the ACTIVE conversation. Renders nothing
@@ -13,22 +16,36 @@ export function DeliverablePinButton({ file }: { file: FileEntity }) {
   // Pin/unpin mutates the conversation's deliverables (`conversations::edit`).
   // Hide the affordance for users lacking it (hook precedes any early return).
   const canEditConversation = usePermission(Permissions.ConversationsEdit)
-  const conversation = Stores.Chat.conversation
+  const conversation = Chat.conversation
   const convId = conversation?.id
-  // Reactive read so the pinned state updates when the list refetches.
-  const byConv = Stores.Deliverables.byConversation
+
+  // Reactive RENDER-SCOPE read of the deliverables map → the pin icon shows the
+  // cached state instantly, updates when the async load lands, and flips live on
+  // sync:deliverable (the store refetches into a new Map). Reading this proxy
+  // inside the effect / a useState initializer (as before) called the proxy's
+  // internal hooks OUTSIDE render → React #321 (invalid hook call).
+  const byConversation = Deliverables.byConversation
+  const list: FileEntity[] = (convId ? byConversation.get(convId) : undefined) ?? []
+
+  // Kick the async load once when there's no cached entry yet. `.$` is the
+  // hook-free snapshot read (safe inside an effect); the reactive read above is
+  // what re-renders the button when the load populates the map.
+  useEffect(() => {
+    if (convId && !Deliverables.$.byConversation.get(convId)) {
+      void Deliverables.getForConversation(convId)
+    }
+  }, [convId])
+
   if (!convId || !canEditConversation) return null
-  const list =
-    byConv.get(convId) ?? Stores.Deliverables.getForConversation(convId)
   const isDeliverable = list.some(f => f.id === file.id)
 
   const toggle = async () => {
     try {
       if (isDeliverable) {
-        await Stores.Deliverables.unpin(convId, file.id)
+        await Deliverables.unpin(convId, file.id)
         message.success('Removed from deliverables')
       } else {
-        await Stores.Deliverables.pin(convId, file.id, true)
+        await Deliverables.pin(convId, file.id, true)
         message.success('Pinned as deliverable')
       }
     } catch (e) {

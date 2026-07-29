@@ -225,6 +225,47 @@ update_check:
         let generated = ziee_framework::openapi::emit_ts::generate_types_ts_from_json(&openapi)
             .expect("generate");
 
+        // Split-out sibling: `permissionDescriptions.ts` must also match its golden.
+        let desc_golden_path =
+            format!("{}/{}/src/api-client/permissionDescriptions.ts", manifest, ui_rel);
+        let desc_golden = std::fs::read_to_string(&desc_golden_path)
+            .unwrap_or_else(|e| panic!("read {}: {}", desc_golden_path, e));
+        let desc_generated =
+            ziee_framework::openapi::emit_ts::generate_permission_descriptions_ts_from_json(&openapi)
+                .expect("generate permissionDescriptions");
+        assert_eq!(
+            desc_generated, desc_golden,
+            "{} permissionDescriptions.ts parity mismatch — run `just openapi-regen`",
+            ui_rel
+        );
+
+        // Split-out sibling: `permissions.ts` (the Permissions enum) must match.
+        let perms_golden_path =
+            format!("{}/{}/src/api-client/permissions.ts", manifest, ui_rel);
+        let perms_golden = std::fs::read_to_string(&perms_golden_path)
+            .unwrap_or_else(|e| panic!("read {}: {}", perms_golden_path, e));
+        let perms_generated =
+            ziee_framework::openapi::emit_ts::generate_permissions_ts_from_json(&openapi)
+                .expect("generate permissions");
+        assert_eq!(
+            perms_generated, perms_golden,
+            "{} permissions.ts parity mismatch — run `just openapi-regen`",
+            ui_rel
+        );
+
+        // Split-out sibling: `apiEndpoints.ts` (the ApiEndpoints map) must match.
+        let ep_golden_path = format!("{}/{}/src/api-client/apiEndpoints.ts", manifest, ui_rel);
+        let ep_golden = std::fs::read_to_string(&ep_golden_path)
+            .unwrap_or_else(|e| panic!("read {}: {}", ep_golden_path, e));
+        let ep_generated =
+            ziee_framework::openapi::emit_ts::generate_api_endpoints_ts_from_json(&openapi)
+                .expect("generate apiEndpoints");
+        assert_eq!(
+            ep_generated, ep_golden,
+            "{} apiEndpoints.ts parity mismatch — run `just openapi-regen`",
+            ui_rel
+        );
+
         if generated != golden {
             // Find the first differing line to make failures actionable.
             let g: Vec<&str> = generated.lines().collect();

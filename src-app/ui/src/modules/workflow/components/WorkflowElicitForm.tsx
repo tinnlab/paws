@@ -2,7 +2,6 @@ import { PenLine } from 'lucide-react'
 import {
   Alert,
   Button,
-  DatePicker,
   Form,
   FormField,
   Input,
@@ -15,6 +14,7 @@ import {
   useForm,
   zodResolver,
 } from '@ziee/kit'
+import { LazyDatePicker } from '@/components/common/LazyDatePicker'
 import { z } from 'zod'
 import { useState } from 'react'
 import { EMAIL_RE } from '@/lib/validation'
@@ -330,7 +330,7 @@ function renderField(
         required={required}
         description={description}
       >
-        <DatePicker
+        <LazyDatePicker
           data-testid={`wf-elicit-date-${name}`}
           placeholder={`Select ${label.toLowerCase()}`}
           aria-label={label}
@@ -349,7 +349,7 @@ function renderField(
         required={required}
         description={description}
       >
-        <DatePicker
+        <LazyDatePicker
           data-testid={`wf-elicit-datetime-${name}`}
           placeholder={`Select ${label.toLowerCase()}`}
           aria-label={label}

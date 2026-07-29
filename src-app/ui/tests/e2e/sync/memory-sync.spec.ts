@@ -239,12 +239,14 @@ test.describe('Realtime sync — memory_admin_settings (permission-scoped)', () 
       const enableA = byTestId(page, 'memory-admin-enabled-switch')
       const enableAdminB = byTestId(pageAdminB, 'memory-admin-enabled-switch')
 
-      // Baseline: memory is ON deployment-wide by default (migration 56).
-      await expect(enableAdminB).toHaveAttribute('aria-checked', 'true')
+      // Baseline: memory is OFF deployment-wide by default — the seed
+      // migration writes `memory_admin_settings.enabled = false` because
+      // memory is a privacy-safe deployment-wide OPT-IN (CLAUDE.md).
+      await expect(enableAdminB).toHaveAttribute('aria-checked', 'false')
 
-      // Toggle it OFF on device A — a real change to propagate.
+      // Toggle it ON on device A — a real change to propagate.
       await enableA.click()
-      await expect(enableA).toHaveAttribute('aria-checked', 'false')
+      await expect(enableA).toHaveAttribute('aria-checked', 'true')
       // The admin page stacks four section forms each with its own "Save";
       // scope to the Engine card (the one holding the lone switch) so we
       // submit the right one.
@@ -256,7 +258,7 @@ test.describe('Realtime sync — memory_admin_settings (permission-scoped)', () 
 
       // Positive: the admin's OTHER device reflects the deployment toggle
       // live via `sync:memory_admin_settings`.
-      await expect(enableAdminB).toHaveAttribute('aria-checked', 'false', {
+      await expect(enableAdminB).toHaveAttribute('aria-checked', 'true', {
         timeout: 15_000,
       })
 

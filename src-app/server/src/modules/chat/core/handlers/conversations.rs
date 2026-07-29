@@ -17,8 +17,12 @@ use crate::{
             models::Conversation,
             permissions::*,
 
-            types::{ConversationListResponse, CreateConversationRequest, UpdateConversationRequest},
+            types::{
+                streaming::{SSEChatStreamEvent, SSEChatStreamHistoryReplacedData},
+                ConversationListResponse, CreateConversationRequest, UpdateConversationRequest,
+            },
         },
+        chat::stream::publish_raw_event,
         permissions::{extractors::RequirePermissions, with_permission},
         sync::{Audience, SyncAction, SyncEntity, SyncOrigin, publish as sync_publish},
     },
@@ -233,10 +237,38 @@ pub async fn delete_conversation(
     origin: SyncOrigin,
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
+    // Cascade teardown, BEFORE the delete — order is load-bearing.
+    // `workflow_runs.conversation_id` is `ON DELETE SET NULL`, so once the row is
+    // gone the conversation's background runs can no longer be FOUND, and they
+    // would survive detached: rows with a NULL conversation and, worse, spawned
+    // tasks still executing headlessly with no surface left to view, steer, or
+    // cancel them (a conversation's in-chat "Tasks" panel is that surface, and
+    // there is deliberately no global background page). So cancel them here, while
+    // the link still exists. Owner-scoped inside, so a foreign/missing
+    // conversation cancels nothing and the `!deleted` 404 below is unaffected.
+    let cancelled_runs =
+        crate::modules::background_mcp::runs::cancel_conversation_background_runs(
+            id,
+            auth.user.id,
+        )
+        .await;
+
     let deleted = Repos.chat.core.delete_conversation( id, auth.user.id).await?;
 
     if !deleted {
         return Err(AppError::not_found("Conversation").into());
+    }
+
+    // Each cancelled run is now terminal — tell the user's other devices so a list
+    // showing it (e.g. another window's Tasks panel) refreshes rather than keeping
+    // a stale `running` badge. Mirrors `cancel_background_run`'s emit.
+    for run_id in cancelled_runs {
+        crate::modules::workflow::events::emit_workflow_run(
+            SyncAction::Update,
+            run_id,
+            auth.user.id,
+            origin.0,
+        );
     }
 
     // Cascade fs cleanup: drop the conversation's lit-search `/lit` view dir so
@@ -265,6 +297,82 @@ pub fn delete_conversation_docs(op: TransformOperation) -> TransformOperation {
         .summary("Delete conversation")
         .description("Delete a conversation and all its branches, messages, and content")
         .response_with::<204, (), _>(|res| res.description("Conversation deleted successfully"))
+        .response_with::<404, (), _>(|res| res.description("Conversation not found"))
+        .response_with::<401, (), _>(|res| res.description("Unauthorized"))
+}
+
+/// Request body for `POST /conversations/{id}/compact` (ITEM-61 / DEC-137).
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+pub struct CompactConversationRequest {
+    /// Optional focus hint steering what the compaction should preserve. Advisory
+    /// today (the rolling summary is regenerated from the full active-branch
+    /// history); reserved for a future focus-aware summarizer.
+    #[serde(default)]
+    pub focus: Option<String>,
+}
+
+/// Manually COMPACT a conversation's context (ITEM-61 / DEC-137): regenerate the
+/// active branch's rolling summary now, then emit a `historyReplaced` marker so a
+/// viewing client renders a "context compacted" divider in the timeline without a
+/// reload. OUTBOUND-ONLY — the stored `message_contents` are never rewritten or
+/// deleted; only the `conversation_summaries` row is upserted.
+#[debug_handler]
+pub async fn compact_conversation(
+    auth: RequirePermissions<(ConversationsEdit,)>,
+    Path(id): Path<Uuid>,
+    Json(_request): Json<CompactConversationRequest>,
+) -> ApiResult<Json<serde_json::Value>> {
+    // Ownership: a foreign / missing conversation is a 404 (never leak existence).
+    let conversation = Repos
+        .chat
+        .core
+        .get_conversation(id, auth.user.id)
+        .await?
+        .ok_or_else(|| AppError::not_found("Conversation"))?;
+
+    let branch_id = conversation.active_branch_id.ok_or_else(|| {
+        AppError::bad_request("NO_BRANCH", "Conversation has no active branch to compact")
+    })?;
+    let model_id = conversation.model_id.ok_or_else(|| {
+        AppError::bad_request("NO_MODEL", "Conversation has no model to summarize with")
+    })?;
+
+    // Force a compaction now: `Some(1)` biases the trigger low so a manual
+    // `/compact` summarizes even below the automatic threshold. Best-effort — a
+    // summarizer failure must NOT fail the affordance; the marker still confirms
+    // the user's action and the conversation stays usable.
+    if let Err(e) = crate::modules::summarization::engine::summarizer::refresh_summary(
+        branch_id, model_id, Some(1),
+    )
+    .await
+    {
+        tracing::warn!("manual /compact (conversation {id}): refresh_summary failed (soft): {e}");
+    }
+
+    // Emit the timeline marker (ITEM-61) on the raw side-channel — the same channel
+    // `taskListChanged` / `historyReplaced`-from-the-loop use — so a viewing client
+    // renders the "context compacted" divider live.
+    let event = SSEChatStreamEvent::HistoryReplaced(SSEChatStreamHistoryReplacedData {
+        conversation_id: id,
+        summary_upto: 0,
+    });
+    publish_raw_event(auth.user.id, id, event.into());
+
+    Ok((StatusCode::OK, Json(serde_json::json!({ "compacted": true }))))
+}
+
+pub fn compact_conversation_docs(op: TransformOperation) -> TransformOperation {
+    with_permission::<(ConversationsEdit,)>(op)
+        .id("Conversation.compact")
+        .tag("Chat")
+        .summary("Manually compact a conversation's context")
+        .description(
+            "Regenerate the active branch's rolling summary and emit a \
+             `historyReplaced` timeline marker. Outbound-only: stored messages are \
+             never rewritten or deleted.",
+        )
+        .response::<200, Json<serde_json::Value>>()
+        .response_with::<400, (), _>(|res| res.description("No active branch or model"))
         .response_with::<404, (), _>(|res| res.description("Conversation not found"))
         .response_with::<401, (), _>(|res| res.description("Unauthorized"))
 }

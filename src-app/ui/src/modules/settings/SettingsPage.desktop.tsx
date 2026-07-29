@@ -27,9 +27,9 @@ import { Button, Dropdown, Flex, Menu, Title } from '@ziee/kit'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useElementMinSize } from '@/modules/layouts/app-layout/hooks/useWindowMinSize'
 import { HeaderBarContainer } from '@/modules/layouts/app-layout/components/HeaderBarContainer'
-import { IoIosArrowDown, IoMdSettings } from 'react-icons/io'
+import { ChevronDown, Settings } from 'lucide-react'
 import { useEffect, useRef } from 'react'
-import { Stores } from '@ziee/framework/stores'
+import { ModuleSystem } from '@ziee/framework/stores'
 
 // Settings page entries that are specific to multi-user SaaS features
 // with no equivalent on single-admin desktop. These are explicitly
@@ -44,7 +44,7 @@ import { Stores } from '@ziee/framework/stores'
 //  - `mcp-servers`: personal/user MCP. Hidden on desktop in favour of
 //    `mcp-admin` (System MCP, kept visible). The page's per-row group-
 //    assignment widget + user-policy card are hidden via
-//    `Stores.AppMode.multiUserMode` (false on desktop).
+//    `AppMode.multiUserMode` (false on desktop).
 //  - `profile`: account display name + password. The single desktop
 //    admin is auto-provisioned with a fixed username and uses Tauri's
 //    auto-login; no profile to present or edit.
@@ -90,7 +90,7 @@ export default function SettingsPage() {
   const minSize = useElementMinSize(containerRef)
   const useMobileLayout = minSize.sm
 
-  const { slots } = Stores.ModuleSystem
+  const { slots } = ModuleSystem
 
   // Compute the effective filter: start with multi-user-only IDs, then
   // auto-hide any core entry whose id has a desktop counterpart
@@ -164,7 +164,7 @@ export default function SettingsPage() {
     const currentItem = menuItems.find(
       item => 'key' in item && item.key === currentSection,
     )
-    return currentItem || { icon: <IoMdSettings />, label: 'Settings' }
+    return currentItem || { icon: <Settings size="1em" />, label: 'Settings' }
   }
 
   const SettingsMenu = () => (
@@ -211,7 +211,7 @@ export default function SettingsPage() {
               >
                 <Button data-testid="desktop-settings-section-dropdown-btn" variant="ghost" className="mt-[2px]">
                   {getCurrentSectionInfo().icon} {getCurrentSectionInfo().label}{' '}
-                  <IoIosArrowDown />
+                  <ChevronDown size="1em" />
                 </Button>
               </Dropdown>
             </div>

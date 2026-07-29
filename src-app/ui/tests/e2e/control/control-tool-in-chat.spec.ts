@@ -1,136 +1,367 @@
 import { test, expect } from '../../fixtures/test-context'
-import { loginAsAdmin, getAdminToken } from '../../common/auth-helpers'
+import type { Page } from '@playwright/test'
+import { sendChatMessage } from '../chat/helpers/chat-helpers'
 import {
-  createProviderViaAPI,
-  createModelViaAPI,
-  assignProviderToAdministratorsGroup,
-} from '../../common/provider-helpers'
-import {
-  goToNewChatPage,
-  selectModelInDropdown,
-  sendChatMessage,
-} from '../chat/helpers/chat-helpers'
+  TEST_LLM,
+  NO_LLM_SKIP,
+  setupControlChat,
+  recordedToolNames,
+  currentConversationId,
+  listJson,
+} from './helpers/control-llm-helpers'
 
 /**
- * control_mcp — REAL LLM end-to-end through the actual browser UI.
+ * control_mcp — REAL LLM end-to-end through the actual browser UI, NO mocks.
  *
  * The built-in app-control tools (list_capabilities / describe_capability /
- * invoke_capability) are auto-attached to a tool-capable chat. This drives the
- * FULL production path with a REAL Anthropic model and NO mocks:
- *   1. the model calls the read-only discovery tools (auto-run), then
- *   2. attempts a STATE-CHANGING `invoke_capability` (Assistant.create) which is
- *      FORCED through the in-chat approval card even in an auto-approve chat, then
- *   3. on Approve, the assistant is actually created (verified via the REST API).
+ * invoke_capability) let the model create and update the app's OWN entities.
+ * This is the matrix that proves the whole chain works — and that would have
+ * caught the two bugs this feature fixes:
  *
- * Gated on ANTHROPIC_API_KEY — skips cleanly when unset (runs against the local
- * bridge when ANTHROPIC_BASE_URL is set, so no paid keys).
+ *   1. DISCOVERY — the user asks in plain language ("create a new project called
+ *      Foo"); the model must FIND the operation via `list_capabilities`. The
+ *      prompts here deliberately never name an operation id, because a prompt
+ *      that does never exercises search. A real user session showed
+ *      `list_capabilities{query:"create project"}` returning **0 results**.
+ *   2. SECURITY — a mutating `invoke_capability` is FORCED through the approval
+ *      card even in a fresh, auto-approve chat.
+ *   3. EFFECT — Approve → the entity really exists via the REST API;
+ *      Deny → nothing was created.
+ *
+ * Gating: runs against WHATEVER LLM the environment configures. It skips ONLY
+ * when nothing at all is configured — never merely because one vendor's key is
+ * absent (that is how this surface went unverified in the first place).
  */
 
-const HAS_ANTHROPIC_KEY = Boolean(process.env.ANTHROPIC_API_KEY)
-
-test.describe('control_mcp — real LLM end-to-end (approve → assistant created)', () => {
-  test.skip(!HAS_ANTHROPIC_KEY, 'ANTHROPIC_API_KEY not set — skipping real-LLM control E2E')
-  // Real-LLM + live SSE: the model's multi-round tool calling and the streaming
-  // connection are non-deterministic, so retry like the other real-backend specs.
+test.describe('control_mcp — real LLM end-to-end (discover → approve → mutate)', () => {
+  test.skip(!TEST_LLM, NO_LLM_SKIP)
+  // Real-LLM + live SSE: multi-round tool calling and the streaming connection
+  // are non-deterministic, so retry like the other real-backend specs.
   test.describe.configure({ retries: 2 })
   test.slow()
 
-  async function setupChat(page: import('@playwright/test').Page, baseURL: string, apiURL: string) {
-    await loginAsAdmin(page, baseURL)
-    const token = await getAdminToken(apiURL)
-    const providerId = await createProviderViaAPI(apiURL, token, 'Anthropic', 'anthropic')
-    await assignProviderToAdministratorsGroup(apiURL, token, providerId)
-    await createModelViaAPI(
-      apiURL,
-      token,
-      providerId,
-      'claude-haiku-4-5-20251001',
-      'Claude Haiku 4.5',
-      'anthropic',
-    )
-    await goToNewChatPage(page, baseURL)
-    await selectModelInDropdown(page, 'Claude Haiku 4.5')
-    return token
+  /**
+   * Content-block types on the conversation's transcript, newest branch.
+   * Used to prove the tool RESULT came back into the chat, not just that a
+   * tool-call row was recorded server-side.
+   */
+  async function conversationBlockTypes(
+    page: Page,
+    apiURL: string,
+    token: string,
+    conversationId: string,
+  ): Promise<string[]> {
+    const res = await page.request.get(`${apiURL}/api/conversations/${conversationId}/messages`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (!res.ok()) {
+      throw new Error(`GET messages failed: ${res.status()} ${await res.text()}`)
+    }
+    const body = await res.json()
+    const messages = body.messages ?? body.data ?? body ?? []
+    const types: string[] = []
+    for (const m of messages as Array<{ contents?: Array<{ content_type?: string }> }>) {
+      for (const c of m.contents ?? []) if (c.content_type) types.push(c.content_type)
+    }
+    return types
   }
 
-  test('a mutating control invoke requires approval, then creates the assistant', async ({
+  /** The Approve/Deny controls of a pending tool-approval card. */
+  function approvalButtons(page: Page) {
+    return {
+      approve: page.locator('[data-testid="tool-approval-approve-once"]').first(),
+      deny: page.locator('[data-testid="tool-approval-deny"]').first(),
+    }
+  }
+
+  /**
+   * TEST-13 / TEST-14 / TEST-15 / TEST-18 — the natural-language
+   * DISCOVERY → MUTATION journey, end to end.
+   *
+   * This single test is the one that would have caught the multi-word search
+   * bug: with the shipped whole-phrase matcher, `list_capabilities` for a
+   * two-word request returns nothing and the model can never reach the invoke,
+   * so the approval card never appears and the project is never created.
+   */
+  test('a plain-language request is DISCOVERED, forced through approval, and really creates the project', async ({
     page,
     testInfra,
   }) => {
     const { baseURL, apiURL } = testInfra
-    const token = await setupChat(page, baseURL, apiURL)
+    const { token } = await setupControlChat(page, baseURL, apiURL)
 
     const name = `ControlE2E_${Date.now()}`
-    await sendChatMessage(
-      page,
-      `Use the app-control tools to create a new assistant named exactly "${name}". ` +
-        `Call invoke_capability with Assistant.create. Do it now — do not ask me first.`,
-      false, // tool round-trips + an approval pause; don't block on first complete
-    )
+    const before = (await listJson(page, apiURL, token, '/api/projects?per_page=100', 'projects'))
+      .length
 
-    // Baseline: how many assistants exist before the turn.
-    const before = await fetchTotalAssistants(apiURL, token)
+    // NOTE: no operation id, no tool name. A real user's phrasing.
+    await sendChatMessage(page, `Create a new project called "${name}" for me.`, false)
 
-    // The mutating invoke must surface the approval card (even though a fresh
-    // chat auto-approves other tools).
-    const approve = page.locator('[data-testid="tool-approval-approve-once"]').first()
-    await expect(approve).toBeVisible({ timeout: 90000 })
+    // INV-4 — a mutating control write must raise the approval card even though
+    // `setupControlChat` put this chat in AUTO-APPROVE (so an ordinary tool would
+    // have run silently, and this assertion can actually fail).
+    const { approve } = approvalButtons(page)
+    await expect(
+      approve,
+      'a mutating control invoke must be forced through the approval card',
+    ).toBeVisible({ timeout: 120000 })
+
+    // INV-3 — prove the model DISCOVERED the operation rather than being told it.
+    // The durable, owner-scoped MCP tool-call history is the record of truth.
+    const conversationId = currentConversationId(page)
+    expect(conversationId, 'the chat must have created a conversation').toBeTruthy()
+    await expect
+      .poll(async () => recordedToolNames(page, apiURL, token, conversationId as string), {
+        timeout: 30000,
+      })
+      .toContain('list_capabilities')
+
+    // Nothing may exist before the human approves.
+    expect(
+      (await listJson(page, apiURL, token, '/api/projects?per_page=100', 'projects')).length,
+      'the project must NOT exist until the user approves',
+    ).toBe(before)
+
     await approve.click()
 
-    // After approval the control write actually runs → a NEW assistant exists via
-    // REST. We assert the COUNT increased rather than an exact name: the model
-    // (esp. a lower-fidelity local bridge) may name it slightly differently, but
-    // the security+integration property under test — approve → the control write
-    // executes and creates a row — holds either way. (The exact-name create path
-    // is also proven deterministically by the Tier-3 integration test
-    // `invoke_create_assistant_real_roundtrip`.)
+    // INV-5 — approve → the entity REALLY exists, verified through REST.
     await expect
-      .poll(async () => fetchTotalAssistants(apiURL, token), { timeout: 60000 })
+      .poll(
+        async () =>
+          (await listJson(page, apiURL, token, '/api/projects?per_page=100', 'projects')).length,
+        { timeout: 90000 },
+      )
       .toBeGreaterThan(before)
+
+    // TEST-18 — and the CHAT reflects it. Not "a tool-call row exists" (the
+    // project-count assertion above already implies that, so it would prove
+    // nothing extra): assert the tool RESULT was written back onto the
+    // conversation transcript as a `tool_result` block, which is what makes the
+    // write visible to the user and to the model's next turn.
+    await expect
+      .poll(async () => conversationBlockTypes(page, apiURL, token, conversationId as string), {
+        timeout: 90000,
+      })
+      .toContain('tool_result')
+    const blocks = await conversationBlockTypes(page, apiURL, token, conversationId as string)
+    expect(blocks, 'the transcript must carry the invoke and its result').toContain('tool_use')
   })
 
-  test('denying the control write leaves nothing created', async ({ page, testInfra }) => {
-    const { baseURL, apiURL } = testInfra
-    const token = await setupChat(page, baseURL, apiURL)
+  /**
+   * TEST-14 / TEST-15 — the same chain, table-driven across representative
+   * mutating operations.
+   *
+   * These rows exist to prove approval + effect across operation CLASSES, so
+   * they add a "use the app-control tools, don't ask me first" nudge to keep a
+   * chatty local model from stalling on a clarifying question. The nudge names
+   * the TOOL FAMILY, never an operation id — discovery via `list_capabilities`
+   * is still required. The unnudged, purely natural phrasing is exercised by the
+   * discovery journey above.
+   */
+  const approveRows = [
+    {
+      op: 'Assistant.create',
+      prompt: (n: string) =>
+        `Create a new assistant named "${n}" for me. Use the app-control tools; do not ask me first.`,
+      count: async (page: Page, apiURL: string, token: string) =>
+        (await listJson(page, apiURL, token, '/api/assistants?per_page=100', 'assistants')).length,
+    },
+    {
+      op: 'Project.create (a second, differently-phrased request)',
+      prompt: (n: string) =>
+        `Please set up a project named "${n}". Use the app-control tools; do not ask me first.`,
+      count: async (page: Page, apiURL: string, token: string) =>
+        (await listJson(page, apiURL, token, '/api/projects?per_page=100', 'projects')).length,
+    },
+  ]
 
-    const name = `ControlDeny_${Date.now()}`
+  for (const row of approveRows) {
+    test(`approval is forced and approve really performs the write — ${row.op}`, async ({
+      page,
+      testInfra,
+    }) => {
+      const { baseURL, apiURL } = testInfra
+      const { token } = await setupControlChat(page, baseURL, apiURL)
+
+      const name = `Ctl_${Date.now()}`
+      const before = await row.count(page, apiURL, token)
+
+      await sendChatMessage(page, row.prompt(name), false)
+
+      const { approve } = approvalButtons(page)
+      await expect(approve, `${row.op}: approval must be forced`).toBeVisible({ timeout: 120000 })
+      expect(
+        await row.count(page, apiURL, token),
+        `${row.op}: nothing may exist before approval`,
+      ).toBe(before)
+
+      await approve.click()
+
+      await expect
+        .poll(async () => row.count(page, apiURL, token), { timeout: 90000 })
+        .toBeGreaterThan(before)
+    })
+  }
+
+  /**
+   * TEST-15 — a SETTINGS update: a different class of mutating operation (a PUT
+   * on a singleton the caller owns), verified by reading the setting back.
+   */
+  test('approval is forced and approve really performs the write — MemorySettings.update', async ({
+    page,
+    testInfra,
+  }) => {
+    const { baseURL, apiURL } = testInfra
+    const { token } = await setupControlChat(page, baseURL, apiURL)
+
+    const readEnabled = async (): Promise<boolean | null> => {
+      const res = await page.request.get(`${apiURL}/api/memory/settings`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!res.ok()) return null
+      const body = await res.json()
+      // The user memory settings row exposes `retrieval_enabled` /
+      // `extraction_enabled` — there is no bare `enabled`.
+      return (body.retrieval_enabled ?? null) as boolean | null
+    }
+
+    const before = await readEnabled()
+    expect(before, 'memory settings must be readable to test a settings write').not.toBeNull()
+
     await sendChatMessage(
       page,
-      `Use the app-control tools to create a new assistant named exactly "${name}" ` +
-        `(invoke_capability with Assistant.create). Do it now — do not ask me first.`,
+      before
+        ? 'In my memory settings, turn memory retrieval OFF. Do it now, using the app-control tools; do not ask me first.'
+        : 'In my memory settings, turn memory retrieval ON. Do it now, using the app-control tools; do not ask me first.',
       false,
     )
 
-    const deny = page.locator('[data-testid="tool-approval-deny"]').first()
-    await expect(deny).toBeVisible({ timeout: 90000 })
+    const { approve } = approvalButtons(page)
+    await expect(approve, 'a settings write must be forced through approval').toBeVisible({
+      timeout: 120000,
+    })
+    expect(await readEnabled(), 'the setting must be unchanged before approval').toBe(before)
+
+    await approve.click()
+
+    await expect.poll(readEnabled, { timeout: 90000 }).toBe(!before)
+  })
+
+  /**
+   * TEST-16 — deny → nothing created, table-driven.
+   *
+   * The pre-existing `denying the control write leaves nothing created` test
+   * survives here as the `Assistant.create` row, strengthened from a name-only
+   * match to a TOTAL-count baseline (a model that names the entity slightly
+   * differently used to satisfy the old assertion vacuously).
+   */
+  const denyRows = [
+    {
+      op: 'Project.create',
+      prompt: (n: string) => `Create a new project called "${n}" for me.`,
+      list: '/api/projects?per_page=100',
+      key: 'projects',
+    },
+    {
+      op: 'Assistant.create',
+      prompt: (n: string) => `Create a new assistant named "${n}" for me.`,
+      list: '/api/assistants?per_page=100',
+      key: 'assistants',
+    },
+  ] as const
+
+  /**
+   * TEST-16 — the deny leg for the SETTINGS operation class, which a
+   * list-of-entities baseline cannot express: assert the singleton's value is
+   * byte-identical after the denial.
+   */
+  test('denying the control write leaves nothing changed — MemorySettings.update', async ({
+    page,
+    testInfra,
+  }) => {
+    const { baseURL, apiURL } = testInfra
+    const { token } = await setupControlChat(page, baseURL, apiURL)
+
+    const readSettings = async (): Promise<string> => {
+      const res = await page.request.get(`${apiURL}/api/memory/settings`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!res.ok()) throw new Error(`GET memory settings failed: ${res.status()}`)
+      const b = await res.json()
+      return JSON.stringify({
+        retrieval_enabled: b.retrieval_enabled,
+        extraction_enabled: b.extraction_enabled,
+        max_memories: b.max_memories,
+        retention_days: b.retention_days,
+      })
+    }
+
+    const before = await readSettings()
+    // Ask for the OPPOSITE of the current value. Asking to turn OFF something
+    // that is already off is a legitimate no-op: the model correctly answers
+    // "it already is" and calls nothing, so the approval card never appears and
+    // the test fails for a reason that has nothing to do with denial. (Memory
+    // retrieval is off by default, which is exactly how this bit the first run.)
+    const currentlyOn = JSON.parse(before).retrieval_enabled === true
+    await sendChatMessage(
+      page,
+      currentlyOn
+        ? 'In my memory settings, turn memory retrieval OFF. Do it now, using the app-control tools; do not ask me first.'
+        : 'In my memory settings, turn memory retrieval ON. Do it now, using the app-control tools; do not ask me first.',
+      false,
+    )
+
+    const { deny } = approvalButtons(page)
+    await expect(deny, 'a settings write must be forced through approval').toBeVisible({
+      timeout: 120000,
+    })
+    await expect(
+      page.locator('[data-testid="approval-tool-args"]').first(),
+      'the pending approval must be for MemorySettings.update',
+    ).toContainText('MemorySettings.update', { timeout: 15000 })
     await deny.click()
 
-    // Give the turn a moment to settle; the assistant must never be created.
-    await page.waitForTimeout(3000)
-    const count = await fetchAssistantCount(apiURL, token, name)
-    expect(count).toBe(0)
+    await page.waitForTimeout(5000)
+    expect(await readSettings(), 'a denied settings write must change nothing').toBe(before)
   })
+
+  for (const row of denyRows) {
+    test(`denying the control write leaves nothing created — ${row.op}`, async ({
+      page,
+      testInfra,
+    }) => {
+      const { baseURL, apiURL } = testInfra
+      const { token } = await setupControlChat(page, baseURL, apiURL)
+
+      const name = `ControlDeny_${Date.now()}`
+      const before = await listJson(page, apiURL, token, row.list, row.key)
+
+      await sendChatMessage(page, row.prompt(name), false)
+
+      const { deny } = approvalButtons(page)
+      await expect(
+        deny,
+        `${row.op}: approval must be forced before a deny is possible`,
+      ).toBeVisible({ timeout: 120000 })
+
+      // The INTENDED operation must be the one being denied — read off the
+      // approval CARD, which is the only place it exists at this moment: a
+      // denied tool is never executed, so no `mcp_tool_calls` row is ever
+      // written for it. (Asserting only "the count did not change" would pass on
+      // a turn where the model proposed something else, or nothing at all.)
+      await expect(
+        page.locator('[data-testid="approval-tool-args"]').first(),
+        `${row.op}: the pending approval must be for the intended operation`,
+      ).toContainText(row.op, { timeout: 15000 })
+
+      // Give the turn a moment to settle; nothing may have been created.
+      await page.waitForTimeout(5000)
+      const after = await listJson(page, apiURL, token, row.list, row.key)
+      expect(after.length, `${row.op}: a denied write must create nothing`).toBe(before.length)
+      expect(
+        after.some((e) => e.name === name),
+        `${row.op}: the denied entity "${name}" must not exist`,
+      ).toBe(false)
+    })
+  }
 })
-
-/** Count assistants owned by the admin whose name matches `name`, via REST. */
-async function fetchAssistantCount(apiURL: string, token: string, name: string): Promise<number> {
-  const list = await fetchAssistants(apiURL, token)
-  return list.filter((a) => a.name === name).length
-}
-
-/** Total assistants owned by the admin, via REST. */
-async function fetchTotalAssistants(apiURL: string, token: string): Promise<number> {
-  return (await fetchAssistants(apiURL, token)).length
-}
-
-async function fetchAssistants(
-  apiURL: string,
-  token: string,
-): Promise<Array<{ name?: string }>> {
-  const res = await fetch(`${apiURL}/assistants?per_page=100`, {
-    headers: { Authorization: `Bearer ${token}` },
-  })
-  if (!res.ok) return []
-  const body = await res.json()
-  return body.assistants ?? body.data ?? []
-}

@@ -9,12 +9,14 @@
 import { lazy } from 'react'
 import type { ModuleGallery } from '@/dev/gallery/support'
 import { holdPatch, lazyNamed, lazyProps } from '@/dev/gallery/support'
-import { Stores } from '@ziee/framework/stores'
 import { llmGroupsList } from '@/dev/gallery/fixtures/llm-providers'
+import { McpComposer } from '@/modules/mcp/stores/mcpComposer'
+import { McpServerDrawer as McpServerDrawerStore } from '@/modules/mcp/stores/mcpServerDrawer'
+import { GroupSystemMcpServersAssignment } from '@/modules/mcp/components/system/groupSystemMcpServersAssignmentDrawer'
 
 const group = llmGroupsList.groups[0]
 
-/** A project stub — enough for `Stores.ProjectDetail.project` reads (`project.id`). */
+/** A project stub — enough for `ProjectDetail.project` reads (`project.id`). */
 const galleryProject = { id: 'proj-s4', name: 'Gallery Project' }
 
 export const gallery: ModuleGallery = {
@@ -27,7 +29,7 @@ export const gallery: ModuleGallery = {
         () => import('@/modules/mcp/components/system/GroupSystemMcpServersAssignmentDrawer'),
         'GroupSystemMcpServersAssignmentDrawer',
       ),
-      open: () => Stores.GroupSystemMcpServersAssignment.openDrawer(group),
+      open: () => GroupSystemMcpServersAssignment.openDrawer(group),
     },
     {
       slug: 'overlay-mcp-server-drawer',
@@ -37,7 +39,7 @@ export const gallery: ModuleGallery = {
         () => import('@/modules/mcp/components/common/McpServerDrawer'),
         'McpServerDrawer',
       ),
-      open: () => Stores.McpServerDrawer.openMcpServerDrawer(),
+      open: () => McpServerDrawerStore.openMcpServerDrawer(),
     },
     {
       slug: 'overlay-mcp-config-modal',
@@ -47,7 +49,7 @@ export const gallery: ModuleGallery = {
         () => import('@/modules/mcp/components/McpConfigModal'),
         'McpConfigModal',
       ),
-      open: () => Stores.McpComposer.openConfigModal(),
+      open: () => McpComposer.openConfigModal(),
     },
   ],
   seeded: [
@@ -55,7 +57,7 @@ export const gallery: ModuleGallery = {
     {
       slug: 'seeded-mcp-tool-calls-error',
       title: 'MCP tool calls — error',
-      note: 'Stores.McpToolCalls.error → the danger text',
+      note: 'McpToolCalls.error → the danger text',
       path: '/',
       initialPath: '/',
       component: lazyProps(
@@ -64,11 +66,11 @@ export const gallery: ModuleGallery = {
         { serverId: 'srv-1' },
       ),
       setup: async () => {
-        const { McpToolCalls } = await import(
-          '@/modules/mcp/stores/McpToolCalls.store'
+        const { useMcpToolCallsStore } = await import(
+          '@/modules/mcp/stores/mcpToolCalls'
         )
         await holdPatch(() =>
-          McpToolCalls.store.setState({
+          useMcpToolCallsStore.setState({
             error: 'Failed to load tool calls.',
             calls: [],
             loading: false,
@@ -82,7 +84,7 @@ export const gallery: ModuleGallery = {
     {
       slug: 'seeded-mcp-tool-calls-loaded',
       title: 'MCP tool calls — loaded',
-      note: 'Stores.McpToolCalls.calls → sortable/filterable grid rows',
+      note: 'McpToolCalls.calls → sortable/filterable grid rows',
       path: '/',
       initialPath: '/',
       component: lazyProps(
@@ -91,8 +93,8 @@ export const gallery: ModuleGallery = {
         { serverId: 'srv-1' },
       ),
       setup: async () => {
-        const { McpToolCalls } = await import(
-          '@/modules/mcp/stores/McpToolCalls.store'
+        const { useMcpToolCallsStore } = await import(
+          '@/modules/mcp/stores/mcpToolCalls'
         )
         const mk = (
           id: string,
@@ -118,7 +120,7 @@ export const gallery: ModuleGallery = {
           user_id: 'u-1',
         })
         await holdPatch(() =>
-          McpToolCalls.store.setState({
+          useMcpToolCallsStore.setState({
             calls: [
               mk('1', 'search', 'completed', 'chat', 120),
               mk('2', 'fetch', 'failed', 'approval', 40),
@@ -151,14 +153,14 @@ export const gallery: ModuleGallery = {
         'ProjectMcpSettingsPanel',
       ),
       setup: async () => {
-        const { ProjectDetail } = await import(
-          '@/modules/projects/stores/ProjectDetail.store'
+        const { ProjectDetailDef } = await import(
+          '@/modules/projects/stores/projectDetail'
         )
         const { ProjectMcpSettingsStore } = await import(
-          '@/modules/mcp/project-extension/stores/ProjectMcpSettings.store'
+          '@/modules/mcp/project-extension/stores/projectMcpSettings'
         )
         await holdPatch(() => {
-          ProjectDetail.store.setState({ project: galleryProject } as any)
+          ProjectDetailDef.store.setState({ project: galleryProject } as any)
           ProjectMcpSettingsStore.store.setState({
             loading: true,
             settings: null,
@@ -182,14 +184,14 @@ export const gallery: ModuleGallery = {
         'ProjectMcpSettingsPanel',
       ),
       setup: async () => {
-        const { ProjectDetail } = await import(
-          '@/modules/projects/stores/ProjectDetail.store'
+        const { ProjectDetailDef } = await import(
+          '@/modules/projects/stores/projectDetail'
         )
         const { ProjectMcpSettingsStore } = await import(
-          '@/modules/mcp/project-extension/stores/ProjectMcpSettings.store'
+          '@/modules/mcp/project-extension/stores/projectMcpSettings'
         )
         await holdPatch(() => {
-          ProjectDetail.store.setState({ project: galleryProject } as any)
+          ProjectDetailDef.store.setState({ project: galleryProject } as any)
           ProjectMcpSettingsStore.store.setState({
             loading: false,
             settings: {
@@ -217,11 +219,11 @@ export const gallery: ModuleGallery = {
       ),
       setup: async () => {
         const { AppMode } = await import('@/modules/app/AppMode.store')
-        const { McpUserPolicy } = await import(
-          '@/modules/mcp/stores/McpUserPolicy.store'
+        const { McpUserPolicyDef: McpUserPolicy } = await import(
+          './stores/mcpUserPolicy'
         )
         await holdPatch(() => {
-          AppMode.store.setState({ multiUserMode: true } as any)
+          AppMode.__setState({ multiUserMode: true } as any)
           McpUserPolicy.store.setState({
             policy: {
               allowed_transports: [],
@@ -287,11 +289,11 @@ export const gallery: ModuleGallery = {
         { group: { id: 'grp-s4', name: 'Gallery Group' } },
       ),
       setup: async () => {
-        const { GroupSystemMcpServersWidget } = await import(
-          '@/modules/mcp/widgets/GroupSystemMcpServersWidget.store'
+        const { GroupSystemMcpServersWidgetDef } = await import(
+          '@/modules/mcp/widgets/groupSystemMcpServersWidget'
         )
         await holdPatch(() =>
-          GroupSystemMcpServersWidget.store.setState({
+          GroupSystemMcpServersWidgetDef.store.setState({
             groupServers: new Map([
               [
                 'grp-s4',

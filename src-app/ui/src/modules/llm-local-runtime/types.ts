@@ -57,13 +57,13 @@ export type RuntimeEngine = 'llamacpp' | 'mistralrs'
 
 // Store type declarations
 import type { StoreProxy } from '@ziee/framework/stores'
-import type { useRuntimeVersionStore } from './stores/RuntimeVersion.store'
-import type { useRuntimeUpdateStore } from './stores/RuntimeUpdate.store'
-import type { useRuntimeDownloadDrawerStore } from './stores/RuntimeDownloadDrawer.store'
-import type { useRuntimeDeleteConfirmStore } from './stores/RuntimeDeleteConfirm.store'
-import type { useRuntimeConfigStore } from './stores/RuntimeConfig.store'
-import type { useRuntimeModelUsageStore } from './stores/RuntimeModelUsage.store'
-import type { useRuntimeDownloadProgressStore } from './stores/RuntimeDownloadProgress.store'
+import type { useRuntimeVersionStore } from './stores/runtimeVersion'
+import type { useRuntimeUpdateStore } from './stores/runtimeUpdate'
+import type { useRuntimeDownloadDrawerStore } from './stores/runtimeDownloadDrawer'
+import type { useRuntimeDeleteConfirmStore } from './stores/runtimeDeleteConfirm'
+import type { useRuntimeConfigStore } from './stores/runtimeConfig'
+import type { useRuntimeModelUsageStore } from './stores/runtimeModelUsage'
+import type { useRuntimeDownloadProgressStore } from './stores/runtimeDownloadProgress'
 
 declare module '@ziee/framework/stores' {
   interface RegisteredStores {

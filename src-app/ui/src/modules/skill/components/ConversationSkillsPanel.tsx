@@ -1,6 +1,5 @@
 import { useEffect } from 'react'
-import { Stores } from '@ziee/framework/stores'
-import { deriveHiddenSkills } from '@/modules/skill/stores/ConversationSkills.store'
+import { deriveHiddenSkills } from '@/modules/skill/stores'
 import {
   Alert,
   Button,
@@ -11,6 +10,9 @@ import {
   Text,
   message,
 } from '@ziee/kit'
+import { SkillDrawer } from '@/modules/skill/stores/skillDrawer'
+import { Skill } from '@/modules/skill/stores/skill'
+import { ConversationSkills } from '@/modules/skill/stores/conversationSkills'
 
 interface ConversationSkillsPanelProps {
   conversationId: string
@@ -24,17 +26,17 @@ interface ConversationSkillsPanelProps {
 export function ConversationSkillsPanel({
   conversationId,
 }: ConversationSkillsPanelProps) {
-  const { skills } = Stores.Skill
-  const available = Stores.ConversationSkills.available[conversationId]
-  const loading = Stores.ConversationSkills.loading[conversationId]
-  const error = Stores.ConversationSkills.error
+  const { skills } = Skill
+  const available = ConversationSkills.available[conversationId]
+  const loading = ConversationSkills.loading[conversationId]
+  const error = ConversationSkills.error
 
 
   useEffect(() => {
-    Stores.ConversationSkills.loadAvailable(conversationId)
+    ConversationSkills.loadAvailable(conversationId)
   }, [conversationId])
 
-  // NOTE: no manual loadSkills() here — reading `Stores.Skill.skills`
+  // NOTE: no manual loadSkills() here — reading `Skill.skills`
   // above self-initializes the install list via the store's
   // `__init__.skills` hook (and `sync:skill` keeps it fresh), so a
   // mount-time fetch would be redundant (REACT_COMPONENT_PATTERNS:
@@ -74,9 +76,9 @@ export function ConversationSkillsPanel({
   const handleToggle = async (skillId: string, visible: boolean) => {
     try {
       if (visible) {
-        await Stores.ConversationSkills.unhide(skillId, conversationId)
+        await ConversationSkills.unhide(skillId, conversationId)
       } else {
-        await Stores.ConversationSkills.hide(skillId, conversationId)
+        await ConversationSkills.hide(skillId, conversationId)
       }
     } catch {
       message.error('Failed to update skill visibility')
@@ -111,7 +113,7 @@ export function ConversationSkillsPanel({
                   className="h-auto max-w-full p-0 font-medium text-inherit"
                   // Thread conversationId so the detail drawer's "Hide in
                   // this conversation" checkbox is reachable from chat.
-                  onClick={() => Stores.SkillDrawer.open(skill, conversationId)}
+                  onClick={() => SkillDrawer.open(skill, conversationId)}
                 >
                   <span className="truncate">
                     {skill.display_name || skill.name}

@@ -17,11 +17,12 @@ import {
 } from '@ziee/kit'
 import { z } from 'zod'
 import { User } from 'lucide-react'
-import { Stores } from '@ziee/framework/stores'
 import { usePermission } from '@/core/permissions'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { SettingsPageContainer } from '@/modules/settings/components/SettingsPageContainer'
 import { SettingsFormActions } from '@/modules/settings/components/SettingsFormActions'
+import { Profile as ProfileStore } from '@/modules/profile/stores/profile'
+import { Auth } from '@/modules/auth/Auth.store'
 
 interface ProfileFormValues {
   display_name: string
@@ -59,8 +60,8 @@ const passwordSchema = z
 
 export function ProfileSettingsPage() {
   // Read ALL store fields at the top, before any early return (hooks rule).
-  const { user, hasPassword } = Stores.Auth
-  const { savingProfile, savingPassword } = Stores.Profile
+  const { user, hasPassword } = Auth
+  const { savingProfile, savingPassword } = ProfileStore
   const canEdit = usePermission(Permissions.ProfileEdit)
   const profileForm = useForm<ProfileFormValues>({
     resolver: zodResolver(profileSchema),
@@ -79,7 +80,7 @@ export function ProfileSettingsPage() {
   // even when the user arrived via an in-session login (authenticateUser
   // sets `user` from the login response, which carries no `has_password`).
   useEffect(() => {
-    void Stores.Auth.refreshCurrentUser()
+    void Auth.refreshCurrentUser()
   }, [])
 
   useEffect(() => {
@@ -95,7 +96,7 @@ export function ProfileSettingsPage() {
 
   const handleProfileSubmit = async (values: ProfileFormValues) => {
     try {
-      await Stores.Profile.updateProfile({
+      await ProfileStore.updateProfile({
         username: values.username.trim(),
         display_name: values.display_name.trim(),
       })
@@ -109,7 +110,7 @@ export function ProfileSettingsPage() {
 
   const handlePasswordSubmit = async (values: PasswordFormValues) => {
     try {
-      await Stores.Profile.changePassword({
+      await ProfileStore.changePassword({
         current_password: values.current_password,
         new_password: values.new_password,
       })

@@ -1,5 +1,5 @@
 import { FileQuestion, Pencil, TriangleAlert } from 'lucide-react'
-import { useState, useEffect } from 'react'
+import { Suspense, useState, useEffect } from 'react'
 import { Button, Empty, Spin, Text, Title } from '@ziee/kit'
 import type { File as FileEntity } from '@/api-client/types'
 import { getViewer } from '@/modules/file/registry/fileViewerRegistry'
@@ -12,9 +12,9 @@ import { FileEditBody } from '@/modules/file/components/FileEditBody'
 import { FileExportMenu } from '@/modules/file/components/FileExportMenu'
 import { DeliverablePinButton } from '@/modules/file/components/DeliverablePinButton'
 import { editableKind } from '@/modules/file/utils/editableTypes'
-import { Stores } from '@ziee/framework/stores'
 import { usePermission } from '@/core/permissions'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
+import { FileVersions } from '@/modules/file/stores/fileVersions'
 
 /** Hard cap on previewable file size — the SINGLE outer OOM backstop that
  *  prevents even fetching a pathological file. Files above this never trigger a
@@ -78,7 +78,7 @@ export function FilePanelHeaderActions({
     <>
       {/* Viewer-specific chrome (toggles / copy / zoom …), when the matched
           viewer declares any. */}
-      {HeaderActions ? <HeaderActions file={file} /> : null}
+      {HeaderActions ? <Suspense fallback={null}><HeaderActions file={file} /></Suspense> : null}
       {/* Export-as (format conversion) for text deliverables — distinct from the
           plain Download of original bytes below. */}
       {editableKind(file) === 'markdown' ? <FileExportMenu file={file} /> : null}
@@ -133,12 +133,15 @@ export function FilePanel({ file, hideHeader = false, initialVersion, showFullPa
   }, [file.id])
   const isViewingOld = selectedVersion !== null && selectedVersion !== file.version
   // Read versionTextCache REACTIVELY so the body re-renders when the async text
-  // load lands. getVersionText() reads via getState() + kicks off the load but
-  // does NOT subscribe (same reason FileVersionBar reads versionsByFile).
-  const versionTextCache = Stores.FileVersions.versionTextCache
+  // load lands. Fire-and-forget background load if not already cached.
+  const versionTextCache = FileVersions.versionTextCache
   const oldVersionText = isViewingOld
-    ? versionTextCache.get(`${file.id}:${selectedVersion}`) ??
-      Stores.FileVersions.getVersionText(file.id, selectedVersion as number)
+    ? (() => {
+        if (versionTextCache.get(`${file.id}:${selectedVersion}`) === undefined) {
+          void FileVersions.loadVersionText(file.id, selectedVersion)
+        }
+        return versionTextCache.get(`${file.id}:${selectedVersion}`) ?? null
+      })()
     : null
 
   return (
@@ -231,7 +234,7 @@ export function FilePanel({ file, hideHeader = false, initialVersion, showFullPa
             </div>
           )
           : Body
-          ? <Body file={file} />
+          ? <Suspense fallback={<div className="flex items-center justify-center h-full" />}><Body file={file} /></Suspense>
           : (
             <div
               className="flex flex-col items-center justify-center h-full p-6"

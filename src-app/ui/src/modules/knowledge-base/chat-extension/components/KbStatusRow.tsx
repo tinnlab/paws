@@ -1,10 +1,12 @@
 import { Tag, message } from '@ziee/kit'
 import { BookOpen } from 'lucide-react'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { usePermission } from '@/core/permissions'
-import { Stores } from '@ziee/framework/stores'
 import { kbKey } from '@/modules/knowledge-base/stores/kbSelectionKey'
 import { useChatPaneOrNull } from '@/modules/chat/core/pane/ChatPaneContext'
+import { KnowledgeBases } from '@/modules/knowledge-base/stores/knowledgeBases'
+import { KnowledgeBaseComposer } from '@/modules/knowledge-base/stores/knowledgeBaseComposer'
+import { Chat } from '@/modules/chat/core/stores/chatBridge'
 
 const EMPTY_SET: ReadonlySet<string> = new Set()
 
@@ -22,10 +24,10 @@ const EMPTY_SET: ReadonlySet<string> = new Set()
 export function KbStatusRow() {
   // Explicit permission gate (layer 4) — see KbMenuItem.
   const canUse = usePermission(Permissions.KnowledgeBaseUse)
-  const { items } = Stores.KnowledgeBases
-  const { selectionByConversation, inheritedByConversation } = Stores.KnowledgeBaseComposer
+  const { items } = KnowledgeBases
+  const { selectionByConversation, inheritedByConversation } = KnowledgeBaseComposer
   const pane = useChatPaneOrNull()
-  const chat = (pane?.store ?? Stores.Chat) as typeof Stores.Chat
+  const chat = (pane?.store ?? Chat) as typeof Chat
   const paneId = pane?.paneId ?? null
   const convId = chat.conversation?.id ?? null
   const key = kbKey(convId, paneId)
@@ -66,7 +68,7 @@ export function KbStatusRow() {
             tone="info"
             icon={<BookOpen />}
             onClose={() =>
-              Stores.KnowledgeBaseComposer.detachFor(convId, id, paneId).catch((e: unknown) =>
+              KnowledgeBaseComposer.detachFor(convId, id, paneId).catch((e: unknown) =>
                 message.error(e instanceof Error ? e.message : 'Failed to detach'),
               )
             }

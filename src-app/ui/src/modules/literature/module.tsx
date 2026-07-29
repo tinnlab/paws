@@ -1,11 +1,9 @@
 import { FileSearch, KeyRound } from 'lucide-react'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { createModule } from '@ziee/framework'
 import { SettingsLayoutDef } from '@/modules/settings/SettingsLayout'
 import { lazyWithPreload } from '@/utils/lazyWithPreload'
 import '@/modules/settings/types/SettingsSlots' // Register settings slot types
-import { useLitSearchAdminStore } from './stores/LitSearchAdmin.store'
-import { useLitSearchUserKeysStore } from './stores/LitSearchUserKeys.store'
 import './types' // CRITICAL: enable store + panel-renderer type declaration merging
 
 // The screening right-panel + tool-result card register via the auto-discovered
@@ -34,6 +32,8 @@ export default createModule({
     version: '1.0.0',
     description: 'Live literature search & screening (admin settings + screening panel)',
   },
+  // smart-loading gate (build-lifted into the manifest)
+  shouldLoad: (ctx) => ctx.isAuthenticated,
   dependencies: ['router'],
   routes: [
     {
@@ -52,14 +52,6 @@ export default createModule({
     },
   ],
   stores: [
-    {
-      name: 'LitSearchAdmin',
-      store: useLitSearchAdminStore,
-    },
-    {
-      name: 'LitSearchUserKeys',
-      store: useLitSearchUserKeysStore,
-    },
   ],
   slots: {
     settingsAdminPages: [

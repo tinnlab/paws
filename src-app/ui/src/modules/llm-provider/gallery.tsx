@@ -13,13 +13,18 @@ import {
   lazyProps,
   whenTrue,
 } from '@/dev/gallery/support'
-import { Stores } from '@ziee/framework/stores'
 import {
   firstEnabledRemoteProviderId,
   llmGroupsList,
   llmProvidersCassette,
   llmProvidersList,
 } from '@/dev/gallery/fixtures/llm-providers'
+import { GroupLlmProvidersAssignment } from '@/modules/llm-provider/components/groupLlmProvidersAssignmentDrawer'
+import { LlmProviderDrawer as LlmProviderDrawerStore } from '@/modules/llm-provider/components/llmProviderDrawer'
+import { AddLocalLlmModelUploadDrawer as AddLocalLlmModelUploadDrawerStore } from '@/modules/llm-provider/stores/llmModelDrawers/addLocalLlmModelUploadDrawer'
+import { AddRemoteLlmModelDrawer as AddRemoteLlmModelDrawerStore } from '@/modules/llm-provider/stores/llmModelDrawers/addRemoteLlmModelDrawer'
+import { EditLlmModelDrawer as EditLlmModelDrawerStore } from '@/modules/llm-provider/stores/llmModelDrawers/editLlmModelDrawer'
+import { AddLocalLlmModelDownloadDrawer as AddLocalLlmModelDownloadDrawerStore } from '@/modules/llm-provider/stores/llmModelDrawers/addLocalLlmModelDownloadDrawer'
 
 const provider = llmProvidersList.providers[0]
 const group = llmGroupsList.groups[0]
@@ -40,7 +45,7 @@ export const gallery: ModuleGallery = {
         () => import('@/modules/llm-provider/components/LlmProviderDrawer'),
         'LlmProviderDrawer',
       ),
-      open: () => Stores.LlmProviderDrawer.openLlmProviderDrawer(provider),
+      open: () => LlmProviderDrawerStore.openLlmProviderDrawer(provider),
     },
     {
       slug: 'overlay-group-llm-providers-assignment',
@@ -50,7 +55,7 @@ export const gallery: ModuleGallery = {
         () => import('@/modules/llm-provider/components/GroupLlmProvidersAssignmentDrawer'),
         'GroupLlmProvidersAssignmentDrawer',
       ),
-      open: () => Stores.GroupLlmProvidersAssignment.openDrawer(group),
+      open: () => GroupLlmProvidersAssignment.openDrawer(group),
     },
     {
       slug: 'overlay-edit-llm-model-drawer',
@@ -61,7 +66,7 @@ export const gallery: ModuleGallery = {
         'EditLlmModelDrawer',
       ),
       open: () =>
-        Stores.EditLlmModelDrawer.openEditLlmModelDrawer(
+        EditLlmModelDrawerStore.openEditLlmModelDrawer(
           (llmProvidersList.providers[0] as any)?.id ?? 'model-1',
         ),
     },
@@ -74,7 +79,7 @@ export const gallery: ModuleGallery = {
         'AddRemoteLlmModelDrawer',
       ),
       open: () =>
-        Stores.AddRemoteLlmModelDrawer.openAddRemoteLlmModelDrawer(
+        AddRemoteLlmModelDrawerStore.openAddRemoteLlmModelDrawer(
           provider.id,
           (provider as any).provider_type ?? 'openai',
         ),
@@ -89,7 +94,7 @@ export const gallery: ModuleGallery = {
         'AddLocalLlmModelUploadDrawer',
       ),
       open: () =>
-        Stores.AddLocalLlmModelUploadDrawer.openAddLocalLlmModelUploadDrawer(provider.id),
+        AddLocalLlmModelUploadDrawerStore.openAddLocalLlmModelUploadDrawer(provider.id),
     },
     {
       slug: 'overlay-add-local-llm-model-download-drawer',
@@ -102,7 +107,7 @@ export const gallery: ModuleGallery = {
         'AddLocalLlmModelDownloadDrawer',
       ),
       open: () =>
-        Stores.AddLocalLlmModelDownloadDrawer.openAddLocalLlmModelDownloadDrawer(
+        AddLocalLlmModelDownloadDrawerStore.openAddLocalLlmModelDownloadDrawer(
           provider.id,
         ),
     },
@@ -124,13 +129,13 @@ export const gallery: ModuleGallery = {
         'ProviderHeader',
       ),
       setup: async () => {
-        const { LlmProviderStoreDef } = await import(
-          '@/modules/llm-provider/stores/LlmProvider.store'
+        const { useLlmProviderStore } = await import(
+          '@/modules/llm-provider/stores/llmProvider'
         )
         // Keep the provider seeded so ProviderHeader's find(id) resolves through the
         // recipe's click (holdForever: the lazy chunk may mount after a fixed hold).
         holdForever(() =>
-          LlmProviderStoreDef.store.setState({
+          useLlmProviderStore.setState({
             providers: llmProvidersList.providers,
             loading: false,
             isInitialized: true,
@@ -162,11 +167,11 @@ export const gallery: ModuleGallery = {
         'DownloadIndicatorWidget',
       ),
       setup: async () => {
-        const { LlmModelDownload } = await import(
-          '@/modules/llm-provider/stores/LlmModelDownload.store'
+        const { LlmModelDownloadStore } = await import(
+          '@/modules/llm-provider/stores/llmModelDownload'
         )
         await holdPatch(() =>
-          LlmModelDownload.store.setState({ downloads: [] } as any),
+          LlmModelDownloadStore.setState({ downloads: [] } as any),
         )
       },
     },
@@ -184,16 +189,16 @@ export const gallery: ModuleGallery = {
         'LlmModelsSection',
       ),
       setup: async () => {
-        const { LlmProviderStoreDef } = await import(
-          '@/modules/llm-provider/stores/LlmProvider.store'
+        const { useLlmProviderStore } = await import(
+          '@/modules/llm-provider/stores/llmProvider'
         )
         const pid =
           firstEnabledRemoteProviderId ?? llmProvidersList.providers[0]?.id ?? 'p1'
         await whenTrue(
-          () => LlmProviderStoreDef.store.getState().providers.length > 0,
+          () => useLlmProviderStore.getState().providers.length > 0,
         )
         await holdPatch(() =>
-          LlmProviderStoreDef.store.setState({
+          useLlmProviderStore.setState({
             llmModelsLoading: { [pid]: true },
           } as any),
         )
@@ -215,14 +220,14 @@ export const gallery: ModuleGallery = {
         'AddLocalLlmModelDownloadDrawer',
       ),
       setup: async () => {
-        const { LlmModelDownload } = await import(
-          '@/modules/llm-provider/stores/LlmModelDownload.store'
+        const { LlmModelDownloadStore } = await import(
+          '@/modules/llm-provider/stores/llmModelDownload'
         )
         const { ViewDownloadDrawer } = await import(
-          '@/modules/llm-provider/stores/LlmModelDrawers.store'
+          '@/modules/llm-provider/stores/llmModelDrawers'
         )
         await holdPatch(() => {
-          LlmModelDownload.store.setState({
+          LlmModelDownloadStore.setState({
             downloads: [
               {
                 id: 's3-dl-failed',
@@ -242,7 +247,7 @@ export const gallery: ModuleGallery = {
               },
             ],
           } as any)
-          ViewDownloadDrawer.store.setState({
+          ViewDownloadDrawer.__setState({
             open: true,
             downloadId: 's3-dl-failed',
           } as any)
@@ -265,14 +270,14 @@ export const gallery: ModuleGallery = {
         'AddLocalLlmModelDownloadDrawer',
       ),
       setup: async () => {
-        const { LlmModelDownload } = await import(
-          '@/modules/llm-provider/stores/LlmModelDownload.store'
+        const { LlmModelDownloadStore } = await import(
+          '@/modules/llm-provider/stores/llmModelDownload'
         )
         const { ViewDownloadDrawer } = await import(
-          '@/modules/llm-provider/stores/LlmModelDrawers.store'
+          '@/modules/llm-provider/stores/llmModelDrawers'
         )
         await holdPatch(() => {
-          LlmModelDownload.store.setState({
+          LlmModelDownloadStore.setState({
             downloads: [
               {
                 id: 's3-dl-active',
@@ -299,7 +304,7 @@ export const gallery: ModuleGallery = {
               },
             ],
           } as any)
-          ViewDownloadDrawer.store.setState({
+          ViewDownloadDrawer.__setState({
             open: true,
             downloadId: 's3-dl-active',
           } as any)
@@ -319,13 +324,13 @@ export const gallery: ModuleGallery = {
         'LocalProviderSettings',
       ),
       setup: async () => {
-        const { LlmProviderStoreDef } = await import(
-          '@/modules/llm-provider/stores/LlmProvider.store'
+        const { useLlmProviderStore } = await import(
+          '@/modules/llm-provider/stores/llmProvider'
         )
         // holdForever (not holdPatch): this lazy component can mount after a fixed
         // hold window ends under the full pass, so assert on a permanent interval.
         holdForever(() =>
-          LlmProviderStoreDef.store.setState({
+          useLlmProviderStore.setState({
             loading: true,
             isInitialized: false,
             providers: [],
@@ -347,11 +352,11 @@ export const gallery: ModuleGallery = {
         { providerId: 's3-empty-prov' },
       ),
       setup: async () => {
-        const { LlmModelDownload } = await import(
-          '@/modules/llm-provider/stores/LlmModelDownload.store'
+        const { LlmModelDownloadStore } = await import(
+          '@/modules/llm-provider/stores/llmModelDownload'
         )
         await holdPatch(() =>
-          LlmModelDownload.store.setState({ downloads: [] } as any),
+          LlmModelDownloadStore.setState({ downloads: [] } as any),
         )
       },
     },

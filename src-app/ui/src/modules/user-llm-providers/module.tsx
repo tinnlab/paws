@@ -1,12 +1,9 @@
 import { Plug } from 'lucide-react'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { createModule } from '@ziee/framework'
 import { SettingsLayoutDef } from '@/modules/settings/SettingsLayout'
 import { lazyWithPreload } from '@/utils/lazyWithPreload'
 import '@/modules/settings/types/SettingsSlots' // Register settings slot types
-import { useModelPickerStore } from './ModelPicker.store'
-import { useUserLlmProvidersStore } from './UserLlmProviders.store'
-import { useUserProviderKeysStore } from './UserProviderKeys.store'
 import './types'
 
 const UserLlmProvidersPage = lazyWithPreload(
@@ -19,11 +16,10 @@ export default createModule({
     version: '1.0.0',
     description: 'User LLM provider API key management',
   },
+  // smart-loading gate (build-lifted into the manifest)
+  shouldLoad: (ctx) => ctx.isAuthenticated,
   dependencies: ['router'],
   stores: [
-    { name: 'UserLlmProviders', store: useUserLlmProvidersStore },
-    { name: 'ModelPicker', store: useModelPickerStore },
-    { name: 'UserProviderKeys', store: useUserProviderKeysStore },
   ],
   routes: [
     {

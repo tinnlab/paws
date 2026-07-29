@@ -1,17 +1,17 @@
 import { Button, Card, Empty, Skeleton, Space, Tag, Text } from '@ziee/kit'
 import { Pencil } from 'lucide-react'
-import { Stores } from '@ziee/framework/stores'
 import { usePermission } from '@/core/permissions'
-import {
-  Permissions,
-  type AutoApprovedServer,
-  type DisabledServer,
-} from '@/api-client/types'
+import { type AutoApprovedServer, type DisabledServer } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { McpConfigModal } from '@/modules/mcp/components/McpConfigModal'
+import { ProjectDetail } from '@/modules/projects/stores/projectDetail'
+import { McpComposer as McpComposerStore } from '@/modules/mcp/stores/mcpComposer'
+import { McpServer } from '@/modules/mcp/stores/mcpServer'
+import { ProjectMcpSettingsLazy } from '@/modules/mcp/project-extension/stores/projectMcpSettings'
 
 /**
  * Project MCP defaults editor. Reads settings from the dedicated
- * `Stores.ProjectMcpSettings` store (separate fetch — the `Project`
+ * `ProjectMcpSettingsLazy` store (separate fetch — the `Project`
  * payload no longer carries the MCP fields after the unification).
  *
  * The Edit button (in the Card header) opens the SAME `McpConfigModal`
@@ -26,19 +26,19 @@ import { McpConfigModal } from '@/modules/mcp/components/McpConfigModal'
  * see both.
  */
 export function ProjectMcpSettingsPanel() {
-  const project = Stores.ProjectDetail.project
-  const settings = Stores.ProjectMcpSettings.settings
-  const loading = Stores.ProjectMcpSettings.loading
+  const project = ProjectDetail.project
+  const settings = ProjectMcpSettingsLazy.settings
+  const loading = ProjectMcpSettingsLazy.loading
   // Resolve server_id → display_name for the per-server lists below.
   // Falls back to the raw id when a server has been deleted but its
   // rule still references it.
-  const { servers } = Stores.McpServer
+  const { servers } = McpServer
   const canEdit = usePermission(Permissions.ProjectsEdit)
 
   if (!project) return null
 
   const handleConfigure = () => {
-    Stores.McpComposer.openConfigModalForProject(project.id, settings)
+    McpComposerStore.openConfigModalForProject(project.id, settings)
   }
 
   const approvalMode = settings?.approval_mode || 'manual_approve'

@@ -1,4 +1,4 @@
-import { Plus } from 'lucide-react'
+import { Plus, ChevronDown } from 'lucide-react'
 import {
   Button,
   Dropdown,
@@ -12,16 +12,16 @@ import {
 import { Loading } from '@/core/components/Loading'
 import { useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Stores } from '@/modules/llm-provider/stores'
 import { DivScrollY } from '@/components/common/DivScrollY'
 import { usePermission } from '@/core/permissions'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { PROVIDER_ICONS } from '@/modules/llm-provider/constants'
 import { LlmProviderDrawer } from '@/modules/llm-provider/components/LlmProviderDrawer'
 import { LocalProviderSettings } from '@/modules/llm-provider/components/LocalProviderSettings'
 import { RemoteProviderSettings } from '@/modules/llm-provider/components/RemoteProviderSettings'
 import { useWindowMinSize } from '@/modules/layouts/app-layout/hooks/useWindowMinSize'
-import { IoIosArrowDown } from 'react-icons/io'
+import { LlmProviderDrawer as LlmProviderDrawerStore } from '@/modules/llm-provider/components/llmProviderDrawer'
+import { LlmProvider } from '@/modules/llm-provider/stores/llmProvider'
 
 export function LlmProviderSettings() {
   const { providerId } = useParams<{ providerId?: string }>()
@@ -29,7 +29,7 @@ export function LlmProviderSettings() {
   const windowMinSize = useWindowMinSize()
 
   // Provider store
-  const { providers, loading, error } = Stores.LlmProvider
+  const { providers, loading, error } = LlmProvider
   const canCreate = usePermission(Permissions.LlmProvidersCreate)
 
   const currentProvider = providers.find(p => p.id === providerId)
@@ -40,7 +40,7 @@ export function LlmProviderSettings() {
   useEffect(() => {
     if (error && providers.length > 0) {
       message.error(error)
-      Stores.LlmProvider.clearLlmProviderStoreError()
+      LlmProvider.clearLlmProviderStoreError()
     }
   }, [error, providers.length])
 
@@ -115,7 +115,7 @@ export function LlmProviderSettings() {
             data-testid={`llm-provider-nav-${item.key}`}
             onClick={() => {
               if (item.key === 'add-provider') {
-                Stores.LlmProviderDrawer.openLlmProviderDrawer()
+                LlmProviderDrawerStore.openLlmProviderDrawer()
               } else {
                 navigate(`/settings/llm-providers/${item.key}`)
               }
@@ -149,7 +149,7 @@ export function LlmProviderSettings() {
           resource="LLM providers"
           description="Your LLM providers couldn't be loaded. Check your connection and try again."
           details={error}
-          onRetry={() => void Stores.LlmProvider.loadLlmProviders(true)}
+          onRetry={() => void LlmProvider.loadLlmProviders(true)}
           data-testid="llm-provider-settings-error"
         />
       )
@@ -221,7 +221,7 @@ export function LlmProviderSettings() {
                       }))}
                       onSelect={(key: string) => {
                         if (key === 'add-provider') {
-                          Stores.LlmProviderDrawer.openLlmProviderDrawer()
+                          LlmProviderDrawerStore.openLlmProviderDrawer()
                         } else {
                           navigate(`/settings/llm-providers/${key}`)
                         }
@@ -241,7 +241,7 @@ export function LlmProviderSettings() {
                         ) : (
                           'Select Provider'
                         )}
-                        <IoIosArrowDown />
+                        <ChevronDown size="1em" />
                       </Button>
                     </Dropdown>
                   </div>

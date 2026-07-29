@@ -1,13 +1,7 @@
 import { createModule } from '@ziee/framework'
-import { Stores } from '@ziee/framework/stores'
 import { AppLayoutDef } from '@/modules/layouts/app-layout'
-import { useFileStore } from './stores/File.store'
-import { useFilePreviewDrawerStore } from './stores/FilePreviewDrawer.store'
-import { useFileVersionsStore } from './stores/FileVersions.store'
-import { useDeliverablesStore } from './stores/Deliverables.store'
-import { ProjectFiles } from './project-extension/stores/ProjectFiles.store'
-import { PdfHighlight } from './stores/PdfHighlight.store'
 import { useDelayedFalse } from '@/hooks/useDelayedFalse'
+import { useOverlayOpen } from '@/core/overlays/overlayVisibility'
 import { lazyWithPreload } from '@/utils/lazyWithPreload'
 import './types'
 // Side-effect import — registers the file knowledge kind into the
@@ -49,6 +43,8 @@ export default createModule({
     version: '1.0.0',
     description: 'File storage, upload, preview and viewer registry',
   },
+  // smart-loading gate (build-lifted into the manifest)
+  shouldLoad: (ctx) => ctx.isAuthenticated,
   dependencies: ['router'],
   routes: [
     {
@@ -60,15 +56,11 @@ export default createModule({
       layout: AppLayoutDef,
     },
   ],
-  stores: [
-    { name: 'File', store: useFileStore },
-    { name: 'FilePreviewDrawer', store: useFilePreviewDrawerStore },
-    { name: 'FileVersions', store: useFileVersionsStore },
-    { name: 'Deliverables', store: useDeliverablesStore },
-    // defineStore handle already carries its { name, store } — name once.
-    ProjectFiles,
-    PdfHighlight,
-  ],
+  // NOTE: ProjectFilesDef (the project↔file attachment store) is a
+  // registerLazyStore proxy — it self-registers when a project-detail surface
+  // imports it. Listing it here loaded it onto every page (chat home included)
+  // at file-module registration, so it's intentionally NOT registered here.
+  stores: [],
   components: [
     {
       // Global file-preview drawer — FileCard's default click opens
@@ -78,8 +70,10 @@ export default createModule({
       // side-by-side right-panel via explicit onClick instead.
       id: 'file-preview-drawer',
       component: FilePreviewDrawer,
-      shouldMount: () =>
-        useDelayedFalse(() => Stores.FilePreviewDrawer.isOpen),
+      // Read the lightweight open-signal (NOT the drawer store — that would pull
+      // it onto every page at registration), then keep it mounted briefly after
+      // close for the exit animation via useDelayedFalse.
+      shouldMount: () => useDelayedFalse(() => useOverlayOpen('file-preview')),
       order: 50,
     },
   ],

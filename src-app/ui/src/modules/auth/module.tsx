@@ -1,9 +1,7 @@
 import { TimerReset } from 'lucide-react'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { createModule } from '@ziee/framework'
 import { useAuthStore } from '@/modules/auth/Auth.store'
-import { useAuthProvidersStore } from '@/modules/auth/AuthProviders.store'
-import { useSessionSettingsStore } from '@/modules/auth/SessionSettings.store'
 import { SettingsLayoutDef } from '@/modules/settings/SettingsLayout'
 import { lazyWithPreload } from '@/utils/lazyWithPreload'
 import '@/modules/settings/types/SettingsSlots' // Register settings slot types
@@ -14,6 +12,11 @@ import '@/modules/settings/types/SettingsSlots' // Register settings slot types
 // bypassing the deliberate desktop divergence). Resolves to core's
 // AuthGuard.tsx on the web build.
 import { AuthGuard } from '@/modules/auth/AuthGuard'
+// Same `@/`-alias requirement as AuthGuard above: the desktop build's
+// vite-plugin-local-override only rewrites `@/`-prefixed specifiers, so a
+// relative './bootSessionVerify' would bind core's body on desktop too and
+// defeat the deliberate no-op divergence.
+import { bootSessionVerify } from '@/modules/auth/bootSessionVerify'
 
 const AuthPage = lazyWithPreload(() =>
   import('./AuthPage').then(m => ({ default: m.AuthPage })),
@@ -64,14 +67,6 @@ export default createModule({
       name: 'Auth',
       store: useAuthStore,
     },
-    {
-      name: 'AuthProviders',
-      store: useAuthProvidersStore,
-    },
-    {
-      name: 'SessionSettings',
-      store: useSessionSettingsStore,
-    },
   ],
   // Fill the router-owned `routeGuards` slot so the router gates protected
   // routes without importing anything from auth (inverts router→auth).
@@ -89,6 +84,10 @@ export default createModule({
     ],
   },
   initialize: () => {
-    console.log('Auth module initialized')
+    // Start the session verification NOW (parallel with the app module's
+    // `/api/app/setup/status` and onboarding's `/api/onboarding/progress`)
+    // instead of waiting for AuthGuard to mount inside the router tree — see
+    // bootSessionVerify.ts. No-op on desktop via its `.desktop.ts` twin.
+    bootSessionVerify()
   },
 })

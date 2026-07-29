@@ -31,26 +31,28 @@ test.describe('File viewer — find in document', () => {
     const input = drawer.getByTestId('file-find-input')
     await expect(input).toBeVisible()
 
-    // "alpha" occurs 3× → count shows 1 / 3.
+    // "alpha" occurs 3× → count shows "1 of 3" (the find bar renders "N of M",
+    // matching the PDF viewer's find bar — see FindBar.tsx).
     await input.fill('alpha')
     const count = drawer.getByTestId('file-find-count')
-    await expect(count).toHaveText('1 / 3')
+    await expect(count).toHaveText('1 of 3')
 
     // Next advances the active index (wraps at the end).
     await drawer.getByTestId('file-find-next-btn').click()
-    await expect(count).toHaveText('2 / 3')
+    await expect(count).toHaveText('2 of 3')
     await drawer.getByTestId('file-find-next-btn').click()
-    await expect(count).toHaveText('3 / 3')
+    await expect(count).toHaveText('3 of 3')
     await drawer.getByTestId('file-find-next-btn').click()
-    await expect(count).toHaveText('1 / 3')
+    await expect(count).toHaveText('1 of 3')
 
     // Prev wraps backward.
     await drawer.getByTestId('file-find-prev-btn').click()
-    await expect(count).toHaveText('3 / 3')
+    await expect(count).toHaveText('3 of 3')
 
-    // A no-match query reports "No results".
+    // A no-match query reports "0 of 0" — the bar has no separate "No results"
+    // text; the zero count conveys it (see the comment in FindBar.tsx).
     await input.fill('zzzznotfound')
-    await expect(count).toHaveText('No results')
+    await expect(count).toHaveText('0 of 0')
 
     // Escape closes the bar.
     await input.fill('alpha')

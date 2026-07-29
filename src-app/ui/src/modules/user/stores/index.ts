@@ -1,6 +1,2 @@
-// Main stores
-export { useUsersStore } from './Users.store'
-export { useUserGroupsStore } from './UserGroups.store'
-
-// Re-export for compatibility with Stores pattern
-export { Stores } from '@ziee/framework/stores'
+// UserGroups still eager-registered via user/module.tsx.
+export { useUserGroupsStore } from './userGroups'

@@ -210,7 +210,12 @@ async fn chat_list_returns_all_user_conversations() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body: Value = resp.json().await.unwrap();
-    let convs = body.as_array().expect("array");
+    // GET /conversations returns ConversationListResponse { conversations, total },
+    // not a bare array.
+    let convs = body["conversations"]
+        .as_array()
+        .or_else(|| body.as_array())
+        .expect("conversations array");
     let ids: Vec<&str> = convs.iter().map(|c| c["id"].as_str().unwrap()).collect();
     assert!(ids.contains(&unfiled.as_str()), "unfiled present: {:?}", ids);
     assert!(ids.contains(&in_project.as_str()), "project-bound present: {:?}", ids);
@@ -1190,3 +1195,250 @@ async fn test_create_project_rejects_bad_default_asset_refs() {
     assert_eq!(body["error_code"].as_str(), Some("DEFAULT_ASSISTANT_INACCESSIBLE"), "{body}");
 }
 
+
+// ============================================================
+// projects_for_conversations — POST /projects/by-conversations
+// ============================================================
+//
+// The BATCH form of the reverse lookup. It exists because a conversation
+// list renders one membership badge per row, so the singular endpoint
+// produced one request (and one query) per conversation — the `n+1`
+// burst the live-ui-audit measured on the sidebar. Same contract as the
+// singular endpoint: always 200, owner-scoped, and "unfiled" is data —
+// an unfiled / unknown / foreign conversation is simply ABSENT from
+// `links` rather than a null entry or an error.
+
+/// Read `links` as a `conversation_id -> project_id` map for easy asserting.
+fn links_map(body: &Value) -> std::collections::HashMap<String, String> {
+    body["links"]
+        .as_array()
+        .expect("links must be an array")
+        .iter()
+        .map(|l| {
+            (
+                l["conversation_id"].as_str().unwrap().to_string(),
+                l["project_id"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect()
+}
+
+/// The de-duplicated `projects` array, keyed by id.
+fn projects_map(body: &Value) -> std::collections::HashMap<String, Value> {
+    body["projects"]
+        .as_array()
+        .expect("projects must be an array")
+        .iter()
+        .map(|p| (p["id"].as_str().unwrap().to_string(), p.clone()))
+        .collect()
+}
+
+#[tokio::test]
+async fn projects_for_conversations_resolves_many_in_one_call() {
+    let server = TestServer::start().await;
+    let user = crate::common::test_helpers::create_user_with_permissions(
+        &server,
+        "user",
+        helpers::full_project_permissions(),
+    )
+    .await;
+
+    let a = helpers::create_project(&server, &user, "Alpha").await;
+    let a_id = a["id"].as_str().unwrap();
+    let b = helpers::create_project(&server, &user, "Beta").await;
+    let b_id = b["id"].as_str().unwrap();
+
+    let in_a1 = helpers::create_project_conversation(&server, &user, a_id).await;
+    let in_a2 = helpers::create_project_conversation(&server, &user, a_id).await;
+    let in_b = helpers::create_project_conversation(&server, &user, b_id).await;
+    let unfiled = helpers::create_unfiled_conversation(&server, &user).await;
+    let bogus = Uuid::new_v4().to_string();
+
+    let resp = reqwest::Client::new()
+        .post(server.api_url("/projects/by-conversations"))
+        .header("Authorization", format!("Bearer {}", user.token))
+        .json(&json!({
+            "conversation_ids": [in_a1, in_a2, in_b, unfiled, bogus],
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: Value = resp.json().await.unwrap();
+    let map = links_map(&body);
+
+    assert_eq!(map.len(), 3, "only the three ATTACHED conversations may come back");
+    assert_eq!(map.get(&in_a1.to_string()).map(String::as_str), Some(a_id));
+    assert_eq!(map.get(&in_a2.to_string()).map(String::as_str), Some(a_id));
+    assert_eq!(map.get(&in_b.to_string()).map(String::as_str), Some(b_id));
+    assert!(!map.contains_key(&unfiled.to_string()), "unfiled must be ABSENT, not null");
+    assert!(!map.contains_key(&bogus), "an unknown id must be ABSENT");
+
+    // Project rows are de-duplicated: `in_a1` + `in_a2` share project Alpha, so
+    // Alpha must appear ONCE in `projects` even though it has two links.
+    let projects = projects_map(&body);
+    assert_eq!(
+        projects.len(),
+        2,
+        "two distinct projects referenced by three links: {:?}",
+        body["projects"]
+    );
+    assert!(projects.contains_key(a_id) && projects.contains_key(b_id));
+
+    // The batch answer must agree FIELD FOR FIELD with the singular endpoint it
+    // replaces — otherwise the badge would render different data per path.
+    let single: Value = reqwest::Client::new()
+        .get(server.api_url(&format!("/projects/by-conversation/{}", in_b)))
+        .header("Authorization", format!("Bearer {}", user.token))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(single["id"].as_str(), Some(b_id));
+    assert_eq!(
+        projects.get(b_id).unwrap(),
+        &single,
+        "the batched project row must be byte-identical to the singular endpoint's",
+    );
+}
+
+#[tokio::test]
+async fn projects_for_conversations_never_leaks_another_users_conversation() {
+    let server = TestServer::start().await;
+    let alice = crate::common::test_helpers::create_user_with_permissions(
+        &server,
+        "alice",
+        helpers::full_project_permissions(),
+    )
+    .await;
+    let bob = crate::common::test_helpers::create_user_with_permissions(
+        &server,
+        "bob",
+        helpers::full_project_permissions(),
+    )
+    .await;
+
+    let bobs_project = helpers::create_project(&server, &bob, "Bob's").await;
+    let bobs_pid = bobs_project["id"].as_str().unwrap();
+    let bobs_conv = helpers::create_project_conversation(&server, &bob, bobs_pid).await;
+
+    let alices_project = helpers::create_project(&server, &alice, "Alice's").await;
+    let alices_pid = alices_project["id"].as_str().unwrap();
+    let alices_conv = helpers::create_project_conversation(&server, &alice, alices_pid).await;
+
+    let resp = reqwest::Client::new()
+        .post(server.api_url("/projects/by-conversations"))
+        .header("Authorization", format!("Bearer {}", alice.token))
+        .json(&json!({ "conversation_ids": [alices_conv, bobs_conv] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let map = links_map(&resp.json::<Value>().await.unwrap());
+
+    assert_eq!(map.get(&alices_conv.to_string()).map(String::as_str), Some(alices_pid));
+    assert!(
+        !map.contains_key(&bobs_conv.to_string()),
+        "ownership leak — alice must not learn Bob's conversation is filed, nor where",
+    );
+}
+
+#[tokio::test]
+async fn projects_for_conversations_empty_batch_is_an_empty_answer() {
+    let server = TestServer::start().await;
+    let user = crate::common::test_helpers::create_user_with_permissions(
+        &server,
+        "user",
+        helpers::full_project_permissions(),
+    )
+    .await;
+
+    let resp = reqwest::Client::new()
+        .post(server.api_url("/projects/by-conversations"))
+        .header("Authorization", format!("Bearer {}", user.token))
+        .json(&json!({ "conversation_ids": [] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["links"].as_array().unwrap().len(), 0);
+    assert_eq!(body["projects"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn projects_for_conversations_over_cap_is_422() {
+    let server = TestServer::start().await;
+    let user = crate::common::test_helpers::create_user_with_permissions(
+        &server,
+        "user",
+        helpers::full_project_permissions(),
+    )
+    .await;
+
+    // One past MAX_CONVERSATIONS_PER_LOOKUP (`project/types.rs`). The crate's
+    // `modules` tree is private to the lib, so the value is mirrored here and
+    // pinned by the assertion below: if the server cap moves, the at-cap call
+    // starts 422-ing and this test fails loudly instead of drifting.
+    const CAP: usize = 200;
+    let ids: Vec<String> = (0..CAP + 1).map(|_| Uuid::new_v4().to_string()).collect();
+    let resp = reqwest::Client::new()
+        .post(server.api_url("/projects/by-conversations"))
+        .header("Authorization", format!("Bearer {}", user.token))
+        .json(&json!({ "conversation_ids": ids }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    // Distinguish OUR cap rejection from axum's own 422 on a malformed body.
+    let err: Value = resp.json().await.unwrap();
+    assert_eq!(
+        err["error_code"].as_str(),
+        Some("TOO_MANY_CONVERSATION_IDS"),
+        "cap rejection must be machine-distinguishable: {err}",
+    );
+
+    // ...and exactly AT the cap is accepted (this is the half that fails if the
+    // server constant ever drops below the mirrored CAP).
+    let ids: Vec<String> = (0..CAP).map(|_| Uuid::new_v4().to_string()).collect();
+    let resp = reqwest::Client::new()
+        .post(server.api_url("/projects/by-conversations"))
+        .header("Authorization", format!("Bearer {}", user.token))
+        .json(&json!({ "conversation_ids": ids }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn projects_for_conversations_requires_auth_and_projects_read() {
+    let server = TestServer::start().await;
+
+    // 401 — no token at all.
+    let resp = reqwest::Client::new()
+        .post(server.api_url("/projects/by-conversations"))
+        .json(&json!({ "conversation_ids": [] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // 403 — authenticated but WITHOUT projects::read.
+    let nobody = crate::common::test_helpers::create_user_with_permissions(
+        &server,
+        "nobody",
+        &["conversations::read"],
+    )
+    .await;
+    let resp = reqwest::Client::new()
+        .post(server.api_url("/projects/by-conversations"))
+        .header("Authorization", format!("Bearer {}", nobody.token))
+        .json(&json!({ "conversation_ids": [] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}

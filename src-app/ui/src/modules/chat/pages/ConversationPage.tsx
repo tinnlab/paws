@@ -38,7 +38,6 @@ import { useHeaderLeftInset } from '@/modules/layouts/app-layout/hooks/useHeader
 import { useWindowMinSize } from '@/modules/layouts/app-layout/hooks/useWindowMinSize'
 import { ChatRightPanel } from '@/modules/chat/core/components/ChatRightPanel'
 import { LazyComponentRenderer } from '@/core/components/LazyComponentRenderer'
-import { Stores } from '@ziee/framework'
 import { useNativeScroll } from '@/modules/layouts/app-layout/hooks/useNativeScroll'
 import { DivScrollY } from '@/components/common/DivScrollY'
 import { cn } from '@/lib/utils'
@@ -46,24 +45,29 @@ import { ConversationFindBar } from '@/modules/chat/components/ConversationFindB
 import { ConversationFindContext } from '@/modules/chat/components/ConversationFindContext'
 import { JumpToLatestButton } from '@/modules/chat/components/JumpToLatestButton'
 import { firstMessageId } from '@/modules/chat/core/stores/messageWindow'
-import { pendingApprovalIdsInPane } from '@/modules/chat/core/utils/toolCallPaneScope'
+import { pendingApprovalIdsInPane, paneApprovalScope } from '@/modules/chat/core/utils/toolCallPaneScope'
 import { useChatPaneOrNull } from '@/modules/chat/core/pane/ChatPaneContext'
 import { useIsPopoutWindow } from '@/modules/chat/core/popout/useIsPopoutWindow'
 import { SplitChatView } from '@/modules/chat/components/SplitChatView'
 import { PaneManagerDrawer } from '@/modules/chat/components/PaneManagerDrawer'
+import { McpComposer as McpComposerStore } from '@/modules/mcp/stores/mcpComposer'
+import { AppLayout } from '@/modules/layouts/app-layout/appLayout'
+import { SplitView as SplitViewStore } from '@/modules/chat/core/stores/splitView'
+import { Chat as ChatStore } from '@/modules/chat/core/stores/chatBridge'
+import { ModuleSystem } from '@ziee/framework/stores'
 
 /**
  * Chat route element for `/chat/:conversationId`.
  *
  * Single-pane (0–1 split panes) → the normal `ConversationPane` bound to the URL
- * conversation via `Stores.Chat` (the primary pane). Once ≥2 split panes exist it
+ * conversation via `ChatStore` (the primary pane). Once ≥2 split panes exist it
  * renders `SplitChatView`, which mounts one `ConversationPane` per pane inside a
  * `ChatPaneProvider`. Branching here on a single reactive read keeps hook order
  * stable; each branch is its own component boundary.
  */
 export default function ConversationPage() {
   const { conversationId } = useParams<{ conversationId: string }>()
-  const { panes, focusedPaneId } = Stores.SplitView
+  const { panes, focusedPaneId } = SplitViewStore
   const navigate = useNavigate()
   // The FOCUSED pane's conversation (reactive) — what the URL must mirror while a
   // split is open.
@@ -84,11 +88,11 @@ export default function ConversationPage() {
   // already set the focused pane) does not re-trigger a second reconcile.
   useEffect(() => {
     if (!conversationId) return
-    const sv = Stores.SplitView.$
+    const sv = SplitViewStore.$
     if (sv.panes.length < 2) return // single-pane: the URL drives ConversationPane
     const focused = sv.panes.find((p) => p.paneId === sv.focusedPaneId)
     if (focused?.conversationId === conversationId) return // already shown → no-op
-    Stores.SplitView.openConversationInWorkspace(conversationId, 'auto')
+    SplitViewStore.openConversationInWorkspace(conversationId, 'auto')
   }, [conversationId])
 
   // Workspace → URL (FB-19). The MISSING second direction: opening a pane via the
@@ -130,7 +134,7 @@ export default function ConversationPage() {
  * One conversation surface — message history + composer + right panel.
  *
  * Rendered in TWO contexts: as the single-pane route (no `ChatPaneProvider` →
- * `pane` is null → drives the primary `Stores.Chat`), and as a pane inside
+ * `pane` is null → drives the primary `ChatStore`), and as a pane inside
  * `SplitChatView` (wrapped in a provider → `pane` set → drives that pane's own
  * store). All store access goes through `chat`, so single-pane stays
  * byte-identical to before the split existed.
@@ -165,7 +169,7 @@ export function ConversationPane() {
   // Uniform store handle: the pane's own store in split, else the focused-pane
   // bridge (= primary) on the single-pane route. Both proxies expose the same
   // reactive-read / `.$` snapshot / action surface.
-  const chat = (pane?.store ?? Stores.Chat) as typeof Stores.Chat
+  const chat = (pane?.store ?? ChatStore) as typeof ChatStore
   // Split per-pane header must match the single-pane app header `HeaderBarContainer`
   // (ITEM-71 / FB-18): same 50px height, and the LEFTMOST pane reserves the same
   // left inset (shared `useHeaderLeftInset` — web 48/12, macOS-desktop 118) so its
@@ -181,7 +185,7 @@ export function ConversationPane() {
   // reactive-proxy hook it triggers isn't conditional (Rules of Hooks; the file's
   // convention is `.$` snapshots for hook-free reads, reactive reads only at top level).
   const { panes: splitViewPanes, focusedPaneId: splitFocusedPaneId } =
-    Stores.SplitView
+    SplitViewStore
   const isLeftmostPane = !!pane && splitViewPanes[0]?.paneId === pane.paneId
   // On a small screen the FOCUSED pane is the only visible one; it should read like
   // a normal single-pane conversation — native document-scroll + the SAME auto-hiding
@@ -233,10 +237,10 @@ export function ConversationPane() {
     if (kind === 'pane') {
       if (!pane) return
       const from = readPaneDragId(e.dataTransfer)
-      const idx = from ? reorderIndices(Stores.SplitView.$.panes, from, pane.paneId) : null
+      const idx = from ? reorderIndices(SplitViewStore.$.panes, from, pane.paneId) : null
       if (idx) {
         e.preventDefault()
-        Stores.SplitView.reorderPanes(idx.from, idx.to)
+        SplitViewStore.reorderPanes(idx.from, idx.to)
       }
       return
     }
@@ -248,14 +252,14 @@ export function ConversationPane() {
     const zone = zoneForX(e.clientX, rect.left, rect.width)
     if (pane) {
       // Existing split: insert before/after THIS pane, or replace it.
-      const atCap = Stores.SplitView.$.panes.length >= SPLIT_LIMITS.MAX_PANES
+      const atCap = SplitViewStore.$.panes.length >= SPLIT_LIMITS.MAX_PANES
       const plan = planSplitPaneDrop(zone, conversationId, droppedId, atCap)
       if (plan.kind === 'replace') {
-        Stores.SplitView.setPaneConversation(pane.paneId, droppedId)
+        SplitViewStore.setPaneConversation(pane.paneId, droppedId)
       } else if (plan.kind === 'insertBefore') {
-        Stores.SplitView.openPane({ conversationId: droppedId, beforePaneId: pane.paneId })
+        SplitViewStore.openPane({ conversationId: droppedId, beforePaneId: pane.paneId })
       } else if (plan.kind === 'insertAfter') {
-        Stores.SplitView.openPane({ conversationId: droppedId, afterPaneId: pane.paneId })
+        SplitViewStore.openPane({ conversationId: droppedId, afterPaneId: pane.paneId })
       }
       return
     }
@@ -271,9 +275,9 @@ export function ConversationPane() {
       const droppedOnLeft = plan.order[0] === droppedId
       void openConversationInWorkspace(droppedId, { intent: 'newPane' }).then(() => {
         if (!droppedOnLeft) return
-        const panes = Stores.SplitView.$.panes
+        const panes = SplitViewStore.$.panes
         const idx = panes.findIndex(p => p.conversationId === droppedId)
-        if (idx > 0) Stores.SplitView.reorderPanes(idx, 0)
+        if (idx > 0) SplitViewStore.reorderPanes(idx, 0)
       })
     }
   }
@@ -294,28 +298,37 @@ export function ConversationPane() {
   // so reading it only in one ternary branch would ADD/DROP a hook when
   // `useMobileShell` flips on a focus-switch → a Rules-of-Hooks crash. Apply the
   // condition to the VALUE, never to the read.
-  const appNativeScroll = Stores.AppLayout.nativeScroll
+  const appNativeScroll = AppLayout.nativeScroll
   const nativeScroll = !pane || useMobileShell ? appNativeScroll : false
   // Live MCP tool-call statuses — subscribed reactively (proxy destructure) so a
   // newly-`pending_approval` tool triggers the scroll-to-approval effect below.
   // NOTE (split-awareness, Stage-2 candidate): `toolCalls` reads the McpComposer
   // store as a process-global map (see the effect below) — not yet pane-scoped.
-  const { toolCalls } = Stores.McpComposer
+  const { toolCalls } = McpComposerStore
 
   // Split affordance: open the current conversation beside a fresh pane. On the
   // single-pane route this seeds pane 0 with the current conversation first.
   const onSplit = () => {
-    if (Stores.SplitView.$.panes.length === 0 && conversationId) {
-      Stores.SplitView.openPane({ conversationId })
+    if (SplitViewStore.$.panes.length === 0 && conversationId) {
+      SplitViewStore.openPane({ conversationId })
     }
-    Stores.SplitView.openPane({ conversationId: null })
+    SplitViewStore.openPane({ conversationId: null })
   }
+
+  // The conversation id we've dispatched a load for (single-pane route). Used by
+  // the loading gate below so the not-found / error branch never renders in the
+  // PRE-LOAD frame: `loadConversation` runs in the effect below (AFTER the first
+  // render), so on a fresh mount the first render still has the store's initial
+  // `loading=false, conversation=null` — which would otherwise flash the
+  // "Conversation not found" alert for one frame before the load even begins.
+  const loadDispatchedForRef = useRef<string | null>(null)
 
   // Load conversation and messages on mount or when ID changes — single-pane
   // route only; in a pane `ChatPaneProvider` owns loading into the pane's own
   // store, so ConversationPane must not re-load via the (focused-pane) bridge.
   useEffect(() => {
     if (!pane && conversationId) {
+      loadDispatchedForRef.current = conversationId
       chat.loadConversation(conversationId)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -502,7 +515,7 @@ export function ConversationPane() {
         // Each pane registers this window listener; only the FOCUSED pane opens
         // its find bar (audit #2) — otherwise Cmd-F opened it in EVERY loaded pane.
         // Single-pane (`!pane`) is always "focused".
-        if (pane && pane.paneId !== Stores.SplitView.$.focusedPaneId) return
+        if (pane && pane.paneId !== SplitViewStore.$.focusedPaneId) return
         e.preventDefault()
         setFindOpen(true)
       }
@@ -512,6 +525,13 @@ export function ConversationPane() {
   }, [])
 
   const findContextValue = useMemo(() => ({ activeMatchId }), [activeMatchId])
+
+  // Ids a pending approval can correlate to for THIS pane: message ids + the
+  // tool_use content ids in those messages. An approval that LEADS a turn is
+  // registered before its assistant message exists (so its `message_id` is
+  // unset), but its tool_use content id is always present once rendered — this
+  // scope makes the per-pane scroll-to-approval work in that case.
+  const approvalScope = useMemo(() => paneApprovalScope(messages), [messages])
 
   const jumpToLatest = async () => {
     // If the window is anchored mid-conversation (after an around= jump), the
@@ -606,7 +626,7 @@ export function ConversationPane() {
     // Per-pane (ITEM-48): seed only THIS pane's own already-pending approvals, so a
     // leftover pending approval belonging to another pane's conversation is never
     // treated as this pane's (it's filtered out — its message isn't in `messages`).
-    for (const id of pendingApprovalIdsInPane(toolCalls, messages))
+    for (const id of pendingApprovalIdsInPane(toolCalls, approvalScope))
       scrolledApprovalsRef.current.add(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversation, conversationId, messages])
@@ -630,7 +650,7 @@ export function ConversationPane() {
     // Per-pane (ITEM-48): only approvals whose carrying message is in THIS pane's
     // messages count — a pending approval in another pane's conversation must not
     // scroll this pane's list.
-    for (const id of pendingApprovalIdsInPane(toolCalls, messages)) {
+    for (const id of pendingApprovalIdsInPane(toolCalls, approvalScope)) {
       if (!seen.has(id)) {
         seen.add(id)
         hasNewApproval = true
@@ -775,15 +795,18 @@ export function ConversationPane() {
   // store's conversation becoming set.
   useEffect(() => {
     if (pane && !pane.conversationId && conversation?.id) {
-      Stores.SplitView.setPaneConversation(pane.paneId, conversation.id)
+      SplitViewStore.setPaneConversation(pane.paneId, conversation.id)
     }
   }, [pane, conversation?.id])
 
-  // Loading state
-  if (loading && !conversation) {
-    return (
-      <Loading />
-    )
+  // Loading state — also covers the PRE-LOAD frame on the single-pane route: the
+  // load effect above runs after the first render, so without `loadPending` the
+  // not-found branch below would flash for one frame on a fresh mount (e.g. a
+  // hard reload / deep link straight to /chat/:id) before the load begins.
+  const loadPending =
+    !pane && !!conversationId && loadDispatchedForRef.current !== conversationId
+  if ((loading || loadPending) && !conversation) {
+    return <Loading />
   }
 
   // Empty PANE (ITEM-27): a split pane with no conversation targeted yet is the
@@ -862,7 +885,7 @@ export function ConversationPane() {
               icon={<Columns2 />}
               aria-label="Open panes"
               aria-haspopup="dialog"
-              onClick={() => Stores.SplitView.setPaneManagerOpen(true)}
+              onClick={() => SplitViewStore.setPaneManagerOpen(true)}
             />
           </Tooltip>
         ) : (
@@ -1011,7 +1034,7 @@ export function ConversationPane() {
                 // Snapshot read (`.$`) — NOT the reactive proxy — so this is a plain
                 // value read, not a hook call inside a loop/conditional (Rules of Hooks).
                 const atCap =
-                  !!pane && Stores.SplitView.$.panes.length >= SPLIT_LIMITS.MAX_PANES
+                  !!pane && SplitViewStore.$.panes.length >= SPLIT_LIMITS.MAX_PANES
                 const label =
                   z === 'center'
                     ? 'Replace'
@@ -1213,7 +1236,7 @@ export function ConversationPane() {
  * any of them.
  */
 function ConversationHeaderTrailingSlot() {
-  const { slots } = Stores.ModuleSystem
+  const { slots } = ModuleSystem
   const rawItems = slots.get('chatConversationHeaderTrailing')
   // Memoize the sorted copy — the underlying slot array is stable
   // (mutates only on module-registration changes, which don't happen

@@ -3,6 +3,7 @@ import {
   Badge,
   Button,
   Card,
+  CardActions,
   Checkbox,
   Controller,
   Form,
@@ -14,7 +15,6 @@ import {
 } from '@ziee/kit'
 import { RadioGroup, RadioGroupItem } from '@ziee/kit/shadcn/radio-group'
 import { SquarePen } from 'lucide-react'
-import { Stores } from '@ziee/framework/stores'
 import {
   allowsOther,
   buildFormSchema,
@@ -30,6 +30,7 @@ import {
   type RichOption,
 } from './elicitationOptions'
 import { renderInputField } from './elicitationFields'
+import { McpComposer } from '@/modules/mcp/stores/mcpComposer'
 
 interface AskUserWizardContentProps {
   elicitationId: string
@@ -355,7 +356,7 @@ export function AskUserWizardContent({
     if (isSubmitting) return
     setIsSubmitting(true)
     try {
-      await Stores.McpComposer.resolveElicitation(elicitationId, 'decline')
+      await McpComposer.resolveElicitation(elicitationId, 'decline')
     } catch (e) {
       // The store rolls status back on POST failure so the user can retry; swallow
       // so it doesn't bubble to the chat error boundary.
@@ -388,7 +389,7 @@ export function AskUserWizardContent({
         return // `finally` re-enables the controls so the user can correct + retry
       }
       const values = finalizeValues(properties, form.getValues(), otherText)
-      await Stores.McpComposer.resolveElicitation(elicitationId, 'accept', values)
+      await McpComposer.resolveElicitation(elicitationId, 'accept', values)
     } catch (e) {
       console.warn('ask_user resolve failed', e)
     } finally {
@@ -402,56 +403,74 @@ export function AskUserWizardContent({
       className="mb-2"
       data-testid="mcp-elicitation-pending-card"
       footer={
-        <div className="flex w-full items-center justify-between gap-2">
+        // A SPLIT row: Decline pinned to the inline-start side, navigation to the
+        // inline-end side. Expressed as `me-auto` on Decline inside the ordinary
+        // `justify-end` row rather than as `justify-between` on the row, for two
+        // reasons that both bite exactly when the row wraps — the case this
+        // component exists to survive:
+        //   1. `justify-content: space-between` puts a line holding ONE item at
+        //      main-START, so once the row wraps the navigation group (carrying
+        //      the primary action) would jump to the left edge while the sibling
+        //      approval cards stay right-aligned.
+        //   2. Grouping Back/Next in a nested `<div>` puts them out of reach of
+        //      `CardActions`' child rules, which apply to DIRECT children only —
+        //      so a single over-wide nav label would still protrude out of the
+        //      unreachable inline-start edge, reproducing the original defect
+        //      inside the fix. Flat children are protected children.
+        <CardActions>
           <Button
             type="button"
             variant="ghost"
             onClick={handleDecline}
             loading={isSubmitting}
             size="default"
+            className="me-auto"
             data-testid="elicitation-decline"
           >
             Decline
           </Button>
-          <div className="flex gap-2">
-            {step > 0 && (
-              <Button
-                type="button"
-                variant="outline"
-                onClick={handleBack}
-                disabled={isSubmitting}
-                size="default"
-                data-testid="elicitation-back"
-              >
-                Back
-              </Button>
-            )}
-            {isLast ? (
-              <Button
-                type="button"
-                loading={isSubmitting}
-                size="default"
-                onClick={handleSubmit}
-                data-testid="elicitation-submit"
-              >
-                Submit
-              </Button>
-            ) : (
-              <Button
-                type="button"
-                size="default"
-                onClick={handleNext}
-                disabled={isSubmitting}
-                data-testid="elicitation-next"
-              >
-                Next
-              </Button>
-            )}
-          </div>
-        </div>
+          {step > 0 && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleBack}
+              disabled={isSubmitting}
+              size="default"
+              data-testid="elicitation-back"
+            >
+              Back
+            </Button>
+          )}
+          {isLast ? (
+            <Button
+              type="button"
+              loading={isSubmitting}
+              size="default"
+              onClick={handleSubmit}
+              data-testid="elicitation-submit"
+            >
+              Submit
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              size="default"
+              onClick={handleNext}
+              disabled={isSubmitting}
+              data-testid="elicitation-next"
+            >
+              Next
+            </Button>
+          )}
+        </CardActions>
       }
     >
-      <div className="flex items-center gap-2 min-w-0" data-testid="elicitation-wizard">
+      {/* `flex-wrap`: the trailing labels are `whitespace-nowrap`, so on one
+          line they starve the `truncate` server name to a rendered width of 0 in a
+          narrow card (the measured failure on the sibling approval card — a
+          `truncate` element is `overflow:hidden` and so has an automatic minimum
+          size of zero, so it always loses). Wrap, don't clip. */}
+      <div className="flex flex-wrap items-center gap-2 min-w-0" data-testid="elicitation-wizard">
         <SquarePen className="size-4 shrink-0 text-primary" />
         <Text strong className="truncate">{server}</Text>
         <Text type="secondary" className="text-xs whitespace-nowrap">

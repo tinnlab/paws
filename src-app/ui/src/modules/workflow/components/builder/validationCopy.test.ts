@@ -1,0 +1,751 @@
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { test } from 'node:test'
+
+import type { ValidationError } from '@/api-client/types'
+import type { BuilderStep } from './stepForms.ts'
+import {
+  HUMANISED_CODES,
+  WORKFLOW_LEVEL,
+  attributeFindings,
+  describeRequestError,
+  findingStepTitle,
+  humaniseFinding,
+  humaniseRequestError,
+  indexFindingsByStep,
+  parseInstallError,
+  resolveFindingStep,
+} from './validationCopy.ts'
+
+// TEST-8/9/10 — the presentation boundary that keeps wire vocabulary away from
+// the person building a workflow (INV-1) and attributes each finding to its
+// step (INV-2). Pure; the backend's `humanisation_contract` test is the other
+// half (it fails if a code reaches here with no copy).
+
+const steps = [
+  {
+    id: 'agent_1',
+    kind: 'agent',
+    description: 'Research the topic',
+    depends_on: [],
+    prompt: '',
+  },
+  {
+    id: 'summarize',
+    kind: 'llm',
+    description: '',
+    depends_on: ['agent_1'],
+    prompt: '',
+  },
+  {
+    id: 'tool_1',
+    kind: 'tool',
+    description: 'Look it up',
+    depends_on: [],
+    server: '',
+    tool: '',
+  },
+] as unknown as BuilderStep[]
+
+function finding(over: Partial<ValidationError>): ValidationError {
+  return {
+    code: 'WORKFLOW_PROMPT_MISSING',
+    layer: 'semantic',
+    message: 'step has neither prompt: nor prompt_file:',
+    location: 'agent_1',
+    ...over,
+  } as ValidationError
+}
+
+test('one backend code reads differently per step kind', () => {
+  const f = finding({})
+  const onAgent = humaniseFinding(f, steps[0])
+  const onLlm = humaniseFinding(f, steps[1])
+  assert.notEqual(
+    onAgent,
+    onLlm,
+    'WORKFLOW_PROMPT_MISSING must say "task" on an agent step and "prompt" on an llm step — ' +
+      'this per-kind split is WHY the humanisation lives in the UI, not the validator',
+  )
+  assert.match(onAgent, /task/i)
+  assert.match(onLlm, /prompt/i)
+})
+
+test('no mapped copy leaks wire vocabulary to the author', () => {
+  // The literal defect: `prompt:` / `prompt_file:` are YAML keys, not English.
+  const offenders: string[] = []
+  for (const code of HUMANISED_CODES) {
+    const text = humaniseFinding(
+      finding({ code, message: 'RAW BACKEND MESSAGE' }),
+      steps[0],
+    )
+    assert.notEqual(
+      text,
+      'RAW BACKEND MESSAGE',
+      `${code} fell through to the raw backend message`,
+    )
+    // A trailing-colon token (`prompt:`, `run:`, `for_each:`) is the wire
+    // vocabulary tell. `{{ … }}` and prose colons are fine.
+    if (/\b[a-z_]{3,}:(?![/\s]*\/)/.test(text.replace(/https?:/g, ''))) {
+      offenders.push(`${code}: ${text}`)
+    }
+    if (/prompt_file|\$defs|serde|snake_case/i.test(text)) {
+      offenders.push(`${code}: ${text}`)
+    }
+  }
+  assert.deepEqual(offenders, [], 'these findings still speak in wire vocabulary')
+})
+
+test('an unknown code falls back to the backend message, never to nothing', () => {
+  const text = humaniseFinding(
+    finding({ code: 'WORKFLOW_SOMETHING_NEW', message: 'a brand new problem' }),
+    steps[0],
+  )
+  assert.equal(text, 'a brand new problem')
+})
+
+test('copy that distinguishes two codes must not be byte-identical', () => {
+  // The two prompt-file codes exist to separate "the path was WRITTEN to leave
+  // the workflow" (`..` / leading `/`) from "the path RESOLVED outside it".
+  // Identical copy erases the only distinction they carry.
+  const pairs: [string, string][] = [
+    ['WORKFLOW_PROMPT_FILE_UNSAFE', 'WORKFLOW_PROMPT_FILE_ESCAPE'],
+  ]
+  for (const [a, b] of pairs) {
+    assert.notEqual(
+      humaniseFinding(finding({ code: a })),
+      humaniseFinding(finding({ code: b })),
+      `${a} and ${b} render identical copy — the codes then carry no information`,
+    )
+  }
+})
+
+test('a two-option remedy names the option THIS surface can carry out', () => {
+  // WORKFLOW_PROMPT_BOTH offers a choice between dropping the typed prompt and
+  // dropping the prompt file. The builder renders NO prompt-file control (there
+  // is not one render site for it under `components/builder/`), so "keep one of
+  // them" instructs an action the author can only half perform here, and does
+  // not say which half. The copy must name the reachable one — emptying the
+  // prompt/task box, which `validate.rs` reads as "no typed prompt" via its
+  // `prompt.filter(|s| !s.is_empty())` — and place the other where it is done.
+  const cases = [
+    ['agent', /task/i],
+    ['llm', /prompt/i],
+  ] as const
+  for (const [kind, box] of cases) {
+    const step = { ...steps[0], kind } as unknown as BuilderStep
+    const text = humaniseFinding(finding({ code: 'WORKFLOW_PROMPT_BOTH' }), step)
+    assert.match(
+      text,
+      /\bclear\b/i,
+      `${kind}: WORKFLOW_PROMPT_BOTH must name the fix the author can perform ` +
+        `on this screen (clearing the box), not only "keep one of them" — got ` +
+        `${JSON.stringify(text)}`,
+    )
+    assert.match(text, box, `${kind}: the copy must name the box to clear`)
+  }
+})
+
+test('a limit sentence states the limit the backend actually enforces', () => {
+  // `validate.rs` rejects only `desc.chars().count() > MAX_STEP_DESCRIPTION_CHARS`,
+  // so EXACTLY 200 characters is valid — "under 200" told the author to cut a
+  // legal label.
+  const text = humaniseFinding(finding({ code: 'WORKFLOW_STEP_DESCRIPTION_TOO_LONG' }))
+  assert.match(text, /200 characters or fewer/)
+  assert.doesNotMatch(
+    text,
+    /under 200/,
+    'off-by-one: 200 characters is accepted by the validator',
+  )
+})
+
+test('template-syntax copy never pastes the parser diagnostic', () => {
+  const text = humaniseFinding(
+    finding({
+      code: 'WORKFLOW_TEMPLATE_SYNTAX',
+      message: "invalid template syntax: unknown filter 'yaml' (supported: json, raw)",
+    }),
+  )
+  assert.doesNotMatch(
+    text,
+    /invalid template syntax|unknown filter|supported/,
+    "TemplateError's Display impl is wire vocabulary — it must not be interpolated into author copy",
+  )
+  assert.match(text, /reference/i)
+})
+
+test('step-id copy does not send the author to a control the builder lacks', () => {
+  // Step ids are generated by `createStep`; no builder surface edits them. These
+  // findings can only arrive via an imported workflow file, so the copy must
+  // point THERE rather than at an imaginary field.
+  for (const code of ['WORKFLOW_BAD_STEP_ID', 'WORKFLOW_DUPLICATE_STEP_ID']) {
+    const text = humaniseFinding(finding({ code }))
+    assert.match(
+      text,
+      /workflow file/i,
+      `${code} must say where the internal name is actually editable`,
+    )
+  }
+})
+
+test('resolveFindingStep handles every location shape', () => {
+  assert.equal(resolveFindingStep(finding({ location: 'agent_1' }), steps)?.id, 'agent_1')
+  assert.equal(
+    resolveFindingStep(finding({ location: 'agent_1.prompt' }), steps)?.id,
+    'agent_1',
+    'a field path resolves to its step',
+  )
+  assert.equal(
+    resolveFindingStep(finding({ location: 'outputs[summary].from' }), steps),
+    null,
+    'an output path is workflow-level, not a step',
+  )
+  assert.equal(
+    resolveFindingStep(finding({ location: undefined }), steps),
+    null,
+    'a finding with no location is workflow-level',
+  )
+  assert.equal(
+    resolveFindingStep(finding({ location: 'ghost_step' }), steps),
+    null,
+    'a location naming a step that no longer exists is workflow-level, not a crash',
+  )
+})
+
+test('a malformed step id containing a dot resolves to its own step', () => {
+  // WORKFLOW_BAD_STEP_ID's `location` IS the malformed id, and the ids it
+  // rejects may contain a '.' (an imported `id: report.final`). Splitting the
+  // location on '.' attributed the ONE finding whose job is to point at that id
+  // to a different step — or to "Whole workflow".
+  const dotted = [
+    { id: 'report', kind: 'llm', description: 'Draft', depends_on: [], prompt: 'x' },
+    { id: 'report.final', kind: 'llm', description: '', depends_on: [], prompt: 'x' },
+  ] as unknown as BuilderStep[]
+
+  assert.equal(
+    resolveFindingStep(
+      finding({ code: 'WORKFLOW_BAD_STEP_ID', location: 'report.final' }),
+      dotted,
+    )?.id,
+    'report.final',
+    'the finding must name the step whose id is malformed, not its dot-prefix',
+  )
+
+  const [a] = attributeFindings(
+    [finding({ code: 'WORKFLOW_BAD_STEP_ID', location: 'report.final' })],
+    dotted,
+  )
+  assert.equal(a.stepIndex, 2)
+  assert.equal(findingStepTitle(a), 'Step 2 · report.final')
+
+  // A malformed id with no matching step is still workflow-level, not a
+  // mis-attribution onto the `report` prefix.
+  assert.equal(
+    resolveFindingStep(
+      finding({ code: 'WORKFLOW_BAD_STEP_ID', location: 'report.gone' }),
+      dotted,
+    ),
+    null,
+  )
+
+  // And a genuine FIELD path still resolves — to the LONGEST matching id.
+  assert.equal(
+    resolveFindingStep(finding({ location: 'report.final.prompt' }), dotted)?.id,
+    'report.final',
+  )
+})
+
+test('attributeFindings numbers the step and labels it for the author', () => {
+  const [a] = attributeFindings([finding({ location: 'agent_1.prompt' })], steps)
+  assert.equal(a.stepId, 'agent_1')
+  assert.equal(a.stepIndex, 1)
+  assert.equal(a.stepLabel, 'Research the topic')
+  assert.equal(findingStepTitle(a), 'Step 1 · Research the topic')
+
+  // A step with no author label falls back to its id, never to blank.
+  const [b] = attributeFindings([finding({ location: 'summarize' })], steps)
+  assert.equal(findingStepTitle(b), 'Step 2 · summarize')
+
+  const [c] = attributeFindings([finding({ location: undefined })], steps)
+  assert.equal(findingStepTitle(c), 'Whole workflow')
+})
+
+test('indexFindingsByStep counts per step without double-counting', () => {
+  const attributed = [
+    ...attributeFindings(
+      [
+        finding({ location: 'agent_1' }),
+        finding({ code: 'WORKFLOW_UNKNOWN_STEP_REF', location: 'agent_1.prompt' }),
+        finding({ code: 'WORKFLOW_TOOL_NO_TOOL', location: 'tool_1' }),
+        finding({ code: 'WORKFLOW_NO_STEPS', location: undefined }),
+      ],
+      steps,
+    ),
+    ...attributeFindings(
+      [
+        {
+          code: 'WORKFLOW_REF_FIELD_UNRESOLVED',
+          layer: 'semantic',
+          message: 'unresolved',
+          location: 'tool_1',
+          severity: 'warning',
+        } as ValidationError,
+      ],
+      steps,
+    ),
+  ]
+  const idx = indexFindingsByStep(attributed)
+  assert.deepEqual(idx.get('agent_1'), { errors: 2, warnings: 0 })
+  assert.deepEqual(idx.get('tool_1'), { errors: 1, warnings: 1 })
+  assert.deepEqual(idx.get(WORKFLOW_LEVEL), { errors: 1, warnings: 0 })
+  assert.equal(idx.get('summarize'), undefined, 'a clean step gets no entry')
+  // Total conservation: every finding lands in exactly one bucket.
+  const total = [...idx.values()].reduce((n, c) => n + c.errors + c.warnings, 0)
+  assert.equal(total, attributed.length)
+})
+
+// ---------------------------------------------------------------------------
+// The SAVE path — the second surface a finding reaches the author through.
+// `validate_for_install` collapses the first blocking finding into an AppError
+// message, and the page toasts it. INV-1 has to hold there too.
+// ---------------------------------------------------------------------------
+
+test('parseInstallError reads the shape validate_for_install formats', () => {
+  const withLoc = parseInstallError(
+    '[semantic/WORKFLOW_PROMPT_MISSING] agent_1: step has neither prompt: nor prompt_file:',
+  )
+  assert.deepEqual(withLoc, {
+    layer: 'semantic',
+    code: 'WORKFLOW_PROMPT_MISSING',
+    location: 'agent_1',
+    message: 'step has neither prompt: nor prompt_file:',
+  })
+
+  // A finding the validator emitted without a location.
+  assert.deepEqual(parseInstallError('[schema/WORKFLOW_NO_STEPS] add a step'), {
+    layer: 'schema',
+    code: 'WORKFLOW_NO_STEPS',
+    location: null,
+    message: 'add a step',
+  })
+
+  // A dotted field path survives as the location.
+  assert.equal(
+    parseInstallError('[semantic/WORKFLOW_UNKNOWN_STEP_REF] agent_1.prompt: nope')
+      ?.location,
+    'agent_1.prompt',
+  )
+
+  // Anything that did NOT come from the validator is not claimed.
+  assert.equal(parseInstallError('Failed to fetch'), null)
+  assert.equal(
+    parseInstallError("A workflow named 'x' already exists — choose a different name"),
+    null,
+  )
+  assert.equal(parseInstallError('[semantic/lowercase_code] x: y'), null)
+})
+
+test('the save path never shows the author the raw validator string', () => {
+  // THE LITERAL DEFECT: this exact string was rendered verbatim in the save
+  // toast whenever the panel's validation was absent or stale.
+  const raw =
+    '[semantic/WORKFLOW_PROMPT_MISSING] agent_1: step has neither prompt: nor prompt_file:'
+  const shown = humaniseRequestError(raw, steps)
+
+  assert.notEqual(shown, raw, 'the raw wire string reached the author')
+  assert.doesNotMatch(shown, /\[semantic\//)
+  assert.doesNotMatch(shown, /prompt_file/)
+  assert.doesNotMatch(shown, /step has neither/)
+  // It says WHICH step, and what to do — the same sentence the panel shows.
+  assert.equal(shown, 'Step 1 · Research the topic: This step needs a task description — say what the assistant should do.')
+})
+
+test('the save path humanises per step kind, like the panel', () => {
+  const onLlm = humaniseRequestError(
+    '[semantic/WORKFLOW_PROMPT_MISSING] summarize: step has neither prompt: nor prompt_file:',
+    steps,
+  )
+  assert.match(onLlm, /^Step 2 · summarize: /)
+  assert.match(onLlm, /prompt/i)
+  assert.doesNotMatch(onLlm, /task description/)
+})
+
+test('a workflow-level save finding is humanised without a step prefix', () => {
+  const shown = humaniseRequestError(
+    '[schema/WORKFLOW_NO_STEPS] workflow.yaml: steps[] must contain at least one step',
+    steps,
+  )
+  assert.equal(shown, 'This workflow has no steps yet — add at least one.')
+  assert.doesNotMatch(shown, /Whole workflow/)
+  assert.doesNotMatch(shown, /steps\[\]/)
+})
+
+test('a save error that is not a validator finding is shown unchanged, never blank', () => {
+  for (const raw of [
+    "A workflow named 'triage' already exists — choose a different name",
+    'Give the workflow a name before saving',
+    // A validator code with no human copy yet: fall back to the backend text
+    // rather than to nothing (the Rust drift guard is what prevents this).
+    '[semantic/WORKFLOW_SOMETHING_NEW] agent_1: a brand new problem',
+  ]) {
+    assert.equal(humaniseRequestError(raw, steps), raw)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// A save/validate failure that never reached the validator. The api-client
+// formats those as `HTTP error! status: <n> - <response body>` — an unbounded
+// machine string (routinely a whole HTML error page) that used to be shown
+// verbatim in the Alert TITLE and the save toast.
+// ---------------------------------------------------------------------------
+
+test('a transport failure never shows the author the api-client wire string', () => {
+  // THE LITERAL DEFECT: a gateway answers with an HTML page, and `core.ts`
+  // wraps the whole body into the Error message.
+  const raw =
+    'HTTP error! status: 502 - <!DOCTYPE html><html><head><title>502 Bad Gateway</title>' +
+    '</head><body bgcolor="white"><center><h1>502 Bad Gateway</h1></center>' +
+    '<hr><center>nginx/1.25.3</center></body></html>'
+  const shown = humaniseRequestError(raw, steps)
+
+  assert.doesNotMatch(shown, /HTTP error!/, 'the api-client wire string reached the author')
+  assert.doesNotMatch(shown, /[<>]/, 'markup reached the author')
+  assert.doesNotMatch(shown, /nginx|DOCTYPE/i)
+  assert.ok(
+    shown.length > 0 && shown.length <= 160,
+    `a machine string must be clipped, not unbounded (got ${shown.length} chars)`,
+  )
+  assert.match(shown, /server/i)
+})
+
+test('a status becomes a sentence, from the Error object or from the message', () => {
+  const cases: [number, RegExp][] = [
+    [401, /signed in/i],
+    [403, /permission/i],
+    [404, /no longer exists/i],
+    [409, /changed on the server/i],
+    [429, /busy/i],
+    [500, /internal error/i],
+    [503, /internal error/i],
+  ]
+  for (const [status, expected] of cases) {
+    const fromObject = humaniseRequestError(
+      Object.assign(new Error(`HTTP error! status: ${status} - <html>x</html>`), {
+        status,
+      }),
+      steps,
+    )
+    assert.match(fromObject, expected, `status ${status} from the Error object`)
+    // The store persists only the STRING, so the panel must reach the same
+    // sentence with the status read back out of the message.
+    assert.equal(
+      humaniseRequestError(`HTTP error! status: ${status} - <html>x</html>`, steps),
+      fromObject,
+      `status ${status} must read the same from the stored string`,
+    )
+  }
+})
+
+test('a validator finding still wins over the status sentence', () => {
+  // `validate_for_install` rejects with 400; flattening that into "the server
+  // rejected this change" would throw away the ONE actionable message.
+  const shown = humaniseRequestError(
+    Object.assign(
+      new Error(
+        '[semantic/WORKFLOW_PROMPT_MISSING] agent_1: step has neither prompt: nor prompt_file:',
+      ),
+      { status: 400 },
+    ),
+    steps,
+  )
+  assert.equal(
+    shown,
+    'Step 1 · Research the topic: This step needs a task description — say what the assistant should do.',
+  )
+})
+
+test('an unreadable failure falls back to the caller sentence, never to blank', () => {
+  for (const error of [
+    new Error('   '),
+    new Error('<html><body>   </body></html>'),
+    {},
+    null,
+    undefined,
+  ]) {
+    const shown = humaniseRequestError(error, steps, 'The workflow could not be saved — try again.')
+    assert.equal(shown, 'The workflow could not be saved — try again.')
+  }
+})
+
+test('a long non-HTTP machine string is clipped rather than pasted whole', () => {
+  const shown = humaniseRequestError(new Error('x'.repeat(500)), steps)
+  assert.ok(shown.length <= 160, `expected a clipped sentence, got ${shown.length} chars`)
+  assert.match(shown, /…$/)
+})
+
+// ---------------------------------------------------------------------------
+// EXACTLY ONCE. Humanising is NOT idempotent, so the surface must apply it at a
+// single boundary. (This replaced a test that asserted the opposite — it only
+// held because all three of its examples happened to be under the 160-char
+// machine-text clip, so it certified a truncation bug instead of catching it.)
+// ---------------------------------------------------------------------------
+
+test('humanising is NOT idempotent — a second pass truncates correct copy', () => {
+  // The real sentence for WORKFLOW_BAD_STEP_ID, step-prefixed as the store
+  // stores it. It is longer than the machine-text clip, and a second pass no
+  // longer matches `[layer/CODE] loc: msg`, so it falls to the transport path.
+  const already = humaniseRequestError(
+    '[schema/WORKFLOW_BAD_STEP_ID] agent_1: id must match ^[a-z][a-z0-9_]*$',
+    steps,
+  )
+  assert.ok(
+    already.length > 160,
+    `this test needs a >160-char sentence to be meaningful (got ${already.length})`,
+  )
+  const twice = humaniseRequestError(already, steps)
+  assert.notEqual(
+    twice,
+    already,
+    'if a second pass became lossless, the exactly-once rule below can be relaxed',
+  )
+  assert.match(twice, /…$/, 'the second pass clipped the sentence')
+})
+
+test('short sentences survive a second pass — which is what made the bug silent', () => {
+  // Documented so nobody re-derives "it looked fine in my case".
+  for (const already of [
+    'The server reported an internal error — try again in a moment.',
+    'The workflow could not be saved — try again.',
+  ]) {
+    assert.equal(humaniseRequestError(already, steps), already)
+  }
+})
+
+test('the store is the ONLY humanisation boundary in the builder', () => {
+  // A SOURCE guard, in the spirit of the backend's `humanisation_contract`:
+  // the defect it prevents (a renderer humanising the store's already-humanised
+  // string, and clipping it) is invisible to a unit test of either module alone,
+  // and shows up only for copy longer than the clip.
+  const dir = new URL('.', import.meta.url).pathname
+  // Comments stripped: this rule is about what the code DOES, and both files
+  // carry a comment explaining why they no longer do it.
+  const read = (rel: string) =>
+    readFileSync(join(dir, rel), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, ' ')
+      .replace(/(^|[^:])\/\/[^\n]*/g, '$1 ')
+
+  for (const rel of ['BuilderValidationPanel.tsx', 'WorkflowBuilderPage.tsx']) {
+    const src = read(rel)
+    assert.ok(
+      !/\bhumanise|\bdescribeRequestError\b/i.test(src),
+      `${rel} humanises a failure. The store already did (it writes the sentence ` +
+        `into 'error' and re-throws it), and a second pass falls through to the ` +
+        `machine-text path, which CLIPS at 160 chars — silently truncating copy ` +
+        `that was already correct. Render what the store stored.`,
+    )
+  }
+
+  // …and the boundary must not vanish either: the store has to be the one
+  // applying it, or nothing does and the raw wire string reaches the author.
+  const store = read('../../stores/WorkflowBuilder.store.ts')
+  assert.ok(
+    /describeRequestError\(/.test(store),
+    'WorkflowBuilder.store.ts no longer humanises — the wire string ' +
+      '`[semantic/CODE] step_id: …` would reach the author verbatim (INV-1)',
+  )
+
+  // …and EVERY failure surface in the store has to go through it, not just the
+  // save. FIX round 4 / finding 5: the LOAD boundary still assigned
+  // `error.message` straight into `loadError`, so a 502's whole HTML body was
+  // rendered into the page's ErrorState details. This is the CLASS assertion —
+  // a raw-message passthrough anywhere in the store fails it, including in a
+  // failure surface that does not exist yet.
+  assert.ok(
+    !/\berror\.message\b/.test(store),
+    'a failure surface in WorkflowBuilder.store.ts passes `error.message` ' +
+      'through raw. The api-client formats a transport failure as ' +
+      '`HTTP error! status: 502 - <the entire response body>` — routinely a ' +
+      'whole HTML page. Route it through describeRequestError/humaniseRequestError.',
+  )
+})
+
+test('describeRequestError reports WHICH finding it restated', () => {
+  // The store keeps this so a later successful check can retire a save error
+  // whose condition the author has since fixed.
+  const fromFinding = describeRequestError(
+    '[semantic/WORKFLOW_PROMPT_MISSING] agent_1: step has neither prompt: nor prompt_file:',
+    steps,
+  )
+  assert.deepEqual(fromFinding.finding, {
+    code: 'WORKFLOW_PROMPT_MISSING',
+    location: 'agent_1',
+    // it resolves to a real step, so it is a location we can match on
+    locationCertain: true,
+  })
+
+  // A workflow-level finding carries its location as the validator sent it.
+  assert.deepEqual(
+    describeRequestError('[schema/WORKFLOW_NO_STEPS] steps[] must contain at least one step', steps)
+      .finding,
+    { code: 'WORKFLOW_NO_STEPS', location: null, locationCertain: false },
+  )
+
+  // Anything that is not a validator finding reports none — a successful check
+  // proves nothing about a name collision or a dead gateway.
+  for (const raw of [
+    "A workflow named 'triage' already exists — choose a different name",
+    'HTTP error! status: 502 - <html>gateway</html>',
+    '[semantic/WORKFLOW_SOMETHING_NEW] agent_1: a brand new problem',
+  ]) {
+    assert.equal(describeRequestError(raw, steps).finding, null, raw)
+  }
+})
+
+test('a location GUESSED out of the message is not reported as authoritative', () => {
+  // FIX round 4 / finding 1. `WORKFLOW_TOO_MANY_STEPS` / `WORKFLOW_NO_STEPS`
+  // carry NO location; their message merely OPENS `workflow.yaml: `, which the
+  // `<token>: <rest>` split reads as one. The structured `/validate-def` result
+  // for the same finding has no location, so treating the guess as authoritative
+  // made the two never match — and the store retired the save error on the first
+  // check, with nothing fixed.
+  const guessed = describeRequestError(
+    '[semantic/WORKFLOW_TOO_MANY_STEPS] workflow.yaml: a workflow may declare at most 50 steps',
+    steps,
+  )
+  assert.deepEqual(guessed.finding, {
+    code: 'WORKFLOW_TOO_MANY_STEPS',
+    location: 'workflow.yaml',
+    locationCertain: false,
+  })
+
+  // A location that is REAL but names no step (an output path) is equally
+  // unusable as a match key, and is reported as such rather than guessed at.
+  const outputPath = describeRequestError(
+    '[semantic/WORKFLOW_UNKNOWN_STEP_REF] outputs[summary].from: unknown step',
+    steps,
+  )
+  assert.equal(outputPath.finding?.locationCertain, false)
+
+  // Sanity: a step id that DOES exist stays authoritative, so the location-aware
+  // match (the same code on another step is a different claim) is not lost.
+  const real = describeRequestError(
+    '[semantic/WORKFLOW_PROMPT_MISSING] summarize: step has neither prompt: nor prompt_file:',
+    steps,
+  )
+  assert.equal(real.finding?.locationCertain, true)
+})
+
+// ---------------------------------------------------------------------------
+// THE BOUNDARY THE COPY SPEAKS FOR (fix round 5, finding 1).
+//
+// Round 4 routed the LOAD failure through the same humanisation as the save —
+// but every sentence there was written for a MUTATION ("The server rejected this
+// CHANGE", "permission to make this CHANGE"). Opening a workflow is not a
+// change: those sentences describe an act the author never performed.
+//
+// And `GET /workflows/{id}/definition` parses the stored workflow.yaml
+// (`handlers/mod.rs`), so a file that no longer deserializes answers 400 with
+// `workflow.yaml deserialization failed: <which step/field>` — the ONLY
+// diagnostic there is, which the blanket status sentence threw away.
+// ---------------------------------------------------------------------------
+
+test('the READ boundary never describes the failure as a change the author made', () => {
+  for (const status of [400, 403, 409, 413]) {
+    const shown = humaniseRequestError(
+      Object.assign(new Error(`HTTP error! status: ${status} - <html>x</html>`), {
+        status,
+      }),
+      [],
+      { boundary: 'read' },
+    )
+    assert.doesNotMatch(
+      shown,
+      /\bchange\b/i,
+      `status ${status} told the author their CHANGE failed while they were only opening a workflow`,
+    )
+    assert.ok(shown.trim().length > 0, `status ${status} said nothing at all`)
+  }
+})
+
+test("a load rejected by an unreadable workflow file keeps the server's diagnostic", () => {
+  // The real shape: AppError::bad_request("WORKFLOW_INVALID_YAML", …) → the
+  // api-client copies the JSON body's `error` field into the Error message.
+  const error = Object.assign(
+    new Error(
+      'workflow.yaml deserialization failed: steps[1]: unknown field `promt` at line 7 column 5',
+    ),
+    { status: 400, error_code: 'WORKFLOW_INVALID_YAML' },
+  )
+  const shown = humaniseRequestError(error, [], {
+    boundary: 'read',
+    fallback: 'This workflow could not be opened — try again.',
+  })
+
+  assert.match(
+    shown,
+    /promt/,
+    'the ONLY actionable diagnostic (which step/field is malformed) was discarded',
+  )
+  assert.doesNotMatch(shown, /\bchange\b/i)
+  // …and it is attributed, so the machine text is never mistaken for our copy.
+  assert.match(shown, /server reported/i)
+})
+
+test('a server message is preserved at the MUTATION boundary too, not flattened', () => {
+  const error = Object.assign(new Error('This workflow is not editable here'), {
+    status: 400,
+  })
+  const shown = humaniseRequestError(error, steps)
+  assert.match(shown, /not editable here/)
+})
+
+test('preserving the server message did NOT reintroduce the unbounded blob', () => {
+  // The competing constraint: a body the server never wrote as a sentence (a
+  // gateway HTML page) must still be stripped and clipped, at BOTH boundaries.
+  const blob = `<html><body>${'x'.repeat(4000)}</body></html>`
+  for (const boundary of ['read', 'mutation'] as const) {
+    // (a) wrapped by the api-client — the status answers, the body never shows.
+    const wrapped = humaniseRequestError(
+      Object.assign(new Error(`HTTP error! status: 502 - ${blob}`), { status: 502 }),
+      [],
+      { boundary },
+    )
+    assert.doesNotMatch(wrapped, /HTTP error!/)
+    assert.doesNotMatch(wrapped, /[<>]/)
+    assert.ok(wrapped.length <= 160, `${boundary}: ${wrapped.length} chars`)
+
+    // (b) a 400 whose "message" is really a body: stripped + clipped, and the
+    //     lead sentence is the only thing that may exceed the machine clip.
+    const asDetail = humaniseRequestError(
+      Object.assign(new Error(blob), { status: 400 }),
+      [],
+      { boundary },
+    )
+    assert.doesNotMatch(asDetail, /[<>]/, `${boundary}: markup reached the author`)
+    assert.ok(
+      asDetail.length <= 240,
+      `${boundary}: an unbounded body leaked (${asDetail.length} chars)`,
+    )
+    assert.match(asDetail, /…/, `${boundary}: the machine text was not clipped`)
+  }
+})
+
+test('the LOAD boundary in the store asks for READ copy', () => {
+  // A SOURCE guard, like the exactly-once one above: the defect (mutation copy
+  // on a read failure) is invisible to a unit test of either module alone,
+  // because the store's `load` is only reachable through a React hook.
+  const dir = new URL('.', import.meta.url).pathname
+  const store = readFileSync(
+    join(dir, '../../stores/WorkflowBuilder.store.ts'),
+    'utf8',
+  )
+  const loadBody = /load: async \([\s\S]*?\n      \},/.exec(store)?.[0]
+  assert.ok(loadBody, "could not find the store's `load` action — update this guard")
+  assert.match(
+    loadBody,
+    /boundary: 'read'/,
+    "the store's LOAD failure is humanised with the default MUTATION copy, so a " +
+      'failure to OPEN a workflow tells the author their CHANGE was rejected.',
+  )
+})

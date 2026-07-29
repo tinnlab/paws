@@ -17,6 +17,8 @@ mod approval_claim_test;
 mod conversation_settings_default_test;
 mod elicitation_mcp_test;
 mod mcp_approval_loop_test;
+mod agent_core_tool_bridge_test;
+mod agent_core_multiturn_bridge_test;
 mod mcp_approval_workflow_test;
 mod mcp_content_test;
 mod mcp_defaults_test;
@@ -26,6 +28,10 @@ mod mcp_loop_settings_test;
 mod mcp_sampling_test;
 mod mcp_streaming_workflow_test;
 mod resource_link_test;
+// Admin per-(server, tool) approval-mode defaults (ITEM-54 / DEC-112)
+mod tool_approvals_test;
+// TEST-17: GET /mcp/servers/{id}/tools payload + both 403 gates (workflow-builder tool picker)
+mod list_tools_for_builder_test;
 // ============================================================================
 // Runtime Tests
 // ============================================================================
@@ -72,6 +78,15 @@ mod sync_emit_test;
 mod permission_revocation_test;
 // all-f44bdb26e811: revoking group membership denies subsequent MCP calls
 mod tool_call_history_test;
+mod tool_call_index_test;
+// ITEM-13 (activity rail): the tool_use_id / message_id lookup filters that
+// join a chat message to its recorded invocations.
+mod tool_call_lookup_test;
+// ITEM-17: secret-bearing arguments are redacted in storage AND in every
+// default response.
+mod tool_call_redaction_test;
+// ITEM-17 / DEC-1: the admin-gated raw-arguments reveal endpoint.
+mod tool_call_reveal_test;
 mod group_cascade_test;
 // group-cascade system-MCP assignment grant/revoke via real endpoints
 mod builtin_test_connection_test;

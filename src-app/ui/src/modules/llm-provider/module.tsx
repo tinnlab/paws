@@ -1,24 +1,19 @@
 import { Server } from 'lucide-react'
-import { Permissions } from '@/api-client/types'
+import { useOverlayOpen } from '@/core/overlays/overlayVisibility'
+import { Permissions } from '@/api-client/permissions'
 import { createModule } from '@ziee/framework'
-import { Stores } from '@ziee/framework/stores'
-import { useGroupLlmProvidersAssignmentStore } from '@/modules/llm-provider/components/GroupLlmProvidersAssignmentDrawer.store'
-import { useLlmProviderDrawerStore } from '@/modules/llm-provider/components/LlmProviderDrawer.store'
-import { useProviderGroupCardStore } from '@/modules/llm-provider/components/ProviderGroupAssignmentCard.store'
 import { DownloadIndicatorWidget } from '@/modules/llm-provider/components/widgets/DownloadIndicatorWidget'
 import {
   useAddLocalLlmModelDownloadDrawerStore,
   useAddLocalLlmModelUploadDrawerStore,
   useAddRemoteLlmModelDrawerStore,
   useEditLlmModelDrawerStore,
-  useLlmModelDownloadStore,
-  useLlmProviderStore,
-  useUploadStore,
   useViewDownloadDrawerStore,
 } from '@/modules/llm-provider/stores'
 import { SettingsLayoutDef } from '@/modules/settings/SettingsLayout'
 import '@/modules/llm-provider/types'
 import { useDelayedFalse } from '@/hooks/useDelayedFalse'
+import { usePermission } from '@/core/permissions'
 import { lazyWithPreload } from '@/utils/lazyWithPreload'
 import '@/modules/settings/types/SettingsSlots' // Register settings slot types
 
@@ -49,6 +44,8 @@ export default createModule({
     version: '1.0.0',
     description: 'LLM provider management',
   },
+  // smart-loading gate (build-lifted into the manifest)
+  shouldLoad: (ctx) => ctx.isAuthenticated && ctx.can(Permissions.LlmProvidersRead),
   dependencies: ['router'],
   routes: [
     {
@@ -60,18 +57,7 @@ export default createModule({
     },
   ],
   stores: [
-    {
-      name: 'LlmProvider',
-      store: useLlmProviderStore,
-    },
-    {
-      name: 'LlmModelDownload',
-      store: useLlmModelDownloadStore,
-    },
-    {
-      name: 'LlmProviderDrawer',
-      store: useLlmProviderDrawerStore,
-    },
+    // BOOT-EAGER (always-mounted overlay) — must stay registered.
     {
       name: 'AddLocalLlmModelUploadDrawer',
       store: useAddLocalLlmModelUploadDrawerStore,
@@ -92,25 +78,13 @@ export default createModule({
       name: 'ViewDownloadDrawer',
       store: useViewDownloadDrawerStore,
     },
-    {
-      name: 'LlmModelUpload',
-      store: useUploadStore,
-    },
-    {
-      name: 'GroupLlmProvidersAssignment',
-      store: useGroupLlmProvidersAssignmentStore,
-    },
-    {
-      name: 'ProviderGroupAssignmentCard',
-      store: useProviderGroupCardStore,
-    },
   ],
   components: [
     {
       id: 'group-llm-providers-assignment-drawer',
       component: GroupLlmProvidersAssignmentDrawer,
       shouldMount: () =>
-        useDelayedFalse(() => Stores.GroupLlmProvidersAssignment.isOpen),
+        useDelayedFalse(() => useOverlayOpen('group-llm-assignment')),
       order: 100,
     },
     {
@@ -123,6 +97,11 @@ export default createModule({
       // always.
       id: 'llm-model-download-notifications',
       component: LlmModelDownloadNotifications,
+      // Gate: download activity is admin-managed (`llm_models::downloads_read`).
+      // A non-admin (and a logged-out visitor) can't see downloads, so don't
+      // load this listener's chunk for them — matches the DownloadIndicatorWidget
+      // slot's permission gate.
+      shouldMount: () => usePermission(Permissions.LlmModelsDownloadsRead),
       order: 102,
     },
   ],

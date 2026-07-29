@@ -1,10 +1,9 @@
 import { createModule } from '@ziee/framework'
-import { MdInfoOutline } from 'react-icons/md'
+import { Info } from 'lucide-react'
 import { SettingsLayoutDef } from '@/modules/settings/SettingsLayout'
-import { useServerUpdateStore } from '@/modules/server-update/stores/ServerUpdate.store'
 import { ServerUpdateBanner } from '@/modules/server-update/ServerUpdateBanner'
 import { lazyWithPreload } from '@/utils/lazyWithPreload'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import '@/modules/settings/types/SettingsSlots' // Register settings slot types
 import '@/modules/layouts/app-layout/types' // Register the appBanners slot type
 
@@ -16,6 +15,8 @@ export default createModule({
     version: '1.0.0',
     description: 'Server version + update notification (admin).',
   },
+  // smart-loading gate (build-lifted into the manifest)
+  shouldLoad: (ctx) => ctx.isAuthenticated && ctx.can(Permissions.ServerUpdateRead),
   routes: [
     {
       path: '/settings/about',
@@ -26,16 +27,12 @@ export default createModule({
     },
   ],
   stores: [
-    {
-      name: 'ServerUpdate',
-      store: useServerUpdateStore,
-    },
   ],
   slots: {
     settingsAdminPages: [
       {
         id: 'about',
-        icon: <MdInfoOutline />,
+        icon: <Info size="1em" />,
         label: 'About',
         path: 'about',
         order: 100,

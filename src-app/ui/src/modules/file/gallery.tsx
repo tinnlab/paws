@@ -8,8 +8,8 @@
 import type { ModuleGallery } from '@/dev/gallery/support'
 import { holdPatch, lazyNamed, lazyProps } from '@/dev/gallery/support'
 import type { File as FileEntity } from '@/api-client/types'
-import { Stores } from '@ziee/framework/stores'
 import { deepProjectFiles } from '@/dev/gallery/fixtures/project-deep'
+import { FilePreviewDrawer as FilePreviewDrawerStore } from '@/modules/file/stores/filePreviewDrawer'
 
 // ── Overlay fixture (from overlays.tsx) ───────────────────────────────────────
 const fileFixture = deepProjectFiles[0]
@@ -68,27 +68,27 @@ const CHROME_FILE_ID = 'f2000000-0000-0000-0000-0000000000ff'
 
 /** Seed one binary-content entry into the File store and hold it. */
 const seedBinary = async (id: string, buf: ArrayBuffer) => {
-  const { File: FileStoreDef } = await import('@/modules/file/stores/File.store')
+  const { store: FileStoreDef } = await import('@/modules/file/stores/file')
   await holdPatch(() => {
-    const b = new Map(FileStoreDef.store.getState().fileBinaryContents)
+    const b = new Map(FileStoreDef.getState().fileBinaryContents)
     b.set(id, buf)
-    FileStoreDef.store.setState({ fileBinaryContents: b } as any)
+    FileStoreDef.setState({ fileBinaryContents: b } as any)
   })
 }
 
 /** Seed a non-null project + a ProjectFiles state, held. */
 const seedProjectFiles = async (patch: Record<string, unknown>) => {
-  const { ProjectDetail } = await import(
-    '@/modules/projects/stores/ProjectDetail.store'
+  const { ProjectDetailDef } = await import(
+    '@/modules/projects/stores/projectDetail'
   )
-  const { ProjectFiles } = await import(
-    '@/modules/file/project-extension/stores/ProjectFiles.store'
+  const { ProjectFilesDef } = await import(
+    '@/modules/file/project-extension/stores/projectFiles'
   )
   await holdPatch(() => {
-    ProjectDetail.store.setState({
+    ProjectDetailDef.store.setState({
       project: { id: 'proj-s2-0001', name: 'Gallery Project' },
     } as any)
-    ProjectFiles.store.setState(patch as any)
+    ProjectFilesDef.store.setState(patch as any)
   })
 }
 
@@ -108,7 +108,7 @@ export const gallery: ModuleGallery = {
         () => import('@/modules/file/components/FilePreviewDrawer'),
         'FilePreviewDrawer',
       ),
-      open: () => Stores.FilePreviewDrawer.openPreview(fileFixture as any),
+      open: () => FilePreviewDrawerStore.openPreview(fileFixture as any),
     },
   ],
   seeded: [
@@ -177,20 +177,20 @@ export const gallery: ModuleGallery = {
         { file: mkFile() },
       ),
       setup: async () => {
-        const { File: FileStoreDef } = await import(
-          '@/modules/file/stores/File.store'
+        const { store: FileStoreDef } = await import(
+          '@/modules/file/stores/file'
         )
         // Park the id in the loading set (and out of the content map) so
         // getFileBinaryContent neither returns content nor schedules a load —
         // the viewer holds at the `!fileBinaryContent || loading` spinner.
         await holdPatch(() => {
           const loading = new Set(
-            FileStoreDef.store.getState().fileBinaryLoadingSet,
+            FileStoreDef.getState().fileBinaryLoadingSet,
           )
           loading.add(XLSX_FILE_ID)
-          const b = new Map(FileStoreDef.store.getState().fileBinaryContents)
+          const b = new Map(FileStoreDef.getState().fileBinaryContents)
           b.delete(XLSX_FILE_ID)
-          FileStoreDef.store.setState({
+          FileStoreDef.setState({
             fileBinaryLoadingSet: loading,
             fileBinaryContents: b,
           } as any)
@@ -253,13 +253,13 @@ export const gallery: ModuleGallery = {
       setup: async () => {
         // Ensure this file has NO fileViewModes entry so the `?? 'compiled'`
         // fallback executes rather than a seeded value.
-        const { File: FileStoreDef } = await import(
-          '@/modules/file/stores/File.store'
+        const { store: FileStoreDef } = await import(
+          '@/modules/file/stores/file'
         )
         await holdPatch(() => {
-          const m = new Map(FileStoreDef.store.getState().fileViewModes)
+          const m = new Map(FileStoreDef.getState().fileViewModes)
           m.delete(CHROME_FILE_ID)
-          FileStoreDef.store.setState({ fileViewModes: m } as any)
+          FileStoreDef.setState({ fileViewModes: m } as any)
         })
       },
     },

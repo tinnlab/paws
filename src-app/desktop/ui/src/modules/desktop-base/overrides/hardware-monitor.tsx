@@ -9,7 +9,7 @@
  */
 import { registerOverride } from '@ziee/framework/overrides'
 import { Button, message } from '@ziee/kit'
-import { MdOutlineMonitorHeart } from 'react-icons/md'
+import { HeartPulse } from 'lucide-react'
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 
 const HARDWARE_MONITOR_WINDOW_LABEL = 'hardware-monitor'
@@ -57,7 +57,7 @@ function DesktopHardwareMonitorButton() {
   return (
     <Button
       data-testid="desktop-hardware-monitor-btn"
-      icon={<MdOutlineMonitorHeart />}
+      icon={<HeartPulse size="1em" />}
       onClick={handleClick}
     >
       Monitor

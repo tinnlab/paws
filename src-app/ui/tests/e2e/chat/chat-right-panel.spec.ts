@@ -431,7 +431,7 @@ test.describe('Chat - Right Panel + File Viewers', () => {
     await expect(panelViewToggle(page, 'raw')).toHaveCount(0)
   })
 
-  test('viewer: PDF renders preview pages; header has Download only', async ({
+  test('viewer: PDF renders via the PDF.js viewer; header has Download only', async ({
     page,
     testInfra,
   }) => {
@@ -440,21 +440,30 @@ test.describe('Chat - Right Panel + File Viewers', () => {
     await attachAndSend(page, FILE_ASSETS.pdf, 'pdf viewer')
     await openFileInPanel(page, 'test.pdf')
 
-    // PdfBody subscribes to previewPageUrls; at least page 1 should render
-    // once the backend's page-1 preview finishes streaming.
-    const pageImg = page
-      .locator('[data-testid="chat-right-panel"] img[alt^="Page"]')
-      .first()
-    await expect(pageImg).toBeVisible({ timeout: 20000 })
-    // Verify the page image actually has bytes loaded (naturalWidth > 0)
-    // — a broken src would still show alt text but render 0×0.
+    // `application/pdf` is served by PdfJsBody (pdf/module.tsx), NOT the
+    // backend-rasterized PdfBody — the latter is now the office/DOCX path
+    // ONLY, so there are no `img[alt="Page N"]` / "Page 1 of N" nodes here.
+    // PDF.js renders each page into a <canvas> inside `.pdfViewer` within
+    // `file-pdf-container`, and reports the page count in the toolbar.
+    const panel = page.locator('[data-testid="chat-right-panel"]')
+    await expect(panel.getByTestId('file-pdf-container')).toBeVisible({ timeout: 20000 })
+    // The loading overlay clears only once the document resolved.
+    await expect(panel.getByTestId('file-pdf-loading')).toHaveCount(0, { timeout: 20000 })
+    await expect(panel.getByTestId('file-pdf-error')).toHaveCount(0)
+
+    // A real rendered page: a canvas with non-zero pixel dimensions.
+    const canvas = panel.locator('.pdfViewer canvas').first()
+    await expect(canvas).toBeVisible({ timeout: 20000 })
     await expect
-      .poll(async () => await pageImg.evaluate((el: HTMLImageElement) => el.naturalWidth), {
+      .poll(async () => await canvas.evaluate((el: HTMLCanvasElement) => el.width), {
         timeout: 10000,
       })
       .toBeGreaterThan(0)
-    // "Page 1 of N" caption confirms the body iteration logic ran.
-    await expect(page.locator('[data-testid="chat-right-panel"]').getByText(/Page 1 of/)).toBeVisible()
+
+    // The toolbar's page indicator proves the document's page count was read.
+    await expect(panel.getByTestId('file-pdf-page-indicator')).toHaveText(/of \d+/, {
+      timeout: 10000,
+    })
 
     await expect(panelButton(page, 'Download')).toBeVisible()
     await expect(panelButton(page, 'Copy')).toHaveCount(0)

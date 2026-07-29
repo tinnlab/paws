@@ -1,5 +1,6 @@
 import { ChevronRight, ChevronDown, File, PanelRight } from 'lucide-react'
 import {
+  Suspense,
   useCallback,
   useEffect,
   useId,
@@ -10,7 +11,6 @@ import {
 } from 'react'
 import { Button, Tooltip } from '@ziee/kit'
 import { cn } from '@/lib/utils'
-import { Stores } from '@ziee/framework/stores'
 import { useChatPaneOrNull } from '@/modules/chat/core/pane/ChatPaneContext'
 import type { File as FileEntity } from '@/api-client/types'
 import type { FileViewerEntry, FileViewerSlotProps, InlineFileSource } from '@/modules/file/types/viewer'
@@ -24,7 +24,7 @@ import { DownloadButton } from '@/modules/file/viewers/shared/chrome'
 import {
   useMessageViewStateStore,
   type MessageViewFullState,
-} from '@/modules/chat/core/stores/MessageViewState.store'
+} from '@/modules/chat/core/stores/messageViewState'
 import { DEFAULT_INLINE_FILE_STATE } from '@/modules/chat/core/stores/messageViewState.helpers'
 import {
   INLINE_FILE_MIN_PX,
@@ -33,6 +33,8 @@ import {
   resolveBodyHeightPx,
 } from '@/modules/file/chat-extension/components/inlineFileHeight'
 import { useInPlaceAnchor } from '@/modules/chat/core/utils/useInPlaceAnchor'
+import { MessageViewState as MessageViewStateStore } from '@/modules/chat/core/stores/messageViewState'
+import { Chat } from '@/modules/chat/core/stores/chatBridge'
 
 interface InlineFilePreviewProps {
   /** Viewer matched by `getViewer(name, mimeType)`. `undefined` when no
@@ -82,7 +84,7 @@ const viewportH = () =>
  */
 export function InlineFilePreview({ viewer, source, file }: InlineFilePreviewProps) {
   // Open into THIS pane's right panel (ITEM-36), not the focused pane's.
-  const chat = (useChatPaneOrNull()?.store ?? Stores.Chat) as typeof Stores.Chat
+  const chat = (useChatPaneOrNull()?.store ?? Chat) as typeof Chat
   const key = source.url
   const rootRef = useRef<HTMLDivElement>(null)
   const bodyId = useId()
@@ -108,7 +110,7 @@ export function InlineFilePreview({ viewer, source, file }: InlineFilePreviewPro
   useEffect(() => {
     if (view.seen) return
     if (typeof IntersectionObserver === 'undefined') {
-      Stores.MessageViewState.markFileSeen(key)
+      MessageViewStateStore.markFileSeen(key)
       return
     }
     const el = rootRef.current
@@ -116,7 +118,7 @@ export function InlineFilePreview({ viewer, source, file }: InlineFilePreviewPro
     const observer = new IntersectionObserver(
       entries => {
         if (entries.some(e => e.isIntersecting)) {
-          Stores.MessageViewState.markFileSeen(key)
+          MessageViewStateStore.markFileSeen(key)
           observer.disconnect()
         }
       },
@@ -151,7 +153,7 @@ export function InlineFilePreview({ viewer, source, file }: InlineFilePreviewPro
 
   const setCollapsed = (next: boolean) => {
     anchorBeforeChange()
-    Stores.MessageViewState.setFileCollapsed(key, next)
+    MessageViewStateStore.setFileCollapsed(key, next)
   }
 
   const handleOpenInPanel = () => {
@@ -199,7 +201,7 @@ export function InlineFilePreview({ viewer, source, file }: InlineFilePreviewPro
     if (dragStart.current == null) return
     dragStart.current = null
     const px = dragHeightRef.current
-    if (px != null) Stores.MessageViewState.setFileHeight(key, px)
+    if (px != null) MessageViewStateStore.setFileHeight(key, px)
     setDrag(null)
   }, [key])
   const onHandlePointerUp = (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -223,7 +225,7 @@ export function InlineFilePreview({ viewer, source, file }: InlineFilePreviewPro
     if (next == null) return
     e.preventDefault()
     anchorBeforeChange()
-    Stores.MessageViewState.setFileHeight(key, clampReservedPx(next, viewportH()))
+    MessageViewStateStore.setFileHeight(key, clampReservedPx(next, viewportH()))
   }
 
   return (
@@ -261,7 +263,7 @@ export function InlineFilePreview({ viewer, source, file }: InlineFilePreviewPro
           </span>
         </div>
         <div className="flex items-center gap-0.5 flex-shrink-0 ms-auto">
-          {HeaderActions ? <HeaderActions {...slotProps} /> : null}
+          {HeaderActions ? <Suspense fallback={null}><HeaderActions {...slotProps} /></Suspense> : null}
           {file ? <DownloadButton file={file} /> : null}
           {file ? (
             <Tooltip content="Open in side panel">
@@ -307,7 +309,9 @@ export function InlineFilePreview({ viewer, source, file }: InlineFilePreviewPro
               data-testid="inline-file-preview-body"
               data-body-height={bodyHeightPx}
             >
-              <Body {...slotProps} />
+              <Suspense fallback={null}>
+                <Body {...slotProps} />
+              </Suspense>
             </div>
           ) : (
             <div

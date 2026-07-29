@@ -143,16 +143,45 @@ pub fn make_wav(secs: f64) -> Vec<u8> {
     w
 }
 
-/// Stage a whisper ggml model file (non-empty bytes) at the exact on-disk path
-/// the server resolves (`<app_data>/voice-models/ggml-<name>.bin`). This is the
-/// air-gap pre-stage path: `model::ensure_model` short-circuits on a present
-/// file, so no download (and therefore no sha256 pin check) runs.
+/// The 4-byte header a REAL whisper.cpp ggml model file begins with.
+///
+/// whisper.cpp writes `GGML_FILE_MAGIC` (`0x67676d6c`) as a NATIVE-ENDIAN `u32`,
+/// so on disk it is `6c 6d 67 67` — ASCII `lmgg`, the REVERSE of `ggml`. Every
+/// fixture in the voice suite must be built from this, NOT from a hand-written
+/// `b"ggml"`: fixtures spelled the ASCII way encode the same wrong assumption the
+/// implementation used to make, so the mock mirror served bytes a real
+/// HuggingFace never would and the whole suite validated the bug instead of
+/// catching it. Transcribed from a real file — see
+/// `.lifecycle/voice-model-bad-magic/BUG_ANALYSIS.md` E3 and TEST_GAP.md.
+pub const GGML_MAGIC: [u8; 4] = [0x6c, 0x6d, 0x67, 0x67];
+
+/// Build plausible whisper ggml model bytes: the real magic + deterministic
+/// filler seeded from `tag` (so the sha256 is stable across runs and can be
+/// advertised as a tree oid).
+pub fn ggml_bytes(tag: &str, fill: usize) -> Vec<u8> {
+    let mut v = Vec::with_capacity(4 + fill);
+    v.extend_from_slice(&GGML_MAGIC);
+    let seed = tag.as_bytes();
+    for i in 0..fill {
+        v.push(seed[i % seed.len()] ^ (i as u8));
+    }
+    v
+}
+
+/// Stage a whisper ggml model file at the exact on-disk path the server resolves
+/// (`<app_data>/voice-models/ggml-<name>.bin`). This is the air-gap pre-stage
+/// path: `model::ensure_model` short-circuits on a present file, so no download
+/// (and therefore no sha256 pin check) runs.
+///
+/// The bytes carry the REAL ggml magic. `model_present` only checks existence +
+/// non-empty, so this is not load-bearing for presence — but a staged fixture
+/// that isn't a plausible model is exactly the kind of unrealistic harness that
+/// hid the bad-magic defect, so the fixture is faithful by construction.
 pub fn stage_model(server: &TestServer, name: &str) -> PathBuf {
     let dir = server.data_dir().join("voice-models");
     std::fs::create_dir_all(&dir).expect("create voice-models dir");
     let path = dir.join(format!("ggml-{name}.bin"));
-    // Any non-empty bytes: `model_present` only checks the file exists + len > 0.
-    std::fs::write(&path, b"stub ggml model bytes").expect("write staged model");
+    std::fs::write(&path, ggml_bytes("staged-model", 256)).expect("write staged model");
     path
 }
 
@@ -247,5 +276,43 @@ pub async fn drive_download_to_terminal(
                 _ => {}
             }
         }
+    }
+}
+
+// ══════════════ voice-model-bad-magic — fixture-faithfulness guard ══════════
+
+/// TEST-10 — the SHARED voice fixtures carry the REAL on-disk whisper ggml
+/// magic.
+///
+/// This is the guard against the exact process failure that let the "bad magic"
+/// defect ship: every "valid model" fixture in this suite was hand-spelled
+/// `b"ggml"` — the implementation's own (wrong) assumption — so the mock mirror
+/// served bytes a real HuggingFace never would, and the suite validated the bug
+/// instead of catching it. The magic here is transcribed from a REAL file, so it
+/// stays true independently of anything in `src/`.
+///
+/// See `.lifecycle/voice-model-bad-magic/{BUG_ANALYSIS,TEST_GAP}.md`.
+// NOTE: no `#[cfg(test)]` — this is an integration-test target, where `cfg(test)`
+// is NOT set, so gating on it would silently compile the module (and this guard)
+// out of the run.
+mod fixture_faithfulness {
+    use super::{ggml_bytes, GGML_MAGIC};
+
+    #[test]
+    fn shared_fixtures_use_the_real_on_disk_ggml_magic() {
+        // The real header, from `curl … ggml-base.bin | xxd` → `6c6d 6767`.
+        assert_eq!(GGML_MAGIC, [0x6c, 0x6d, 0x67, 0x67]);
+        // Explicitly NOT the ASCII spelling the fixtures used to hard-code.
+        assert_ne!(
+            GGML_MAGIC, *b"ggml",
+            "a real whisper ggml file does NOT start with the ASCII bytes `ggml` — \
+             a fixture that says it does re-introduces the blind spot"
+        );
+        // And the builder every fixture goes through actually emits it.
+        let bytes = ggml_bytes("fixture-check", 64);
+        assert_eq!(&bytes[..4], &GGML_MAGIC, "ggml_bytes must emit the real magic");
+        assert_eq!(bytes.len(), 4 + 64);
+        // Deterministic, so an advertised sha256 oid is stable across runs.
+        assert_eq!(bytes, ggml_bytes("fixture-check", 64));
     }
 }

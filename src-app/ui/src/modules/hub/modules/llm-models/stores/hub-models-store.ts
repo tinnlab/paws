@@ -1,9 +1,9 @@
 import { ApiClient } from '@/api-client'
 import type { HubLocalProvider, HubModel } from '@/api-client/types'
-import { defineStore } from '@ziee/framework/store-kit'
-import { Stores } from '@ziee/framework/stores'
+import { defineStore, registerLazyStore } from '@ziee/framework/store-kit'
+import { LlmModelDownload } from '@/modules/llm-provider/stores/llmModelDownload'
 
-export const HubModels = defineStore('HubModels', {
+const HubModelsDef = defineStore('HubModels', {
   immer: true,
   state: {
     models: [] as HubModel[],
@@ -65,7 +65,7 @@ export const HubModels = defineStore('HubModels', {
           // from. Defaults to 0 server-side when omitted.
           source_index: sourceIndex,
         })
-        Stores.LlmModelDownload.addExternalDownload(result.download)
+        LlmModelDownload.addExternalDownload(result.download)
       },
     }
   },
@@ -85,4 +85,6 @@ export const HubModels = defineStore('HubModels', {
   },
 })
 
-export const useHubModelsStore = HubModels.store
+export const useHubModelsStore = HubModelsDef.store
+
+export const HubModels = registerLazyStore(HubModelsDef)

@@ -2,9 +2,8 @@ import { createModule } from '@ziee/framework'
 import { Lock } from 'lucide-react'
 import { SettingsLayoutDef } from '@/modules/settings/SettingsLayout'
 import { lazyWithPreload } from '@/utils/lazyWithPreload'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import '@/modules/settings/types/SettingsSlots' // Register settings slot types
-import { useAuthProvidersAdminStore } from './stores/AuthProvidersAdmin.store'
 import './types' // CRITICAL: store type declaration merging
 
 const AuthProvidersSettingsPage = lazyWithPreload(() =>
@@ -23,6 +22,8 @@ export default createModule({
     version: '1.0.0',
     description: 'Admin: configure third-party auth providers (Google, Microsoft, Apple, generic OIDC)',
   },
+  // smart-loading gate (build-lifted into the manifest)
+  shouldLoad: (ctx) => ctx.isAuthenticated && ctx.can(Permissions.AuthProvidersRead),
   dependencies: ['router', 'auth'],
   routes: [
     {
@@ -34,10 +35,6 @@ export default createModule({
     },
   ],
   stores: [
-    {
-      name: 'AuthProvidersAdmin',
-      store: useAuthProvidersAdminStore,
-    },
   ],
   slots: {
     settingsAdminPages: [

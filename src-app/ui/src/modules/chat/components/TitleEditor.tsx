@@ -8,13 +8,13 @@ import {
   zodResolver,
 } from '@ziee/kit'
 import { z } from 'zod'
-import { Pencil, Check, X } from 'lucide-react'
-import { IoIosArrowBack } from 'react-icons/io'
+import { Pencil, Check, X, ChevronLeft } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
-import { Stores } from '@ziee/framework/stores'
 import { chatExtensionRegistry } from '@/modules/chat/core/extensions'
 import { useIsPopoutWindow } from '@/modules/chat/core/popout/useIsPopoutWindow'
 import { useChatPaneOrNull } from '@/modules/chat/core/pane/ChatPaneContext'
+import { SplitView } from '@/modules/chat/core/stores/splitView'
+import { Chat } from '@/modules/chat/core/stores/chatBridge'
 import { UNTITLED_CONVERSATION_LABEL } from '@/modules/chat/core/utils/conversationDisplayLabel'
 import { mathToPlainText } from '@/components/common/mathPlainText'
 
@@ -49,7 +49,7 @@ export function TitleEditor() {
   //    shell into the window (undoing the chat-only ITEM-52).
   // So show it ONLY in the normal single-pane view: hide when a split is open (panes
   // >= 2, reactive) or in the pop-out window.
-  const isSplit = Stores.SplitView.panes.length >= 2
+  const isSplit = SplitView.panes.length >= 2
   const isPopoutWindow = useIsPopoutWindow()
   const showBackButton = !isSplit && !isPopoutWindow
 
@@ -57,7 +57,7 @@ export function TitleEditor() {
   // per-pane, so renaming pane B's title while pane A is focused must update pane
   // B's conversation, not the focused one (audit #3, mirrors MessageActions).
   const pane = useChatPaneOrNull()
-  const chat = (pane?.store ?? Stores.Chat) as typeof Stores.Chat
+  const chat = (pane?.store ?? Chat) as typeof Chat
   const { conversation } = chat
 
   const handleEditClick = () => {
@@ -145,7 +145,7 @@ export function TitleEditor() {
           aria-label="Back to conversation list"
           data-testid="conversation-back-button"
         >
-          <IoIosArrowBack className="text-md" />
+          <ChevronLeft size="1em" className="text-md" />
         </Button>
       )}
       <Title

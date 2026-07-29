@@ -1,11 +1,11 @@
 import { useEffect } from 'react'
 import { Alert, Card, Form, FormField, InputNumber, Switch, message, useForm, zodResolver } from '@ziee/kit'
 import { z } from 'zod'
-import { Stores } from '@ziee/framework/stores'
 import { usePermission } from '@/core/permissions'
 import { SettingsFormActions } from '@/modules/settings/components/SettingsFormActions'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { SettingsSectionStatus } from '@/components/common/SettingsSectionStatus'
+import { FileRagAdmin } from '@/modules/file-rag/stores/fileRagAdmin'
 
 const READ_PERM = Permissions.FileRagAdminRead
 const MANAGE_PERM = Permissions.FileRagAdminManage
@@ -23,9 +23,13 @@ type FormValues = z.infer<typeof schema>
  * in their own cards below.
  */
 export function EnableSection() {
-  const canRead = usePermission(READ_PERM) || usePermission(MANAGE_PERM)
+  // Both permission hooks must be called UNCONDITIONALLY every render — a
+  // `usePermission(A) || usePermission(B)` short-circuits the second hook when
+  // the first is true, so the hook COUNT varies with permission state and React
+  // throws "Rendered more hooks than during the previous render" when it flips.
   const canManage = usePermission(MANAGE_PERM)
-  const { settings, saving, error } = Stores.FileRagAdmin
+  const canRead = usePermission(READ_PERM) || canManage
+  const { settings, saving, error } = FileRagAdmin
   const form = useForm<FormValues>({ resolver: zodResolver(schema) })
 
   useEffect(() => {
@@ -55,13 +59,13 @@ export function EnableSection() {
       <SettingsSectionStatus
         title="Document search"
         error={error}
-        onRetry={() => Stores.FileRagAdmin.load()}
+        onRetry={() => FileRagAdmin.load()}
       />
     )
 
   const handleSubmit = async (values: FormValues) => {
     try {
-      await Stores.FileRagAdmin.update({
+      await FileRagAdmin.update({
         enabled: values.enabled,
         default_top_k: values.default_top_k,
       })

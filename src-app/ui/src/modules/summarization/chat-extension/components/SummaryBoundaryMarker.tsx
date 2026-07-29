@@ -1,8 +1,9 @@
 import { Shrink, ChevronRight, ChevronDown } from 'lucide-react'
 import { useState } from 'react'
 import { Card, Separator, Flex, Text } from '@ziee/kit'
-import { Stores } from '@ziee/framework/stores'
 import { useMessageContext } from '@/modules/chat/core/MessageContext'
+import { ConversationSummarization } from '@/modules/summarization/stores/conversationSummarization'
+import { Chat } from '@/modules/chat/core/stores/chatBridge'
 
 /**
  * In-thread persistent marker shown on the boundary message — i.e. the
@@ -22,17 +23,30 @@ import { useMessageContext } from '@/modules/chat/core/MessageContext'
  * condensed" marker). The footer sits directly below the last
  * condensed turn, which reads naturally.
  *
- * The summary itself lives in `Stores.ConversationSummarization.current`
- * — loaded by `SummarizationStatusPill` on every conversation switch
- * and on every `messages.size` change.
+ * The summary itself lives in `ConversationSummarization.current`
+ * — loaded by `SummarizationStatusPill` when a conversation is opened
+ * or switched to, and by the summarization extension's
+ * `afterStreamComplete` hook at the end of each turn. It is NOT
+ * reloaded per message any more; see `summaryRefreshTrigger.ts`.
+ *
+ * `ConversationSummarization` is a SINGLE-ENTRY store, so `current`
+ * can belong to a different conversation than the message this
+ * instance renders for (two split panes; a pane sitting on the
+ * new-chat route). The conversation guard below is what stops this
+ * marker from attaching another conversation's summary to a message
+ * that merely shares an id space.
  */
 export function SummaryBoundaryMarker() {
   const message = useMessageContext()
-  const current = Stores.ConversationSummarization.current
+  const current = ConversationSummarization.current
+  const conversationId = Chat.conversation?.id ?? null
   const [expanded, setExpanded] = useState(false)
 
   if (!message) return null
   if (!current?.summary) return null
+  // Single-entry store: only render when the held summary belongs to the
+  // conversation this marker is rendering inside.
+  if (!conversationId || current.conversationId !== conversationId) return null
   if (current.summary.summarized_up_to_id !== message.id) return null
 
   const summary = current.summary

@@ -1,9 +1,9 @@
-export { KnowledgeBases, useKnowledgeBasesStore } from './KnowledgeBases.store'
+export { KnowledgeBases, useKnowledgeBasesStore } from './knowledgeBases'
 export {
   KnowledgeBaseDetail,
   useKnowledgeBaseDetailStore,
-} from './KnowledgeBaseDetail.store'
+} from './knowledgeBaseDetail'
 export {
   KnowledgeBaseComposer,
   useKnowledgeBaseComposerStore,
-} from './KnowledgeBaseComposer.store'
+} from './knowledgeBaseComposer'

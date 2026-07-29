@@ -1,9 +1,10 @@
 import { Dropdown, Tooltip, Skeleton } from '@ziee/kit'
 import { LogOut, User } from 'lucide-react'
-import { Stores } from '@ziee/framework/stores'
 import { usePermission } from '@/core/permissions'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { useNavigate } from 'react-router-dom'
+import { AppLayout } from '@/modules/layouts/app-layout/appLayout'
+import { Auth } from '@/modules/auth/Auth.store'
 
 function SidebarItem({
   icon,
@@ -71,8 +72,8 @@ function SidebarItem({
 }
 
 export function UserProfileWidget() {
-  const { user, isInitializing, isLoading } = Stores.Auth
-  const { isSidebarCollapsed } = Stores.AppLayout
+  const { user, isInitializing, isLoading } = Auth
+  const { isSidebarCollapsed } = AppLayout
   const canViewProfile = usePermission(Permissions.ProfileRead)
   const navigate = useNavigate()
 
@@ -113,7 +114,7 @@ export function UserProfileWidget() {
       key: 'logout',
       icon: <LogOut />,
       label: 'Logout',
-      onClick: async () => await Stores.Auth.logoutUser(),
+      onClick: async () => await Auth.logoutUser(),
     },
   ]
 

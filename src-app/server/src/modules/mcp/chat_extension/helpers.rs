@@ -210,9 +210,17 @@ use crate::modules::mcp::elicitation::models::ASK_USER_SCHEMA_MARKER;
 /// is the ONLY place the trusted rich-UX marker is added: `cap_requested_schema`
 /// STRIPS any client/server-supplied copy at every ingress, and this stamp runs
 /// AFTER the cap on the ziee-internal `ask_user` path only, so an external MCP
-/// server can never forge it. Pure + idempotent; a non-object schema (which the
-/// FE renders as an empty form anyway) is returned unchanged so this can never
-/// panic. The few-byte marker cannot push a within-cap schema over the limit.
+/// server can never forge it. Pure + idempotent. The few-byte marker cannot push
+/// a within-cap schema over the limit.
+///
+/// A non-object schema is returned unchanged so this can never panic — but that
+/// arm is now a DEFENSIVE floor, not an expected path. It used to be reached in
+/// production by a model that JSON-encoded its `schema` argument, and the
+/// resulting unmarked string rendered as an empty form; that input is now
+/// decoded (or refused) upstream in [`prepare_ask_user_schema`], so a string can
+/// no longer arrive here. The end-to-end assertion that it cannot is what the
+/// old isolated test of this function was missing — see
+/// `ask_user_string_schema_never_reaches_the_marker_stamp`.
 fn stamp_ask_user_marker(schema: Value) -> Value {
     match schema {
         Value::Object(mut map) => {
@@ -221,6 +229,111 @@ fn stamp_ask_user_marker(schema: Value) -> Value {
         }
         other => other,
     }
+}
+
+/// A copyable, literal-JSON `ask_user` schema the model can adapt. Every
+/// `schema` refusal carries this, so the model is never told only that it was
+/// wrong — it is shown what right looks like.
+const ASK_USER_SCHEMA_EXAMPLE: &str = concat!(
+    r#"{"type":"object","properties":{"name":{"type":"string","title":"Project name"}},"#,
+    r#""required":["name"]}"#
+);
+
+/// Turn the model's raw `schema` argument into the `requested_schema` the
+/// frontend renders, or into an ACTIONABLE refusal.
+///
+/// Extracted from `run_ask_user_elicitation` as a pure function so the
+/// successful outcome is directly assertable: with no interactive stream the
+/// caller returns before the schema is observable, so previously only the ERROR
+/// paths could be unit-tested and the decode could not be covered at all.
+///
+/// Ordering is load-bearing, in this exact sequence:
+///
+/// 1. **Measure the RAW value.** The schema is LLM-generated and arbitrary, and
+///    the frontend renders a form field per property, so a pathologically
+///    large/nested schema can hang the browser. It is measured BEFORE
+///    `cap_requested_schema` because that helper replaces an oversized schema
+///    with a tiny error-marker object — checking the capped value would never
+///    see the original size and the guard would never fire. Measuring the raw
+///    value ALSO means an oversized JSON-encoded string is refused without ever
+///    being handed to a parser.
+/// 2. **Decode** a JSON-encoded string into the object the model meant. A model
+///    that stringifies its object argument is the reported live defect; a value
+///    that cannot become an object is refused, never substituted.
+/// 3. **Re-measure the decoded value**, so the cap is authoritative in both the
+///    encoded and the decoded form.
+/// 4. **Cap + strip** (`cap_requested_schema`), then **stamp** the trusted
+///    rich-UX marker. The stamp must stay AFTER the strip or an external server
+///    could forge it.
+fn prepare_ask_user_schema(input: &Value) -> Result<Value, String> {
+    let raw = input.get("schema");
+
+    // (1) Raw size, before anything parses or caps it.
+    if let Some(raw) = raw {
+        let raw_bytes = serde_json::to_vec(raw).map(|v| v.len()).unwrap_or(usize::MAX);
+        if raw_bytes > MAX_STRUCTURED_CONTENT_BYTES {
+            return Err(format!(
+                "ask_user 'schema' is too large ({raw_bytes} bytes; limit \
+                 {MAX_STRUCTURED_CONTENT_BYTES}). Send a smaller schema with fewer \
+                 or shorter properties. Example: {ASK_USER_SCHEMA_EXAMPLE}"
+            ));
+        }
+    }
+
+    // (2) Decode. Absent / explicit-null keeps the pre-existing default.
+    let decoded = crate::common::tool_args::coerce_arg(
+        input,
+        "schema",
+        crate::common::tool_args::ArgShape::Object,
+        ASK_USER_SCHEMA_EXAMPLE,
+    )
+    .map_err(|e| format!("ask_user {}", e.message()))?
+    .unwrap_or_else(|| serde_json::json!({ "type": "object" }));
+
+    // (3) Decoded size. For JSON this can never exceed the raw measurement (a
+    // JSON-encoded string of a value is always longer than the value's own
+    // serialization, and JSON has no expansion primitive), so this is a guard
+    // that holds even if that argument ever stops being true — not a branch we
+    // expect to reach. See DECISIONS DEC-6.
+    let decoded_bytes = serde_json::to_vec(&decoded)
+        .map(|v| v.len())
+        .unwrap_or(usize::MAX);
+    if decoded_bytes > MAX_STRUCTURED_CONTENT_BYTES {
+        return Err(format!(
+            "ask_user 'schema' is too large ({decoded_bytes} bytes once decoded; limit \
+             {MAX_STRUCTURED_CONTENT_BYTES}). Send a smaller schema with fewer or \
+             shorter properties. Example: {ASK_USER_SCHEMA_EXAMPLE}"
+        ));
+    }
+
+    // A schema the model SUPPLIED that asks nothing renders a card the user
+    // cannot act on. `ask_user`'s own contract is "each entry in `properties` is
+    // ONE question", so this is the same malformed-argument class and the model
+    // can fix it immediately. An ABSENT schema is deliberately NOT an error —
+    // that is the pre-existing "no fields, just accept or decline" contract, and
+    // an external MCP server's zero-property confirmation stays valid too. See
+    // DESIGN §3.3 / DEC-9.
+    if raw.is_some_and(|v| !v.is_null()) {
+        let has_fields = decoded
+            .get("properties")
+            .and_then(|p| p.as_object())
+            .is_some_and(|p| !p.is_empty());
+        if !has_fields {
+            return Err(format!(
+                "ask_user 'schema' has no `properties`, so the form would render zero \
+                 fields and the user could not answer. Each entry in `properties` is ONE \
+                 question. Example: {ASK_USER_SCHEMA_EXAMPLE}"
+            ));
+        }
+    }
+
+    // (4) Cap the untrusted schema, then stamp the ask_user marker so the FE
+    // renders the rich decision UX (cards + wizard + Other-escape). Stamping
+    // AFTER the cap keeps the size/injection guard authoritative — an oversized
+    // schema is already rejected above and never reaches this line.
+    Ok(stamp_ask_user_marker(
+        crate::modules::mcp::elicitation::models::cap_requested_schema(decoded),
+    ))
 }
 
 fn ask_user_tool_result(
@@ -287,41 +400,29 @@ pub(crate) async fn run_ask_user_elicitation(
         .trim()
         .to_string();
     if message.is_empty() {
-        return ask_result("ask_user requires a non-empty 'message'.".to_string(), true);
-    }
-    // The schema is LLM-generated and arbitrary; the FE renders a form field
-    // per property, so a pathologically large/nested schema can hang the
-    // browser. Reject anything over the same 1 MB cap used for structured
-    // content rather than streaming it to the client. The model gets a clean
-    // tool-result error and can retry with a smaller schema.
-    //
-    // Measure the RAW input schema BEFORE `cap_requested_schema`: that helper
-    // replaces an oversized schema with a tiny error-marker object, so checking
-    // the capped value would never see the original size and the guard would
-    // never fire.
-    let raw_schema = input
-        .get("schema")
-        .cloned()
-        .unwrap_or_else(|| serde_json::json!({ "type": "object" }));
-    let schema_bytes = serde_json::to_vec(&raw_schema)
-        .map(|v| v.len())
-        .unwrap_or(usize::MAX);
-    if schema_bytes > MAX_STRUCTURED_CONTENT_BYTES {
+        let received = match input.get("message") {
+            None => "was not supplied",
+            Some(Value::String(_)) => "arrived empty (or only whitespace)",
+            Some(_) => "arrived as a non-string value",
+        };
         return ask_result(
             format!(
-                "ask_user 'schema' is too large ({schema_bytes} bytes; limit \
-                 {MAX_STRUCTURED_CONTENT_BYTES}). Send a smaller schema."
+                "ask_user 'message' {received}, but a non-empty string is required — it is \
+                 the question the user reads. Send `message` as a plain string. Example: \
+                 {{\"message\":\"What would you like to name this project?\",\"schema\":\
+                 {ASK_USER_SCHEMA_EXAMPLE}}}"
             ),
             true,
         );
     }
-    // Cap the untrusted schema, then stamp the ask_user marker so the FE renders
-    // the rich decision UX (cards + wizard + Other-escape). Stamping AFTER the
-    // cap keeps the size/injection guard authoritative — an oversized schema is
-    // already rejected above and never reaches this line.
-    let requested_schema = stamp_ask_user_marker(
-        crate::modules::mcp::elicitation::models::cap_requested_schema(raw_schema),
-    );
+    // Decode / size-guard / cap / stamp the model-supplied schema. Every
+    // refusal is an actionable tool result: the model is told what it sent, what
+    // is required, and shown a schema it can copy — so it can correct itself on
+    // the next turn instead of repeating the same malformed call.
+    let requested_schema = match prepare_ask_user_schema(&input) {
+        Ok(s) => s,
+        Err(msg) => return ask_result(msg, true),
+    };
 
     // No interactive stream (e.g. the before_llm_call no-SSE path) → nobody to ask.
     let Some(sse_tx) = sse_tx else {
@@ -694,11 +795,20 @@ pub async fn send_tool_start_event(
     input: &serde_json::Value,
 ) {
     if let Some(tx) = tx {
+        // ITEM-14 (DEC-9): stamp the step's start so a live rail row can tick an
+        // elapsed time. This is the STEP's start (the dispatch moment), which is
+        // all that can exist before the call does; the authoritative
+        // `started_at`/`duration_ms` arrive on `mcpToolComplete` from the
+        // recorder's clock and replace it.
+        let started_at = time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .ok();
         let event = SSEChatStreamEvent::McpToolStart(SSEChatStreamMcpToolStartData {
             tool_use_id: tool_use_id.to_string(),
             tool_name: tool_name.to_string(),
             server: server.to_string(),
             input: input.clone(),
+            started_at,
         });
 
         if let Err(e) = tx.send(Ok(event.into())) {
@@ -707,8 +817,39 @@ pub async fn send_tool_start_event(
     }
 }
 
+/// Max bytes of tool-result text carried on the `mcpToolComplete` frame. The full
+/// result is always reachable via `get_tool_result` / the tool-call history; this
+/// is only the inline preview.
+const TOOL_COMPLETE_RESULT_PREVIEW_BYTES: usize = 2000;
+
+/// Truncate `s` to at most `max_bytes`, **never splitting a UTF-8 character**.
+///
+/// Replaces `&r[..2000]`, which panicked (`byte index N is not a char boundary`)
+/// whenever the 2000th byte landed mid-character — i.e. on any tool result
+/// containing CJK text, emoji, accented Latin, or box-drawing output positioned
+/// across the cut. A tool whose output happened to be multibyte at that offset
+/// crashed the SSE emitter for the whole turn.
+fn truncate_on_char_boundary(s: &str, max_bytes: usize) -> String {
+    if s.len() <= max_bytes {
+        return s.to_string();
+    }
+    // Walk back to the nearest char boundary at or below `max_bytes`. `floor_char_boundary`
+    // is still unstable, so do it explicitly.
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...[truncated]", &s[..end])
+}
+
 /// Send SSE event for tool complete.
 /// Fire-and-forget: logs a warning if the channel is closed but never fails the caller.
+///
+/// `timing` (ITEM-14) is the reading of the ONE clock in `McpSession::call_tool` —
+/// the same `started_at`/`elapsed_ms` pair persisted to `mcp_tool_calls`. Callers
+/// obtain it from `McpSession::last_call_timing()` (surfaced by `execute_tool` and
+/// `call_mcp_tool`); `None` when the step never reached a session, in which case
+/// the frame carries no timing rather than a fabricated one.
 pub async fn send_tool_complete_event(
     tx: Option<&tokio::sync::mpsc::UnboundedSender<Result<Event, Infallible>>>,
     tool_use_id: &str,
@@ -716,15 +857,11 @@ pub async fn send_tool_complete_event(
     server: &str,
     is_error: bool,
     result: Option<&str>,
+    timing: Option<crate::modules::mcp::tool_calls::models::ToolCallTiming>,
 ) {
     if let Some(tx) = tx {
-        let result_truncated = result.map(|r| {
-            if r.len() > 2000 {
-                format!("{}...[truncated]", &r[..2000])
-            } else {
-                r.to_string()
-            }
-        });
+        let result_truncated =
+            result.map(|r| truncate_on_char_boundary(r, TOOL_COMPLETE_RESULT_PREVIEW_BYTES));
 
         let event = SSEChatStreamEvent::McpToolComplete(SSEChatStreamMcpToolCompleteData {
             tool_use_id: tool_use_id.to_string(),
@@ -732,12 +869,64 @@ pub async fn send_tool_complete_event(
             server: server.to_string(),
             is_error,
             result: result_truncated,
+            started_at: timing.and_then(|t| t.started_at_rfc3339()),
+            duration_ms: timing.map(|t| t.elapsed_ms),
         });
 
         if let Err(e) = tx.send(Ok(event.into())) {
             tracing::warn!("Failed to send SSE tool complete event: {:?}", e);
         }
     }
+}
+
+/// ITEM-25 / AP-3: does this call re-prompt for approval on EVERY turn, no matter
+/// what the user chooses now?
+///
+/// TRUE means a persisted per-(server, tool) auto-approval would NOT prevent the
+/// next prompt, so the client must not offer "Approve for this conversation".
+/// This is the SERVER declaring its own policy — the single source of truth for
+/// the `always_reprompt` field on `mcpApprovalRequired`. The client previously
+/// re-derived it by hardcoding the App Control server's UUID plus the
+/// `invoke_capability` tool name, which was wrong for `background`'s
+/// `spawn_background` and for any admin `manual_approve` override.
+///
+/// The three conditions are exactly the branches of the approval ladder (mirrored
+/// in `mcp.rs::after_llm_call` and `chat::agent_host::gate::decide_pure`) that
+/// reach "needs approval" WITHOUT ever consulting the auto-approved list:
+///
+/// 1. an admin per-(server, tool) `manual_approve` override — it wins over
+///    everything downstream, including any user auto-approval;
+/// 2. `control_mcp`'s mutating ops (`control_call_needs_approval`);
+/// 3. `background_mcp`'s launching op (`background_call_needs_approval`).
+///
+/// Everything else routes through `decide_regular_tool_approval` /
+/// `ApprovalMode::ManualApprove`, both of which DO honor auto-approval → `false`.
+pub fn approval_is_always_reprompt(
+    server_id: Option<uuid::Uuid>,
+    tool_name: &str,
+    input: &serde_json::Value,
+    admin_override: Option<&super::approval::models::ApprovalMode>,
+) -> bool {
+    use super::approval::models::ApprovalMode;
+    // (1) An admin `manual_approve` override forces the prompt regardless of any
+    // user/conversation auto-approval, so the prompt WILL recur.
+    if let Some(mode) = admin_override {
+        return matches!(mode, ApprovalMode::ManualApprove);
+    }
+    let Some(id) = server_id else {
+        return false;
+    };
+    // (2) control_mcp: read-only tools auto-run; a mutating `invoke_capability`
+    // always re-prompts (overriding even AutoApprove).
+    if id == crate::modules::control_mcp::control_mcp_server_id() {
+        return crate::modules::control_mcp::handlers::control_call_needs_approval(tool_name, input);
+    }
+    // (3) background_mcp: owner-scoped reads auto-run; `spawn_background` launches
+    // a detached agent and always re-prompts.
+    if id == crate::modules::background_mcp::background_mcp_server_id() {
+        return crate::modules::background_mcp::tools::background_call_needs_approval(tool_name);
+    }
+    false
 }
 
 /// Send SSE event for approval required.
@@ -753,6 +942,17 @@ pub async fn send_approval_required_event(
     server: &str,
     server_id: &str,
     input: &serde_json::Value,
+    // ITEM-50 (full-disclosure): the external destination host (`None` for a
+    // built-in/loopback/stdio server) + the tool's full exact description
+    // (`None` when unresolved) — surfaced so the approval card can render a
+    // *data-egress* review, not just "this tool needs approval".
+    dest_host: Option<String>,
+    description: Option<String>,
+    // ITEM-25/AP-3: the server's own declaration that this call re-prompts every
+    // turn regardless of the user's choice. Compute it with
+    // `approval_is_always_reprompt` at the call site (which holds the resolved
+    // server id + admin override) — never re-derive it client-side.
+    always_reprompt: bool,
 ) -> Result<(), AppError> {
     if let Some(tx) = tx {
         let event = SSEChatStreamEvent::McpApprovalRequired(SSEChatStreamMcpApprovalRequiredData {
@@ -761,6 +961,9 @@ pub async fn send_approval_required_event(
             server: server.to_string(),
             server_id: server_id.to_string(),
             input: input.clone(),
+            dest_host,
+            description,
+            always_reprompt,
         });
 
         tx.send(Ok(event.into()))
@@ -832,8 +1035,10 @@ mod tests {
     use super::{
         ask_user_tool_result, build_query_input, cap_structured_content,
         convert_mcp_tool_to_ai_tool, run_ask_user_elicitation, stamp_ask_user_marker,
-        McpContentData, ASK_USER_SCHEMA_MARKER, MAX_ANTHROPIC_TOOL_NAME_LEN,
-        MAX_STRUCTURED_CONTENT_BYTES,
+        truncate_on_char_boundary, McpContentData, ASK_USER_SCHEMA_MARKER,
+        MAX_ANTHROPIC_TOOL_NAME_LEN, MAX_STRUCTURED_CONTENT_BYTES,
+        TOOL_COMPLETE_RESULT_PREVIEW_BYTES,
+        prepare_ask_user_schema, ASK_USER_SCHEMA_EXAMPLE,
     };
 
     use crate::modules::mcp::client::traits::Tool as McpToolDef;
@@ -920,7 +1125,8 @@ mod tests {
     #[tokio::test]
     async fn ask_user_without_sse_returns_non_error_no_session_marker() {
         let result = run_ask_user_elicitation(
-            serde_json::json!({ "message": "Pick a color", "schema": { "type": "object" } }),
+            serde_json::json!({ "message": "Pick a color", "schema": { "type": "object",
+                "properties": { "color": { "type": "string" } } } }),
             None,
             None,
             None, // no sse_tx
@@ -1079,7 +1285,8 @@ mod tests {
             mpsc::unbounded_channel::<Result<axum::response::sse::Event, std::convert::Infallible>>();
 
         let handle = tokio::spawn(run_ask_user_elicitation(
-            serde_json::json!({ "message": "Pick a color", "schema": { "type": "object" } }),
+            serde_json::json!({ "message": "Pick a color", "schema": { "type": "object",
+                "properties": { "color": { "type": "string" } } } }),
             None,
             None,
             Some(tx),
@@ -1351,7 +1558,8 @@ mod tests {
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(5),
             run_ask_user_elicitation(
-                serde_json::json!({ "message": "Pick a color", "schema": { "type": "object" } }),
+                serde_json::json!({ "message": "Pick a color", "schema": { "type": "object",
+                "properties": { "color": { "type": "string" } } } }),
                 None,
                 None,
                 Some(tx),
@@ -1396,5 +1604,432 @@ mod tests {
         let (content, is_error) = tool_result_parts(&result);
         assert!(is_error, "oversized schema must be a tool error");
         assert!(content.contains("too large"), "got: {content}");
+    }
+
+    // ========================================================================
+    // ITEM-14 — `mcpToolComplete` result preview must not panic on multibyte
+    // ========================================================================
+
+    /// REGRESSION (the bug ITEM-14 fixes): `send_tool_complete_event` truncated
+    /// with `&r[..2000]`, a BYTE slice that panics with
+    /// `byte index 2000 is not a char boundary` whenever the cut lands mid-character.
+    /// Any tool returning CJK / emoji / accented text longer than the cap could
+    /// therefore kill the SSE emitter for the whole turn.
+    ///
+    /// The string below is built so byte 2000 falls STRICTLY INSIDE a 3-byte
+    /// character: 1998 ASCII bytes, then '日' occupying bytes 1998..2001.
+    /// `&s[..2000]` on it panics; `truncate_on_char_boundary` must not.
+    #[test]
+    fn truncate_on_char_boundary_survives_a_split_multibyte_char() {
+        let cap = TOOL_COMPLETE_RESULT_PREVIEW_BYTES;
+        let mut s = "a".repeat(cap - 2);
+        s.push('\u{65e5}'); // 3 bytes: occupies cap-2 .. cap+1
+        s.push_str(&"b".repeat(50));
+        assert!(s.len() > cap, "fixture must exceed the cap");
+        assert!(
+            !s.is_char_boundary(cap),
+            "fixture must actually straddle the cut (this is what used to panic)"
+        );
+
+        let out = truncate_on_char_boundary(&s, cap);
+
+        assert!(out.ends_with("...[truncated]"), "truncation marker kept: {}", &out[out.len() - 20..]);
+        let body = out.strip_suffix("...[truncated]").unwrap();
+        // Cut back to the boundary BELOW the cap — never past it, never mid-char.
+        assert_eq!(body.len(), cap - 2, "cut back to the nearest char boundary");
+        assert!(!body.contains('\u{65e5}'), "the straddling char is dropped, not split");
+        // The whole output is valid UTF-8 by construction (it is a `String`), which
+        // is precisely what the byte slice could not guarantee.
+    }
+
+    /// A 4-byte emoji straddling the cut is handled the same way, and a cut that
+    /// lands exactly ON a boundary keeps every full character before it.
+    #[test]
+    fn truncate_on_char_boundary_handles_emoji_and_exact_boundaries() {
+        // Emoji straddling: 1999 ASCII + a 4-byte emoji spanning 1999..2003.
+        let cap = TOOL_COMPLETE_RESULT_PREVIEW_BYTES;
+        let mut s = "x".repeat(cap - 1);
+        s.push('\u{1f600}');
+        s.push_str(&"y".repeat(10));
+        assert!(!s.is_char_boundary(cap));
+        let body = truncate_on_char_boundary(&s, cap)
+            .strip_suffix("...[truncated]")
+            .unwrap()
+            .to_string();
+        assert_eq!(body.len(), cap - 1);
+
+        // Exact boundary: 2 bytes per char, cut lands between chars → nothing lost.
+        let s = "\u{e9}".repeat(cap); // 'é' is 2 bytes
+        assert!(s.is_char_boundary(cap));
+        let body = truncate_on_char_boundary(&s, cap)
+            .strip_suffix("...[truncated]")
+            .unwrap()
+            .to_string();
+        assert_eq!(body.len(), cap);
+        assert_eq!(body.chars().count(), cap / 2);
+    }
+
+    /// Under the cap the value passes through byte-for-byte (no marker appended),
+    /// including multibyte content.
+    #[test]
+    fn truncate_on_char_boundary_passes_short_input_through() {
+        let s = "hello \u{4e16}\u{754c} \u{1f30f}";
+        assert_eq!(
+            truncate_on_char_boundary(s, TOOL_COMPLETE_RESULT_PREVIEW_BYTES),
+            s
+        );
+        // Degenerate cap: everything is dropped, but it still must not panic.
+        assert_eq!(truncate_on_char_boundary("\u{65e5}\u{672c}", 1), "...[truncated]");
+    }
+
+    // ========================================================================
+    // ITEM-25 / AP-3 — the server declares its own re-prompt policy
+    // ========================================================================
+
+    /// The client used to decide whether to hide "Approve for this conversation"
+    /// by hardcoding the App Control built-in's UUID plus the `invoke_capability`
+    /// tool name. These pin the SERVER-side replacement so the flag matches the
+    /// gate that actually causes the re-prompt.
+    #[test]
+    fn approval_is_always_reprompt_matches_the_gate() {
+        use super::approval_is_always_reprompt;
+        use crate::modules::mcp::chat_extension::approval::models::ApprovalMode;
+        use serde_json::json;
+
+        let control = crate::modules::control_mcp::control_mcp_server_id();
+        let background = crate::modules::background_mcp::background_mcp_server_id();
+        let regular = uuid::Uuid::from_u128(0xdead_beef);
+
+        // An admin `manual_approve` override wins over EVERYTHING downstream, so
+        // auto-approving in the conversation could not stop the next prompt.
+        assert!(approval_is_always_reprompt(
+            Some(regular),
+            "anything",
+            &json!({}),
+            Some(&ApprovalMode::ManualApprove)
+        ));
+        // The other two override modes never reach a prompt at all.
+        assert!(!approval_is_always_reprompt(
+            Some(control),
+            "invoke_capability",
+            &json!({}),
+            Some(&ApprovalMode::AutoApprove)
+        ));
+        assert!(!approval_is_always_reprompt(
+            Some(control),
+            "invoke_capability",
+            &json!({}),
+            Some(&ApprovalMode::Disabled)
+        ));
+
+        // control_mcp: read-only tools auto-run (no prompt at all, so no
+        // "always"); a mutating/unknown invoke always re-prompts.
+        assert!(!approval_is_always_reprompt(
+            Some(control),
+            "list_capabilities",
+            &json!({}),
+            None
+        ));
+        assert!(!approval_is_always_reprompt(
+            Some(control),
+            "describe_capability",
+            &json!({}),
+            None
+        ));
+        assert!(
+            approval_is_always_reprompt(Some(control), "invoke_capability", &json!({}), None),
+            "a malformed/unknown invoke fails safe to approve, and re-prompts"
+        );
+
+        // background_mcp: the SECOND such server — exactly the case the client's
+        // control-only hardcoding got wrong.
+        assert!(!approval_is_always_reprompt(
+            Some(background),
+            "check_status",
+            &json!({}),
+            None
+        ));
+        assert!(!approval_is_always_reprompt(
+            Some(background),
+            "collect_result",
+            &json!({}),
+            None
+        ));
+        assert!(approval_is_always_reprompt(
+            Some(background),
+            "spawn_background",
+            &json!({}),
+            None
+        ));
+
+        // A regular server routes through the approval-mode ladder, which DOES
+        // honour a persisted auto-approval → the button is offered.
+        assert!(!approval_is_always_reprompt(Some(regular), "search", &json!({}), None));
+        // Unresolvable server → no basis to claim "always"; offer the button.
+        assert!(!approval_is_always_reprompt(None, "search", &json!({}), None));
+    }
+    // ── stringified-argument decode (the reported live defect) ───────────────
+
+    /// The EXACT payload observed in the live session: the model sent
+    /// `ask_user`'s object `schema` argument as a JSON-ENCODED STRING. Before
+    /// the fix this stayed a string all the way to the browser, which rendered
+    /// a card with zero fields, and the turn blocked for the full 300s timeout.
+    ///
+    /// It must now become a usable OBJECT carrying every question the model
+    /// asked — AND the trusted rich-UX marker, which proves the decode happened
+    /// early enough to be stamped. (TEST-1 / TEST-10, INV-1 + INV-6)
+    #[test]
+    fn ask_user_reported_stringified_schema_becomes_a_usable_marked_object() {
+        let input = serde_json::json!({
+            "message": "What would you like to name this new project?",
+            "schema": r#"{"properties": {"name": {"title": "Project name", "type": "string"}, "description": {"title": "Brief description (optional)", "type": "string"}, "instructions": {"title": "System instructions for conversations in this project (optional)", "type": "string"}}, "required": ["name"], "type": "object"}"#
+        });
+        let out = prepare_ask_user_schema(&input).expect("the reported payload must be accepted");
+
+        assert!(out.is_object(), "the schema must be an OBJECT, not a string");
+        let props = out["properties"]
+            .as_object()
+            .expect("a usable form needs `properties`");
+        assert_eq!(props.len(), 3, "all three questions must survive");
+        for key in ["name", "description", "instructions"] {
+            assert!(props.contains_key(key), "missing question `{key}`");
+        }
+        assert_eq!(props["name"]["title"], serde_json::json!("Project name"));
+        assert_eq!(out["required"], serde_json::json!(["name"]));
+        assert_eq!(
+            out[ASK_USER_SCHEMA_MARKER],
+            serde_json::json!(true),
+            "the decode must happen before the stamp, or the FE never enters rich mode"
+        );
+    }
+
+    /// The end-to-end assertion the pre-existing isolated leaf test traded away.
+    ///
+    /// `stamp_ask_user_marker_stamps_objects_idempotently_and_skips_non_objects`
+    /// feeds `json!("just a string")` to the stamp and asserts it passes through
+    /// unchanged — a correct statement about the LEAF that silently ratified the
+    /// broken SYSTEM. The leaf's no-panic contract is still right and is kept;
+    /// what was missing is this: a string must never REACH the stamp, because by
+    /// then the only outcomes left are "unmarked empty form" or "panic".
+    /// (TEST-43, ITEM-21)
+    #[test]
+    fn ask_user_string_schema_never_reaches_the_marker_stamp() {
+        // Decodable → the stamp sees an OBJECT.
+        let decodable = serde_json::json!({
+            "message": "Pick",
+            "schema": r#"{"type":"object","properties":{"c":{"type":"string"}}}"#
+        });
+        let out = prepare_ask_user_schema(&decodable).unwrap();
+        assert!(
+            out.is_object() && out[ASK_USER_SCHEMA_MARKER] == serde_json::json!(true),
+            "a decodable string must arrive at the stamp as a marked object, got: {out}"
+        );
+
+        // Undecodable → refused OUTRIGHT, so the stamp is never called with a
+        // string at all. Either way the non-object arm of the stamp is now
+        // unreachable from this path.
+        let undecodable = serde_json::json!({ "message": "Pick", "schema": "not json {" });
+        assert!(
+            prepare_ask_user_schema(&undecodable).is_err(),
+            "an undecodable string must be refused, never forwarded to the stamp"
+        );
+    }
+
+    /// No-regression: a well-formed object schema produces EXACTLY what the
+    /// pre-existing `cap_requested_schema` → `stamp_ask_user_marker` composition
+    /// produced, byte for byte; and an ABSENT schema still defaults to
+    /// `{"type":"object"}` + marker rather than erroring. (TEST-11, INV-8)
+    #[test]
+    fn ask_user_well_formed_and_absent_schemas_are_unchanged() {
+        use crate::modules::mcp::elicitation::models::cap_requested_schema;
+
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": { "color": { "type": "string", "enum": ["red", "green"] } }
+        });
+        let expected = stamp_ask_user_marker(cap_requested_schema(schema.clone()));
+        let got = prepare_ask_user_schema(
+            &serde_json::json!({ "message": "Pick a color", "schema": schema }),
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_vec(&got).unwrap(),
+            serde_json::to_vec(&expected).unwrap(),
+            "a well-formed schema must be byte-identical to the pre-change composition"
+        );
+
+        let absent = prepare_ask_user_schema(&serde_json::json!({ "message": "Proceed?" }))
+            .expect("an ABSENT schema must NOT be an error");
+        assert_eq!(absent["type"], serde_json::json!("object"));
+        assert_eq!(absent[ASK_USER_SCHEMA_MARKER], serde_json::json!(true));
+    }
+
+    /// The size guard stays authoritative in BOTH forms.
+    ///
+    /// A 2 MB JSON-ENCODED STRING must be refused just as an oversized object
+    /// is — and it must be refused on the RAW measurement, before anything
+    /// parses it. The ordering invariant that makes the raw-first check
+    /// sufficient is asserted alongside: a JSON-encoded string of a value is
+    /// always at least as long as the value's own serialization, so the raw
+    /// measurement can never under-report. (TEST-12, INV-4)
+    #[test]
+    fn ask_user_size_guard_covers_the_encoded_form_too() {
+        let big = serde_json::json!({
+            "type": "object",
+            "properties": { "x": { "type": "string", "description": "A".repeat(MAX_STRUCTURED_CONTENT_BYTES + 1024) } }
+        });
+        let encoded = serde_json::to_string(&big).unwrap();
+        assert!(encoded.len() > MAX_STRUCTURED_CONTENT_BYTES, "fixture must clear the cap");
+
+        let err = prepare_ask_user_schema(
+            &serde_json::json!({ "message": "Pick", "schema": encoded }),
+        )
+        .expect_err("an oversized ENCODED schema must be refused");
+        assert!(err.contains("too large"), "got: {err}");
+        assert!(
+            err.contains(&MAX_STRUCTURED_CONTENT_BYTES.to_string()),
+            "the refusal must name the limit: {err}"
+        );
+
+        // The ordering invariant: encoded length >= decoded length, always.
+        for v in [
+            serde_json::json!({ "type": "object" }),
+            serde_json::json!({ "type": "object", "properties": { "a": { "type": "string" } } }),
+            serde_json::json!({ "a": [1, 2, 3], "b": { "c": "d\"e" } }),
+        ] {
+            let enc = serde_json::to_vec(&serde_json::Value::String(
+                serde_json::to_string(&v).unwrap(),
+            ))
+            .unwrap()
+            .len();
+            let dec = serde_json::to_vec(&v).unwrap().len();
+            assert!(
+                enc >= dec,
+                "encoded ({enc}) must never measure smaller than decoded ({dec}) for {v}"
+            );
+        }
+    }
+
+    /// EVERY `ask_user` rejection — the new decode paths AND the pre-existing
+    /// ones — must tell the model what it sent, what is required, and show a
+    /// schema it can copy. An error the model cannot act on leaves it repeating
+    /// the same malformed call, which is what the user experiences as a dead
+    /// card. Asserts the TEXT, not merely that it is an error. (TEST-14 /
+    /// TEST-15 / TEST-16, INV-5)
+    #[tokio::test]
+    async fn ask_user_every_rejection_is_actionable() {
+        let deep = {
+            let mut d = r#"{"type":"object","properties":{"a":{"type":"string"}}}"#.to_string();
+            for _ in 0..4 {
+                d = serde_json::to_string(&d).unwrap();
+            }
+            d
+        };
+        let cases: Vec<(&str, serde_json::Value)> = vec![
+            ("message-missing", serde_json::json!({ "schema": { "type": "object", "properties": { "a": { "type": "string" } } } })),
+            ("message-blank", serde_json::json!({ "message": "   ", "schema": { "type": "object", "properties": { "a": { "type": "string" } } } })),
+            ("schema-not-json", serde_json::json!({ "message": "Pick", "schema": "not json {" })),
+            ("schema-decodes-to-array", serde_json::json!({ "message": "Pick", "schema": "[1,2,3]" })),
+            ("schema-decodes-to-number", serde_json::json!({ "message": "Pick", "schema": "42" })),
+            ("schema-over-unwrap-bound", serde_json::json!({ "message": "Pick", "schema": deep })),
+            ("schema-wrong-type", serde_json::json!({ "message": "Pick", "schema": 7 })),
+            ("schema-no-properties", serde_json::json!({ "message": "Pick", "schema": { "type": "object" } })),
+            ("schema-empty-properties", serde_json::json!({ "message": "Pick", "schema": { "type": "object", "properties": {} } })),
+        ];
+
+        for (label, input) in cases {
+            let result = run_ask_user_elicitation(input, None, None, None, None).await;
+            let (content, is_error) = tool_result_parts(&result);
+            assert!(is_error, "[{label}] must be a tool error");
+            // (a) what was RECEIVED — the argument is named.
+            assert!(
+                content.contains("'schema'") || content.contains("`schema`")
+                    || content.contains("'message'") || content.contains("`message`"),
+                "[{label}] must name the offending argument: {content}"
+            );
+            // (b) what is EXPECTED.
+            assert!(
+                content.contains("required") || content.contains("must") || content.contains("Send"),
+                "[{label}] must say what is expected: {content}"
+            );
+            // (c) a concrete corrective EXAMPLE the model can copy.
+            assert!(
+                content.contains("Example: "),
+                "[{label}] must carry a copyable example: {content}"
+            );
+            assert!(
+                content.contains("\"type\":\"object\"") || content.contains("\"schema\":"),
+                "[{label}] the example must be literal JSON, not prose: {content}"
+            );
+            // …and a rejected schema must never leak the trusted rich-UX marker
+            // into model-visible text.
+            assert!(
+                !content.contains(ASK_USER_SCHEMA_MARKER),
+                "[{label}] a rejection must never carry the rich-mode marker: {content}"
+            );
+        }
+    }
+
+    /// The zero-`properties` split of DESIGN §3.3 / DEC-9, pinned because it is
+    /// deliberately ASYMMETRIC and would otherwise look like an inconsistency:
+    /// a schema the model SUPPLIED that asks nothing is a correctable mistake,
+    /// while an ABSENT schema is the pre-existing "no fields, just accept or
+    /// decline" contract and must keep working. (TEST-15)
+    #[test]
+    fn ask_user_zero_properties_is_an_error_only_when_the_model_supplied_it() {
+        assert!(
+            prepare_ask_user_schema(
+                &serde_json::json!({ "message": "Pick", "schema": { "type": "object", "properties": {} } })
+            )
+            .is_err(),
+            "an explicitly supplied schema that asks nothing must be correctable"
+        );
+        assert!(
+            prepare_ask_user_schema(&serde_json::json!({ "message": "Proceed?" })).is_ok(),
+            "an ABSENT schema must remain valid — that is the pre-existing contract"
+        );
+        assert!(
+            prepare_ask_user_schema(&serde_json::json!({ "message": "Proceed?", "schema": null }))
+                .is_ok(),
+            "an explicit null must behave as absent"
+        );
+    }
+
+    /// The shared model-supplied-argument conformance battery, applied to THIS
+    /// call site. This is the class of test whose absence let the bug ship —
+    /// see `.lifecycle/ask-user-stringified-schema/TEST_GAP_ANALYSIS.md`.
+    /// (TEST-41)
+    #[test]
+    fn ask_user_schema_passes_the_shared_argument_conformance_battery() {
+        use crate::common::tool_args::conformance::{assert_arg_conformance, ArgSite};
+        use crate::common::tool_args::ArgShape;
+
+        let canonical =
+            serde_json::json!({ "type": "object", "properties": { "name": { "type": "string" } } });
+        // The site stamps the trusted marker, so compare against the stamped
+        // form: the battery asserts WHAT THE MODEL MEANT survives, not that the
+        // pipeline is a no-op.
+        let strip = |v: serde_json::Value| -> serde_json::Value {
+            match v {
+                serde_json::Value::Object(mut m) => {
+                    m.remove(ASK_USER_SCHEMA_MARKER);
+                    serde_json::Value::Object(m)
+                }
+                other => other,
+            }
+        };
+        assert_arg_conformance(ArgSite {
+            site: "ask_user.schema",
+            arg: "schema",
+            shape: ArgShape::Object,
+            canonical,
+            example: ASK_USER_SCHEMA_EXAMPLE,
+            absent_yields: Some(serde_json::json!({ "type": "object" })),
+            extract: move |args: serde_json::Value| {
+                prepare_ask_user_schema(&args)
+                    .map(|v| Some(strip(v)))
+                    .map_err(|e| e)
+            },
+        });
     }
 }

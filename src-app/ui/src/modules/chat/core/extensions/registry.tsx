@@ -2,26 +2,61 @@ import type {
   ChatExtension,
   ExtensionRegistrationOptions,
   BeforeSendResult,
-  SendBlocker,
   SSEEvent,
   SSEEventTypeRegistry,
   ChatSlotName,
   ExtensionRequestFields,
   ContentRendererProps,
 } from '@/modules/chat/core/extensions/types'
+import { resolveCancel } from '@/modules/chat/core/extensions/beforeSendCancel'
+import type {
+  RailActivityContext,
+  RailContribution,
+  RailStepDescriptor,
+} from '@/modules/chat/components/rail/railTypes'
+import { RailContributionRegistry } from '@/modules/chat/core/extensions/railRegistryCore'
+import { RailStepDetail } from '@/modules/chat/components/rail/RailStepDetail'
+import { clearRailLiveSourceIfOwnedBy } from '@/modules/chat/core/rail/liveSteps'
+import { clearElicitationTransportIfOwnedBy } from '@/modules/chat/core/elicitation/transport'
+import { composeRequestFieldsFrom } from '@/modules/chat/core/extensions/composeRequestFields'
 import React from 'react'
 import { createSlotRegistry } from '@ziee/framework/slots'
 
 /**
  * Central registry for managing chat extensions
  * Handles registration, ordering, and orchestration
- * Extensions access Stores.Chat directly for conversation data
+ * Extensions access ChatStore directly for conversation data
  */
 export class ChatExtensionRegistry {
   private extensions: Map<string, ChatExtension> = new Map()
   private extensionOptions: Map<string, ExtensionRegistrationOptions> =
     new Map()
   private initialized = false
+
+  // Reactive change signal (register / unregister). Consumers that render a
+  // component PER extension (so they never call a hook in a loop) subscribe via
+  // `useChatExtensionList()` and re-render when the set changes, mounting /
+  // unmounting a probe per extension — Rules-of-Hooks-safe at any registration
+  // time. A monotonically increasing version is a stable useSyncExternalStore
+  // snapshot.
+  private changeVersion = 0
+  private changeListeners = new Set<() => void>()
+
+  private notifyExtensionsChanged(): void {
+    this.changeVersion++
+    for (const l of this.changeListeners) l()
+  }
+
+  /** Subscribe to register/unregister (arrow-bound for useSyncExternalStore). */
+  subscribeToExtensions = (onChange: () => void): (() => void) => {
+    this.changeListeners.add(onChange)
+    return () => {
+      this.changeListeners.delete(onChange)
+    }
+  }
+
+  /** Monotonic version bumped on every register/unregister (stable snapshot). */
+  getExtensionsVersion = (): number => this.changeVersion
 
   /**
    * Slot registry: maps slot names to ordered components, built at
@@ -44,6 +79,25 @@ export class ChatExtensionRegistry {
     string,
     Array<{ extension: ChatExtension; Component: React.ComponentType<ContentRendererProps> }>
   > = new Map()
+
+  /**
+   * ACTIVITY-RAIL contribution registry (ITEM-1).
+   *
+   * Deliberately a SEPARATE registry BESIDE `contentTypeRegistry`, not a rewrite
+   * of renderer resolution. Two reasons:
+   *
+   *  1. Correctness — a rail step and a rendered block are different questions.
+   *     A contribution may describe a step it does not render (it delegates the
+   *     body straight back through `renderContent`), and a renderer may render a
+   *     block that is not a step at all.
+   *  2. Merge safety — this file is one of the three hottest on the branch
+   *     (BASE.md). An additive field + three thin delegations merge cleanly
+   *     against a concurrent edit to `renderContent`; a rewrite would not.
+   *
+   * The resolution logic itself lives in a pure, JSX-free module so it is
+   * reachable from a unit spec (`railRegistryCore.ts`).
+   */
+  private railContributions = new RailContributionRegistry()
 
   /**
    * SSE event handler registry: Maps event types to handlers
@@ -85,6 +139,39 @@ export class ChatExtensionRegistry {
   > = new Map()
 
   /**
+   * Synchronous accessor for the PRIMARY chat store's mutable state object,
+   * pushed here by the chat store module at load (`setPrimaryChatStateAccessor`)
+   * — an inversion so `register()` can seed the primary pane's extension store
+   * SYNCHRONOUSLY without a circular static import of the chat store. When the
+   * text extension registers (inside the `chatExtensionsReady` chain the composer
+   * gates on), its `TextStore` must be present on the primary store the INSTANT
+   * `chatExtensionsReady` resolves — a deferred async seed would land a tick
+   * later, after the readiness gate has already let the composer read
+   * `Chat.TextStore` (→ the "TextStore undefined" crash).
+   */
+  private primaryChatStateAccessor:
+    | (() => Record<string, unknown>)
+    | null = null
+
+  /** Register the primary chat store's state accessor (see field doc). Called
+   *  once by the chat store module at load. */
+  setPrimaryChatStateAccessor(accessor: () => Record<string, unknown>): void {
+    this.primaryChatStateAccessor = accessor
+    // Seed any extensions already registered before the store module loaded, so
+    // an out-of-order load (store after some extensions) still ends up seeded.
+    this.seedPrimaryStore()
+  }
+
+  /** Idempotently inject every registered extension store into the primary chat
+   *  store, if the accessor is available. No-op until the store module registers
+   *  its accessor. */
+  private seedPrimaryStore(): void {
+    const state = this.primaryChatStateAccessor?.()
+    if (!state) return
+    this.injectExtensionStores(state)
+  }
+
+  /**
    * Register a new extension
    * Extensions are automatically sorted by priority
    * Supports re-registration for HMR (Hot Module Replacement)
@@ -102,28 +189,48 @@ export class ChatExtensionRegistry {
 
     this.extensions.set(extension.name, extension)
     this.extensionOptions.set(extension.name, options)
+    this.notifyExtensionsChanged()
 
     // Seed the PRIMARY pane's chat store with this extension's store instance
     // (split panes seed their OWN via `injectExtensionStores` in each store's
     // init — see that method). Idempotent so it can't race/overwrite the
     // init-time injection: whichever runs first wins, the other skips.
+    //
+    // SYNCHRONOUS via the store-registered accessor (`setPrimaryChatStateAccessor`).
+    // The composer (`ChatInput`) gates on `chatExtensionsReady`, which resolves
+    // once every extension's `register()` has returned — so the seed MUST happen
+    // synchronously inside `register()`, not on a later microtask, or the gate
+    // opens before `Chat.TextStore` exists (→ "TextStore undefined"). The async
+    // dynamic import is kept ONLY as a fallback for the (unexpected) case where an
+    // extension registers before the chat store module has pushed its accessor.
     if (extension.store) {
-      // Lazy import useChatStore to avoid circular dependency
-      // Import happens at runtime when register() is called, not at module load time
-      import('../stores/Chat.store').then(({ useChatStore }) => {
-        // Inject store at root level of Chat store for reactive access via Stores.Chat.{storeName}
-        // Direct mutation is safe now that Immer middleware has been removed
-        const stateObject = useChatStore.getState() as unknown as Record<
-          string,
-          unknown
-        >
-        if (!stateObject[extension.store!.name]) {
-          stateObject[extension.store!.name] = extension.store!.createStore()
-          console.log(
-            `[ChatExtensions] Injected store "${extension.store!.name}" for extension: ${extension.name}`,
-          )
+      const state = this.primaryChatStateAccessor?.()
+      if (state) {
+        if (!state[extension.store.name]) {
+          state[extension.store.name] = extension.store.createStore()
         }
-      })
+      } else {
+        // Accessor not yet available — defer via a lazy import (avoids a circular
+        // static import of the chat store). Idempotent with the accessor seed.
+        // This path is NOT expected: every extension.tsx statically imports the
+        // chat store, so the store module (which pushes the accessor at load) is
+        // evaluated before any register() runs. If it ever fires, the seed is
+        // deferred a microtask and can miss the `chatExtensionsReady` gate the
+        // composer waits on — re-exposing the "TextStore undefined" crash — so
+        // WARN loudly rather than fail silently.
+        console.warn(
+          `[ChatExtensions] primary chat-store accessor not registered when seeding "${extension.store.name}"; falling back to a deferred async seed (composer may briefly miss it). This indicates a module-load-order regression.`,
+        )
+        import('../stores/chat').then(({ useChatStore }) => {
+          const stateObject = useChatStore.getState() as unknown as Record<
+            string,
+            unknown
+          >
+          if (!stateObject[extension.store!.name]) {
+            stateObject[extension.store!.name] = extension.store!.createStore()
+          }
+        })
+      }
     }
 
     // Register content type components in content type registry
@@ -142,6 +249,24 @@ export class ChatExtensionRegistry {
       console.log(
         `[ChatExtensions] Registered content types for ${extension.name}:`,
         Object.keys(extension.contentTypes).join(', '),
+      )
+    }
+
+    // Register ACTIVITY-RAIL contributions (ITEM-1). Sorted by `order` (falling
+    // back to the extension's priority) so a generic fallback contribution can
+    // deliberately sit behind every tool-family contribution.
+    if (extension.railContributions) {
+      this.railContributions.register(
+        extension.name,
+        extension.railContributions,
+        extension.priority ?? 100,
+      )
+
+      console.log(
+        `[ChatExtensions] Registered rail contributions for ${extension.name}:`,
+        extension.railContributions
+          .flatMap(c => c.contentTypes)
+          .join(', '),
       )
     }
 
@@ -229,6 +354,7 @@ export class ChatExtensionRegistry {
 
     this.extensions.delete(name)
     this.extensionOptions.delete(name)
+    this.notifyExtensionsChanged()
 
     // Clear this extension's slot entries via the generic slot registry.
     this.slots.unregister(name)
@@ -242,6 +368,23 @@ export class ChatExtensionRegistry {
         this.contentTypeRegistry.set(contentType, filtered)
       }
     }
+
+    // Clear rail-contribution entries for this extension
+    this.railContributions.unregister(name)
+
+    // …and the live-step source, if THIS extension installed it. Registration
+    // happens in an extension's `initialize`; without a matching clear the
+    // module-level source (and its store subscription) outlives the extension
+    // that owns it, so a disabled/HMR-torn-down extension keeps feeding live
+    // statuses to rails from a module the host believes it has disposed.
+    // Guarded by owner so unregistering a DIFFERENT extension cannot detach it.
+    clearRailLiveSourceIfOwnedBy(name)
+
+    // …and the elicitation transport, on the same owner-scoped terms. Without
+    // it a torn-down provider leaves a module-level transport (and its store
+    // subscription) that another extension's approval card would keep resolving
+    // through.
+    clearElicitationTransportIfOwnedBy(name)
 
     // Clear SSE event handler registry entries for this extension
     for (const [eventType, entries] of this.sseEventHandlerRegistry.entries()) {
@@ -275,7 +418,7 @@ export class ChatExtensionRegistry {
 
     // Remove extension store from Chat store (if it was injected)
     if (extension?.store) {
-      import('../stores/Chat.store').then(({ useChatStore }) => {
+      import('../stores/chat').then(({ useChatStore }) => {
         // Direct mutation is safe now that Immer middleware has been removed
         const stateObject = useChatStore.getState()
         const storeName = extension.store!.name
@@ -318,7 +461,7 @@ export class ChatExtensionRegistry {
    * single-pane behaviour is unchanged.
    *
    * Direct mutation (not `set`) mirrors the register-time injection: the nested
-   * store carries its own reactivity (read as `Stores.Chat.<Name>`), so adding
+   * store carries its own reactivity (read as `ChatStore.<Name>`), so adding
    * the field to the parent state object needs no subscriber notification.
    */
   injectExtensionStores(chatState: Record<string, unknown>): void {
@@ -333,7 +476,7 @@ export class ChatExtensionRegistry {
   /**
    * Initialize all extensions
    * Call this once when chat is mounted
-   * Extensions access Stores.Chat directly for conversation data
+   * Extensions access ChatStore directly for conversation data
    */
   /**
    * Initialize all extensions against a chat store (ITEM-5/34). Each extension's
@@ -381,7 +524,7 @@ export class ChatExtensionRegistry {
     let api = chatStore
     let resolve = resolveStore
     if (!api || !resolve) {
-      const { useChatStore } = await import('../stores/Chat.store')
+      const { useChatStore } = await import('../stores/chat')
       const state = useChatStore.getState() as unknown as Record<string, unknown>
       api =
         api ?? (useChatStore as unknown as import('./types').ChatExtStoreApi)
@@ -589,7 +732,7 @@ export class ChatExtensionRegistry {
   /**
    * Cleanup all extensions
    * Call this when chat is unmounted
-   * Extensions access Stores.Chat directly for conversation data
+   * Extensions access ChatStore directly for conversation data
    */
   async cleanup(): Promise<void> {
     await this.cleanupExtensions()
@@ -616,7 +759,7 @@ export class ChatExtensionRegistry {
     let api = chatStore
     let resolve = resolveStore
     if (!api || !resolve) {
-      const { useChatStore } = await import('../stores/Chat.store')
+      const { useChatStore } = await import('../stores/chat')
       const state = useChatStore.getState() as unknown as Record<string, unknown>
       api =
         api ?? (useChatStore as unknown as import('./types').ChatExtStoreApi)
@@ -671,37 +814,8 @@ export class ChatExtensionRegistry {
     }
   }
 
-  /**
-   * Reactive send-blocker aggregator. Returns the list of blockers
-   * currently reported by extensions (file: "uploading", future
-   * extensions could report "awaiting-approval", etc.).
-   *
-   * THIS IS A REACT HOOK — call only from inside a render path
-   * (`ChatInput` does). Iterates the extension list in stable
-   * insertion order and calls each extension's `useSendBlocker`
-   * unconditionally. The set of extensions is fixed at app boot,
-   * so the hook count is stable across renders.
-   *
-   * Returns an empty array when no extension blocks. Callers
-   * typically check `blockers.length > 0` to disable the Send button.
-   */
-  useSendBlockers(): SendBlocker[] {
-    const out: SendBlocker[] = []
-    for (const extension of this.getExtensions()) {
-      if (extension.useSendBlocker) {
-        try {
-          const result = extension.useSendBlocker()
-          if (result) out.push(result)
-        } catch (error) {
-          console.error(
-            `[ChatExtensions] Error in ${extension.name}.useSendBlocker:`,
-            error,
-          )
-        }
-      }
-    }
-    return out
-  }
+  // Send-blocker aggregation moved to `useSendBlocked()` (contributions.tsx) —
+  // a component-per-extension collector, so it no longer calls a hook in a loop.
 
   /**
    * Execute beforeSendMessage hook across all extensions
@@ -738,25 +852,30 @@ export class ChatExtensionRegistry {
       }
     }
 
-    // Check for remaining (non-discarded) cancellations
-    for (const [name, result] of results) {
-      if (result.cancel && !discarded.has(name)) {
-        console.log(
-          `[ChatExtensions] Message send cancelled by: ${name}`,
-        )
-        return {
-          cancel: true,
-          errorMessage: result.errorMessage,
-        }
-      }
-    }
+    // Resolve the remaining (non-discarded) cancellations. `resolveCancel`
+    // applies the fail-loud-wins rule: a silent (no-op) veto never masks a loud
+    // one, so a real blocker still reaches the user even if the composer also
+    // happens to be empty.
+    const decision = resolveCancel(results, discarded)
+    if (!decision.cancel) return { cancel: false }
 
-    return { cancel: false }
+    // A silent cancel is an ordinary no-op keypress, not an incident — logging
+    // it at `log` level on every empty Enter would be console noise.
+    if (!decision.silent) {
+      console.log(
+        `[ChatExtensions] Message send cancelled by: ${decision.cancelledBy}`,
+      )
+    }
+    return {
+      cancel: true,
+      silent: decision.silent,
+      errorMessage: decision.errorMessage,
+    }
   }
 
   /**
    * Execute afterStreamComplete hook across all extensions
-   * Extensions access Stores.Chat directly for conversation data
+   * Extensions access ChatStore directly for conversation data
    */
   async afterStreamComplete(
     message: import('@/api-client/types').MessageWithContent,
@@ -820,9 +939,6 @@ export class ChatExtensionRegistry {
       for (const { extension, handler } of enabledHandlers) {
         try {
           await handler(event.data, chatGet, chatSet)
-          console.log(
-            `[ChatExtensions] SSE event "${event.event_type}" handled by: ${extension.name}`,
-          )
         } catch (error) {
           console.error(
             `[ChatExtensions] Error in ${extension.name}.sseEventHandlers.${eventType}:`,
@@ -852,9 +968,6 @@ export class ChatExtensionRegistry {
 
           // Stop propagation if handled
           if (result.handled) {
-            console.log(
-              `[ChatExtensions] SSE event "${event.event_type}" handled by: ${extension.name} (legacy)`,
-            )
             return true
           }
         }
@@ -870,13 +983,100 @@ export class ChatExtensionRegistry {
   }
 
   /**
+   * Resolve the ACTIVITY-RAIL step anchored at `ctx.index`, if any extension
+   * claims it.
+   *
+   * First non-null wins, in `order` (then priority) sequence — the same
+   * first-wins discipline `renderContent` uses. Returns the owning contribution
+   * alongside the descriptor so the caller can render the step's detail through
+   * the SAME contribution that described it (they can never disagree).
+   *
+   * A contribution that throws is skipped, not fatal: a broken descriptor must
+   * degrade the row, never break the transcript.
+   */
+  resolveRailStep(
+    ctx: RailActivityContext,
+  ): { step: RailStepDescriptor; contribution: RailContribution } | null {
+    return this.railContributions.resolve(
+      ctx,
+      name => this.extensionOptions.get(name)?.enabled !== false,
+      (name, error) =>
+        console.error(
+          `[ChatExtensions] Error describing rail activity in ${name}:`,
+          error,
+        ),
+    )
+  }
+
+  /**
+   * The inline detail body for a resolved step (ITEM-11 / INV-2).
+   *
+   * When the contribution supplies no `renderDetail` — the normal case — the
+   * rail DELEGATES to `renderContent({ content })` with NO neighbour list. That
+   * is the documented non-recursion guard, and it is what makes expanding a
+   * knowledge-base step render the knowledge-base card and a file step render
+   * the file preview: the rail re-uses each extension's already-registered
+   * renderer rather than re-implementing anything.
+   */
+  renderRailDetail(
+    ctx: RailActivityContext,
+    contribution: RailContribution,
+    isUser: boolean,
+    /** How many blocks the step OWNS (its `consumed`). Defaults to 1. */
+    consumed = 1,
+  ): React.ReactNode {
+    if (contribution.renderDetail) {
+      try {
+        return contribution.renderDetail(ctx)
+      } catch (error) {
+        console.error('[ChatExtensions] Error rendering rail detail:', error)
+        return null
+      }
+    }
+    // The CORE default body, plus every block the step CONSUMED beyond its
+    // anchor.
+    //
+    // Two separate defects were closed here, both found by the blind audit:
+    //
+    //  - Delegating the ANCHOR to `renderContent` resolved to the extension's
+    //    full tool CARD — a second bordered box with its own chevron inside the
+    //    rail, whose open flag lives in component state (the virtualised-list
+    //    reset INV-7 exists to prevent), and which prints `tool_use.input`
+    //    unredacted. `RailStepDetail` is rendered instead: redacted, chrome-free,
+    //    and unavoidable.
+    //  - Rendering the anchor ALONE dropped the paired `tool_result`, which is
+    //    where the file/knowledge-base/literature renderers live — so a
+    //    tool-produced chart/PDF/CSV lost its inline FileCard entirely. That is a
+    //    real INV-2 regression, and because the set of tools that can emit a
+    //    `resource_link` is open-ended (which is exactly why that renderer is a
+    //    catch-all), it has to be fixed in the delegation rather than by asking
+    //    each contribution to remember.
+    const nodes: React.ReactNode[] = []
+    const anchor = ctx.blocks[ctx.index]
+    const span = Math.max(1, consumed)
+    let paired: import('@/api-client/types').MessageContentDataToolResult | null = null
+    for (let i = ctx.index + 1; i < ctx.index + span && i < ctx.blocks.length; i++) {
+      const b = ctx.blocks[i]
+      if (b.content_type === 'tool_result' && !paired) {
+        paired = b.content as import('@/api-client/types').MessageContentDataToolResult
+      }
+      const node = this.renderContent({ content: b, isUser })
+      if (node) nodes.push(<React.Fragment key={b.id || `d-${i}`}>{node}</React.Fragment>)
+    }
+    return (
+      <>
+        <RailStepDetail block={anchor} result={paired} />
+        {nodes}
+      </>
+    )
+  }
+
+  /**
    * Get content renderer for a specific content type
    * Uses pre-built content-type registry for efficient rendering
    * Only creates components for extensions registered to this content type
    */
-  renderContent(
-    props: ContentRendererProps,
-  ): { node: React.ReactNode; consumed: number } | null {
+  renderContent(props: ContentRendererProps): React.ReactNode | null {
     const contentType = props.content.content_type
     const registered = this.contentTypeRegistry.get(contentType)
 
@@ -898,24 +1098,20 @@ export class ChatExtensionRegistry {
     // is a catch-all (the historical first-wins behavior). This lets several
     // extensions co-own a content type (`tool_result`) without an internal
     // delegation chain — each claims its own, the catch-all handles the rest.
+    //
+    // A renderer ALWAYS renders exactly the block it is handed. The former
+    // `contentSpan` grouping seam is gone (ITEM-5) — grouping is the activity
+    // rail's job and is computed once, so a renderer can no longer claim a span
+    // that disagrees with what it draws.
     for (const { extension, Component } of enabledRegistered) {
       const statics = Component as {
         contentMatch?: (c: ContentRendererProps['content']) => boolean
-        contentSpan?: (blocks: ContentRendererProps['content'][], index: number) => number
       }
       if (statics.contentMatch && !statics.contentMatch(props.content)) {
         continue
       }
       try {
-        // A grouping renderer may consume this block + following ones — but only
-        // when it has the neighbor list (inline in a message). Rendered
-        // standalone (no `blocks`), it always consumes exactly one, so grouping
-        // never recurses when a group renders its own members.
-        const consumed =
-          props.blocks && props.index != null && statics.contentSpan
-            ? Math.max(1, statics.contentSpan(props.blocks, props.index))
-            : 1
-        return { node: <Component {...props} />, consumed }
+        return <Component {...props} />
       } catch (error) {
         console.error(
           `[ChatExtensions] Error rendering content type '${contentType}' in ${extension.name}:`,
@@ -941,38 +1137,30 @@ export class ChatExtensionRegistry {
 
   /**
    * Compose request fields from all extensions
-   * Extensions access Stores.Chat directly for conversation data
+   * Extensions access ChatStore directly for conversation data
+   *
+   * FAIL-CLOSED: if any contributor throws, this REJECTS with a
+   * `RequestFieldCompositionError` instead of returning fields silently missing
+   * that contributor's keys. The merge/failure algebra (and the reasoning for
+   * fail-closed) lives in the pure, unit-tested `composeRequestFields.ts`.
    */
   async composeRequestFields(
     ctx: import('./types').ChatHookCtx,
   ): Promise<ExtensionRequestFields> {
-    const extensions = this.getExtensions().filter(ext =>
-      ext.composeRequestFields !== undefined,
-    )
+    const contributors = this.getExtensions()
+      .filter(ext => ext.composeRequestFields !== undefined)
+      .map(ext => ({
+        name: ext.name,
+        compose: () => ext.composeRequestFields!(ctx),
+      }))
 
-    let fields: ExtensionRequestFields = {}
-
-    for (const extension of extensions) {
-      try {
-        if (extension.composeRequestFields) {
-          const extensionFields = await extension.composeRequestFields(ctx)
-          fields = { ...fields, ...extensionFields }
-        }
-      } catch (error) {
-        console.error(
-          `[ChatExtensions] Error in ${extension.name}.composeRequestFields:`,
-          error,
-        )
-      }
-    }
-
-    return fields
+    return composeRequestFieldsFrom(contributors)
   }
 
   /**
    * Execute onMessageSent hook across all extensions
    * Called after message is successfully sent, before streaming starts
-   * Extensions access Stores.Chat directly for conversation data
+   * Extensions access ChatStore directly for conversation data
    */
   async onMessageSent(ownerPaneId?: string | null): Promise<void> {
     const extensions = this.getExtensions().filter(ext =>
@@ -1003,7 +1191,7 @@ export class ChatExtensionRegistry {
   /**
    * Execute onStreamStart hook across all extensions
    * Called when streaming starts
-   * Extensions access Stores.Chat directly for conversation data
+   * Extensions access ChatStore directly for conversation data
    */
   async onStreamStart(): Promise<void> {
     const extensions = this.getExtensions().filter(ext =>
@@ -1034,7 +1222,7 @@ export class ChatExtensionRegistry {
   /**
    * Execute onStreamError hook across all extensions
    * Called when streaming encounters an error
-   * Extensions access Stores.Chat directly for conversation data
+   * Extensions access ChatStore directly for conversation data
    */
   async onStreamError(error: Error, ownerPaneId?: string | null): Promise<void> {
     const extensions = this.getExtensions().filter(ext =>
@@ -1133,9 +1321,6 @@ export class ChatExtensionRegistry {
         try {
           const content = await provider(delta)
           if (content) {
-            console.log(
-              `[ChatExtensions] Streaming content for "${contentType}" provided by: ${extension.name}`,
-            )
             return content
           }
         } catch (error) {
@@ -1157,9 +1342,6 @@ export class ChatExtensionRegistry {
         if (extension.provideStreamingContent) {
           const content = await extension.provideStreamingContent(contentType, delta)
           if (content) {
-            console.log(
-              `[ChatExtensions] ${extension.name} provided streaming content for type: ${contentType} (legacy)`,
-            )
             return content
           }
         }
@@ -1202,9 +1384,6 @@ export class ChatExtensionRegistry {
         try {
           const updatedContent = await processor(content, delta)
           if (updatedContent !== content) {
-            console.log(
-              `[ChatExtensions] Streaming delta for "${contentType}" processed by: ${extension.name}`,
-            )
             return updatedContent
           }
         } catch (error) {
@@ -1226,9 +1405,6 @@ export class ChatExtensionRegistry {
         if (extension.processStreamingDelta) {
           const updatedContent = await extension.processStreamingDelta(content, delta)
           if (updatedContent !== content) {
-            console.log(
-              `[ChatExtensions] Streaming delta processed by: ${extension.name} (legacy)`,
-            )
             return updatedContent
           }
         }
@@ -1248,42 +1424,6 @@ export class ChatExtensionRegistry {
 // Singleton instance
 export const chatExtensionRegistry = new ChatExtensionRegistry()
 
-/**
- * React hook that aggregates `useConversationMenu` contributions
- * from every enabled extension. Returns combined menu items +
- * stacked overlays, ready to drop into an antd Dropdown's
- * `menu.items` and rendered alongside the trigger.
- *
- * Each extension's `useConversationMenu` is itself a hook, so this
- * call iterates the registered extensions and calls each in
- * priority order. Standard rules-of-hooks apply: the set of
- * extensions implementing this hook must be stable for the
- * lifetime of the component using it (true under the
- * auto-discovery setup; HMR re-registrations re-mount consumers).
- */
-export function useConversationMenuContributions(
-  conversation: import('@/api-client/types').Conversation,
-): {
-  items: import('@ziee/kit').DropdownItem[]
-  overlays: React.ReactNode[]
-  keepMenuOpen: boolean
-} {
-  const items: import('@ziee/kit').DropdownItem[] = []
-  const overlays: React.ReactNode[] = []
-  let keepMenuOpen = false
-  const extensions = chatExtensionRegistry
-    .getExtensions()
-    .filter(ext => ext.useConversationMenu !== undefined)
-  for (const ext of extensions) {
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    const contrib = ext.useConversationMenu!(conversation)
-    if (contrib.items) items.push(...contrib.items)
-    if (contrib.overlays) {
-      overlays.push(
-        <React.Fragment key={ext.name}>{contrib.overlays}</React.Fragment>,
-      )
-    }
-    if (contrib.keepMenuOpen) keepMenuOpen = true
-  }
-  return { items, overlays, keepMenuOpen }
-}
+// Conversation-menu aggregation moved to the `ConversationMenuContributions`
+// component (contributions.tsx) — a component-per-extension collector, so it no
+// longer calls `useConversationMenu` in a loop.

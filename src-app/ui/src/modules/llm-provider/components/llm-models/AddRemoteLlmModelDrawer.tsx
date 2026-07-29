@@ -16,12 +16,13 @@ import {
 import { Drawer } from '@/modules/layouts/app-layout/components/Drawer'
 import { useEffect, useMemo, useState } from 'react'
 import type { DiscoveredModel } from '@/api-client/types'
-import { Stores } from '@ziee/framework/stores'
 import { usePermission } from '@/core/permissions'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { LlmModelParametersSection } from '@/modules/llm-provider/components/llm-models/shared/LlmModelParametersSection'
 import { BASIC_MODEL_FIELDS } from '@/modules/llm-provider/constants/llmModelParameters'
 import { mapDiscoveredModelToForm } from '@/modules/llm-provider/components/llm-models/discoveredModelForm'
+import { LlmProvider } from '@/modules/llm-provider/stores/llmProvider'
+import { AddRemoteLlmModelDrawer as AddRemoteLlmModelDrawerStore } from '@/modules/llm-provider/stores/llmModelDrawers/addRemoteLlmModelDrawer'
 
 // The picker sources its options from `GET /discover-models` (catalog + live
 // /v1/models). display_name + description reuse BASIC_MODEL_FIELDS (minus the
@@ -55,16 +56,16 @@ export function AddRemoteLlmModelDrawer() {
     },
   })
 
-  const { open, providerId } = Stores.AddRemoteLlmModelDrawer
+  const { open, providerId } = AddRemoteLlmModelDrawerStore
   const canCreate = usePermission(Permissions.LlmModelsCreate)
 
   // Discovered models + state for THIS provider. Read the reactive proxy fields
   // UNCONDITIONALLY (each access calls a store hook — a ternary around them would
   // change the hook count when providerId toggles null<->value on open/close and
   // crash with "rendered more/fewer hooks"), then index by providerId plainly.
-  const discoveredMap = Stores.LlmProvider.discoveredModels
-  const discoverLoadingMap = Stores.LlmProvider.discoverLoading
-  const discoverNotesMap = Stores.LlmProvider.discoverNotes
+  const discoveredMap = LlmProvider.discoveredModels
+  const discoverLoadingMap = LlmProvider.discoverLoading
+  const discoverNotesMap = LlmProvider.discoverNotes
   const discovered = providerId ? discoveredMap[providerId] : undefined
   const discovering = providerId ? Boolean(discoverLoadingMap[providerId]) : false
   const notes = providerId ? discoverNotesMap[providerId] : undefined
@@ -72,7 +73,7 @@ export function AddRemoteLlmModelDrawer() {
   // Fetch the provider's available models when the drawer opens.
   useEffect(() => {
     if (open && providerId) {
-      Stores.LlmProvider.discoverModels(providerId)
+      LlmProvider.discoverModels(providerId)
     }
   }, [open, providerId])
 
@@ -113,10 +114,10 @@ export function AddRemoteLlmModelDrawer() {
 
     try {
       setLoading(true)
-      Stores.LlmProvider.clearLlmProviderStoreError()
+      LlmProvider.clearLlmProviderStoreError()
 
       const ctx = values.context_length
-      await Stores.LlmProvider.createLlmModel(providerId, {
+      await LlmProvider.createLlmModel(providerId, {
         name,
         display_name: (values.display_name as string) || name,
         description: values.description as string,
@@ -136,7 +137,7 @@ export function AddRemoteLlmModelDrawer() {
       })
 
       resetAll()
-      Stores.AddRemoteLlmModelDrawer.closeAddRemoteLlmModelDrawer()
+      AddRemoteLlmModelDrawerStore.closeAddRemoteLlmModelDrawer()
       message.success('Model added successfully')
     } catch (error) {
       console.error('Failed to add model:', error)
@@ -148,7 +149,7 @@ export function AddRemoteLlmModelDrawer() {
 
   const handleCancel = () => {
     resetAll()
-    Stores.AddRemoteLlmModelDrawer.closeAddRemoteLlmModelDrawer()
+    AddRemoteLlmModelDrawerStore.closeAddRemoteLlmModelDrawer()
   }
 
   return (

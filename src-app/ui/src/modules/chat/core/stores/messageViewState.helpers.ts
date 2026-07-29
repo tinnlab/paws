@@ -45,12 +45,35 @@ export interface MessageViewMaps {
   collapsed: Record<string, boolean>
   /** resource_link URI → InlineFileViewState (absent ⇒ DEFAULT_INLINE_FILE_STATE). */
   files: Record<string, InlineFileViewState>
+  /** `<messageId>#<spanIndex>` → activity-rail open flag (absent ⇒ derived). */
+  rails: Record<string, boolean>
+  /** `<messageId>#step#<stepKey>` → step inline-detail open flag (absent ⇒ closed). */
+  steps: Record<string, boolean>
 }
 
 /** Fresh, empty maps — the per-conversation reset value (DEC-4). Returns NEW
  *  object identities each call so a reset can never alias the previous maps. */
 export function emptyViewMaps(): MessageViewMaps {
-  return { collapsed: {}, files: {} }
+  return { collapsed: {}, files: {}, rails: {}, steps: {} }
+}
+
+/**
+ * Drop every rail / step entry belonging to `messageId`. Rail keys are
+ * `<messageId>#…`, so a scoped conversation switch can evict them without
+ * touching another split pane's still-open conversation — the same contract
+ * `resetViewState(messageIds)` already honours for `collapsed`.
+ */
+export function forgetRailKeys(
+  maps: { rails: Record<string, boolean>; steps: Record<string, boolean> },
+  messageId: string,
+): void {
+  const prefix = `${messageId}#`
+  for (const k of Object.keys(maps.rails)) {
+    if (k.startsWith(prefix)) delete maps.rails[k]
+  }
+  for (const k of Object.keys(maps.steps)) {
+    if (k.startsWith(prefix)) delete maps.steps[k]
+  }
 }
 
 /** Resolve a message's collapsed flag, applying the default for an unknown id. */

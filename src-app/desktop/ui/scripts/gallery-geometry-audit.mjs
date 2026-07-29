@@ -48,6 +48,7 @@ import { chromium } from '@playwright/test'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { resolveGalleryPort } from '@ziee/gallery/scripts/lib/run-key.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const UI_DIR = path.resolve(__dirname, '..')
@@ -60,7 +61,7 @@ const arg = (n, d) =>
     .join('=')
 const flag = n => process.argv.includes(`--${n}`)
 
-const PORT = process.env.GALLERY_PORT || '1420'
+const PORT = process.env.GALLERY_PORT || String(resolveGalleryPort({ env: undefined, cfgPort: null, which: 'desktopGallery' }))
 const BASE = arg('url', `http://localhost:${PORT}/dev-gallery.html`)
 const OUT = arg('out', GALLERY_DIR)
 const GATE = flag('gate')

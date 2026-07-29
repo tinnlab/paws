@@ -8,7 +8,7 @@ import { usePlusDropdown } from '@/modules/chat/components/PlusDropdownContext'
 import { PlusMenuItem } from '@/modules/chat/components/PlusMenuItem'
 import type { MessageWithContent } from '@/api-client/types'
 import { ApiClient } from '@/api-client'
-import { Stores } from '@ziee/framework/stores'
+import { Chat } from '@/modules/chat/core/stores/chatBridge'
 
 /**
  * Extract text from message contents
@@ -19,7 +19,13 @@ function extractMessageText(message: MessageWithContent): string {
   }
 
   return message.contents
-    .filter(content => content.content_type === 'text')
+    .filter(
+      content =>
+        content.content_type === 'text' ||
+        // A system-injected `observation` (background result) is part of the
+        // conversation and belongs in the exported transcript.
+        content.content_type === 'observation',
+    )
     .map(content => {
       const textData = content.content as { text?: string }
       return textData.text || ''
@@ -32,7 +38,7 @@ function extractMessageText(message: MessageWithContent): string {
  */
 function exportAsJSON(): void {
   // Access raw state outside React context
-  const { conversation, messages } = Stores.Chat.$
+  const { conversation, messages } = Chat.$
   if (!conversation) return
 
   const messagesArray = Array.from(messages.values())
@@ -74,7 +80,7 @@ async function exportViaBackend(
   mime: string,
   label: string,
 ): Promise<void> {
-  const { conversation } = Stores.Chat.$
+  const { conversation } = Chat.$
   if (!conversation) return
   try {
     const res = await ApiClient.Chat.exportConversation({
@@ -158,7 +164,7 @@ function getExportMenuItems() {
  * instead of behind it; picking a format exports and closes the "+" menu.
  */
 function ExportMenuItem() {
-  const messages = Array.from(Stores.Chat.messages.values())
+  const messages = Array.from(Chat.messages.values())
   const { close } = usePlusDropdown()
 
   // Don't show export if there's nothing to export.

@@ -1,22 +1,22 @@
 import { Paperclip } from 'lucide-react'
 import { Upload, message } from '@ziee/kit'
-import { Stores } from '@ziee/framework/stores'
 import { useChatPaneOrNull } from '@/modules/chat/core/pane/ChatPaneContext'
-import { composerPaneKey } from '@/modules/file/stores/File.store'
+import { composerPaneKey } from '@/modules/file/stores/file'
 import { usePermission } from '@/core/permissions'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { usePlusDropdown } from '@/modules/chat/components/PlusDropdownContext'
 import {
   MAX_FILE_UPLOAD_BYTES as MAX_FILE_SIZE,
   MAX_FILE_UPLOAD_LABEL,
 } from '@/modules/file/constants'
+import { File as FileStore } from '@/modules/file/stores/file'
 
 /**
  * FileAttachMenuItem Component
  * Menu item inside the + dropdown for attaching files
  */
 export function FileAttachMenuItem() {
-  const { uploadFiles } = Stores.File
+  const { uploadFiles } = FileStore
   const paneKey = composerPaneKey(useChatPaneOrNull()?.paneId)
   const { close } = usePlusDropdown()
   // Gate on files::upload (mirrors FilePasteHandler / FileUploadArea). Without

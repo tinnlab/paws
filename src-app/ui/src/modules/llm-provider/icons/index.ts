@@ -1,2 +1,6 @@
 export { DeepSeek } from './DeepSeek'
 export { Mistral } from './Mistral'
+export { OpenAI } from './OpenAI'
+export { Anthropic } from './Anthropic'
+export { Gemini } from './Gemini'
+export { HuggingFace } from './HuggingFace'

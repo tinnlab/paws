@@ -1,8 +1,5 @@
 import { createModule } from '@ziee/framework'
 import { lazy } from 'react'
-import { useApiKeysStepStore } from './components/ApiKeysStep.store'
-import { useMcpServersStepStore } from './components/McpServersStep.store'
-import { useMemorySetupStepStore } from './components/MemorySetupStep.store'
 import './types'
 
 export default createModule({
@@ -11,11 +8,10 @@ export default createModule({
     version: '1.0.0',
     description: 'Getting Started guide',
   },
+  // smart-loading gate (build-lifted into the manifest)
+  shouldLoad: (ctx) => ctx.isAuthenticated,
   dependencies: ['onboarding'],
   stores: [
-    { name: 'ApiKeysStep', store: useApiKeysStepStore },
-    { name: 'McpServersStep', store: useMcpServersStepStore },
-    { name: 'MemorySetupStep', store: useMemorySetupStepStore },
   ],
   slots: {
     onboarding: [

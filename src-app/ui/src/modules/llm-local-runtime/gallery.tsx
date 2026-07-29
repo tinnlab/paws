@@ -7,7 +7,7 @@
  */
 import type { ModuleGallery } from '@/dev/gallery/support'
 import { holdPatch, lazyNamed, lazyProps } from '@/dev/gallery/support'
-import { Stores } from '@ziee/framework/stores'
+import { RuntimeDownloadDrawer as RuntimeDownloadDrawerStore } from '@/modules/llm-local-runtime/stores/runtimeDownloadDrawer'
 
 export const gallery: ModuleGallery = {
   overlays: [
@@ -21,7 +21,7 @@ export const gallery: ModuleGallery = {
         'RuntimeDownloadDrawer',
       ),
       open: () =>
-        Stores.RuntimeDownloadDrawer.openDrawer({
+        RuntimeDownloadDrawerStore.openDrawer({
           id: 'llamacpp',
           name: 'llama.cpp',
           display_name: 'llama.cpp',
@@ -56,14 +56,14 @@ export const gallery: ModuleGallery = {
         { engine: 'llamacpp' },
       ),
       setup: async () => {
-        const { RuntimeUpdate } = await import(
-          '@/modules/llm-local-runtime/stores/RuntimeUpdate.store'
+        const { RuntimeUpdateRaw } = await import(
+          '@/modules/llm-local-runtime/stores/runtimeUpdate'
         )
-        const { RuntimeConfig } = await import(
-          '@/modules/llm-local-runtime/stores/RuntimeConfig.store'
+        const { RuntimeConfigRaw } = await import(
+          '@/modules/llm-local-runtime/stores/runtimeConfig'
         )
         await holdPatch(() => {
-          RuntimeConfig.store.setState({
+          RuntimeConfigRaw.setState({
             gpu: {
               platform: 'linux',
               arch: 'x86_64',
@@ -72,7 +72,7 @@ export const gallery: ModuleGallery = {
             },
             loadingGpu: false,
           } as any)
-          RuntimeUpdate.store.setState({
+          RuntimeUpdateRaw.setState({
             checking: new Map(),
             updateChecks: new Map([
               [
@@ -105,17 +105,17 @@ export const gallery: ModuleGallery = {
         { engine: 'llamacpp' },
       ),
       setup: async () => {
-        const { RuntimeUpdate } = await import(
-          '@/modules/llm-local-runtime/stores/RuntimeUpdate.store'
+        const { RuntimeUpdateRaw } = await import(
+          '@/modules/llm-local-runtime/stores/runtimeUpdate'
         )
-        const { RuntimeConfig } = await import(
-          '@/modules/llm-local-runtime/stores/RuntimeConfig.store'
+        const { RuntimeConfigRaw } = await import(
+          '@/modules/llm-local-runtime/stores/runtimeConfig'
         )
         const { RuntimeDownloadProgress } = await import(
-          '@/modules/llm-local-runtime/stores/RuntimeDownloadProgress.store'
+          '@/modules/llm-local-runtime/stores/runtimeDownloadProgress'
         )
         await holdPatch(() => {
-          RuntimeConfig.store.setState({
+          RuntimeConfigRaw.setState({
             gpu: {
               platform: 'linux',
               arch: 'x86_64',
@@ -124,7 +124,7 @@ export const gallery: ModuleGallery = {
             },
             loadingGpu: false,
           } as any)
-          RuntimeUpdate.store.setState({
+          RuntimeUpdateRaw.setState({
             checking: new Map(),
             updateChecks: new Map([
               [
@@ -151,7 +151,7 @@ export const gallery: ModuleGallery = {
               ],
             ]),
           } as any)
-          RuntimeDownloadProgress.store.setState({
+          RuntimeDownloadProgress.__setState({
             activeByKey: new Map([
               [
                 'llamacpp@1.2.0@cpu',

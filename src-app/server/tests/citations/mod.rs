@@ -815,14 +815,32 @@ async fn test_delete_citation_cascades_project_bibliography_link() {
 // independently under the same conversation scope.
 #[tokio::test]
 async fn memory_and_citations_compose_for_one_user() {
+    if crate::common::memory_setup::skip_if_no_embedding_key("memory_and_citations_compose_for_one_user")
+    {
+        return;
+    }
     let server = TestServer::start().await;
     let user = create_user_with_permissions(
         &server,
         "mem_cit_user",
-        &["citations::use", "citations::manage", "memory::read", "memory::write"],
+        &[
+            "citations::use",
+            "citations::manage",
+            "memory::read",
+            "memory::write",
+            "memory::admin::read",
+            "memory::admin::manage",
+            "llm_providers::read",
+            "llm_providers::edit",
+            "llm_models::create",
+        ],
     )
     .await;
     let conv = Uuid::new_v4().to_string();
+
+    // Memory now defaults OFF: enable it deployment-wide + configure the
+    // embedding model (against the local bridge) before remember/recall.
+    crate::common::memory_setup::enable_semantic_memory(&server, &user.token).await;
 
     // Memory: remember + recall.
     let remember = reqwest::Client::new()
@@ -908,9 +926,11 @@ async fn test_mcp_add_and_remove_with_project_id() {
     .unwrap();
     assert!(add["error"].is_null(), "add_citations with project_id: {add}");
 
-    // The project's reference list contains it.
+    // The project's reference list contains it. The list-by-project endpoint is
+    // `GET /citations?project_id=…` (rest::list_citations) — the
+    // `/projects/{id}/citations` sub-resource is POST-attach / DELETE-detach only.
     let proj_list: Value = client
-        .get(server.api_url(&format!("/projects/{pid}/citations")))
+        .get(server.api_url(&format!("/citations?project_id={pid}")))
         .header("Authorization", format!("Bearer {}", user.token))
         .send()
         .await
@@ -942,7 +962,7 @@ async fn test_mcp_add_and_remove_with_project_id() {
 
     // Detached from the project...
     let after: Value = client
-        .get(server.api_url(&format!("/projects/{pid}/citations")))
+        .get(server.api_url(&format!("/citations?project_id={pid}")))
         .header("Authorization", format!("Bearer {}", user.token))
         .send()
         .await
@@ -1286,3 +1306,95 @@ async fn test_delete_entry_cascades_project_link() {
     assert_eq!(lib["entries"].as_array().unwrap().len(), 0, "entry gone from library too");
 }
 
+
+// ───────── stringified batch arguments (the ask_user twin, silent variants) ─────────
+
+/// The two SILENT WRONG ANSWERS this class produced, proved over the REAL
+/// JSON-RPC surface.
+///
+/// `remove_citations` read `ids` with `.and_then(|v| v.as_array()).unwrap_or_default()`,
+/// so a model that JSON-ENCODED the array (which they routinely do) got an empty
+/// vec — and the tool answered **"0 citation(s) deleted." as SUCCESS**. Nothing
+/// was removed, no error was raised, and both the model and the user believed it
+/// had worked. That is strictly worse than the reported empty-form bug, because
+/// there is no visible symptom at all. (TEST-28)
+#[tokio::test]
+async fn stringified_batch_arguments_are_decoded_over_the_real_surface() {
+    let server = TestServer::start().await;
+    let user = create_user_with_permissions(&server, "cit_stringified", &["citations::use"]).await;
+
+    // Add an identifier-less entry via a STRINGIFIED `items` array. Before the
+    // fix this failed with "missing `items` array" — a lie, since `items` was
+    // present.
+    let res = jsonrpc(
+        &server,
+        &user.token,
+        "tools/call",
+        json!({
+            "name": "add_citations",
+            "arguments": {
+                "items": r#"[{"title":"A stringified-argument regression test","csl":{"type":"book","title":"A stringified-argument regression test"}}]"#
+            }
+        }),
+    )
+    .send()
+    .await
+    .unwrap();
+    let body: Value = res.json().await.unwrap();
+    assert!(
+        body["error"].is_null(),
+        "a JSON-encoded `items` must be decoded, not refused: {body}"
+    );
+
+    let entries = list_entries(&server, &user.token).await;
+    assert_eq!(entries.len(), 1, "the entry must actually be stored: {entries:?}");
+    let id = entries[0]["id"].as_str().expect("entry id").to_string();
+
+    // …now remove it with a STRINGIFIED `ids`. THIS is the silent one.
+    let res = jsonrpc(
+        &server,
+        &user.token,
+        "tools/call",
+        json!({ "name": "remove_citations", "arguments": { "ids": format!("[\"{id}\"]") } }),
+    )
+    .send()
+    .await
+    .unwrap();
+    let body: Value = res.json().await.unwrap();
+    assert!(body["error"].is_null(), "a JSON-encoded `ids` must be decoded: {body}");
+
+    let after = list_entries(&server, &user.token).await;
+    assert!(
+        after.is_empty(),
+        "the entry must actually be REMOVED — reporting '0 deleted' as success is the defect: {after:?}"
+    );
+}
+
+/// …and an `ids` that cannot be an array is REFUSED with feedback the model can
+/// act on, rather than silently selecting nothing (or, for `format_citations`,
+/// silently selecting the user's ENTIRE library). Asserts the message TEXT.
+/// (TEST-28 companion)
+#[tokio::test]
+async fn unusable_batch_arguments_are_refused_with_actionable_text() {
+    let server = TestServer::start().await;
+    let user = create_user_with_permissions(&server, "cit_unusable", &["citations::use"]).await;
+
+    let res = jsonrpc(
+        &server,
+        &user.token,
+        "tools/call",
+        json!({ "name": "remove_citations", "arguments": { "ids": "not json {" } }),
+    )
+    .send()
+    .await
+    .unwrap();
+    let body: Value = res.json().await.unwrap();
+    let msg = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(!msg.is_empty(), "an unusable `ids` must be an ERROR, not a silent no-op: {body}");
+    assert!(msg.contains("ids"), "must name the argument: {msg}");
+    assert!(msg.contains("JSON array"), "must say what is expected: {msg}");
+    assert!(
+        msg.contains("Example:") && msg.contains('['),
+        "must carry a copyable literal-JSON example: {msg}"
+    );
+}

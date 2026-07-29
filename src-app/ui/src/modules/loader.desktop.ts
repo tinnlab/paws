@@ -101,6 +101,42 @@ function resolveDependencies(modules: AppModule[]): AppModule[] {
   return sorted.map(name => moduleMap.get(name)!)
 }
 
+/**
+ * Router deep-link seam — desktop variants.
+ *
+ * The web `loader.ts` is manifest-driven + LAZY: modules download on demand, so
+ * the router needs these four helpers to pull / await / gate a route's owning
+ * module (`RouterComponent.tsx` + `HubPage.tsx` import them from `@/modules/loader`,
+ * which resolves HERE on desktop). The desktop loader is EAGER: `loadModules()`
+ * globs + registers every (non-blocklisted) core module up front, so by the time
+ * the router runs, nothing is lazy or in-flight. These are therefore no-ops /
+ * `false`:
+ *  - `ensureModuleForPath` — nothing to lazy-load ⇒ never triggers a load.
+ *  - `isPathModulePending` — no module is ever mid-download ⇒ never pending.
+ *  - `isPathModuleForbidden` — desktop auto-logins the single local admin (all
+ *    permissions); a blocklisted core module simply isn't registered, so an
+ *    unmatched path is a genuine 404, not a permission denial.
+ *  - `revalidateForPath` — no location-scoped lazy modules to re-evaluate.
+ *
+ * Kept in lockstep with `loader.ts`'s public surface so a shared import of any of
+ * them resolves on desktop (a missing export fails the desktop prod build).
+ */
+export async function ensureModuleForPath(_pathname: string): Promise<boolean> {
+  return false
+}
+
+export function isPathModulePending(_pathname: string): boolean {
+  return false
+}
+
+export function isPathModuleForbidden(_pathname: string): boolean {
+  return false
+}
+
+export function revalidateForPath(_pathname: string): void {
+  // no-op: every core module is eager-loaded at boot.
+}
+
 export function loadModules(): void {
   const { registerModule, initializeModules } = useModuleSystemStore.getState()
 

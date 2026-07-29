@@ -1,20 +1,12 @@
 import { Plug } from 'lucide-react'
-import { Permissions } from '@/api-client/types'
+import { useOverlayOpen } from '@/core/overlays/overlayVisibility'
+import { Permissions } from '@/api-client/permissions'
 import { createModule } from '@ziee/framework'
-import { Stores } from '@ziee/framework/stores'
 import { useDelayedFalse } from '@/hooks/useDelayedFalse'
-import { useMcpUserPolicyStore } from '@/modules/mcp/stores/McpUserPolicy.store'
-import { useGroupSystemMcpServersAssignmentStore } from '@/modules/mcp/components/system/GroupSystemMcpServersAssignmentDrawer.store'
-import { useSystemMcpServerGroupCardStore } from '@/modules/mcp/components/system/McpServerGroupsAssignmentCard.store'
-import { useProjectMcpSettingsStore } from '@/modules/mcp/project-extension/stores/ProjectMcpSettings.store'
-import {
-  useMcpComposerStore,
-  useMcpServerDrawerStore,
-  useMcpStore,
-  useMcpToolCallsStore,
-  useSystemMcpServersStore,
-} from '@/modules/mcp/stores'
-import { useGroupSystemMcpServersWidgetStore } from '@/modules/mcp/widgets/GroupSystemMcpServersWidget.store'
+// Deep import (NOT the `@/modules/mcp/stores` barrel): the barrel re-exports
+// mcpServer/systemMcpServer/mcpServerDrawer/mcpComposer too, so importing one
+// hook from it dragged all of them (incl. the 17 KB mcpComposer) into the
+// boot-loaded mcp module chunk.
 import { SettingsLayoutDef } from '@/modules/settings/SettingsLayout'
 import { lazyWithPreload } from '@/utils/lazyWithPreload'
 import '@/modules/mcp/types' // CRITICAL: Import to enable type declaration merging
@@ -55,6 +47,8 @@ export default createModule({
     version: '1.0.0',
     description: 'Model Context Protocol (MCP) server management',
   },
+  // smart-loading gate (build-lifted into the manifest)
+  shouldLoad: (ctx) => ctx.isAuthenticated,
   dependencies: ['router'],
   routes: [
     {
@@ -76,60 +70,20 @@ export default createModule({
       layout: SettingsLayoutDef,
     },
   ],
-  stores: [
-    {
-      name: 'McpServer',
-      store: useMcpStore,
-    },
-    {
-      name: 'SystemMcpServer',
-      store: useSystemMcpServersStore,
-    },
-    {
-      name: 'McpServerDrawer',
-      store: useMcpServerDrawerStore,
-    },
-    {
-      name: 'GroupSystemMcpServersWidget',
-      store: useGroupSystemMcpServersWidgetStore,
-    },
-    {
-      name: 'GroupSystemMcpServersAssignment',
-      store: useGroupSystemMcpServersAssignmentStore,
-    },
-    {
-      name: 'SystemMcpServerGroupCard',
-      store: useSystemMcpServerGroupCardStore,
-    },
-    {
-      name: 'McpComposer',
-      store: useMcpComposerStore,
-    },
-    {
-      // Per-server tool-call history (mcp_tool_calls), shown in the
-      // McpServerDrawer "Calls" tab. Refetches live on sync:mcp_tool_call.
-      name: 'McpToolCalls',
-      store: useMcpToolCallsStore,
-    },
-    {
-      name: 'ProjectMcpSettings',
-      store: useProjectMcpSettingsStore,
-    },
-    {
-      // Global MCP user-policy (allowed transports + sandbox flavor
-      // for user-installed stdio). Loaded on first access; admin
-      // edits emit `mcp_user_policy.updated` so the drawer + Add
-      // button + Hub tab re-render without a page reload.
-      name: 'McpUserPolicy',
-      store: useMcpUserPolicyStore,
-    },
-  ],
+  // McpToolCalls (McpServerDrawer "Calls" tab) and McpUserPolicy (read by the
+  // MCP settings drawer/card/Add-button + the Hub MCP tab) are both consumed
+  // ONLY by page-level surfaces — no always-mounted overlay, sidebar, or chat
+  // composer reads them. They're registerLazyStore proxies that self-register
+  // (and subscribe to their sync events) when those pages import them, so
+  // listing them here — which loaded mcpToolCalls.js + mcpUserPolicy.js on EVERY
+  // route at module registration — is intentionally omitted.
+  stores: [],
   components: [
     {
       id: 'group-system-mcp-servers-assignment-drawer',
       component: GroupSystemMcpServersAssignmentDrawer,
       shouldMount: () =>
-        useDelayedFalse(() => Stores.GroupSystemMcpServersAssignment.isOpen),
+        useDelayedFalse(() => useOverlayOpen('group-mcp-assignment')),
       order: 100,
     },
   ],

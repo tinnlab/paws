@@ -3,6 +3,14 @@ import { resolve } from 'path'
 import { tmpdir } from 'os'
 import { execSync } from 'child_process'
 import { createServer } from 'net'
+// @ts-ignore — key-derived e2e defaults (ITEM-12): when ZIEE_E2E_* is unset the
+// default is per-worktree (audit §7), so isolation isn't a manual opt-in.
+import { resolveE2eDefaults } from './e2e-data-dir.mjs'
+
+// Resolved ONCE per process from the run key. An explicit ZIEE_E2E_* env still
+// wins inside resolveE2eDefaults; lock dir + port bases are per-worktree by
+// default so a partial env-set can never reintroduce a shared base.
+const E2E_DEFAULTS = resolveE2eDefaults()
 
 /**
  * True when `port` can actually be bound on 0.0.0.0 right now.
@@ -30,7 +38,39 @@ function isPortBindable(port: number): Promise<boolean> {
 // stale-lock cleanup kills a sibling worktree's just-starting backend
 // (observed as a graceful "Shutdown signal received" ~20s into startup).
 // Pair with ZIEE_E2E_BASE_VITE_PORT / ZIEE_E2E_BASE_BACKEND_PORT.
-const LOCK_DIR = process.env.ZIEE_E2E_LOCK_DIR || resolve(tmpdir(), 'ziee-test-locks')
+// Default is per-worktree (`/tmp/ziee-test-locks-<key>`); ZIEE_E2E_LOCK_DIR wins
+// (handled inside resolveE2eDefaults). `tmpdir()` retained via the key-path only
+// when the derived default is used. Pairs with the key-derived port bases below.
+const LOCK_DIR = E2E_DEFAULTS.lockDir || resolve(tmpdir(), 'ziee-test-locks')
+
+/**
+ * Namespace for the per-session `.test-configs/` sub-directory, derived from the
+ * SAME key as the lock dir.
+ *
+ * Why: `cleanupStaleConfigFiles` decides "is this config file still owned by a
+ * live session?" from `collectLiveRunIds()`, which reads LOCK_DIR. The config dir
+ * used to be a single un-namespaced `tests/.test-configs`. So two sessions in the
+ * SAME worktree that isolate themselves the documented way (a private
+ * `ZIEE_E2E_LOCK_DIR`) share the config dir but can NOT see each other's locks —
+ * every one of the sibling's live `postgres-<runId>.json` /
+ * `docker-compose-<runId>.yaml` / `test-<testId>.yaml` / `vite-<testId>.ts` files
+ * looks like an unowned orphan and is deleted once it ages past CONFIG_STALE_MS,
+ * ENOENT-ing the victim run mid-flight.
+ *
+ * Keying the config dir by the lock dir makes the guard's world-view and the
+ * files it can reach the same set: a session only ever sweeps configs whose
+ * owning locks it can actually read.
+ */
+export const CONFIG_NS = LOCK_DIR.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+/, '')
+
+/**
+ * The per-session config dir under a tests/ root (`tests/.test-configs/<ns>`).
+ * Single source of truth for global-setup, global-teardown and test-context so
+ * the three can never drift.
+ */
+export function resolveConfigDir(testsDir: string): string {
+  return resolve(testsDir, '.test-configs', CONFIG_NS)
+}
 const LOCK_TIMEOUT_MS = 1800000 // 30 minutes - covers a full dir run; postgres locks are not heartbeat-refreshed
 // @ts-ignore - Reserved for future use
 const _HEARTBEAT_INTERVAL_MS = 5000 // 5 seconds - heartbeat update frequency (reserved for future use)
@@ -89,24 +129,42 @@ function _killProcess(pid: number): void {
 }
 
 /**
- * Kill all processes using a specific port
- * More reliable than killing by PID for parent/child process trees
+ * True when `cmd` resolves on PATH (POSIX `command -v`). Used to pick an
+ * AVAILABLE port-killer on Unix so cleanup still works on a box WITHOUT `lsof`.
  */
-function killProcessOnPort(port: number): void {
+function hasCmd(cmd: string): boolean {
   try {
-    const cmd = process.platform === 'win32'
-      ? `netstat -ano | findstr :${port}`
-      : `lsof -ti :${port}`
+    execSync(`command -v ${cmd}`, { stdio: 'ignore' })
+    return true
+  } catch {
+    return false
+  }
+}
 
-    const output = execSync(cmd, { encoding: 'utf8', stdio: 'pipe' }).trim()
+/**
+ * Kill all processes using a specific port
+ * More reliable than killing by PID for parent/child process trees.
+ *
+ * On Unix the original implementation used `lsof -ti :port` ONLY, and swallowed
+ * the throw when `lsof` was absent — so on a box without lsof (common on minimal
+ * CI images and, e.g., this dev box which ships `fuser` but not `lsof`/`ss`) the
+ * orphan cleanup silently did NOTHING. Fall back `lsof` → `fuser -k` → `ss` by
+ * `command -v` availability so a functional kill always runs when any of them is
+ * present. Windows (`netstat`/`taskkill`) is unchanged.
+ */
+export function killProcessOnPort(port: number): void {
+  // Defense-in-depth: `port` is typed number but callers pass values read from
+  // lock files (lock.vitePort/backendPort); refuse a non-numeric value before
+  // it is interpolated into a shell string.
+  if (!Number.isInteger(port) || port <= 0) return
 
-    if (!output) return
-
-    if (process.platform === 'win32') {
+  if (process.platform === 'win32') {
+    try {
+      const output = execSync(`netstat -ano | findstr :${port}`, { encoding: 'utf8', stdio: 'pipe' }).trim()
+      if (!output) return
       // Windows: extract PID from netstat output
-      const lines = output.split('\n')
       const pids = new Set<string>()
-      for (const line of lines) {
+      for (const line of output.split('\n')) {
         const match = line.trim().match(/\s+(\d+)$/)
         if (match) pids.add(match[1])
       }
@@ -115,20 +173,64 @@ function killProcessOnPort(port: number): void {
           execSync(`taskkill /F /PID ${pid}`, { stdio: 'ignore' })
         } catch {}
       }
-    } else {
-      // Unix: lsof returns PIDs directly
-      const pids = output.split('\n').filter(Boolean)
+      console.log(`🔪 Killed processes on port ${port}`)
+    } catch {
+      // No process on port or command failed - that's ok
+    }
+    return
+  }
+
+  // Unix: prefer lsof (explicit PID list → kill -9), else fuser (kills holders
+  // directly), else ss (parse pid= → kill -9). command -v gates each so an
+  // absent tool falls through instead of silently no-opping.
+  if (hasCmd('lsof')) {
+    try {
+      const output = execSync(`lsof -ti :${port}`, { encoding: 'utf8', stdio: 'pipe' }).trim()
+      if (!output) return
+      for (const pid of output.split('\n').filter(Boolean)) {
+        try {
+          execSync(`kill -9 ${pid}`, { stdio: 'ignore' })
+        } catch {}
+      }
+      console.log(`🔪 Killed processes on port ${port} (lsof)`)
+    } catch {
+      // lsof present but matched nothing / errored — nothing to kill.
+    }
+    return
+  }
+
+  if (hasCmd('fuser')) {
+    try {
+      // `fuser -k` sends SIGKILL to every process holding the TCP port directly.
+      execSync(`fuser -k ${port}/tcp`, { stdio: 'ignore' })
+      console.log(`🔪 Killed processes on port ${port} (fuser)`)
+    } catch {
+      // No holder / fuser errored — ok.
+    }
+    return
+  }
+
+  if (hasCmd('ss')) {
+    try {
+      const output = execSync(`ss -H -ltnp 'sport = :${port}'`, { encoding: 'utf8', stdio: 'pipe' }).trim()
+      if (!output) return
+      const pids = new Set<string>()
+      for (const m of output.matchAll(/pid=(\d+)/g)) pids.add(m[1])
       for (const pid of pids) {
         try {
           execSync(`kill -9 ${pid}`, { stdio: 'ignore' })
         } catch {}
       }
+      if (pids.size) console.log(`🔪 Killed processes on port ${port} (ss)`)
+    } catch {
+      // ss errored — ok.
     }
-
-    console.log(`🔪 Killed processes on port ${port}`)
-  } catch (error) {
-    // No process on port or command failed - that's ok
+    return
   }
+
+  // No port-killer tool available — cannot reap; leave a trace instead of
+  // silently doing nothing (the old lsof-only behavior).
+  console.warn(`⚠️  no lsof/fuser/ss available to free port ${port}; leaving it`)
 }
 
 /**
@@ -299,9 +401,11 @@ export async function findAvailablePorts(
 ): Promise<{ vite: number; backend: number }> {
   // Try up to 100 port pairs
   const MAX_ATTEMPTS = 100
-  // Env-overridable port base for cross-worktree isolation (see LOCK_DIR).
-  const BASE_VITE_PORT = parseInt(process.env.ZIEE_E2E_BASE_VITE_PORT || '9000', 10)
-  const BASE_BACKEND_PORT = parseInt(process.env.ZIEE_E2E_BASE_BACKEND_PORT || '9100', 10)
+  // Per-worktree KEY-DERIVED base (ITEM-12): default is `portBase(key, floor)` so
+  // two worktrees never share a base; ZIEE_E2E_BASE_* still overrides (resolved
+  // in E2E_DEFAULTS, which moves the lock dir with these bases — audit §7).
+  const BASE_VITE_PORT = E2E_DEFAULTS.baseVitePort
+  const BASE_BACKEND_PORT = E2E_DEFAULTS.baseBackendPort
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     // Spread workers across port range to reduce collisions
@@ -312,8 +416,30 @@ export async function findAvailablePorts(
     const backendPort = BASE_BACKEND_PORT + offset
 
     if (acquirePortLock(vitePort, backendPort)) {
-      console.log(`🔒 Locked ports for worker ${workerIndex}: vite ${vitePort}, backend ${backendPort}`)
-      return { vite: vitePort, backend: backendPort }
+      // Lock acquired — but the lock file only coordinates sessions that SHARE
+      // this lock dir. A concurrent e2e session on the same box using a DIFFERENT
+      // lock dir (the cross-worktree isolation recipe sets ZIEE_E2E_LOCK_DIR but
+      // often leaves the default port base) doesn't see our lock, so both race to
+      // the SAME default base and one session's test-context step-1
+      // killProcessOnPort() then kills the other's LIVE backend/vite mid-test →
+      // its browser's SSE + /api calls get ECONNREFUSED. Mirror the postgres
+      // allocator (allocatePostgresPort → isPortBindable): a lock-free port is not
+      // necessarily bind-free, so verify BOTH ports are actually bindable at the
+      // OS level before handing them out. If a sibling holds either, release our
+      // just-taken lock and try the next offset. NOTE this bind probe is TOCTOU
+      // (same accepted caveat as allocatePostgresPort): two sessions on different
+      // lock dirs could both pass the probe and race for the same port — it
+      // strongly REDUCES, but cannot fully eliminate, cross-session collisions.
+      const bindable =
+        (await isPortBindable(vitePort)) && (await isPortBindable(backendPort))
+      if (bindable) {
+        console.log(`🔒 Locked ports for worker ${workerIndex}: vite ${vitePort}, backend ${backendPort}`)
+        return { vite: vitePort, backend: backendPort }
+      }
+      console.log(
+        `⚠️  ports ${vitePort}/${backendPort} are lock-free but already bound at the OS level (a concurrent session on a different lock dir); skipping`,
+      )
+      releasePortLock(vitePort, backendPort)
     }
   }
 
@@ -450,7 +576,7 @@ export async function allocatePostgresPort(runId: string): Promise<number> {
   // one run's postgres dies with "port already allocated" → ECONNREFUSED. Give a
   // concurrent session its OWN base (e.g. ZIEE_E2E_BASE_PG_PORT=54600) so it can
   // never collide with the default-54331 sessions.
-  const BASE_PORT = parseInt(process.env.ZIEE_E2E_BASE_PG_PORT || '54331', 10)
+  const BASE_PORT = E2E_DEFAULTS.basePgPort
   const MAX_ATTEMPTS = 100
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
@@ -530,10 +656,30 @@ export function cleanupStaleConfigFiles(configDir: string): void {
 
   console.log(`   Found ${files.length} test config files to check (${allFiles.length} total files)`)
 
+  // Build the set of runIds owned by a STILL-LIVE session from the shared
+  // postgres-*.lock dir (each lock carries {pid, runId}; a live pid ⇒ in-use).
+  // This guards against a concurrent same-configDir session's ACTIVE
+  // `postgres-<runId>.json` / `docker-compose-<runId>.yaml` being deleted merely
+  // because it aged past the 5-min TTL → its teardown then ENOENTs. Mirrors the
+  // container-cleanup liveRunIds guard in global-setup.ts.
+  const liveRunIds = collectLiveRunIds()
+
   let removed = 0
+  let kept = 0
 
   for (const file of files) {
     const filePath = resolve(configDir, file)
+
+    // If a LIVE postgres lock still owns the run/test id embedded in this
+    // filename, the file belongs to an in-flight session — skip it regardless
+    // of age (a genuine orphan has no live lock and still falls through to the
+    // TTL check below).
+    const embeddedId = extractConfigId(file)
+    if (embeddedId && liveRunIds.has(embeddedId)) {
+      console.log(`   ✅ Kept active config: ${file} (live lock owns ${embeddedId})`)
+      kept++
+      continue
+    }
 
     try {
       const stats = statSync(filePath)
@@ -555,9 +701,46 @@ export function cleanupStaleConfigFiles(configDir: string): void {
     }
   }
 
-  if (removed > 0) {
-    console.log(`✅ Config cleanup complete: ${removed} removed\n`)
+  if (removed > 0 || kept > 0) {
+    console.log(`✅ Config cleanup complete: ${removed} removed, ${kept} kept\n`)
   } else {
     console.log('✅ No stale config files found\n')
   }
+}
+
+/**
+ * The run/test id embedded in a `.test-configs` filename, or null. Used by the
+ * live-lock guard in cleanupStaleConfigFiles. `postgres-<runId>.json` /
+ * `docker-compose-<runId>.yaml` yield a runId (matchable against a live
+ * postgres lock); `test-<testId>.yaml` / `vite-<testId>.ts` yield a testId
+ * (never in the runId set → TTL still governs them, unchanged).
+ */
+export function extractConfigId(file: string): string | null {
+  if (file.startsWith('postgres-') && file.endsWith('.json')) return file.slice('postgres-'.length, -'.json'.length)
+  if (file.startsWith('docker-compose-') && file.endsWith('.yaml')) return file.slice('docker-compose-'.length, -'.yaml'.length)
+  if (file.startsWith('test-') && file.endsWith('.yaml')) return file.slice('test-'.length, -'.yaml'.length)
+  if (file.startsWith('vite-') && file.endsWith('.ts')) return file.slice('vite-'.length, -'.ts'.length)
+  return null
+}
+
+/**
+ * Set of runIds whose owning session is STILL ALIVE, read from the shared
+ * `postgres-*.lock` files (each carries `{pid, runId}`). Mirrors the
+ * container-cleanup liveness map in global-setup.ts so both the container sweep
+ * and the config-file sweep keep an in-flight concurrent session's artifacts.
+ */
+export function collectLiveRunIds(): Set<string> {
+  const live = new Set<string>()
+  if (!existsSync(LOCK_DIR)) return live
+  for (const f of readdirSync(LOCK_DIR)) {
+    if (!f.startsWith('postgres-') || !f.endsWith('.lock')) continue
+    try {
+      const lock = JSON.parse(readFileSync(resolve(LOCK_DIR, f), 'utf-8'))
+      if (!lock.runId) continue
+      if (isProcessAlive(lock.pid)) live.add(lock.runId)
+    } catch {
+      // Corrupted lock file — ignore.
+    }
+  }
+  return live
 }

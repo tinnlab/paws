@@ -13,7 +13,7 @@
 
 use crate::chat::helpers;
 use crate::common::stub_chat::{
-    self, STUB_TITLE, STUB_TITLE_EMPTY, STUB_TITLE_EMPTY_ONCE, StubChat,
+    self, STUB_TITLE, STUB_TITLE_BUDGET_ONCE, STUB_TITLE_EMPTY, STUB_TITLE_EMPTY_ONCE, StubChat,
 };
 use uuid::Uuid;
 
@@ -147,10 +147,12 @@ async fn title_request_carries_the_reasoning_safe_token_budget() {
         .into_iter()
         .find(|r| r.is_title_request)
         .expect("the title extension must have issued a generation call");
-    assert_eq!(
-        title_request.max_tokens,
-        Some(512),
-        "the title budget must be large enough for a reasoning model's preamble"
+    assert!(
+        title_request.max_tokens.is_some_and(|t| t >= 4096),
+        "the title budget on the wire must survive a reasoning model's preamble \
+         (measured: qwen3.6-35b-a3b burns >1024 tokens of reasoning before any \
+         answer text), got {:?}",
+        title_request.max_tokens
     );
     assert!(
         title_request.tool_names.is_empty(),
@@ -281,5 +283,44 @@ async fn a_tool_capable_first_turn_still_gets_a_title() {
         stored_title(&server, &user.token, conv_id).await.as_deref(),
         Some(STUB_TITLE),
         "the title must be AI-generated, not the raw first user message"
+    );
+}
+
+/// TEST-8 — the escalated-budget retry, end-to-end through the real extension.
+///
+/// The production failure this feature fixes: a reasoning model spends the whole
+/// output budget on hidden chain-of-thought and returns ZERO answer text with
+/// `finish_reason: "length"`. Before the fix that soft-failed the turn (and,
+/// once the conversation grew past the retry bound, left it permanently
+/// untitled). Now the SAME turn reissues the request once at a larger budget and
+/// the conversation is titled.
+#[tokio::test]
+async fn a_budget_exhausted_title_attempt_is_retried_at_a_larger_budget() {
+    let (server, user, stub, model_id) = setup("title_budget_retry", false).await;
+
+    let content = format!("What is known about BRCA1 in breast cancer? {STUB_TITLE_BUDGET_ONCE}");
+    let (conv_id, _branch_id) = first_exchange(&server, &user.token, model_id, &content).await;
+
+    let title_requests: Vec<_> = stub
+        .requests()
+        .into_iter()
+        .filter(|r| r.is_title_request)
+        .collect();
+    assert_eq!(
+        title_requests.len(),
+        2,
+        "a budget-exhausted attempt must be retried ONCE within the same turn"
+    );
+    let first = title_requests[0].max_tokens.expect("first attempt budget");
+    let second = title_requests[1].max_tokens.expect("retry budget");
+    assert!(
+        second > first,
+        "the retry must ESCALATE the budget ({second} must exceed {first})"
+    );
+
+    assert_eq!(
+        stored_title(&server, &user.token, conv_id).await.as_deref(),
+        Some(STUB_TITLE),
+        "the escalated retry must produce the title that the starved attempt could not"
     );
 }

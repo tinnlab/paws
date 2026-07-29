@@ -12,19 +12,14 @@ import {
   dialog,
 } from '@ziee/kit'
 import { formatSpeed, formatTime } from '@/utils/downloadUtils'
-import {
-  Permissions,
-  type DownloadInstance,
-  type HubLocalProvider,
-  type HubModel,
-  type ModelQuantization,
-  type ModelSource,
-} from '@/api-client/types'
+import { type DownloadInstance, type HubLocalProvider, type HubModel, type ModelQuantization, type ModelSource } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { useState } from 'react'
 import { ModelDetailsDrawer } from '@/modules/hub/modules/llm-models/components/ModelDetailsDrawer'
-import { Stores } from '@ziee/framework/stores'
 import { usePermission } from '@/core/permissions'
 import { useHubModelDownloadGate } from '@/modules/hub/modules/llm-models/hooks/useHubModelDownloadGate'
+import { LlmModelDownload as LlmModelDownloadStore } from '@/modules/llm-provider/stores/llmModelDownload'
+import { HubModels } from '@/modules/hub/modules/llm-models/stores/hub-models-store'
 
 interface ModelHubCardProps {
   model: HubModel
@@ -39,8 +34,8 @@ export function ModelHubCard({ model }: ModelHubCardProps) {
   // so this component just wires the result into its UX.
   const { runGates, probing } = useHubModelDownloadGate()
 
-  const { localProviders } = Stores.HubModels
-  const { downloads } = Stores.LlmModelDownload
+  const { localProviders } = HubModels
+  const { downloads } = LlmModelDownloadStore
 
   // v2 Phase 7: repository_path moved off the model and onto each
   // source. Walk every source's identifier to match (a single model
@@ -247,7 +242,7 @@ export function ModelHubCard({ model }: ModelHubCardProps) {
         ? `${model.display_name} (${selectedQuantization.name.toUpperCase()})`
         : model.display_name
 
-      await Stores.HubModels.downloadModelFromHub(
+      await HubModels.downloadModelFromHub(
         model.name,
         provider.id,
         display_name,

@@ -12,7 +12,6 @@ import {
   ZoomOut,
 } from 'lucide-react'
 import { Button, Input, Separator, Spin, Text, Tooltip } from '@ziee/kit'
-import { Stores } from '@ziee/framework/stores'
 import type { FileViewerSlotProps } from '../../types/viewer'
 import type { PdfController, ScaleValue } from './pdfjs'
 import { usePdfDocument } from './usePdfDocument'
@@ -22,6 +21,7 @@ import {
   useFileHighlightScope,
 } from '@/modules/file/viewers/highlightScope'
 import { nextZoomStep } from './zoom'
+import { PdfHighlight } from '@/modules/file/stores/pdfHighlight'
 
 // Client-side PDF viewer (ITEM-5/6/7/8/9, DEC-11). Mounts PDF.js's own
 // `PDFViewer` component — native continuous-scroll virtualization, incremental
@@ -32,8 +32,15 @@ import { nextZoomStep } from './zoom'
 // `application/pdf` entry; office docs keep the legacy image body.
 export function PdfJsBody(props: FileViewerSlotProps) {
   // The PDF entry declares no `inline:`, so only `{file}` ever reaches here.
+  // The type guard lives in this thin wrapper so that EVERY hook of the real
+  // body — including the reactive `PdfHighlight.targets` proxy read, which IS a
+  // hook (useEffect + useStore, see framework/src/stores.ts) — runs
+  // unconditionally rather than behind an early return (taxonomy O2).
   if (!('file' in props)) return null
-  const { file } = props
+  return <PdfJsBodyInner file={props.file} />
+}
+
+function PdfJsBodyInner({ file }: { file: Extract<FileViewerSlotProps, { file: unknown }>['file'] }) {
   const { status, doc, api, error } = usePdfDocument(file.id)
 
   // Citation-highlight target for THIS file (set by a caller that opens the doc
@@ -43,7 +50,7 @@ export function PdfJsBody(props: FileViewerSlotProps) {
   // the bare fileId key (unchanged single-pane behavior).
   const hlScope = useFileHighlightScope()
   const highlightTarget =
-    Stores.PdfHighlight.targets.get(scopedHighlightKey(hlScope, file.id)) ?? null
+    PdfHighlight.targets.get(scopedHighlightKey(hlScope, file.id)) ?? null
 
   const containerRef = useRef<HTMLDivElement>(null)
   const viewerRef = useRef<HTMLDivElement>(null)

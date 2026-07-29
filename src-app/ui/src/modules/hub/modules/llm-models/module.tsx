@@ -1,8 +1,6 @@
 import { Server } from 'lucide-react'
 import { createModule } from '@ziee/framework'
-import { Permissions } from '@/api-client/types'
-import { useHubModelsStore } from '@/modules/hub/modules/llm-models/stores/hub-models-store'
-import { useModelDetailsDrawerStore } from '@/modules/hub/modules/llm-models/components/ModelDetailsDrawer.store'
+import { Permissions } from '@/api-client/permissions'
 import { lazyWithPreload } from '@/utils/lazyWithPreload'
 import '@/modules/hub/modules/llm-models/types'
 
@@ -16,17 +14,13 @@ export default createModule({
     version: '1.0.0',
     description: 'Hub catalog for LLM models',
   },
+  // smart-loading gate (build-lifted into the manifest)
+  shouldLoad: (ctx) =>
+    ctx.isAuthenticated &&
+    ctx.can(Permissions.HubModelsRead) &&
+    (ctx.path === '/hub' || ctx.path.startsWith('/hub/')),
   dependencies: [],
-  stores: [
-    {
-      name: 'HubModels',
-      store: useHubModelsStore,
-    },
-    {
-      name: 'ModelDetailsDrawer',
-      store: useModelDetailsDrawerStore,
-    },
-  ],
+  stores: [],
   slots: {
     hubTabs: [
       {
@@ -40,6 +34,7 @@ export default createModule({
           refresh: Permissions.HubModelsRefresh,
         },
         refresh: async () => {
+          const { useHubModelsStore } = await import('@/modules/hub/modules/llm-models/stores/hub-models-store')
           await useHubModelsStore.getState().refreshFromGitHub()
         },
       },

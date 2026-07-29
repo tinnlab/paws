@@ -1,7 +1,7 @@
 import type { StoreProxy } from '@ziee/framework/stores'
-import type { useApiKeysStepStore } from './components/ApiKeysStep.store'
-import type { useMcpServersStepStore } from './components/McpServersStep.store'
-import type { useMemorySetupStepStore } from './components/MemorySetupStep.store'
+import type { useApiKeysStepStore } from './components/apiKeysStep'
+import type { useMcpServersStepStore } from './components/mcpServersStep'
+import type { useMemorySetupStepStore } from './components/memorySetupStep'
 
 declare module '@ziee/framework/stores' {
   interface RegisteredStores {

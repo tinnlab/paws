@@ -13,7 +13,6 @@ import { Text } from '@ziee/kit'
 import { Loader2, MessageSquare } from 'lucide-react'
 import { ExtensionSlot } from '@/modules/chat/core/extensions'
 import { ChatMessage } from '@/modules/chat/components/ChatMessage'
-import { Stores } from '@ziee/framework/stores'
 import {
   anchorRestoreNeeded,
   captureTopAnchor,
@@ -29,6 +28,7 @@ import {
   recordMeasurements,
   widthBucket,
 } from '@/modules/chat/core/utils/measuredHeightCache'
+import { Chat } from '@/modules/chat/core/stores/chatBridge'
 
 /** A captured scroll anchor for reverse-infinite-scroll prepend (ITEM-4). */
 export interface MessageAnchor {
@@ -100,7 +100,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(
       loadingOlder,
       lastTurnInterrupted,
       finalizingTurn,
-    } = Stores.Chat
+    } = Chat
 
     // Ordered window (insertion order = render order).
     const messagesArray = useMemo(() => Array.from(messages.values()), [messages])
@@ -592,12 +592,40 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(
           </div>
         )}
 
-        {/* Streaming indicator (non-virtualized sibling below the list). */}
-        {(loading || isStreaming) && (
-          <div className={'w-full h-20 mt-3'}>
-            <Loader2 className={'text-xl animate-spin'} />
-          </div>
-        )}
+        {/* Busy indicator (non-virtualized sibling below the list). This is the
+            single affordance telling the user "something is in flight", so it
+            must be identifiable — to assistive tech, and to the tests asserting
+            it STOPS once a turn terminates (a spinner that never clears reads as
+            "still thinking", which is why a failed turn used to look like a hung
+            one).
+
+            Structured like its older-messages sibling above: the live region is
+            ALWAYS mounted and only its CONTENT toggles, because a live region
+            inserted at the same moment as its text is unreliably announced. The
+            accessible name sits on the region itself rather than on the <svg>
+            (an svg without an explicit role has inconsistent name computation,
+            which can leave the region announcing nothing).
+
+            The label distinguishes the two states the flags represent: `loading`
+            is a message-history fetch, `isStreaming` is a generation in flight —
+            announcing "Generating response" for a plain page load would be a
+            lie. */}
+        <div
+          className="w-full"
+          role="status"
+          aria-live="polite"
+          aria-label={
+            isStreaming ? 'Generating response' : loading ? 'Loading messages' : undefined
+          }
+          data-testid="chat-busy-indicator"
+          data-busy={isStreaming ? 'streaming' : loading ? 'loading' : undefined}
+        >
+          {(loading || isStreaming) && (
+            <div className={'w-full h-20 mt-3'} data-testid="chat-streaming-indicator">
+              <Loader2 className={'text-xl animate-spin'} aria-hidden="true" />
+            </div>
+          )}
+        </div>
 
         {/* Extension slot: message list footer */}
         <ExtensionSlot name="message_list_footer" />

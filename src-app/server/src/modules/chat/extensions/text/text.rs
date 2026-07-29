@@ -56,7 +56,7 @@ impl ChatExtension for TextExtension {
     async fn provide_user_message_content(
         &self,
         _context: &StreamContext,
-        _send_request: &SendMessageRequest,
+        send_request: &SendMessageRequest,
         text_content: &str,
     ) -> Result<Vec<crate::modules::chat::core::models::content::MessageContentData>, AppError> {
         // Create Text content from user's message
@@ -64,11 +64,21 @@ impl ChatExtension for TextExtension {
             return Ok(Vec::new());
         }
 
-        let text_content = TextContent::Text {
-            text: text_content.to_string(),
+        // Server-internal injectors (e.g. background push-to-resume) set
+        // `content_as_observation` so the message renders as a distinct
+        // observation card while still wire-mapping to plain user text. The flag is
+        // `#[serde(skip)]` on the request, so a client cannot set it (no spoofing).
+        let block = if send_request.content_as_observation {
+            TextContent::Observation {
+                text: text_content.to_string(),
+            }
+        } else {
+            TextContent::Text {
+                text: text_content.to_string(),
+            }
         };
 
-        Ok(vec![text_content.to_message_content()])
+        Ok(vec![block.to_message_content()])
     }
 
     async fn process_delta(
@@ -176,7 +186,7 @@ impl ChatExtension for TextExtension {
     }
 
     fn handled_content_types(&self) -> Vec<&'static str> {
-        vec!["text", "thinking"]
+        vec!["text", "thinking", "observation"]
     }
 
     async fn process_content_for_llm(
@@ -193,6 +203,11 @@ impl ChatExtension for TextExtension {
         // Convert to ContentBlock
         match text_content {
             TextContent::Text { text } => Ok(Some(ContentBlock::Text { text })),
+            // A system/observation block is wire-visible as PLAIN USER TEXT (it
+            // rides a user-role message, so it becomes Role::User text) — never
+            // System (which is dropped from context). This is what lets the resumed
+            // model actually SEE the background result.
+            TextContent::Observation { text } => Ok(Some(ContentBlock::Text { text })),
             TextContent::Thinking { thinking, metadata } => {
                 let signature = metadata.as_ref().and_then(|m| m.signature.clone());
                 let redacted = metadata.as_ref().and_then(|m| m.redacted_data.clone());
@@ -249,5 +264,91 @@ impl ChatExtension for TextExtension {
             }
             _ => None, // Not our content type
         }
+    }
+}
+
+#[cfg(test)]
+mod observation_tests {
+    //! TEST-9 (bg-push-resume, DEC-1 observation content type). The `observation`
+    //! block is a ziee-internal SYSTEM/observation type: it must WIRE-map to a
+    //! plain-text provider block (user-visible context, never skipped), and the
+    //! server-internal `content_as_observation` request flag must make the text
+    //! extension emit an `observation`-typed block instead of `text`.
+    use super::*;
+    use crate::modules::chat::core::models::content::MessageContentData;
+
+    /// A pool that never connects (the tested methods don't touch the DB).
+    fn lazy_pool() -> PgPool {
+        sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgresql://localhost/unused")
+            .expect("lazy pool")
+    }
+
+    fn ctx(pool: PgPool) -> StreamContext {
+        StreamContext {
+            conversation_id: uuid::Uuid::new_v4(),
+            branch_id: uuid::Uuid::new_v4(),
+            message_id: None,
+            user_id: uuid::Uuid::new_v4(),
+            pool,
+            metadata: HashMap::new(),
+            iteration: 1,
+        }
+    }
+
+    fn request(as_observation: bool) -> SendMessageRequest {
+        let mut r: SendMessageRequest = serde_json::from_value(serde_json::json!({
+            "content": "ignored",
+            "model_id": uuid::Uuid::new_v4().to_string(),
+            "branch_id": uuid::Uuid::new_v4().to_string(),
+        }))
+        .expect("build SendMessageRequest");
+        r.content_as_observation = as_observation;
+        r
+    }
+
+    // An `observation` content block converts to a plain USER-visible text block on
+    // the wire (NOT skipped like a signature-less thinking block) — this is what
+    // lets the resumed model actually see the background result.
+    #[tokio::test]
+    async fn observation_wire_maps_to_text_block() {
+        let ext = TextExtension::new(lazy_pool());
+        let block: MessageContentData = TextContent::Observation {
+            text: "[Background task complete] Result: hello".into(),
+        }
+        .to_message_content();
+        assert_eq!(block.content_type(), "observation", "stored as the observation type");
+
+        let out = ext
+            .process_content_for_llm(&block, &ctx(lazy_pool()))
+            .await
+            .expect("convert ok");
+        match out {
+            Some(ContentBlock::Text { text }) => {
+                assert!(text.contains("Background task complete"), "carries the text: {text}");
+            }
+            other => panic!("observation must wire-map to a user-visible Text block, got {other:?}"),
+        }
+    }
+
+    // With `content_as_observation` set, the text extension emits an
+    // `observation`-typed block; without it, a plain `text` block.
+    #[tokio::test]
+    async fn flag_selects_observation_vs_text_block() {
+        let ext = TextExtension::new(lazy_pool());
+
+        let obs = ext
+            .provide_user_message_content(&ctx(lazy_pool()), &request(true), "the result")
+            .await
+            .expect("provide ok");
+        assert_eq!(obs.len(), 1);
+        assert_eq!(obs[0].content_type(), "observation", "flag set → observation block");
+
+        let plain = ext
+            .provide_user_message_content(&ctx(lazy_pool()), &request(false), "a normal message")
+            .await
+            .expect("provide ok");
+        assert_eq!(plain.len(), 1);
+        assert_eq!(plain[0].content_type(), "text", "flag unset → plain text block");
     }
 }

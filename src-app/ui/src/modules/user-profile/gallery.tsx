@@ -40,13 +40,13 @@ const widget = () =>
 const seedUser =
   (displayName: string | null, collapsed = false) =>
   async () => {
-    const { Auth } = await import('@/modules/auth/Auth.store')
-    const { AppLayout } = await import(
-      '@/modules/layouts/app-layout/AppLayout.store'
+    const { useAuthStore } = await import('@/modules/auth/Auth.store')
+    const { useAppLayoutStore } = await import(
+      '@/modules/layouts/app-layout/appLayout'
     )
     await holdPatch(() => {
-      AppLayout.store.setState({ isSidebarCollapsed: collapsed } as any)
-      Auth.store.setState({
+      useAppLayoutStore.setState({ isSidebarCollapsed: collapsed } as any)
+      useAuthStore.setState({
         // A username DISTINCT from the bootstrap fixture's `admin`. Without
         // this the "no display name" surface is byte-identical to the default
         // seed, so a fallback assertion would pass even if this setup never
@@ -76,7 +76,7 @@ export const gallery: ModuleGallery = {
         // holdForever (not holdPatch): the widget can mount after a fixed hold
         // window ends under the full pass, so assert on a permanent interval.
         holdForever(() =>
-          Auth.store.setState({
+          Auth.__setState({
             user: null,
             isInitializing: true,
             isLoading: false,

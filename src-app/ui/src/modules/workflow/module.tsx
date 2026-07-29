@@ -1,18 +1,9 @@
 import { Workflow as WorkflowIcon } from 'lucide-react'
-import { Permissions } from '@/api-client/types'
+import { useOverlayOpen } from '@/core/overlays/overlayVisibility'
+import { Permissions } from '@/api-client/permissions'
 import { createModule } from '@ziee/framework'
-import { Stores } from '@ziee/framework/stores'
 import { useDelayedFalse } from '@/hooks/useDelayedFalse'
 import { SettingsLayoutDef } from '@/modules/settings/SettingsLayout'
-import {
-  useSystemWorkflowStore,
-  useWorkflowDrawerStore,
-  useWorkflowRunsStore,
-  useWorkflowRunStore,
-  useWorkflowStore,
-} from '@/modules/workflow/stores'
-import { useGroupSystemWorkflowsWidgetStore } from '@/modules/workflow/widgets/GroupSystemWorkflowsWidget.store'
-import { useGroupSystemWorkflowsAssignmentStore } from '@/modules/workflow/widgets/GroupSystemWorkflowsAssignmentDrawer.store'
 import { lazyWithPreload } from '@/utils/lazyWithPreload'
 import '@/modules/workflow/types' // CRITICAL: store declaration merging
 import '@/modules/settings/types/SettingsSlots' // settings slot types
@@ -26,6 +17,12 @@ const WorkflowsList = lazyWithPreload(() =>
 const AdminWorkflowsPage = lazyWithPreload(() =>
   import('./components/admin/AdminWorkflowsPage').then(m => ({
     default: m.AdminWorkflowsPage,
+  })),
+)
+
+const WorkflowBuilderPage = lazyWithPreload(() =>
+  import('./components/builder/WorkflowBuilderPage').then(m => ({
+    default: m.WorkflowBuilderPage,
   })),
 )
 
@@ -47,28 +44,18 @@ export default createModule({
     version: '1.0.0',
     description: 'Declarative multi-step LLM workflows',
   },
+  // smart-loading gate (build-lifted into the manifest)
+  shouldLoad: (ctx) => ctx.isAuthenticated,
   dependencies: ['router'],
   stores: [
-    { name: 'Workflow', store: useWorkflowStore },
-    { name: 'SystemWorkflow', store: useSystemWorkflowStore },
-    { name: 'WorkflowRun', store: useWorkflowRunStore },
-    { name: 'WorkflowRuns', store: useWorkflowRunsStore },
-    { name: 'WorkflowDrawer', store: useWorkflowDrawerStore },
-    {
-      name: 'GroupSystemWorkflowsWidget',
-      store: useGroupSystemWorkflowsWidgetStore,
-    },
-    {
-      name: 'GroupSystemWorkflowsAssignment',
-      store: useGroupSystemWorkflowsAssignmentStore,
-    },
+    // BOOT-EAGER (always-mounted overlay) — must stay registered.
   ],
   components: [
     {
       id: 'group-system-workflows-assignment-drawer',
       component: GroupSystemWorkflowsAssignmentDrawer,
       shouldMount: () =>
-        useDelayedFalse(() => Stores.GroupSystemWorkflowsAssignment.isOpen),
+        useDelayedFalse(() => useOverlayOpen('group-workflow-assignment')),
       order: 100,
     },
   ],
@@ -80,6 +67,22 @@ export default createModule({
       element: WorkflowsList,
       requiresAuth: true,
       permission: Permissions.WorkflowsRead,
+      layout: SettingsLayoutDef,
+    },
+    {
+      // Create a new user-scope workflow (visual builder).
+      path: '/settings/workflows/builder',
+      element: WorkflowBuilderPage,
+      requiresAuth: true,
+      permission: Permissions.WorkflowsInstall,
+      layout: SettingsLayoutDef,
+    },
+    {
+      // Edit an existing workflow's definition in place (id preserved).
+      path: '/settings/workflows/:id/edit',
+      element: WorkflowBuilderPage,
+      requiresAuth: true,
+      permission: Permissions.WorkflowsManage,
       layout: SettingsLayoutDef,
     },
     {

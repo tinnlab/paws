@@ -267,6 +267,27 @@ export interface VoiceApiState {
   modelDownloads: SnapshotDto[]
   /** Captured whisper-server log lines (GET /instance/logs). */
   instanceLogs: VoiceLogsResponse
+  /**
+   * When set, the model-download SSE emits a terminal `failed` frame carrying
+   * this message INSTEAD of progress→complete, and the model is NOT marked
+   * installed. Drives the failed-install presentation specs
+   * (`.lifecycle/voice-model-bad-magic/`, INV-1/INV-2).
+   */
+  failModelDownloadWith?: string
+  /**
+   * How many times POST /models/download was called (mirrors `transcribeCount`).
+   * Lets a spec prove a Retry control actually re-issued the install rather than
+   * asserting a failure row is still on screen — which it would be either way.
+   */
+  modelDownloadStartCount: number
+  /**
+   * The runtime-BINARY twin of `failModelDownloadWith`: the version-download SSE
+   * emits a terminal `failed` frame carrying this message and the version is NOT
+   * marked installed. INV-2 is a statement about the PAGE, and
+   * `AvailableVersionsCard` renders directly above `AvailableModelsCard` on it,
+   * so the failed-install presentation has to be asserted on both cards.
+   */
+  failVersionDownloadWith?: string
 }
 
 export interface VoiceRouteController {
@@ -450,6 +471,7 @@ export function defaultVoiceState(
     models: [],
     catalog: bigCatalog(),
     modelDownloads: [],
+    modelDownloadStartCount: 0,
     instanceLogs: {
       lines: [
         'whisper_init_from_file_with_params_no_state: loading model',
@@ -525,6 +547,21 @@ export async function routeVoice(
         // key shape is `model@<name>` (see the POST below).
         const name = key.split('@')[1] ?? key
         const modelId = `model-${name}`
+        // Failure path: terminal `failed` frame, nothing installed. Note the
+        // task reports bytes_received: 0 with NO total — the exact shape that
+        // used to render a bare "0 Bytes" under the row.
+        if (state.failModelDownloadWith) {
+          const failBody =
+            `event: connected\ndata: ${JSON.stringify({ key })}\n\n` +
+            `event: failed\ndata: ${JSON.stringify({
+              error: state.failModelDownloadWith,
+            })}\n\n`
+          return route.fulfill({
+            status: 200,
+            contentType: 'text/event-stream',
+            body: failBody,
+          })
+        }
         if (!state.models.some(m => m.name === name)) {
           state.models = [...state.models, mkVoiceModel(name, { id: modelId })]
         }
@@ -557,6 +594,20 @@ export async function routeVoice(
       if (evMatch) {
         const key = decodeURIComponent(evMatch[1])
         const version = key.split('@')[1] ?? 'v1.1.0'
+        // Failure path: terminal `failed` frame, nothing installed. Mirrors the
+        // model-download branch below; the task reports bytes_received: 0 with
+        // NO total — the shape that used to render a bare "0 Bytes".
+        if (state.failVersionDownloadWith) {
+          return route.fulfill({
+            status: 200,
+            contentType: 'text/event-stream',
+            body:
+              `event: connected\ndata: ${JSON.stringify({ key })}\n\n` +
+              `event: failed\ndata: ${JSON.stringify({
+                error: state.failVersionDownloadWith,
+              })}\n\n`,
+          })
+        }
         // Ensure the just-installed version is reflected as installed so the
         // complete-handler's loadVersions()/checkForUpdates() reload shows it.
         if (!state.versions.some(v => v.version === version)) {
@@ -632,6 +683,7 @@ export async function routeVoice(
       } catch {
         /* ignore */
       }
+      state.modelDownloadStartCount++
       const name = (body.name as string) || 'large-v3'
       const key = `model@${name}`
       const snap: SnapshotDto = {

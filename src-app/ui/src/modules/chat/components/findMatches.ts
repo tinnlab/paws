@@ -33,7 +33,9 @@ export function messageText(message: MessageWithContent): string {
   if (!message.contents) return ''
   let out = ''
   for (const content of message.contents) {
-    if (content.content_type === 'text') {
+    // `observation` (a system-injected result) is real, searchable text and can be
+    // large — include it so it's findable and drives the collapse threshold.
+    if (content.content_type === 'text' || content.content_type === 'observation') {
       const text = (content.content as { text?: string } | null)?.text
       if (typeof text === 'string') out += (out ? '\n' : '') + text
     }

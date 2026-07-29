@@ -1,7 +1,6 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { App } from '@ziee/ui-core'
-import { Stores } from '@ziee/framework/stores'
 import { loadDesktopModules } from '@ziee/desktop/modules/desktop-loader'
 import { registerDesktopOverrides } from '@ziee/desktop/modules/desktop-base/overrides'
 import { AppErrorBoundary } from '@/components/AppErrorBoundary'
@@ -11,13 +10,23 @@ import { Button } from '@ziee/kit'
 // via `@/core/...` at typecheck time even though Vite's
 // localOverridePlugin handles it at runtime.
 import { installDecorumTitlebarFix } from '@ziee/desktop/core/decorum-titlebar-fix'
+import { installChunkLoadRecovery } from '@ziee/framework/chunk-recovery'
 import '@/index.css'
+import { AppMode } from '@/modules/app/AppMode.store'
 
 // Posthoc CSS patch for tauri-plugin-decorum's z:100 titlebar overlay
 // (Windows only). Without it, the SidebarToggleButton at top-left is
 // unclickable because decorum's drag region paints above it. No-op on
 // macOS / web. See decorum-titlebar-fix.ts for the threat model.
 installDecorumTitlebarFix()
+
+// Code-split chunk failure recovery — the desktop entry is hand-written and does
+// NOT fall back to the core UI's `main.tsx`, so it must install this itself or
+// the desktop webview keeps the old behaviour (a chunk 404 surfacing only as an
+// unhandled page error). Same contract as the web entry: OBSERVE the
+// `vite:preloadError`, log it, mark the build stale — never `preventDefault()`,
+// never auto-reload (see the chunk-recovery module header).
+installChunkLoadRecovery()
 
 /**
  * Desktop Application Entry Point
@@ -47,9 +56,9 @@ loadDesktopModules()
 // this in `desktop-base/module.tsx::initialize()` (async) would
 // leave a brief render-flash window before the flip; setting it
 // here happens after both core + desktop modules have registered
-// their stores (`Stores.AppMode` from `modules/app/module.tsx`) and
+// their stores (`AppMode` from `modules/app/module.tsx`) and
 // before `createRoot().render(<App/>)`.
-Stores.AppMode.setMultiUserMode(false)
+AppMode.setMultiUserMode(false)
 
 // Register every element-level desktop UI override (a `<Seam>` declared in a
 // core web component) BEFORE the first render, so a core component that reads

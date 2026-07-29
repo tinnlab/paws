@@ -1,12 +1,10 @@
 import { createModule } from '@ziee/framework'
-import { Stores } from '@ziee/framework/stores'
 import { Plug } from 'lucide-react'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { hasPermissionNow } from '@/core/permissions'
-import { useHubMcpServersStore } from '@/modules/hub/modules/mcp/stores/hub-mcp-servers-store'
-import { useMcpServerDetailsDrawerStore } from '@/modules/hub/modules/mcp/components/McpServerDetailsDrawer.store'
 import { lazyWithPreload } from '@/utils/lazyWithPreload'
 import '@/modules/hub/modules/mcp/types'
+import { McpUserPolicy } from '@/modules/mcp/stores/mcpUserPolicy'
 
 const McpServersHubTab = lazyWithPreload(() =>
   import('./components/McpServersHubTab').then(m => ({
@@ -20,17 +18,13 @@ export default createModule({
     version: '1.0.0',
     description: 'Hub catalog for MCP servers',
   },
+  // smart-loading gate (build-lifted into the manifest)
+  shouldLoad: (ctx) =>
+    ctx.isAuthenticated &&
+    ctx.can(Permissions.HubMCPServersRead) &&
+    (ctx.path === '/hub' || ctx.path.startsWith('/hub/')),
   dependencies: [],
-  stores: [
-    {
-      name: 'HubMcpServers',
-      store: useHubMcpServersStore,
-    },
-    {
-      name: 'McpServerDetailsDrawer',
-      store: useMcpServerDetailsDrawerStore,
-    },
-  ],
+  stores: [],
   slots: {
     hubTabs: [
       {
@@ -58,10 +52,11 @@ export default createModule({
           if (hasPermissionNow(Permissions.McpServersAdminCreate)) {
             return true
           }
-          const policy = Stores.McpUserPolicy.$.policy
+          const policy = McpUserPolicy.$.policy
           return !!policy && policy.allowed_transports.length > 0
         },
         refresh: async () => {
+          const { useHubMcpServersStore } = await import('@/modules/hub/modules/mcp/stores/hub-mcp-servers-store')
           await useHubMcpServersStore.getState().refreshFromGitHub()
         },
       },

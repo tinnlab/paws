@@ -1,8 +1,7 @@
 import { createModule } from '@ziee/framework'
 import { LayoutGrid } from 'lucide-react'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { lazyWithPreload } from '@/utils/lazyWithPreload'
-import { useHubInstalledStore } from '@/modules/hub/stores/hub-installed-store'
 
 // "Installed" hub tab. Shows every tracked install (models, assistants,
 // MCP servers) the user can see — their own user-scoped installs plus,
@@ -23,6 +22,16 @@ export default createModule({
     version: '1.0.0',
     description: 'Hub tab listing every tracked install visible to the caller',
   },
+  // smart-loading gate (build-lifted into the manifest)
+  // Loose gate matching the Installed tab's own read perm — any of the three
+  // hub-read perms (ctx.can takes one perm, so OR them). Gating on HubModelsRead
+  // alone wrongly excluded assistants-only / mcp-only users from their Installed tab.
+  shouldLoad: (ctx) =>
+    ctx.isAuthenticated &&
+    (ctx.can(Permissions.HubModelsRead) ||
+      ctx.can(Permissions.HubAssistantsRead) ||
+      ctx.can(Permissions.HubMCPServersRead)) &&
+    (ctx.path === '/hub' || ctx.path.startsWith('/hub/')),
   dependencies: [],
   slots: {
     hubTabs: [
@@ -46,6 +55,7 @@ export default createModule({
           },
         },
         refresh: async () => {
+          const { useHubInstalledStore } = await import('@/modules/hub/stores/hub-installed-store')
           await useHubInstalledStore.getState().loadInstalled()
         },
       },

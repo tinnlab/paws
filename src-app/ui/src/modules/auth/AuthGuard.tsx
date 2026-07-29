@@ -1,17 +1,19 @@
 import { useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { Stores } from '@ziee/framework/stores'
 import { AuthPage } from '@/modules/auth/AuthPage'
 import { Loading } from '@/core/components/Loading'
+import { App } from '@/modules/app/stores/app'
+import { AppMode } from '@/modules/app/AppMode.store'
+import { Auth } from '@/modules/auth/Auth.store'
 
 interface AuthGuardProps {
   children: React.ReactNode
 }
 
 export const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
-  const { isAuthenticated, isInitializing } = Stores.Auth
-  const { needsSetup } = Stores.App
-  const { multiUserMode } = Stores.AppMode
+  const { isAuthenticated, isInitializing } = Auth
+  const { needsSetup } = App
+  const { multiUserMode } = AppMode
   const navigate = useNavigate()
   const location = useLocation()
 
@@ -21,7 +23,7 @@ export const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
     // Any persisted token from a previous launch is stale because the
     // desktop server regenerates its JWT secret per launch.
     if (multiUserMode) {
-      Stores.Auth.initAuth()
+      Auth.initAuth()
     }
   }, [multiUserMode])
 
@@ -48,10 +50,14 @@ export const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
     return <Loading fullscreen />
   }
 
-  // Redirect to setup if needed
+  // Redirect to setup if needed. The navigate() lives in the effect above —
+  // calling it HERE (during render) enqueues a Router state update while
+  // AuthGuard is rendering, which React 19 flags as "Cannot update a component
+  // (`Router`) while rendering a different component (`AuthGuard`)". Render the
+  // pending spinner instead; the `needsSetup === true` effect performs the
+  // redirect right after commit.
   if (needsSetup) {
-    navigate('/setup', { replace: true })
-    return null
+    return <Loading fullscreen />
   }
 
   // Show authentication page if not authenticated

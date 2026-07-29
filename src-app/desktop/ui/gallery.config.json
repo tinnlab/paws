@@ -3,7 +3,7 @@
   "srcDir": "src",
   "surfaceRoots": ["src/modules", "src/components/ui"],
   "kitImport": "@ziee/kit",
-  "port": 1455,
+  "portWhich": "desktopGallery",
   "galleryUrl": "/gallery.html",
   "extraTrees": ["../../ui/src"],
   "kitTestIds": ["../../../sdk/packages/kit/src", "../../../sdk/packages/shell/src"],

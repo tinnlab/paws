@@ -12,32 +12,37 @@ import { Badge, Button, Empty, List, Paragraph, Popover, Switch, Text, message }
 import { Trash2, FolderPlus, FolderOpen } from 'lucide-react'
 
 import type { MountEntry } from '@/api-client/types'
-import { Stores } from '@ziee/framework/stores'
-
+import { Chat } from '@/modules/chat/core/stores/chatBridge'
+import { ConversationHostMounts } from '@ziee/desktop/modules/host-mount/conversation-extension/stores/conversationHostMounts'
+import { FileDialog } from '@ziee/desktop/modules/file-dialog/store'
 export function ConversationMountsControl() {
-  const conversationId = Stores.Chat.conversation?.id
-  const { saving } = Stores.ConversationHostMounts
+  const conversationId = Chat.conversation?.id
+  // Read every reactive proxy field BEFORE the `!conversationId` guard: a
+  // store-proxy field read IS a hook (useEffect + useStore — see
+  // framework/src/stores.ts), so reading `byConversation` after the early return
+  // made the hook count jump when the conversation flipped null→set
+  // (taxonomy O2; same shape as 57f9fdb5b).
+  const { saving, byConversation } = ConversationHostMounts
 
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState<MountEntry[]>([])
 
   if (!conversationId) return null
 
-  const savedCount =
-    Stores.ConversationHostMounts.byConversation[conversationId]?.length ?? 0
+  const savedCount = byConversation[conversationId]?.length ?? 0
 
   const onOpenChange = async (next: boolean) => {
     setOpen(next)
     if (next) {
-      await Stores.ConversationHostMounts.loadMounts(conversationId)
+      await ConversationHostMounts.loadMounts(conversationId)
       setDraft(
-        Stores.ConversationHostMounts.$.byConversation[conversationId] ?? [],
+        ConversationHostMounts.$.byConversation[conversationId] ?? [],
       )
     }
   }
 
   const addFolder = async () => {
-    const picked = await Stores.FileDialog.openFolder({
+    const picked = await FileDialog.openFolder({
       title: 'Select a folder to mount into this conversation',
     })
     if (!picked || Array.isArray(picked)) return
@@ -50,7 +55,7 @@ export function ConversationMountsControl() {
 
   const save = async () => {
     try {
-      await Stores.ConversationHostMounts.saveMounts(conversationId, draft)
+      await ConversationHostMounts.saveMounts(conversationId, draft)
       message.success('Saved mounted folders')
       setOpen(false)
     } catch {

@@ -1,9 +1,7 @@
 // Only export hooks, not action functions
-export { useMcpStore } from './McpServer.store'
-export { useSystemMcpServersStore } from './SystemMcpServer.store'
-export { useMcpServerDrawerStore } from './McpServerDrawer.store'
-export { useMcpComposerStore } from './McpComposer.store'
-export { useMcpToolCallsStore } from './McpToolCalls.store'
+export { useMcpStore } from './mcpServer'
+export { useSystemMcpServersStore } from './systemMcpServer'
+export { useMcpServerDrawerStore } from './mcpServerDrawer'
+export { useMcpComposerStore } from './mcpComposer'
+export { useMcpToolCallsStore } from './mcpToolCalls'
 
-// Re-export for compatibility with Stores pattern
-export { Stores } from '@ziee/framework/stores'

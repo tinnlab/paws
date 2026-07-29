@@ -99,15 +99,11 @@ fn hex_sha256(bytes: &[u8]) -> String {
 fn default_fixtures() -> Vec<FileFixture> {
     // A valid ggml body: the 4-byte magic + deterministic filler (so its sha256
     // is stable across runs and we can advertise it as the tree oid).
-    let ggml = |tag: &str, fill: usize| {
-        let mut v = Vec::with_capacity(4 + fill);
-        v.extend_from_slice(b"ggml");
-        let seed = tag.as_bytes();
-        for i in 0..fill {
-            v.push(seed[i % seed.len()] ^ (i as u8));
-        }
-        v
-    };
+    // Built from the REAL on-disk ggml magic via the shared helper. Spelling it
+    // as an ASCII literal here is what made the mirror serve bytes a real
+    // HuggingFace never would, so the suite validated the bad-magic defect
+    // instead of catching it. See TEST_GAP.md.
+    let ggml = super::ggml_bytes;
     vec![
         // Verified catalog model (has oid) → verified=true, source=catalog.
         FileFixture {
@@ -132,6 +128,25 @@ fn default_fixtures() -> Vec<FileFixture> {
             name: "badmagic".to_string(),
             filename: "ggml-badmagic.bin".to_string(),
             bytes: b"<!DOCTYPE html> this is not a whisper model at all".to_vec(),
+            advertise_oid: false,
+            slow: false,
+        },
+        // An EMPTY 200 body. A distinct user situation from bad magic — the
+        // pre-fix code folded `downloaded == 0` into the magic error and told the
+        // user their (never-received) file had a bad header.
+        FileFixture {
+            name: "emptybody".to_string(),
+            filename: "ggml-emptybody.bin".to_string(),
+            bytes: Vec::new(),
+            advertise_oid: false,
+            slow: false,
+        },
+        // A body that ends after fewer than the 4 header bytes: identifiable as
+        // truncated, not as "wrong magic".
+        FileFixture {
+            name: "truncated".to_string(),
+            filename: "ggml-truncated.bin".to_string(),
+            bytes: vec![0x6c, 0x6d],
             advertise_oid: false,
             slow: false,
         },
@@ -585,7 +600,7 @@ async fn test_10_upload_valid_and_bad_magic() {
     let admin = create_user_with_permissions(&server, "voice_mm_t10", VOICE_ADMIN_PERMS).await;
 
     // Valid ggml upload.
-    let mut good = b"ggml".to_vec();
+    let mut good = super::GGML_MAGIC.to_vec();
     good.extend_from_slice(b"uploaded-whisper-model-bytes-0123456789");
     let res = upload_model(&server, &admin.token, Some("myupload"), Some(("model.bin", good.clone()))).await;
     assert_eq!(res.status(), 200, "valid upload should 200");
@@ -637,9 +652,9 @@ async fn test_11_activate_sets_settings_and_delete_guard() {
     let admin = create_user_with_permissions(&server, "voice_mm_t11", VOICE_ADMIN_PERMS).await;
 
     // Two uploaded models to switch between.
-    let mut a = b"ggml".to_vec();
+    let mut a = super::GGML_MAGIC.to_vec();
     a.extend_from_slice(b"model-A-bytes");
-    let mut b = b"ggml".to_vec();
+    let mut b = super::GGML_MAGIC.to_vec();
     b.extend_from_slice(b"model-B-bytes");
     let id_a = upload_model(&server, &admin.token, Some("mdla"), Some(("a.bin", a)))
         .await
@@ -790,7 +805,7 @@ async fn test_13_sync_emits() {
         .await;
 
     // (b) upload → voice_model/create.
-    let mut good = b"ggml".to_vec();
+    let mut good = super::GGML_MAGIC.to_vec();
     good.extend_from_slice(b"sync-upload-bytes");
     let id = upload_model(&server, &admin.token, Some("syncup"), Some(("u.bin", good)))
         .await
@@ -882,7 +897,7 @@ async fn test_26_catalog_graceful_degrade_when_unreachable() {
     );
 
     // Upload still works with an unreachable catalog.
-    let mut good = b"ggml".to_vec();
+    let mut good = super::GGML_MAGIC.to_vec();
     good.extend_from_slice(b"offline-upload");
     let res = upload_model(&server, &admin.token, Some("offline"), Some(("o.bin", good))).await;
     assert_eq!(res.status(), 200, "upload works regardless of catalog reachability");
@@ -1106,9 +1121,9 @@ async fn test_30_activate_drains_and_respawns_running_instance() {
     //  ggml-<name>.bin files directly via a re-upload of matching bytes is not
     //  needed — activate only needs a row whose `name` maps to an on-disk file.)
     // Simplest: upload the two models through the API so rows + files both exist.
-    let mut base_bytes = b"ggml".to_vec();
+    let mut base_bytes = super::GGML_MAGIC.to_vec();
     base_bytes.extend_from_slice(b"base-model-body");
-    let mut small_bytes = b"ggml".to_vec();
+    let mut small_bytes = super::GGML_MAGIC.to_vec();
     small_bytes.extend_from_slice(b"small-model-body");
     upload_model(&server, &admin.token, Some("base"), Some(("base.bin", base_bytes))).await;
     let id_small = upload_model(&server, &admin.token, Some("small"), Some(("small.bin", small_bytes)))
@@ -1307,4 +1322,295 @@ async fn test_33_instance_logs_endpoints() {
         .await
         .unwrap();
     assert_eq!(r.status(), 403, "logs needs voice::admin::read");
+}
+
+// ══════════════════ voice-model-bad-magic — gap-closing tests ═══════════════
+//
+// These are the CLASS of test that was missing when the "bad magic" defect
+// shipped. See `.lifecycle/voice-model-bad-magic/TEST_GAP.md`. The suite already
+// covered install/upload/reject, but every "valid model" fixture was built from
+// the implementation's own (wrong) magic constant, so the real-format path was
+// never exercised at any tier.
+
+/// TEST-4 — a catalog install driven end-to-end against a mirror serving
+/// **real-format** ggml bytes completes: the file lands on disk and a row is
+/// created. This is the exact path that fails in production today — before the
+/// fix, EVERY catalog install was rejected on its first chunk because the magic
+/// constant's byte order was reversed.
+#[tokio::test]
+async fn bad_magic_fix_real_format_catalog_install_succeeds() {
+    let mock = spawn_mock().await;
+    let server = server_with_mirror(&mock, vec![]).await;
+    let admin = create_user_with_permissions(&server, "voice_bm_real", VOICE_ADMIN_PERMS).await;
+
+    // The fixture bytes begin with the REAL on-disk header `6c 6d 67 67`.
+    let fixture = mock.files.iter().find(|f| f.name == "verok").expect("fixture");
+    assert_eq!(
+        &fixture.bytes[..4],
+        &super::GGML_MAGIC,
+        "the mirror must serve bytes with the REAL whisper ggml magic — a fixture \
+         spelled `ggml` in ASCII is what hid this defect"
+    );
+
+    let res = post_download(&server, &admin.token, json!({ "name": "verok" })).await;
+    assert_eq!(res.status(), 200);
+    let key = res.json::<Value>().await.unwrap()["key"].as_str().unwrap().to_string();
+    drive_model_download(&server, &admin.token, &key, Duration::from_secs(30))
+        .await
+        .expect("a REAL-format whisper model must install successfully");
+
+    assert!(
+        voice_models_dir(&server).join("ggml-verok.bin").exists(),
+        "the model file must be on disk after a successful install"
+    );
+    assert!(
+        list_models(&server, &admin.token).await.iter().any(|m| m["name"] == "verok"),
+        "a successful install must create a row"
+    );
+}
+
+/// TEST-3 [acceptance][INV-3] — the three download failure conditions are
+/// reported DISTINCTLY, and NO artifact is left behind on any failure exit.
+///
+/// The pre-fix code folded "the response body was empty" into the magic error,
+/// so an empty HTTP 200 told the user their file had a bad header. It also
+/// proves the download path's temp-then-move + cleanup contract holds on every
+/// failure exit — the property INV-3 demands (and which, per BUG_ANALYSIS E1,
+/// already held: the live instance had no 0-byte detritus).
+#[tokio::test]
+async fn bad_magic_fix_failures_are_distinct_and_leave_no_artifact() {
+    let mock = spawn_mock().await;
+    let server = server_with_mirror(&mock, vec![]).await;
+    let admin = create_user_with_permissions(&server, "voice_bm_fail", VOICE_ADMIN_PERMS).await;
+
+    // (a) An EMPTY 200 body → named for what it is, NOT "bad magic".
+    let res = post_download(&server, &admin.token, json!({ "name": "emptybody" })).await;
+    assert_eq!(res.status(), 200);
+    let key = res.json::<Value>().await.unwrap()["key"].as_str().unwrap().to_string();
+    let err = drive_model_download(&server, &admin.token, &key, Duration::from_secs(30))
+        .await
+        .expect_err("an empty body must fail the download");
+    let lower = err.to_lowercase();
+    assert!(
+        lower.contains("empty") || lower.contains("0 bytes"),
+        "an empty response must be reported as EMPTY, got: {err}"
+    );
+    assert!(
+        !lower.contains("bad magic"),
+        "an empty response must NOT be reported as a magic failure, got: {err}"
+    );
+
+    // (b) An HTML error page → reported as the wrong container, and the message
+    //     shows the observed bytes so it is self-diagnosing.
+    let res = post_download(&server, &admin.token, json!({ "name": "badmagic" })).await;
+    assert_eq!(res.status(), 200);
+    let key = res.json::<Value>().await.unwrap()["key"].as_str().unwrap().to_string();
+    let err = drive_model_download(&server, &admin.token, &key, Duration::from_secs(30))
+        .await
+        .expect_err("an HTML body must fail the download");
+    assert!(
+        err.contains("3c 21 44 4f") || err.contains("<!DO"),
+        "the message must surface the observed bytes so an HTML error page is \
+         self-diagnosing, got: {err}"
+    );
+    assert!(
+        err.to_lowercase().contains("expected"),
+        "the message must state what was expected, got: {err}"
+    );
+
+    // (c) A body that ends before the 4-byte header → reported as TRUNCATED, not
+    //     as "wrong magic": nothing arrived that could identify a container, so
+    //     telling the user their header is wrong would be a guess.
+    let res = post_download(&server, &admin.token, json!({ "name": "truncated" })).await;
+    assert_eq!(res.status(), 200);
+    let key = res.json::<Value>().await.unwrap()["key"].as_str().unwrap().to_string();
+    let err = drive_model_download(&server, &admin.token, &key, Duration::from_secs(30))
+        .await
+        .expect_err("a sub-header body must fail the download");
+    let lower = err.to_lowercase();
+    assert!(
+        lower.contains("too short") || lower.contains("ended after"),
+        "a sub-header body must be reported as TRUNCATED, got: {err}"
+    );
+    assert!(
+        !lower.contains("bad magic") && !lower.contains("is not a whisper model"),
+        "a sub-header body must NOT be reported as a magic failure, got: {err}"
+    );
+
+    // Every failure exit leaves NOTHING behind — no file, no `.tmp` leak.
+    let dir = voice_models_dir(&server);
+    for name in ["ggml-emptybody.bin", "ggml-badmagic.bin", "ggml-truncated.bin"] {
+        assert!(!dir.join(name).exists(), "{name} must not be left on disk");
+    }
+    let leftovers: Vec<String> = std::fs::read_dir(&dir)
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .filter(|n| n.contains(".tmp"))
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(leftovers.is_empty(), "no temp files may leak: {leftovers:?}");
+
+    // And no rows for anything that failed.
+    let models = list_models(&server, &admin.token).await;
+    for n in ["emptybody", "badmagic", "truncated"] {
+        assert!(
+            !models.iter().any(|m| m["name"] == n),
+            "a failed download must create no row for {n}"
+        );
+    }
+}
+
+/// TEST-7 [acceptance][INV-5] — a 0-byte or wrong-content upload is rejected AT
+/// INGEST with its own clear message: no row, no file, no temp leak — never
+/// "stored and failed later". A real-format upload still succeeds.
+#[tokio::test]
+async fn bad_magic_fix_upload_rejected_at_ingest_with_clear_message() {
+    let server = TestServer::start_with_options(TestServerOptions::default()).await;
+    let admin = create_user_with_permissions(&server, "voice_bm_up", VOICE_ADMIN_PERMS).await;
+    let dir = voice_models_dir(&server);
+
+    // (a) A 0-byte upload → rejected, and NOT mislabelled as bad magic.
+    let res = upload_model(
+        &server,
+        &admin.token,
+        Some("emptyup"),
+        Some(("empty.bin", Vec::new())),
+    )
+    .await;
+    assert!(res.status().is_client_error(), "0-byte upload must 4xx, got {}", res.status());
+    let body: Value = res.json().await.unwrap_or(Value::Null);
+    let msg = body.to_string().to_lowercase();
+    assert!(
+        msg.contains("empty") || msg.contains("0 bytes"),
+        "a 0-byte upload must be reported as EMPTY, got: {body}"
+    );
+    assert!(
+        !msg.contains("bad magic"),
+        "a 0-byte upload must NOT be reported as a magic failure, got: {body}"
+    );
+
+    // (b) A wrong-content upload → rejected with an actionable message.
+    let res = upload_model(
+        &server,
+        &admin.token,
+        Some("htmlup"),
+        Some(("page.bin", b"<!DOCTYPE html><html>404</html>".to_vec())),
+    )
+    .await;
+    assert!(res.status().is_client_error(), "HTML upload must 4xx");
+    let body: Value = res.json().await.unwrap_or(Value::Null);
+    let text = body.to_string();
+    assert!(
+        text.to_lowercase().contains("expected"),
+        "the rejection must state what was expected, got: {text}"
+    );
+
+    // Neither rejected upload created a row, a file, or a temp leak.
+    let models = list_models(&server, &admin.token).await;
+    for n in ["emptyup", "htmlup"] {
+        assert!(!models.iter().any(|m| m["name"] == n), "no row for rejected upload {n}");
+        assert!(!dir.join(format!("ggml-{n}.bin")).exists(), "no file for {n}");
+    }
+    let leftovers: Vec<String> = std::fs::read_dir(&dir)
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .filter(|n| n.contains(".tmp"))
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(leftovers.is_empty(), "rejected uploads must leak no temp: {leftovers:?}");
+
+    // (c) A REAL-format upload still succeeds (the fix does not over-reject).
+    let res = upload_model(
+        &server,
+        &admin.token,
+        Some("realup"),
+        Some(("real.bin", super::ggml_bytes("uploaded-real-model", 512))),
+    )
+    .await;
+    assert_eq!(res.status(), 200, "a real-format upload must succeed");
+    assert!(dir.join("ggml-realup.bin").exists(), "the accepted upload is on disk");
+}
+
+/// TEST-9 [acceptance][INV-1] — the models-list / catalog API never reports a
+/// file-validation error for a model that is NOT installed.
+///
+/// Asserted over the WHOLE catalog rather than one named model, so a different
+/// model or a different underlying cause cannot slip through — a test pinned to
+/// `base-q5_1` would have let the next variant ship.
+#[tokio::test]
+async fn not_installed_models_never_report_a_file_validation_error() {
+    let mock = spawn_mock().await;
+    let server = server_with_mirror(&mock, vec![]).await;
+    let admin = create_user_with_permissions(&server, "voice_bm_inv", VOICE_ADMIN_PERMS).await;
+
+    // Nothing is installed yet.
+    assert!(
+        list_models(&server, &admin.token).await.is_empty(),
+        "precondition: no models installed"
+    );
+
+    // Provoke a REAL failure first, so the invariant is tested in the exact
+    // circumstance that produced the owner's screenshot (a terminal failed task
+    // sitting in the registry) rather than on a pristine server.
+    let res = post_download(&server, &admin.token, json!({ "name": "badmagic" })).await;
+    let key = res.json::<Value>().await.unwrap()["key"].as_str().unwrap().to_string();
+    let _ = drive_model_download(&server, &admin.token, &key, Duration::from_secs(30)).await;
+
+    // Still nothing installed…
+    let installed = list_models(&server, &admin.token).await;
+    assert!(
+        installed.is_empty(),
+        "a failed install must not create an installed row, got: {installed:?}"
+    );
+
+    // …and NO catalog entry reported as not-installed carries a file-validation
+    // error anywhere in its payload.
+    let (st, catalog) = get_json(&server, &admin.token, "/voice/models/catalog").await;
+    assert_eq!(st, StatusCode::OK);
+    let entries = catalog["models"].as_array().cloned().unwrap_or_default();
+    assert!(!entries.is_empty(), "the mock catalog should list entries");
+    for entry in &entries {
+        if entry["installed"] == Value::Bool(true) {
+            continue;
+        }
+        // Scan the entry's VALUES, minus its own identity fields: `name` /
+        // `filename` are chosen by the upstream repo and legitimately contain
+        // arbitrary words (this very mock serves a fixture called `badmagic`).
+        // Matching on them would assert about the catalog's naming, not about
+        // whether we attached a validation error to it.
+        let mut scanned = entry.clone();
+        if let Some(obj) = scanned.as_object_mut() {
+            obj.remove("name");
+            obj.remove("filename");
+        }
+        let payload = scanned.to_string().to_lowercase();
+        for forbidden in ["magic", "not a whisper", "corrupt", "invalid file"] {
+            assert!(
+                !payload.contains(forbidden),
+                "a NOT-INSTALLED model must carry no file-validation error, but {} \
+                 contains {forbidden:?}: {entry}",
+                entry["name"]
+            );
+        }
+        // INV-6's backend half: the advertised size is the CATALOG's number for
+        // that file — never an on-disk byte count. Asserted against what the
+        // mirror actually served (an external anchor), not against `> 0`: a
+        // `> 0` check would pass on any nonzero number, including an on-disk one.
+        let filename = entry["filename"].as_str().unwrap_or_default();
+        let fixture = mock
+            .files
+            .iter()
+            .find(|f| f.filename == filename)
+            .unwrap_or_else(|| panic!("catalog listed {filename:?} with no fixture behind it"));
+        assert_eq!(
+            entry["size_bytes"].as_i64(),
+            Some(fixture.bytes.len() as i64),
+            "a not-installed catalog entry must advertise the size the SOURCE \
+             advertised for {filename}, not an on-disk number: {entry}"
+        );
+    }
 }

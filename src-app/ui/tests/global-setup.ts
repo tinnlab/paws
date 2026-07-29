@@ -1,20 +1,48 @@
 import { FullConfig } from '@playwright/test'
-import { execSync } from 'child_process'
+import { execSync, spawn } from 'child_process'
 import { resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
-import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 'fs'
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import crypto from 'crypto'
 import pg from 'pg'
 import dotenv from 'dotenv'
-import { cleanupStaleLocks, cleanupStaleConfigFiles, allocatePostgresPort } from './fixtures/port-manager'
+import { cleanupStaleLocks, cleanupStaleConfigFiles, allocatePostgresPort, resolveConfigDir } from './fixtures/port-manager'
+import {
+  findFreePort,
+  serverBinaryPath,
+  terminateChild,
+  waitForHttpReady,
+} from './fixtures/harness-process'
 
 const { Pool } = pg
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
 export default async function globalSetup(_config: FullConfig) {
-  // Load environment variables from .env.test
+  // Load environment variables from .env.test.
+  //
+  // TWO paths, in precedence order. `ui/tests/.env.test` wins (dotenv never
+  // overwrites an already-set var), then `server/tests/.env.test` fills the
+  // gaps. Both files are gitignored, so a fresh clone / new worktree has
+  // NEITHER — and until now only the ui-side path was read. Every doc, spec
+  // comment and runbook in this repo says "source server/tests/.env.test", and
+  // that is the file people actually create; the ui-side one is routinely
+  // absent. The result was a silent, total env miss ("injected env (0)") that
+  // does NOT fail the run — it degrades it:
+  //   • HUGGINGFACE_API_KEY unset  → llm repository/download specs throw outright
+  //   • OPENAI_BASE_URL unset      → `createProviderViaAPI` points the provider at
+  //                                  the real https://api.openai.com/v1 with the
+  //                                  placeholder key `sk-test-placeholder`, so every
+  //                                  real-LLM chat spec gets a 401, no assistant
+  //                                  message ever renders, and the whole
+  //                                  chat/split-chat cluster times out looking like
+  //                                  a product failure
+  //   • ZIEE_TEST_LLM_MODEL unset  → specs that POST a model with `name: MODEL`
+  //                                  send `name: undefined` → 422 "missing field `name`"
+  // Reading the server-side file as a fallback makes the documented setup step
+  // actually take effect for e2e.
   dotenv.config({ path: resolve(__dirname, '.env.test') })
+  dotenv.config({ path: resolve(__dirname, '../../server/tests/.env.test') })
 
   console.log('\n🚀 Starting Playwright E2E Test Infrastructure...\n')
 
@@ -34,7 +62,13 @@ export default async function globalSetup(_config: FullConfig) {
   cleanupStaleLocks()
 
   // Clean up stale config files from previous crashed/killed test runs
-  const configDir = resolve(__dirname, '.test-configs')
+  // Namespaced by the SAME key as the lock dir (port-manager CONFIG_NS). The
+  // stale-config sweep judges liveness from `collectLiveRunIds()` (which reads
+  // LOCK_DIR); with an un-namespaced config dir, a session that isolates itself
+  // via ZIEE_E2E_LOCK_DIR could not see a same-worktree sibling's locks and
+  // therefore deleted the sibling's LIVE postgres-<runId>.json / test-*.yaml
+  // once they aged past the TTL (observed as spurious ENOENT storms).
+  const configDir = resolveConfigDir(__dirname)
   cleanupStaleConfigFiles(configDir)
 
   // Per-session container namespace. Concurrent e2e sessions (separate git
@@ -223,9 +257,27 @@ export default async function globalSetup(_config: FullConfig) {
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import path from 'node:path'
+// Smart-loading needs the module manifest (\`virtual:ziee-module-manifest\`,
+// imported by src/modules/loader.ts) — without this plugin the build fails to
+// resolve that virtual id. preloadGraphPlugin emits the idle-prefetch graph so
+// the prod-mode e2e build matches prod (and doesn't 404 on the graph fetch).
+import { moduleManifestPlugin } from ${JSON.stringify(resolve(uiRoot, 'plugins/vite-plugin-module-manifest.js'))}
+import { preloadGraphPlugin } from ${JSON.stringify(resolve(uiRoot, 'plugins/vite-plugin-preload-graph.js'))}
+// eagerRenderGraphPlugin folds the chat markdown/HTML render graph (streamdown +
+// its plugins + the internal highlighted-body/mermaid chunks) into the entry
+// static graph so it is modulepreloaded at boot and never fetched on-demand at
+// render time — removing the render-time server-delivery dependency that made
+// the deterministic render specs flake under CPU load. (e2e build ONLY.)
+import { eagerRenderGraphPlugin } from ${JSON.stringify(resolve(uiRoot, 'plugins/vite-plugin-eager-render-graph.js'))}
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [
+    react(),
+    tailwindcss(),
+    moduleManifestPlugin({ srcDir: ${JSON.stringify(srcRoot)} }),
+    preloadGraphPlugin(),
+    eagerRenderGraphPlugin({ entry: ${JSON.stringify(resolve(srcRoot, 'main.tsx'))} }),
+  ],
   root: ${JSON.stringify(srcRoot)},
   cacheDir: ${JSON.stringify(resolve(uiRoot, 'node_modules/.vite-e2e-build'))},
   resolve: {
@@ -246,7 +298,6 @@ export default defineConfig({
       '@ant-design/icons',
       'i18next',
       'react-i18next',
-      'react-icons',
       'react-use',
       'dayjs',
       'immer',
@@ -257,8 +308,26 @@ export default defineConfig({
       'mermaid',
     ],
   },
-  optimizeDeps: { include: ['streamdown', 'streamdown/dist/*.js'] },
-  build: { outDir: ${JSON.stringify(distDir)}, emptyOutDir: true },
+  // (optimizeDeps is a DEV-server prebundle knob — a no-op for this static
+  // build. The streamdown render graph is instead folded into the entry static
+  // graph by eagerRenderGraphPlugin above.)
+  build: {
+    outDir: ${JSON.stringify(distDir)},
+    emptyOutDir: true,
+    // Mirror vite.config.ts: name module-boundary chunks after their module so
+    // the 16-smart-loading spec can identify per-module downloads in the prod
+    // e2e build (default naming collapses them all to \`module-<hash>.js\`).
+    rollupOptions: {
+      output: {
+        chunkFileNames: chunkInfo => {
+          const id = chunkInfo.facadeModuleId
+          const m = id && id.match(/[\\\\/]modules[\\\\/](.+?)[\\\\/]module\\.tsx$/)
+          if (m) return \`assets/module.\${m[1].replace(/[\\\\/]/g, '_')}.[hash].js\`
+          return 'assets/[name]-[hash].js'
+        },
+      },
+    },
+  },
 })
 `,
     )
@@ -296,6 +365,149 @@ export default defineConfig({
       console.warn('⚠️  Server warmup build failed (continuing; per-test cargo run will build):', e)
     }
   }
+
+  // 8c. Build a migrated TEMPLATE database ONCE per run. Each per-test backend
+  //     then clones a ready schema via `CREATE DATABASE … TEMPLATE …` instead of
+  //     running the full migration set (~107 migrations, ~460ms) on every boot.
+  //     Node can't run a sqlx Migrator, so we boot the (warm) prebuilt server
+  //     ONCE against the template DB — its boot migrates it — then shut it down.
+  //     Best-effort (DEC-9): on any failure we publish no template name and
+  //     test-context falls back to the raw CREATE DATABASE (migrate-on-boot)
+  //     path. Opt out with E2E_SKIP_DB_TEMPLATE=1.
+  // NOTE (seed semantics): the template is produced by BOOTING the server, which
+  // also runs the declarative seed (seed-if-empty; default.yaml seeds default
+  // groups/settings but NO admin user, so the /setup first-run flow is preserved).
+  // Each per-test server then boots against the clone and re-runs seed, which is a
+  // no-op on the already-seeded rows. The one behavioral consequence: config-
+  // derived "seed-once" values (e.g. session_settings from jwt.*) are latched from
+  // the TEMPLATE's config, so a per-test config that sets a NON-default seed-once
+  // value would not take effect. The template + per-test configs use the same
+  // defaults today, so there is no divergence; a future spec needing a custom
+  // seed-once value should opt out with E2E_SKIP_DB_TEMPLATE=1.
+  let templateName: string | undefined
+  const serverBinary = serverBinaryPath()
+  if (process.env.E2E_SKIP_DB_TEMPLATE === '1') {
+    console.log('🗄️  E2E_SKIP_DB_TEMPLATE=1 — per-test backends will migrate on boot\n')
+  } else if (!existsSync(serverBinary)) {
+    console.warn('⚠️  Prebuilt server binary absent — skipping DB template (per-test boots migrate)\n')
+  } else {
+    templateName = `ziee_test_template_${runId.replace(/[^a-zA-Z0-9_]/g, '_')}`
+    const serverRoot2 = resolve(uiRoot, '../server')
+    const tmplConfigPath = resolve(configDir, `template-${runId}.yaml`)
+    const tmplHubDir = resolve(configDir, `hub-template-${runId}`)
+    try {
+      console.log(`🗄️  Building migrated template DB "${templateName}" (once per run)...`)
+      // (Re)create the template fresh so migration changes are picked up.
+      const adminPool = new Pool({
+        host: 'localhost', port: postgresPort, user: 'postgres', password: 'password', database: 'postgres',
+      })
+      try {
+        await adminPool.query(
+          `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
+          [templateName],
+        )
+        await adminPool.query(`DROP DATABASE IF EXISTS ${templateName}`)
+        await adminPool.query(`CREATE DATABASE ${templateName}`)
+      } finally {
+        await adminPool.end()
+      }
+
+      const tmplPort = await findFreePort()
+      writeFileSync(
+        tmplConfigPath,
+        `postgresql:
+  use_embedded: false
+  external:
+    host: "localhost"
+    port: ${postgresPort}
+    username: "postgres"
+    password: "password"
+    database: "${templateName}"
+server:
+  host: "127.0.0.1"
+  port: ${tmplPort}
+  api_prefix: "/api"
+logging:
+  level: "info"
+  format: "json"
+update_check:
+  enabled: false
+jwt:
+  secret: "test-secret-key-for-jwt-tokens-min-32-chars-long-template"
+  issuer: "ziee-test"
+  audience: "ziee-test-api"
+  access_token_expiry_hours: 24
+  refresh_token_expiry_days: 30
+bio_mcp:
+  enabled: false
+`,
+      )
+      const cargoBinDir =
+        process.platform === 'win32'
+          ? `${process.env.USERPROFILE}\\.cargo\\bin`
+          : `${process.env.HOME}/.cargo/bin`
+      const tmplProc = spawn(serverBinary, ['--config-file', tmplConfigPath], {
+        cwd: serverRoot2,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: {
+          ...process.env,
+          ZIEE_HUB_DATA_DIR_OVERRIDE: tmplHubDir,
+          ZIEE_DISABLE_MODEL_VALIDATION: '1',
+          ZIEE_DISABLE_MCP_HEALTH_CHECK: '1',
+          PATH: `${cargoBinDir}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH}`,
+        },
+      })
+      // Keep a rolling stderr tail so a Rust panic (plain text, NOT the JSON
+      // "level":"error" lines) is visible if the boot fails.
+      let tmplErr = ''
+      tmplProc.stderr?.on('data', d => {
+        tmplErr = (tmplErr + d.toString()).slice(-2000)
+      })
+
+      // Migrations run synchronously during boot BEFORE the HTTP listener binds
+      // (server main: initialize_database → migrate, then TcpListener::bind), so
+      // a healthy /api/health means the template is fully migrated. Passing
+      // tmplProc makes the wait fail FAST if the server crashes instead of
+      // burning the whole 120s budget.
+      const ready = await waitForHttpReady(
+        `http://127.0.0.1:${tmplPort}/api/health`,
+        120,
+        tmplProc,
+      )
+
+      // Shut it down and CONFIRM exit (shared exit-driven helper) so the template
+      // has no live connections when the per-test clones copy from it.
+      await terminateChild(tmplProc)
+
+      // Terminate any straggler backend so CREATE DATABASE … TEMPLATE can copy.
+      const quiesce = new Pool({
+        host: 'localhost', port: postgresPort, user: 'postgres', password: 'password', database: 'postgres',
+      })
+      try {
+        await quiesce.query(
+          `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
+          [templateName],
+        )
+      } finally {
+        await quiesce.end()
+      }
+
+      if (!ready) {
+        throw new Error(`template server never became healthy${tmplErr ? `: ${tmplErr.slice(0, 500)}` : ''}`)
+      }
+      console.log(`✅ Template DB ready: ${templateName}\n`)
+    } catch (e) {
+      console.warn('⚠️  Template DB build failed (per-test backends will migrate on boot):', e)
+      templateName = undefined
+    } finally {
+      try { rmSync(tmplConfigPath, { force: true }) } catch {}
+      try { rmSync(tmplHubDir, { recursive: true, force: true }) } catch {}
+    }
+  }
+
+  // Re-write the postgres run config with the (optional) template name so
+  // test-context can clone from it. Absent → test-context uses raw CREATE.
+  writeFileSync(configPath, JSON.stringify({ ...configData, templateName }, null, 2))
 
   console.log('   Test infrastructure:')
   console.log(`   - PostgreSQL: port ${postgresPort} (container: ziee-tailtest-postgres-${runId})`)

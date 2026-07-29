@@ -70,6 +70,11 @@ src-app/server/vendor/pgvector/pg_config_wrapper/
 !.claude/skills/design-taste-frontend
 !.claude/lifecycle
 !.claude/app.config
+# settings.json registers the PostToolUse edit-lint hook, which points at
+# agent-kit/lifecycle/edit-lint-hook.mjs — committed agent infra like the entries
+# above, and useless if each clone has to re-create it by hand. settings.LOCAL.json
+# stays ignored: that one is genuinely per-machine (personal permissions).
+!.claude/settings.json
 
 # Transient server build/packaging staging (server-release.yml + nfpm smoke).
 /dist/

@@ -22,11 +22,11 @@ export const gallery: ModuleGallery = {
         { assistantId: 'asst-1' },
       ),
       setup: async () => {
-        const { CoreMemoryBlocks } = await import(
-          '@/modules/memory/stores/CoreMemoryBlocks.store'
+        const { useCoreMemoryBlocksStore } = await import(
+          '@/modules/memory/stores/coreMemoryBlocks'
         )
         await holdPatch(() =>
-          CoreMemoryBlocks.store.setState({
+          useCoreMemoryBlocksStore.setState({
             blocksByAssistant: { 'asst-1': [] },
             loadingByAssistant: { 'asst-1': true },
           } as any),
@@ -45,11 +45,11 @@ export const gallery: ModuleGallery = {
         { assistantId: 'asst-1' },
       ),
       setup: async () => {
-        const { CoreMemoryBlocks } = await import(
-          '@/modules/memory/stores/CoreMemoryBlocks.store'
+        const { useCoreMemoryBlocksStore } = await import(
+          '@/modules/memory/stores/coreMemoryBlocks'
         )
         await holdPatch(() =>
-          CoreMemoryBlocks.store.setState({
+          useCoreMemoryBlocksStore.setState({
             blocksByAssistant: { 'asst-1': [] },
             loadingByAssistant: { 'asst-1': false },
           } as any),
@@ -60,7 +60,7 @@ export const gallery: ModuleGallery = {
     {
       slug: 'seeded-memory-audit-loaded',
       title: 'Memory audit log — loaded',
-      note: 'Stores.MemoryAudit.entries → sortable/filterable grid rows',
+      note: 'MemoryAudit.entries → sortable/filterable grid rows',
       path: '/',
       initialPath: '/',
       component: lazyNamed(
@@ -68,10 +68,15 @@ export const gallery: ModuleGallery = {
         'AuditLogSection',
       ),
       setup: async () => {
-        const { MemoryAudit } = await import(
-          '@/modules/memory/stores/MemoryAudit.store'
+        const { useMemoryAuditStore } = await import(
+          '@/modules/memory/stores/memoryAudit'
         )
-        const mk = (id: number, op: string, source: string, snapshot: string) => ({
+        const mk = (
+          id: number,
+          op: string,
+          source: string,
+          snapshot: string,
+        ) => ({
           id,
           op,
           source,
@@ -82,7 +87,7 @@ export const gallery: ModuleGallery = {
           user_id: 'u-1',
         })
         await holdPatch(() =>
-          MemoryAudit.store.setState({
+          useMemoryAuditStore.setState({
             entries: [
               mk(1, 'ADD', 'manual', 'Likes espresso'),
               mk(2, 'UPDATE', 'extraction', 'Works at Acme'),

@@ -1,7 +1,12 @@
-//! Tier 4 — real-LLM end-to-end for the control MCP server. Soft-skips without
-//! `ANTHROPIC_API_KEY`; runs against the local DeepSeek/Qwen bridge when
-//! `ANTHROPIC_BASE_URL` is set (no paid keys). Proves two properties with a real
-//! model driving the tools:
+//! Tier 4 — real-LLM end-to-end for the control MCP server. Runs against
+//! WHICHEVER LLM the environment configures (`chat::helpers::configured_test_llm`
+//! — the OpenAI seam, the Anthropic seam, or the global `ZIEE_TEST_LLM_BASE_URL`
+//! bridge), and soft-skips ONLY when nothing at all is configured.
+//!
+//! It used to gate on `ANTHROPIC_API_KEY` alone, so on a box wired to a local
+//! OpenAI-compatible bridge these reported SKIPPED and the control surface went
+//! unverified — the "covered by tests that never execute" failure this feature
+//! exists to end. Proves two properties with a real model driving the tools:
 //!   1. discovery — the model calls `list_capabilities` (read-only, auto-runs).
 //!   2. security — a write (`invoke_capability` of a mutating op) is FORCED
 //!      through approval, so nothing is created until the user approves.
@@ -17,10 +22,14 @@ fn control_mcp_server_id() -> Uuid {
     Uuid::new_v5(&Uuid::NAMESPACE_URL, b"control.ziee.internal")
 }
 
-/// Configure the built-in Anthropic provider (redirected at the local bridge via
-/// the `test_provider_base_url` seam) + create a tool-capable model, then grant
-/// `user_id` access.
-async fn tool_capable_model(server: &TestServer, user_id: &str, api_key: &str) -> Value {
+/// Configure the built-in provider the environment points at (redirected at a
+/// local bridge when a base-URL seam is set) + create a tool-capable model, then
+/// grant `user_id` access.
+async fn tool_capable_model(
+    server: &TestServer,
+    user_id: &str,
+    llm: &crate::chat::helpers::TestLlm,
+) -> Value {
     let admin = create_user_with_permissions(
         server,
         "ctl_llm_admin",
@@ -46,15 +55,14 @@ async fn tool_capable_model(server: &TestServer, user_id: &str, api_key: &str) -
         .as_array()
         .expect("providers")
         .iter()
-        .find(|p| p["name"].as_str() == Some("Anthropic"))
-        .expect("Anthropic provider")["id"]
+        .find(|p| p["name"].as_str() == Some(llm.provider_name))
+        .unwrap_or_else(|| panic!("built-in provider '{}' not found", llm.provider_name))["id"]
         .as_str()
         .unwrap()
         .to_string();
 
-    // Apply the DeepSeek/Qwen bridge base_url seam when present.
-    let mut update = json!({ "enabled": true, "api_key": api_key });
-    if let Some(base_url) = crate::chat::helpers::test_provider_base_url("ANTHROPIC_API_KEY") {
+    let mut update = json!({ "enabled": true, "api_key": llm.api_key });
+    if let Some(base_url) = &llm.base_url {
         update["base_url"] = json!(base_url);
     }
     let r = reqwest::Client::new()
@@ -64,15 +72,20 @@ async fn tool_capable_model(server: &TestServer, user_id: &str, api_key: &str) -
         .send()
         .await
         .unwrap();
-    assert!(r.status().is_success(), "configure Anthropic → {}", r.status());
+    assert!(
+        r.status().is_success(),
+        "configure {} → {}",
+        llm.provider_name,
+        r.status()
+    );
 
     let r = reqwest::Client::new()
         .post(server.api_url("/llm-models"))
         .header("Authorization", format!("Bearer {}", admin.token))
         .json(&json!({
             "provider_id": provider_id,
-            "name": "claude-opus-4-1-20250805",
-            "display_name": "Claude (control tools)",
+            "name": llm.model_name,
+            "display_name": "Control tools (configured test LLM)",
             "description": "control real-LLM tool-capable model",
             "enabled": true,
             "engine_type": "none",
@@ -89,9 +102,11 @@ async fn tool_capable_model(server: &TestServer, user_id: &str, api_key: &str) -
     model
 }
 
-async fn setup(api_key: &str) -> (TestServer, crate::common::test_helpers::TestUser, Uuid, Uuid, Uuid) {
+async fn setup(
+    llm: &crate::chat::helpers::TestLlm,
+) -> (TestServer, crate::common::test_helpers::TestUser, Uuid, Uuid, Uuid) {
     let server = TestServer::start_with_options(TestServerOptions {
-        extra_env: vec![("ANTHROPIC_API_KEY".to_string(), api_key.to_string())],
+        extra_env: vec![(llm.key_env.to_string(), llm.api_key.clone())],
         ..Default::default()
     })
     .await;
@@ -111,7 +126,7 @@ async fn setup(api_key: &str) -> (TestServer, crate::common::test_helpers::TestU
         ],
     )
     .await;
-    let model = tool_capable_model(&server, &user.user_id, api_key).await;
+    let model = tool_capable_model(&server, &user.user_id, llm).await;
     let model_id = crate::chat::helpers::parse_uuid(&model["id"]);
     let conversation =
         crate::chat::helpers::create_conversation(&server, &user.token, Some(model_id), None).await;
@@ -120,13 +135,36 @@ async fn setup(api_key: &str) -> (TestServer, crate::common::test_helpers::TestU
     (server, user, conversation_id, branch_id, model_id)
 }
 
+/// Resolve the configured test LLM, or announce the ONLY legitimate skip.
+///
+/// TEST-11: the gate is "is ANY LLM configured", never "is this one vendor
+/// configured". The resolved provider/model is printed so a run log proves which
+/// LLM actually drove the test rather than leaving "it passed" ambiguous.
+fn require_llm(test: &str) -> Option<crate::chat::helpers::TestLlm> {
+    match crate::chat::helpers::configured_test_llm() {
+        Some(llm) => {
+            eprintln!(
+                "control_mcp::{test} — driving the configured test LLM: provider={} model={} base_url={}",
+                llm.provider_name,
+                llm.model_name,
+                llm.base_url.as_deref().unwrap_or("<vendor default>")
+            );
+            Some(llm)
+        }
+        None => {
+            eprintln!(
+                "skipping control_mcp::{test} — NO LLM configured at all \
+                 (set OPENAI_API_KEY+OPENAI_BASE_URL+ZIEE_TEST_LLM_MODEL, or the Anthropic seam)"
+            );
+            None
+        }
+    }
+}
+
 #[tokio::test]
 async fn real_llm_discovers_capabilities() {
-    let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") else {
-        eprintln!("skipping control_mcp::real_llm_discovers_capabilities — ANTHROPIC_API_KEY unset");
-        return;
-    };
-    let (server, user, conversation_id, branch_id, model_id) = setup(&api_key).await;
+    let Some(llm) = require_llm("real_llm_discovers_capabilities") else { return };
+    let (server, user, conversation_id, branch_id, model_id) = setup(&llm).await;
 
     let payload = json!({
         "content": "What can you do to manage this application? You MUST call the \
@@ -172,30 +210,46 @@ async fn real_llm_discovers_capabilities() {
 
 #[tokio::test]
 async fn real_llm_write_requires_approval() {
-    let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") else {
-        eprintln!("skipping control_mcp::real_llm_write_requires_approval — ANTHROPIC_API_KEY unset");
-        return;
-    };
-    let (server, user, conversation_id, branch_id, model_id) = setup(&api_key).await;
+    let Some(llm) = require_llm("real_llm_write_requires_approval") else { return };
+    let (server, user, conversation_id, branch_id, model_id) = setup(&llm).await;
     let name = format!("CtlLLM-{}", &Uuid::new_v4().to_string()[..8]);
 
+    // Deliberately does NOT name the operation id: the model must DISCOVER it
+    // through `list_capabilities`, which is the path the shipped search bug
+    // broke. Naming `Assistant.create` here would have made this test pass
+    // straight through that bug.
     let payload = json!({
         "content": format!(
-            "Create a new assistant named '{name}' using the app-control tools \
-             (invoke_capability with Assistant.create). Do it now; do not ask me first."
+            "Create a new assistant named '{name}' for me. Use the app-control tools; \
+             do it now, do not ask me first."
         ),
         "model_id": model_id.to_string(),
         "branch_id": branch_id.to_string(),
         "enable_mcp": true
     });
-    let events = crate::chat::helpers::send_body_and_collect_events(
+    // One retry: whether a 35B local model attempts the write on its FIRST turn
+    // is its decision, not the product's. The assertion below is unweakened — an
+    // approval frame must still appear — this only tolerates the model declining
+    // once, the sole observed flake under a loaded shared bridge.
+    let mut events = crate::chat::helpers::send_body_and_collect_events(
         &server,
         &user.token,
         conversation_id,
-        payload,
+        payload.clone(),
         &["complete"],
     )
     .await;
+    if !events.iter().any(|e| e.event == "mcpApprovalRequired") {
+        eprintln!("real_llm_write_requires_approval: no approval frame on turn 1; retrying once");
+        events = crate::chat::helpers::send_body_and_collect_events(
+            &server,
+            &user.token,
+            conversation_id,
+            payload,
+            &["complete"],
+        )
+        .await;
+    }
 
     // The mutating invoke must be gated: an approval was requested and the
     // assistant was NOT created (it waits behind the user's approval).

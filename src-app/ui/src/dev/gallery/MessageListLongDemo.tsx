@@ -16,8 +16,8 @@ import {
   MessageList,
   type MessageListHandle,
 } from '@/modules/chat/components/MessageList'
-import { useChatStore } from '@/modules/chat/core/stores/Chat.store'
-import { useMessageViewStateStore } from '@/modules/chat/core/stores/MessageViewState.store'
+import { useChatStore } from '@/modules/chat/core/stores/chat'
+import { useMessageViewStateStore } from '@/modules/chat/core/stores/messageViewState'
 import type { MessageContent, MessageWithContent } from '@/api-client/types'
 
 const NOW = new Date('2026-07-08T00:00:00Z').toISOString()

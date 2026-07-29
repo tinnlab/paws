@@ -1,12 +1,12 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-/* Streamdown's streaming keyframes (sd-fadeIn / sd-blurIn / sd-slideUp), used
- * by <Streamdown isAnimating>. Ships as a ready-made stylesheet in v2. */
-@import "streamdown/styles.css";
-/* KaTeX styles for the @streamdown/math plugin (block/inline LaTeX). Without
- * this the KaTeX markup renders but is completely unstyled. */
-@import "katex/dist/katex.min.css";
+/* NOTE: the Streamdown keyframes stylesheet (`streamdown/styles.css`) and the
+ * KaTeX stylesheet (`katex/dist/katex.min.css`, ~24 KB) are NOT imported here —
+ * they are imported from the LAZY `streamdownPlugins.ts` module instead, so
+ * Vite splits them into the lazy Streamdown chunk. That keeps ~24 KB of math
+ * CSS off the critical path for every page that never renders markdown/math
+ * (login, most settings). They load the moment a <Streamdown> mounts. */
 
 @custom-variant dark (&:is(.dark *));
 
@@ -42,6 +42,20 @@
  * mis-sized (clipped button text, etc.). Scan the kit source (consumed from
  * ./src per @ziee/kit's exports). Three-up = repo root, like the streamdown globs. */
 @source "../../../sdk/packages/kit/src/**/*.{ts,tsx}";
+/* @ziee/shell + @ziee/notification-ui — the SAME defect as the kit above, and it
+ * shipped: the app shell (AppLayout, ThemeProvider, Drawer, SettingsPageContainer)
+ * also lives in the sdk submodule, outside Tailwind v4's auto-scanned tree.
+ * Utilities used ONLY there are silently never emitted. The live-UI audit caught
+ * the consequence as a `zero-size-control` finding: `AppLayout`'s WCAG 2.4.1
+ * "Skip to content" bypass link is `sr-only focus:not-sr-only focus:absolute
+ * focus:z-50 focus:top-2 …`, and NOT ONE of those `focus:` utilities existed in
+ * the bundle — measured, `getComputedStyle` on the FOCUSED link still returned
+ * `width:1px; clip-path:inset(50%)`. So a sighted keyboard user tabbed to an
+ * invisible 1x1 control: the bypass link was present in the a11y tree but
+ * non-functional on screen. Scanning the shell source emits them and the link
+ * appears on focus as designed. */
+@source "../../../sdk/packages/shell/src/**/*.{ts,tsx}";
+@source "../../../sdk/packages/notification-ui/src/**/*.{ts,tsx}";
 
 /* Cap a long code block's scroll body so a huge one doesn't dominate the
  * message — scroll inside beyond ~60vh (ceiling 36rem). Streamdown puts no

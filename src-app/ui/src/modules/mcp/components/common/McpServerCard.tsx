@@ -1,14 +1,13 @@
 import { useState } from 'react'
 import { Alert, Button, Card, Confirm, Tag, Text, Tooltip, Switch, Flex } from '@ziee/kit'
-import { Pencil, Trash2, Plug } from 'lucide-react'
+import { Pencil, Trash2, Plug, History } from 'lucide-react'
 import { message } from '@ziee/kit'
-import { Stores } from '@ziee/framework/stores'
 import { usePermission } from '@/core/permissions'
-import {
-  Permissions,
-  type McpServer,
-  type TestMcpConnectionRequest,
-} from '@/api-client/types'
+import { type McpServer, type TestMcpConnectionRequest } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
+import { SystemMcpServer } from '@/modules/mcp/stores/systemMcpServer'
+import { McpServer as McpServerStore } from '@/modules/mcp/stores/mcpServer'
+import { McpServerDrawer } from '@/modules/mcp/stores/mcpServerDrawer'
 
 // System and user MCP servers gate on different permission namespaces.
 // `server.is_system` selects which set applies at render time. `test` maps to
@@ -26,6 +25,14 @@ const USER_PERMS = {
 
 interface McpServerCardProps {
   server: McpServer
+  /**
+   * Gates the MUTATING action row only — enable/test/edit/delete. System +
+   * built-in servers pass `false` here so a user can never reach their edit
+   * surface. It deliberately does NOT gate the read-only "Calls" affordance:
+   * that one is gated on `mcp_servers::read` (see `canViewHistory` below), so
+   * a non-admin can audit the calls they themselves made against a built-in
+   * server without any edit affordance appearing on it.
+   */
   isEditable?: boolean
   bordered?: boolean
 }
@@ -42,21 +49,33 @@ export function McpServerCard({
   const canEdit = usePermission(perms.edit)
   const canDelete = usePermission(perms.delete)
   const canTest = usePermission(perms.test)
+  // The call-history surface is READ-only and owner-scoped server-side
+  // (`mcp/tool_calls/repository.rs` scopes every query with `user_id = $1`), so
+  // it rides the same `mcp_servers::read` permission that gates the list this
+  // card renders in — for system servers too. Without this the Calls tab was
+  // reachable only through the Edit button, i.e. never for a built-in server.
+  const canViewHistory = usePermission(Permissions.McpServersRead)
 
   const handleEdit = () => {
     if (server.is_system) {
-      Stores.McpServerDrawer.openMcpServerDrawer(server, 'edit-system')
+      McpServerDrawer.openMcpServerDrawer(server, 'edit-system')
     } else {
-      Stores.McpServerDrawer.openMcpServerDrawer(server, 'edit')
+      McpServerDrawer.openMcpServerDrawer(server, 'edit')
     }
+  }
+
+  // Read-only drawer: renders ONLY the tool-call history tab. Never `edit` /
+  // `edit-system`, so no form, no save, no delete is mounted.
+  const handleViewHistory = () => {
+    McpServerDrawer.openMcpServerDrawer(server, 'history')
   }
 
   const handleDelete = async () => {
     try {
       if (server.is_system) {
-        await Stores.SystemMcpServer.deleteSystemServer(server.id)
+        await SystemMcpServer.deleteSystemServer(server.id)
       } else {
-        await Stores.McpServer.deleteMcpServer(server.id)
+        await McpServerStore.deleteMcpServer(server.id)
       }
       message.success('Server deleted successfully')
     } catch (_error) {
@@ -85,8 +104,8 @@ export function McpServerCard({
         id: server.id,
       }
       const result = server.is_system
-        ? await Stores.SystemMcpServer.testSystemServerConnection(payload)
-        : await Stores.McpServer.testMcpServerConnection(payload)
+        ? await SystemMcpServer.testSystemServerConnection(payload)
+        : await McpServerStore.testMcpServerConnection(payload)
       if (result.success) {
         message.success(result.message || 'Connection successful')
       } else {
@@ -99,9 +118,9 @@ export function McpServerCard({
       // to reload the page.
       try {
         if (server.is_system) {
-          await Stores.SystemMcpServer.loadSystemServers()
+          await SystemMcpServer.loadSystemServers()
         } else {
-          await Stores.McpServer.loadMcpServers()
+          await McpServerStore.loadMcpServers()
         }
       } catch (e) {
         console.warn('Failed to refresh after Test Connection:', e)
@@ -117,11 +136,11 @@ export function McpServerCard({
     setEnableLoading(true)
     try {
       if (server.is_system) {
-        await Stores.SystemMcpServer.updateSystemServer(server.id, {
+        await SystemMcpServer.updateSystemServer(server.id, {
           enabled,
         })
       } else {
-        await Stores.McpServer.updateMcpServer(server.id, {
+        await McpServerStore.updateMcpServer(server.id, {
           enabled,
         })
       }
@@ -228,6 +247,26 @@ export function McpServerCard({
               </Flex>
             </div>
             <div className="flex flex-wrap gap-2 items-center justify-end">
+              {/* Read-only call history — sits OUTSIDE the `isEditable` block
+                  on purpose (ITEM-16): a built-in / system server has no edit
+                  affordance, but the user must still be able to audit their
+                  own calls against it. */}
+              {canViewHistory && (
+                <Tooltip title="View the tool calls you made through this server">
+                  <Button
+                    variant="ghost"
+                    icon={<History />}
+                    onClick={e => {
+                      e.stopPropagation()
+                      handleViewHistory()
+                    }}
+                    aria-label={`View tool call history for ${server.display_name}`}
+                    data-testid="mcp-server-calls-btn"
+                  >
+                    Calls
+                  </Button>
+                </Tooltip>
+              )}
               {isEditable && (
                 <>
                   {canEdit && (

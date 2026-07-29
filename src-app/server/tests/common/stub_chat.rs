@@ -71,6 +71,16 @@ pub const STUB_TITLE_EMPTY: &str = "STUB_TITLE=empty";
 /// on the retry.
 pub const STUB_TITLE_EMPTY_ONCE: &str = "STUB_TITLE=empty_once";
 
+/// Like [`STUB_TITLE_EMPTY_ONCE`], but the FIRST title call comes back with no
+/// text AND `finish_reason: "length"` — i.e. the model burned the whole output
+/// budget on hidden reasoning.
+///
+/// This is the shape of the production bug a stub could not previously express:
+/// [`STUB_TITLE_EMPTY`] ends `stop` (a model with nothing to say), which must
+/// NOT be retried, whereas a budget-exhausted attempt must be retried once at a
+/// larger budget. The two modes are what keep those paths distinguishable.
+pub const STUB_TITLE_BUDGET_ONCE: &str = "STUB_TITLE=budget_once";
+
 impl RecordedRequest {
 
     pub fn has_tool(&self, name: &str) -> bool {
@@ -220,9 +230,22 @@ async fn chat_completions(State(s): State<StubState>, body: axum::body::Bytes) -
         })
         .unwrap_or_default();
 
-    let had_tool_result = messages
+    // "This turn already produced a tool result" = a `role:"tool"` message appears
+    // AFTER the last user message (i.e. we are on a continuation iteration of the
+    // CURRENT turn). Scanning the whole history would wrongly report `true` on the
+    // FIRST iteration of a LATER turn whose PRIOR turns used tools — making the
+    // stub skip the new turn's tool call (breaks every multi-turn tool test).
+    let last_user_idx = messages
         .iter()
-        .any(|m| m.get("role").and_then(|r| r.as_str()) == Some("tool"));
+        .rposition(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"));
+    let had_tool_result = {
+        let tail = match last_user_idx {
+            Some(i) => &messages[i + 1..],
+            None => &messages[..],
+        };
+        tail.iter()
+            .any(|m| m.get("role").and_then(|r| r.as_str()) == Some("tool"))
+    };
 
     // System-block text (manifest detection + file-id parse). Concatenate every
     // system message's text.
@@ -265,25 +288,24 @@ async fn chat_completions(State(s): State<StubState>, body: axum::body::Bytes) -
         .or_else(|| v.get("max_completion_tokens"))
         .and_then(|v| v.as_u64());
 
-    // Title calls seen BEFORE this one (the push below has not happened yet) —
-    // drives the `empty_once` transient-failure mode.
-    let prior_title_requests = s
-        .requests
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|r| r.is_title_request)
-        .count();
-
-    s.requests.lock().unwrap().push(RecordedRequest {
-        tool_names: tool_names.clone(),
-        had_tool_result,
-        has_manifest,
-        all_text,
-        roles,
-        max_tokens,
-        is_title_request,
-    });
+    // Title calls seen BEFORE this one — drives the `empty_once` / `budget_once`
+    // transient-failure modes. Counted and recorded under ONE lock acquisition:
+    // with two acquisitions, two concurrent title calls both observe `prior == 0`
+    // and both take the "first call fails" branch.
+    let prior_title_requests = {
+        let mut requests = s.requests.lock().unwrap();
+        let prior = requests.iter().filter(|r| r.is_title_request).count();
+        requests.push(RecordedRequest {
+            tool_names: tool_names.clone(),
+            had_tool_result,
+            has_manifest,
+            all_text,
+            roles,
+            max_tokens,
+            is_title_request,
+        });
+        prior
+    };
 
     // The title extension's call: answer with a beacon (or, when the test asked
     // for it, an EMPTY completion) instead of routing through the STUB_PLAN
@@ -301,12 +323,19 @@ async fn chat_completions(State(s): State<StubState>, body: axum::body::Bytes) -
         let text = match mode.as_str() {
             "empty" => None,
             "empty_once" if prior_title_requests == 0 => None,
+            "budget_once" if prior_title_requests == 0 => None,
             _ => Some(STUB_TITLE.to_string()),
         };
+        // `budget_once` ends the FIRST attempt budget-exhausted rather than
+        // `stop`, so the extension's escalated retry is actually exercised.
+        let finish_override = match mode.as_str() {
+            "budget_once" if prior_title_requests == 0 => Some("length"),
+            _ => None,
+        };
         return if streaming {
-            stream_response(&model, text, None)
+            stream_response_with_finish(&model, text, None, finish_override)
         } else {
-            json_response(&model, text, None)
+            json_response_with_finish(&model, text, None, finish_override)
         };
     }
 
@@ -356,6 +385,50 @@ fn script(
             }
             let echoed = last_tool_result_text(messages);
             (Some(format!("Matches: {echoed}")), None)
+        }
+        // files_mcp `read_file` BY NAME (`STUB_NAME`) — reads back a file the model
+        // authored earlier in the conversation. Pairs with `create_file` for the
+        // author-then-read-back flow.
+        "read_named" => {
+            if let (false, Some(wire)) =
+                (had_tool_result, resolve_wire_name(tool_names, "read_file"))
+            {
+                // A filename is a single token — take only the first word after
+                // `STUB_NAME=` (the test appends trailing prose, and `parse_token`
+                // otherwise runs to end-of-line; read_file needs an EXACT name).
+                let name = parse_token(last_user, "STUB_NAME=")
+                    .and_then(|v| v.split_whitespace().next().map(str::to_string))
+                    .filter(|c| !c.trim().is_empty())
+                    .unwrap_or_else(|| "authored.md".into());
+                return (None, Some((wire.to_string(), json!({ "name": name }))));
+            }
+            let echoed = last_tool_result_text(messages);
+            (Some(format!("You wrote: {echoed}")), None)
+        }
+        // files_mcp `create_file` — author a NEW file. Drives the "author the
+        // first file from an EMPTY conversation" flow (B1): the files_mcp WRITE
+        // tools attach even with no files present. `STUB_FILE` / `STUB_CONTENT`
+        // set the filename + body.
+        "create_file" => {
+            if let (false, Some(wire)) =
+                (had_tool_result, resolve_wire_name(tool_names, "create_file"))
+            {
+                let filename = parse_token(last_user, "STUB_FILE=")
+                    .filter(|c| !c.trim().is_empty())
+                    .unwrap_or_else(|| "authored.md".into());
+                let content = parse_token(last_user, "STUB_CONTENT=")
+                    .filter(|c| !c.trim().is_empty())
+                    .unwrap_or_else(|| "authored content".into());
+                return (
+                    None,
+                    Some((
+                        wire.to_string(),
+                        json!({ "filename": filename, "content": content }),
+                    )),
+                );
+            }
+            // Continuation: confirm creation (the test asserts "Created the file").
+            (Some("Created the file.".into()), None)
         }
         "remember" => {
             if let (false, Some(wire)) =
@@ -448,6 +521,51 @@ fn script(
                     Some((
                         wire.to_string(),
                         json!({ "message": "", "schema": { "type": "object" } }),
+                    )),
+                );
+            }
+            let answer = last_tool_result_text(messages);
+            (Some(format!("Result: {answer}")), None)
+        }
+        // ask_user whose `schema` argument is JSON-ENCODED AS A STRING — the
+        // EXACT shape observed in the live session that motivated the
+        // stringified-argument fix. Models routinely encode a nested object
+        // argument one level too many; before the fix this reached the browser
+        // as a string and rendered a form with ZERO fields. The continuation
+        // echoes whatever the user answered.
+        "ask_user_stringified" => {
+            if let (false, Some(wire)) =
+                (had_tool_result, resolve_wire_name(tool_names, "ask_user"))
+            {
+                return (
+                    None,
+                    Some((
+                        wire.to_string(),
+                        json!({
+                            "message": "What would you like to name this new project?",
+                            // NOTE the value is a STRING, not an object. This is
+                            // the defect, reproduced verbatim.
+                            "schema": r#"{"properties": {"name": {"title": "Project name", "type": "string"}, "description": {"title": "Brief description (optional)", "type": "string"}, "instructions": {"title": "System instructions for conversations in this project (optional)", "type": "string"}}, "required": ["name"], "type": "object"}"#
+                        }),
+                    )),
+                );
+            }
+            let answer = last_tool_result_text(messages);
+            (Some(format!("You chose: {answer}")), None)
+        }
+        // ask_user whose `schema` is a string that is NOT valid JSON — the
+        // unrecoverable half of the same class. The built-in must answer with an
+        // ACTIONABLE tool error (what arrived / what is required / a copyable
+        // example) instead of hanging on a form nobody can fill in.
+        "ask_user_bad_string_schema" => {
+            if let (false, Some(wire)) =
+                (had_tool_result, resolve_wire_name(tool_names, "ask_user"))
+            {
+                return (
+                    None,
+                    Some((
+                        wire.to_string(),
+                        json!({ "message": "Pick one", "schema": "not json {" }),
                     )),
                 );
             }
@@ -549,7 +667,12 @@ fn script(
             if let (false, Some(wire)) =
                 (had_tool_result, resolve_wire_name(tool_names, "get_tool_result"))
             {
-                if let Some(id) = parse_token(last_user, "STUB_TOOLUSE=") {
+                // A tool_use_id is a single token — take only the first word after
+                // `STUB_TOOLUSE=` (the test appends trailing prose; `parse_token`
+                // otherwise runs to end-of-line and the id would never match).
+                if let Some(id) = parse_token(last_user, "STUB_TOOLUSE=")
+                    .and_then(|v| v.split_whitespace().next().map(str::to_string))
+                {
                     return (None, Some((wire.to_string(), json!({ "tool_use_id": id }))));
                 }
                 return (Some("No tool_use_id provided to recall.".into()), None);
@@ -696,6 +819,17 @@ fn next_tool_call_id() -> String {
 }
 
 fn stream_response(model: &str, text: Option<String>, tool_call: Option<(String, Value)>) -> Response {
+    stream_response_with_finish(model, text, tool_call, None)
+}
+
+/// As [`stream_response`], but lets the caller force the terminal
+/// `finish_reason` (e.g. `"length"` for a budget-exhausted title attempt).
+fn stream_response_with_finish(
+    model: &str,
+    text: Option<String>,
+    tool_call: Option<(String, Value)>,
+    finish_override: Option<&str>,
+) -> Response {
     let mut events: Vec<Event> = Vec::new();
     events.push(sse_chunk(model, json!({"role": "assistant"}), None));
 
@@ -720,6 +854,7 @@ fn stream_response(model: &str, text: Option<String>, tool_call: Option<(String,
     } else {
         "stop"
     };
+    let finish = finish_override.unwrap_or(finish);
     events.push(sse_chunk(model, json!({}), Some(finish)));
 
     let stream = futures::stream::iter(
@@ -732,6 +867,16 @@ fn stream_response(model: &str, text: Option<String>, tool_call: Option<(String,
 }
 
 fn json_response(model: &str, text: Option<String>, tool_call: Option<(String, Value)>) -> Response {
+    json_response_with_finish(model, text, tool_call, None)
+}
+
+/// As [`json_response`], but lets the caller force the `finish_reason`.
+fn json_response_with_finish(
+    model: &str,
+    text: Option<String>,
+    tool_call: Option<(String, Value)>,
+    finish_override: Option<&str>,
+) -> Response {
     let mut message = json!({ "role": "assistant", "content": text });
     let finish = if let Some((name, args)) = &tool_call {
         message["tool_calls"] = json!([{
@@ -743,6 +888,7 @@ fn json_response(model: &str, text: Option<String>, tool_call: Option<(String, V
     } else {
         "stop"
     };
+    let finish = finish_override.unwrap_or(finish);
     Json(json!({
         "id": "chatcmpl-stub",
         "object": "chat.completion",

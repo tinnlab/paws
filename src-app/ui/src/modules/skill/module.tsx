@@ -1,18 +1,9 @@
 import { BookOpen } from 'lucide-react'
-import { Permissions } from '@/api-client/types'
+import { useOverlayOpen } from '@/core/overlays/overlayVisibility'
+import { Permissions } from '@/api-client/permissions'
 import { createModule } from '@ziee/framework'
-import { Stores } from '@ziee/framework/stores'
 import { useDelayedFalse } from '@/hooks/useDelayedFalse'
 import { SettingsLayoutDef } from '@/modules/settings/SettingsLayout'
-import {
-  useConversationSkillsStore,
-  useSkillConversationDrawerStore,
-  useSkillDrawerStore,
-  useSkillStore,
-  useSystemSkillStore,
-} from '@/modules/skill/stores'
-import { useGroupSystemSkillsWidgetStore } from '@/modules/skill/widgets/GroupSystemSkillsWidget.store'
-import { useGroupSystemSkillsAssignmentStore } from '@/modules/skill/widgets/GroupSystemSkillsAssignmentDrawer.store'
 import { lazyWithPreload } from '@/utils/lazyWithPreload'
 import '@/modules/skill/types' // CRITICAL: store declaration merging
 import '@/modules/settings/types/SettingsSlots' // settings slot types
@@ -45,31 +36,18 @@ export default createModule({
     version: '1.0.0',
     description: 'Agent Skills — installable knowledge bundles',
   },
+  // smart-loading gate (build-lifted into the manifest)
+  shouldLoad: (ctx) => ctx.isAuthenticated,
   dependencies: ['router'],
   stores: [
-    { name: 'Skill', store: useSkillStore },
-    { name: 'ConversationSkills', store: useConversationSkillsStore },
-    { name: 'SystemSkill', store: useSystemSkillStore },
-    { name: 'SkillDrawer', store: useSkillDrawerStore },
-    {
-      name: 'SkillConversationDrawer',
-      store: useSkillConversationDrawerStore,
-    },
-    {
-      name: 'GroupSystemSkillsWidget',
-      store: useGroupSystemSkillsWidgetStore,
-    },
-    {
-      name: 'GroupSystemSkillsAssignment',
-      store: useGroupSystemSkillsAssignmentStore,
-    },
+    // BOOT-EAGER (always-mounted overlay) — must stay registered.
   ],
   components: [
     {
       id: 'group-system-skills-assignment-drawer',
       component: GroupSystemSkillsAssignmentDrawer,
       shouldMount: () =>
-        useDelayedFalse(() => Stores.GroupSystemSkillsAssignment.isOpen),
+        useDelayedFalse(() => useOverlayOpen('group-skill-assignment')),
       order: 100,
     },
   ],

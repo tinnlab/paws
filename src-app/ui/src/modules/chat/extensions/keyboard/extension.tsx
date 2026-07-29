@@ -4,7 +4,7 @@ import {
   type ChatExtension,
 } from '@/modules/chat/core/extensions'
 import { useMainContentMinSize } from '@/modules/layouts/app-layout/hooks/useWindowMinSize'
-import { useSplitViewStore } from '@/modules/chat/core/stores/SplitView.store'
+import { useSplitViewStore } from '@/modules/chat/core/stores/splitView'
 
 /**
  * Resolve the DOM subtree of the FOCUSED split pane (ITEM-39). The keyboard
@@ -126,8 +126,17 @@ function KeyboardShortcutsHelp() {
   if (mainContentMinSize.xs) return null
 
   return (
+    // `w-0 flex-1` (not just `min-w-0`): as a flex item this element's
+    // MIN-CONTENT CONTRIBUTION is what its parent group's automatic minimum sums,
+    // and `min-width:0` alone only permits shrinking during layout — the
+    // contribution stays the `nowrap` text width, which used to floor the
+    // composer's left toolbar group at the full tips string and push Send off the
+    // composer. A flex base size of 0 makes the contribution genuinely 0, so the
+    // group's minimum is exactly its un-shrinkable icon buttons. `flex-1` then
+    // lets the tips take whatever room is actually left, and `truncate`
+    // ellipsizes. See the layout comment in ChatInput.tsx.
     <div
-      className="text-xs text-muted-foreground truncate min-w-0"
+      className="text-xs text-muted-foreground truncate w-0 flex-1 min-w-0"
       data-testid="chat-keyboard-tips"
     >
       <span>Tips: Ctrl+Enter to send, Ctrl+K to focus, Esc to clear</span>

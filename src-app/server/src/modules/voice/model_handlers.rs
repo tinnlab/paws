@@ -562,12 +562,12 @@ pub async fn upload_model(
         )
         .to_api_error());
     }
-    if !model::has_whisper_magic(&upload.head) {
-        return Err(AppError::bad_request(
-            "VOICE_MODEL_INVALID",
-            "file is not a whisper ggml/GGUF model (bad magic)",
-        )
-        .to_api_error());
+    // Reject at INGEST — before any row is written and while `temp_guard` still
+    // owns the streamed temp — so a 0-byte or wrong-content upload is never
+    // stored and failed later. Each condition gets its own actionable message
+    // (an empty upload used to be reported as "bad magic", which is false).
+    if let Some(rejection) = model::ModelRejection::classify(&upload.head, upload.size) {
+        return Err(rejection.to_error("the uploaded file", &upload.head).to_api_error());
     }
 
     // Filename: keep a .gguf upload's extension, else the ggml-<name>.bin form.

@@ -1,6 +1,6 @@
 import type { StoreProxy } from '@ziee/framework/stores'
-import type { useLitSearchAdminStore } from './stores/LitSearchAdmin.store'
-import type { useLitSearchUserKeysStore } from './stores/LitSearchUserKeys.store'
+import type { useLitSearchAdminStore } from './stores/litSearchAdmin'
+import type { useLitSearchUserKeysStore } from './stores/litSearchUserKeys'
 
 declare module '@ziee/framework/stores' {
   interface RegisteredStores {
@@ -65,7 +65,7 @@ export interface LiteratureScreeningData {
   reasons: Record<string, string>
 }
 
-declare module '@/modules/chat/core/stores/Chat.store' {
+declare module '@/modules/chat/core/stores/chat' {
   interface PanelRendererMap {
     literature: LiteratureScreeningData
   }

@@ -1,11 +1,11 @@
 import { CloudDownload } from 'lucide-react'
-import { Permissions } from '@/api-client/types'
+import { useOverlayOpen } from '@/core/overlays/overlayVisibility'
+import { Permissions } from '@/api-client/permissions'
 import { createModule } from '@ziee/framework'
-import { useLlmRepositoryDrawerStore } from '@/modules/llm-repository/components/LlmRepositoryDrawer.store'
-import { useLlmRepositoryStore } from '@/modules/llm-repository/stores/LlmRepository.store'
 import { SettingsLayoutDef } from '@/modules/settings/SettingsLayout'
 import '@/modules/llm-repository/types' // Import type augmentation
 import { lazyWithPreload } from '@/utils/lazyWithPreload'
+import { useDelayedFalse } from '@/hooks/useDelayedFalse'
 import '@/modules/settings/types/SettingsSlots' // Register settings slot types
 
 const LlmRepositorySettings = lazyWithPreload(() =>
@@ -25,6 +25,8 @@ export default createModule({
     version: '1.0.0',
     description: 'LLM model repository management',
   },
+  // smart-loading gate (build-lifted into the manifest)
+  shouldLoad: (ctx) => ctx.isAuthenticated && ctx.can(Permissions.LlmRepositoriesRead),
   dependencies: ['router'],
   routes: [
     {
@@ -36,19 +38,16 @@ export default createModule({
     },
   ],
   stores: [
-    {
-      name: 'LlmRepository',
-      store: useLlmRepositoryStore,
-    },
-    {
-      name: 'LlmRepositoryDrawer',
-      store: useLlmRepositoryDrawerStore,
-    },
   ],
   components: [
     {
       id: 'llm-repository-drawer',
       component: LlmRepositoryDrawer,
+      // Gate: mount ONLY while the drawer is open (mirrors the sibling
+      // GroupLlmProvidersAssignmentDrawer). Without this the drawer's chunk +
+      // its `GET /api/llm-repositories` fetch fired on EVERY route (incl. the
+      // logged-out login page) for a component that is closed 99% of the time.
+      shouldMount: () => useDelayedFalse(() => useOverlayOpen('llm-repository')),
       order: 100,
     },
   ],

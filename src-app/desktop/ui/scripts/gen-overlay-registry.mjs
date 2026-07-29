@@ -88,6 +88,8 @@ function importedPrimitives(src) {
   while ((m = importRe.exec(src))) {
     const [, names, source] = m
     const isKit =
+      source === '@ziee/kit' ||
+      source.startsWith('@ziee/kit/') ||
       source === '@/components/ui' ||
       source.startsWith('@/components/ui/') ||
       source === '@/modules/layouts/app-layout/components/Drawer'

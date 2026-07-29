@@ -1,8 +1,16 @@
 import { Shrink, FileText, EyeOff, Loader2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Tooltip, Tag, Dropdown, message } from '@ziee/kit'
-import { Stores } from '@ziee/framework/stores'
 import { ApiClient } from '@/api-client'
+import { ConversationSummarization as ConversationSummarizationStore } from '@/modules/summarization/stores/conversationSummarization'
+import { SummarizationAdmin as SummarizationAdminStore } from '@/modules/summarization/stores/summarizationAdmin'
+import { Chat } from '@/modules/chat/core/stores/chatBridge'
+import { isSessionCreatedConversation } from '@/core/sessionCreatedConversations'
+import {
+  isSummaryHeld,
+  shouldLoadSummaryOnOpen,
+  type SummaryTriggerState,
+} from '@/modules/summarization/chat-extension/summaryRefreshTrigger'
 
 type Mode = 'inherit' | 'on' | 'off'
 
@@ -12,20 +20,31 @@ type Mode = 'inherit' | 'on' | 'off'
  * `MemoryStatusPill` (memory's per-conversation pill).
  *
  * Also acts as the **read-model driver** for the in-thread summary
- * marker: subscribes to `messages.size` + `conversation.id` and calls
- * `Stores.ConversationSummarization.loadForConversation(id)`
- * on change. This load-bearing pattern rides cross-device freshness
- * transitively on `sync:conversation` — DO NOT move the trigger
- * elsewhere (audit lesson from the crashed-session redo).
+ * marker (`SummaryBoundaryMarker`) — it calls
+ * `ConversationSummarizationStore.loadForConversation(id)` when a
+ * conversation is opened or switched to.
+ *
+ * SUPERSEDED NOTE (kept because it was load-bearing): this used to
+ * subscribe to `messages.size` as well, and the header carried a
+ * "DO NOT move the trigger elsewhere" warning from an earlier audit.
+ * The message-count trigger fired 3–4 network reads per send for ONE
+ * server-side write and the live-UI audit reported it as a duplicate
+ * request storm; it is gone. The trigger did NOT move out of this
+ * extension — the turn-end half now lives in the same extension's
+ * `afterStreamComplete` hook (`../extension.tsx`), which is the one
+ * signal that fires exactly once per completed turn, in the OWNING
+ * pane. `summaryRefreshTrigger.ts` carries the full rationale,
+ * including why the transport-level in-flight coalescer cannot cover
+ * this and why `Chat.isStreaming` is NOT the trigger.
  */
 export function SummarizationStatusPill() {
   // Read every Stores.X.field at the TOP, before any conditional.
   // Each proxy access fires a useEffect; reading conditionally after
   // a guard triggers "Rendered more hooks than during the previous
   // render."
-  const conversation = Stores.Chat.conversation
-  const messages = Stores.Chat.messages
-  const adminSettings = Stores.SummarizationAdmin.settings
+  const conversation = Chat.conversation
+  const isStreaming = Chat.isStreaming
+  const adminSettings = SummarizationAdminStore.settings
   const [mode, setMode] = useState<Mode>('inherit')
   const [loading, setLoading] = useState(false)
 
@@ -53,20 +72,38 @@ export function SummarizationStatusPill() {
     }
   }, [conversation?.id])
 
-  // Drive the summary read-model: re-fetch when the conversation
-  // changes OR when message count changes (a new turn just landed,
-  // and the summary might have been updated by the after_llm_call
-  // hook on the server). The single-entry cache in
-  // ConversationSummarization rotates on conversation switch.
+  // Drive the summary read-model for the OPEN / SWITCH case only — NOT per
+  // message, which fired 3–4× per send for the ONE server-side write the
+  // `after_llm_call` hook performs. The TURN-END read is owned by this
+  // extension's `afterStreamComplete` hook (see `../extension.tsx`), which the
+  // stream handler invokes exactly once per completed turn. The rationale for
+  // both halves — and for why the transport-level in-flight coalescer cannot
+  // cover this — is in `summaryRefreshTrigger.ts`.
+  //
+  // The trigger STAYS in this component (the audit lesson recorded in this
+  // file's header): the pill is the read-model driver for
+  // `SummaryBoundaryMarker`, and the turn-end hook lives in the same extension.
   useEffect(() => {
-    if (!conversation?.id) {
-      Stores.ConversationSummarization.clear()
+    const id = conversation?.id ?? null
+    const next: SummaryTriggerState = {
+      conversationId: id,
+      streaming: isStreaming,
+      createdInThisSession: id ? isSessionCreatedConversation(id) : false,
+    }
+    if (!next.conversationId) {
+      ConversationSummarizationStore.clear()
       return
     }
-    void Stores.ConversationSummarization.loadForConversation(
-      conversation.id,
+    // Non-reactive snapshot read: this runs in an effect, and subscribing to the
+    // store here would re-render the pill on its own load.
+    const held = isSummaryHeld(
+      ConversationSummarizationStore.$,
+      next.conversationId,
     )
-  }, [conversation?.id, messages.size])
+    if (shouldLoadSummaryOnOpen(next, held ? next.conversationId : null)) {
+      void ConversationSummarizationStore.loadForConversation(next.conversationId)
+    }
+  }, [conversation?.id, isStreaming])
 
   if (!conversation?.id) return null
   // Known cross-cutting limitation (mirrors MemoryStatusPill): for

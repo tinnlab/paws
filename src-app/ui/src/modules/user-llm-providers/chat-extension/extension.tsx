@@ -1,13 +1,14 @@
 import { createExtension, type ChatExtension } from '@/modules/chat/core/extensions'
 import { ModelSelector } from '@/modules/user-llm-providers/chat-extension/components/ModelSelector'
 import type { Conversation } from '@/api-client/types'
+import { ModelPicker } from '@/modules/user-llm-providers/modelPicker'
 
 /**
  * Model Extension (frontend chat-extension shim).
  *
  * Bridges the chat composer to the user-llm-providers module. The
- * picker state lives in modules/user-llm-providers/ModelPicker.store.ts
- * (registered as Stores.ModelPicker), NOT under Stores.Chat. This
+ * picker state lives in modules/user-llm-providers/modelPicker/
+ * (registered as ModelPicker), NOT under Chat. This
  * extension is a thin UI shim that:
  *   - Renders the toolbar model selector slot.
  *   - Reads the active picker selection into outgoing chat requests
@@ -28,9 +29,8 @@ const modelExtension: ChatExtension = createExtension({
   priority: 10, // High priority - before text (5)
 
   initialize: async (ctx) => {
-    const { Stores } = await import('@ziee/framework/stores')
     const { newChatModelKey } = await import(
-      '@/modules/user-llm-providers/ModelPicker.store'
+      '@/modules/user-llm-providers/modelPicker'
     )
 
     // Editing-message → restore the message's model id, then fall back to the
@@ -49,9 +49,9 @@ const modelExtension: ChatExtension = createExtension({
           const key =
             conversation?.id ?? newChatModelKey(chatStore.getState().paneId)
           if (editingMessage?.model_id) {
-            Stores.ModelPicker.setModelId(key, editingMessage.model_id)
+            ModelPicker.setModelId(key, editingMessage.model_id)
           } else if (!editingMessage) {
-            Stores.ModelPicker.initializeFromConversation(
+            ModelPicker.initializeFromConversation(
               key,
               conversation?.model_id ?? undefined,
             )
@@ -74,13 +74,17 @@ const modelExtension: ChatExtension = createExtension({
    * (ctx.conversationId; null = new chat → the shared new-chat key). (ITEM-5)
    */
   composeRequestFields: async ctx => {
-    const { Stores } = await import('@ziee/framework/stores')
     const { newChatModelKey } = await import(
-      '@/modules/user-llm-providers/ModelPicker.store'
+      '@/modules/user-llm-providers/modelPicker'
     )
     const key = ctx.conversationId ?? newChatModelKey(ctx.paneId)
+    // getModelId/defaultModelId are LAZY store actions → they return a Promise
+    // (the dispatcher loads the action chunk first). They MUST be awaited: using
+    // the Promise directly makes `model_id` serialize to `{}`, so the backend
+    // rejects the conversation-create with 422 "model_id: invalid type: map".
     const modelId =
-      Stores.ModelPicker.getModelId(key) ?? Stores.ModelPicker.defaultModelId()
+      (await ModelPicker.getModelId(key)) ??
+      (await ModelPicker.defaultModelId())
     if (!modelId) {
       throw new Error('No model selected')
     }
@@ -99,8 +103,7 @@ const modelExtension: ChatExtension = createExtension({
    * Runs per pane (each pane's loadConversation invokes it).
    */
   onConversationLoad: async (conversation: Conversation) => {
-    const { Stores } = await import('@ziee/framework/stores')
-    Stores.ModelPicker.initializeFromConversation(
+    ModelPicker.initializeFromConversation(
       conversation.id,
       conversation.model_id ?? undefined,
     )

@@ -1,17 +1,19 @@
 import { createModule } from '@ziee/framework'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { History, Plus } from 'lucide-react'
 import { AppLayoutDef } from '@/modules/layouts/app-layout'
 import { lazyWithPreload } from '@/utils/lazyWithPreload'
 import { chatBridge } from '@/modules/chat/core/stores/chatBridge'
-import { useChatHistoryStore } from '@/modules/chat/stores/ChatHistory.store'
-import { useMessageViewStateStore } from '@/modules/chat/core/stores/MessageViewState.store'
-import { useSplitViewStore } from '@/modules/chat/core/stores/SplitView.store'
 import { RecentConversationsWidget } from '@/modules/chat/widgets/RecentConversationsWidget'
 import { OpenInNewWindowAction } from '@/modules/chat/components/OpenInNewWindowAction'
 import '@/modules/chat/types'
 import '@/modules/chat/core/events' // Import chat events for type merging
-import '@/modules/chat/extensions' // Auto-discover and register chat extensions
+// NOTE: chat extensions are NOT discovered here anymore. Importing
+// `@/modules/chat/extensions` at module-registration time pulled EVERY chat
+// extension (+ their stores: mcpComposer, file, memory, knowledge-base …) into
+// the boot payload, even on /login. Discovery is now triggered lazily by the
+// chat composer (`ChatInput` → `useChatExtensionsReady`) when a chat page first
+// mounts, so those chunks load with /chat instead of at boot.
 
 const NewChatPage = lazyWithPreload(() => import('./pages/NewChatPage'))
 const ConversationPage = lazyWithPreload(
@@ -30,26 +32,16 @@ export default createModule({
     version: '1.0.0',
     description: 'Chat module for conversations',
   },
+  // smart-loading gate (build-lifted into the manifest)
+  shouldLoad: (ctx) => ctx.isAuthenticated,
   dependencies: ['router'],
   stores: [
     {
-      // `Stores.Chat` is the focused-pane BRIDGE (forwards to the focused pane,
+      // `ChatStore` is the focused-pane BRIDGE (forwards to the focused pane,
       // default = the primary pane); single-pane forwards to the primary so
       // behaviour is unchanged.
       name: 'Chat',
       store: chatBridge,
-    },
-    {
-      name: 'ChatHistory',
-      store: useChatHistoryStore,
-    },
-    {
-      name: 'MessageViewState',
-      store: useMessageViewStateStore,
-    },
-    {
-      name: 'SplitView',
-      store: useSplitViewStore,
     },
   ],
   routes: [
@@ -120,7 +112,7 @@ export default createModule({
         component: RecentConversationsWidget,
         order: 10,
         // Gate: this widget lists the user's conversations and fetches
-        // them on mount (`Stores.ChatHistory.loadConversations()`). The
+        // them on mount (`ChatHistory.loadConversations()`). The
         // sibling `chats` nav entry is gated on ConversationsRead — match
         // it here so a user without the grant never sees the list nor
         // fires the 403 fetch.

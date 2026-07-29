@@ -20,10 +20,12 @@ import {
   whenTrue,
 } from '@/dev/gallery/support'
 import { chatCassette } from '@/dev/gallery/fixtures/chat'
-import { useChatStore } from '@/modules/chat/core/stores/Chat.store'
-import { useFileStore } from '@/modules/file/stores/File.store'
-import { useMcpComposerStore } from '@/modules/mcp/stores/McpComposer.store'
-import { ModelPicker } from '@/modules/user-llm-providers/ModelPicker.store'
+import { GALLERY_EMPTY_TASKS_CONVERSATION_ID } from '@/modules/background/gallery'
+import { LONG_TOOL_DESCRIPTION } from '@/dev/gallery/fixtures/longToolDescription'
+import { useChatStore } from '@/modules/chat/core/stores/chat'
+import { useFileStore } from '@/modules/file/stores/file'
+import { useMcpComposerStore } from '@/modules/mcp/stores/mcpComposer'
+import { useModelPickerStore } from '@/modules/user-llm-providers/modelPicker'
 import {
   BRANCHED_ANCHOR_MESSAGE_ID,
   BRANCHED_BRANCH_IDS,
@@ -34,6 +36,7 @@ import {
   literaturePanelData,
   liveAskUser,
   liveElicitation,
+  liveElicitationNoFields,
   rightPanelFile,
   streamingCassette,
 } from '@/dev/gallery/fixtures/chat-deep'
@@ -75,7 +78,7 @@ const LONG_MODEL_PROVIDER_ID = 'gallery-long-model-provider'
  */
 const holdSingleModel = (id: string, name: string) =>
   holdForever(() =>
-    ModelPicker.store.setState({
+    useModelPickerStore.setState({
       providers: [
         {
           id: LONG_MODEL_PROVIDER_ID,
@@ -201,7 +204,7 @@ export const gallery: ModuleGallery = {
         // holdForever re-asserts every 150ms so the composer's own loadProviders()
         // (which refills from the cassette on mount) can't repopulate it.
         holdForever(() =>
-          ModelPicker.store.setState({
+          useModelPickerStore.setState({
             providers: [],
             selectedModelId: null,
             loading: false,
@@ -386,16 +389,47 @@ export const gallery: ModuleGallery = {
       slug: 'deep-chat-tool-approval',
       title: 'Conversation — tool approval pending',
       conversationId: CHAT_DEEP_CONVERSATION_IDS.toolRunning,
-      note: 'McpComposer toolCall in pending_approval → the inline "Tool Approval Required" prompt (approve-once / approve-conv / deny)',
+      note: 'McpComposer toolCall in pending_approval → the inline "Tool Approval Required" prompt (ITEM-50 full-disclosure: data-egress host + full tool description + concrete args; approve-once / approve-conv / deny)',
       setup: async () => {
         await whenLoaded(CHAT_DEEP_CONVERSATION_IDS.toolRunning)
         useMcpComposerStore.getState().addToolCall({
           tool_use_id: 'toolu_running_1',
-          server: 'code_sandbox',
+          server: 'Acme Weather',
           server_id: 'a1b2c3d4-0000-5000-8000-000000000001',
-          tool_name: 'execute_command',
+          tool_name: 'get_forecast',
           status: 'pending_approval',
-          input: { command: 'ls -la /workspace' },
+          input: { location: 'San Francisco, CA', units: 'metric', days: 5 },
+          // ITEM-50: external tool → surface the concrete destination host + the
+          // tool's full exact advertised description on the approval card.
+          dest_host: 'api.weather.example.com',
+          description:
+            'Fetch a multi-day weather forecast for a location from the Acme Weather API. The location is sent verbatim to the upstream service; results are not cached.',
+        })
+      },
+    },
+    {
+      // The POPULATED-with-real-data twin of the cell above. The short
+      // description there is exactly the case that HIDES the defect: an
+      // advertised description is attacker-influenced and unbounded, and a long
+      // one used to grow the card until Deny/Approve sat below the fold. This
+      // cell keeps the long-description state in the gallery's theme × viewport
+      // matrix so the clamp + "Show more" stay covered by the runtime-health /
+      // geometry sweeps, at mobile width too (where the card is tallest).
+      slug: 'deep-chat-tool-approval-long-desc',
+      title: 'Conversation — tool approval pending (long description)',
+      conversationId: CHAT_DEEP_CONVERSATION_IDS.toolRunning,
+      note: 'approval card with a ~2,000-char advertised description → the description block is CLAMPED with a "Show more" toggle (full text still in the DOM) so approve/deny stay reachable without scrolling',
+      setup: async () => {
+        await whenLoaded(CHAT_DEEP_CONVERSATION_IDS.toolRunning)
+        useMcpComposerStore.getState().addToolCall({
+          tool_use_id: 'toolu_running_1',
+          server: 'Acme Weather',
+          server_id: 'a1b2c3d4-0000-5000-8000-000000000001',
+          tool_name: 'get_forecast',
+          status: 'pending_approval',
+          input: { location: 'San Francisco, CA', units: 'metric', days: 5 },
+          dest_host: 'api.weather.example.com',
+          description: LONG_TOOL_DESCRIPTION,
         })
       },
     },
@@ -416,6 +450,16 @@ export const gallery: ModuleGallery = {
         // The block's own `status: 'pending'` already renders the form; seeding the
         // McpComposer live entry (matching id) makes it the freshest-status source too.
         useMcpComposerStore.getState().addElicitationRequest(liveElicitation)
+      },
+    },
+    {
+      slug: 'deep-chat-elicitation-no-fields',
+      title: 'Conversation — elicitation with no renderable fields (degraded)',
+      conversationId: CHAT_DEEP_CONVERSATION_IDS.elicitation,
+      note: 'the honest degraded state: a schema that yields zero fields shows WHY and offers Decline / Accept-without-values, instead of an empty form with a Submit that fabricates an empty answer',
+      setup: async () => {
+        await whenLoaded(CHAT_DEEP_CONVERSATION_IDS.elicitation)
+        useMcpComposerStore.getState().addElicitationRequest(liveElicitationNoFields)
       },
     },
     {
@@ -569,8 +613,147 @@ export const gallery: ModuleGallery = {
         },
       ],
     },
+    {
+      // The in-conversation background surfaces (there is no global
+      // /background-tasks page any more). POPULATED on purpose — the background
+      // cassette seeds five runs spanning running / completed sub-agent /
+      // completed sandbox / failed / cancelled, so the design-critic pass reviews
+      // real card data (status badges, token counts, error text, action rows)
+      // rather than an empty panel.
+      slug: 'deep-chat-right-panel-background',
+      title: 'Conversation — right panel open (background Tasks)',
+      conversationId: SHOWCASE_CONVERSATION_ID,
+      note: 'the in-chat "Tasks" tab (registerPanelRenderer("background")) populated with five runs + the "Showing N of M" footer',
+      setup: async () => {
+        await whenLoaded(SHOWCASE_CONVERSATION_ID)
+        chat().displayInRightPanel({
+          id: `background-${SHOWCASE_CONVERSATION_ID}`,
+          title: 'Tasks',
+          type: 'background',
+          data: { conversationId: SHOWCASE_CONVERSATION_ID },
+        })
+      },
+    },
+    {
+      // The panel's EMPTY branch, driven for real: the background cassette answers
+      // GALLERY_EMPTY_TASKS_CONVERSATION_ID with a zero-run page, so opening the
+      // tab on that id renders the genuine empty state (not a seeded fake).
+      slug: 'deep-chat-background-empty',
+      title: 'Conversation — right panel, background Tasks (empty)',
+      conversationId: SHOWCASE_CONVERSATION_ID,
+      note: 'the Tasks tab for a conversation with no background runs — the real empty branch',
+      setup: async () => {
+        await whenLoaded(SHOWCASE_CONVERSATION_ID)
+        chat().displayInRightPanel({
+          id: `background-${GALLERY_EMPTY_TASKS_CONVERSATION_ID}`,
+          title: 'Tasks',
+          type: 'background',
+          data: { conversationId: GALLERY_EMPTY_TASKS_CONVERSATION_ID },
+        })
+      },
+    },
+    {
+      // The `message_list_footer` affordance, pinned after the last turn. Renders
+      // only once the conversation HAS runs, so this state is what proves it is
+      // reachable at all — plus its click target for the interaction pass.
+      slug: 'deep-chat-background-footer',
+      title: 'Conversation — end-of-conversation background affordance',
+      conversationId: SHOWCASE_CONVERSATION_ID,
+      note: 'the message_list_footer row summarising this conversation’s running sub-agents; clicking it opens the Tasks tab',
+      setup: async () => {
+        await whenLoaded(SHOWCASE_CONVERSATION_ID)
+        // The footer mounts inside MessageList and fetches its own slice. Wait on
+        // the STORE reaching the loaded state rather than a fixed sleep — a slow
+        // run would otherwise capture the pre-fetch frame, where the footer
+        // renders null, and silently blank the screenshot.
+        const { BackgroundRuns } = await import(
+          '@/modules/background/stores/BackgroundRuns.store'
+        )
+        await whenTrue(
+          () =>
+            (BackgroundRuns.$.totalByConversation[SHOWCASE_CONVERSATION_ID] ?? 0) > 0,
+        )
+      },
+      interactions: [
+        {
+          name: 'open-tasks',
+          note: 'click the footer affordance → the right-panel Tasks tab opens on THIS conversation',
+          steps: async d => {
+            await d.click('background-footer-open')
+            await d.waitFor('background-panel-list', 3000)
+            await d.wait(200)
+          },
+        },
+      ],
+    },
   ],
   seeded: [
+    // ── Agent task list (ITEM-36): mid-stream mixed state — the evolving,
+    //    followable checklist. `in_progress` shows its active_form; others
+    //    show content; completed is struck through. ─────────────────────────────
+    {
+      slug: 'seeded-agent-task-list',
+      title: 'Agent task list — in progress',
+      note: 'TaskListChecklist: 2 done / 1 in_progress / 2 pending (CC dual-form render)',
+      path: '/',
+      initialPath: '/',
+      component: lazyProps(
+        () => import('@/modules/chat/components/agent-activity/TaskListChecklist'),
+        'TaskListChecklist',
+        {
+          items: [
+            { id: 't1', content: 'Read the failing spec', active_form: 'Reading the failing spec', status: 'completed' },
+            { id: 't2', content: 'Reproduce the bug', active_form: 'Reproducing the bug', status: 'completed' },
+            { id: 't3', content: 'Fix the off-by-one in the parser', active_form: 'Fixing the off-by-one in the parser', status: 'in_progress' },
+            { id: 't4', content: 'Run the test suite', active_form: 'Running the test suite', status: 'pending' },
+            { id: 't5', content: 'Write a regression test', active_form: 'Writing a regression test', status: 'pending' },
+          ],
+        },
+      ),
+    },
+    // ── Delegated sub-agents (ITEM-4): fan-out still running (per-child status). ──
+    {
+      slug: 'seeded-agent-subagents-running',
+      title: 'Delegated sub-agents — running',
+      note: 'SubAgentActivityCard: 3 children (1 done / 1 running / 1 running), rollup = running',
+      path: '/',
+      initialPath: '/',
+      component: lazyProps(
+        () => import('@/modules/chat/components/agent-activity/SubAgentActivityCard'),
+        'SubAgentActivityCard',
+        {
+          activity: {
+            children: [
+              { id: 'c1', label: 'Search PubMed for BRCA1 trials', status: 'completed' },
+              { id: 'c2', label: 'Summarise the ClinicalTrials.gov results', status: 'running' },
+              { id: 'c3', label: 'Cross-check the ChEMBL targets', status: 'running' },
+            ],
+          },
+        },
+      ),
+    },
+    // ── Delegated sub-agents (ITEM-4): fan-out finished, all terminal (one child
+    //    failed — rollup = failed). ──────────────────────────────────────────────
+    {
+      slug: 'seeded-agent-subagents-done',
+      title: 'Delegated sub-agents — done',
+      note: 'SubAgentActivityCard: all terminal (1 failed), rollup = failed',
+      path: '/',
+      initialPath: '/',
+      component: lazyProps(
+        () => import('@/modules/chat/components/agent-activity/SubAgentActivityCard'),
+        'SubAgentActivityCard',
+        {
+          activity: {
+            children: [
+              { id: 'c1', label: 'Search PubMed for BRCA1 trials', status: 'completed' },
+              { id: 'c2', label: 'Summarise the ClinicalTrials.gov results', status: 'completed' },
+              { id: 'c3', label: 'Cross-check the ChEMBL targets', status: 'failed' },
+            ],
+          },
+        },
+      ),
+    },
     {
       slug: 'seeded-recent-convos-loading',
       title: 'Recent chats widget — loading',
@@ -582,11 +765,11 @@ export const gallery: ModuleGallery = {
         'RecentConversationsWidget',
       ),
       setup: async () => {
-        const { ChatHistory } = await import(
-          '@/modules/chat/stores/ChatHistory.store'
+        const { useChatHistoryStore } = await import(
+          '@/modules/chat/stores/chatHistory'
         )
         await holdPatch(() =>
-          ChatHistory.store.setState({
+          useChatHistoryStore.setState({
             recentLoading: true,
             recentInitialized: false,
           } as any),
@@ -605,11 +788,11 @@ export const gallery: ModuleGallery = {
         'RecentConversationsWidget',
       ),
       setup: async () => {
-        const { ChatHistory } = await import(
-          '@/modules/chat/stores/ChatHistory.store'
+        const { useChatHistoryStore } = await import(
+          '@/modules/chat/stores/chatHistory'
         )
         await holdPatch(() =>
-          ChatHistory.store.setState({
+          useChatHistoryStore.setState({
             recentInitialized: true,
             recentLoading: false,
             recentConversations: [],
@@ -629,11 +812,11 @@ export const gallery: ModuleGallery = {
         'RecentConversationsWidget',
       ),
       setup: async () => {
-        const { ChatHistory } = await import(
-          '@/modules/chat/stores/ChatHistory.store'
+        const { useChatHistoryStore } = await import(
+          '@/modules/chat/stores/chatHistory'
         )
         await holdPatch(() =>
-          ChatHistory.store.setState({
+          useChatHistoryStore.setState({
             recentInitialized: true,
             recentLoading: false,
             recentLoadingMore: false,
@@ -657,11 +840,11 @@ export const gallery: ModuleGallery = {
         'RecentConversationsWidget',
       ),
       setup: async () => {
-        const { ChatHistory } = await import(
-          '@/modules/chat/stores/ChatHistory.store'
+        const { useChatHistoryStore } = await import(
+          '@/modules/chat/stores/chatHistory'
         )
         await holdPatch(() =>
-          ChatHistory.store.setState({
+          useChatHistoryStore.setState({
             recentInitialized: false,
             recentLoading: false,
             recentConversations: [],
@@ -682,11 +865,11 @@ export const gallery: ModuleGallery = {
         'RecentConversationsWidget',
       ),
       setup: async () => {
-        const { ChatHistory } = await import(
-          '@/modules/chat/stores/ChatHistory.store'
+        const { useChatHistoryStore } = await import(
+          '@/modules/chat/stores/chatHistory'
         )
         await holdPatch(() =>
-          ChatHistory.store.setState({
+          useChatHistoryStore.setState({
             recentInitialized: true,
             recentLoading: false,
             recentLoadingMore: true,
@@ -761,7 +944,7 @@ export const gallery: ModuleGallery = {
       ),
       setup: async () => {
         const { useChatStore } = await import(
-          '@/modules/chat/core/stores/Chat.store'
+          '@/modules/chat/core/stores/chat'
         )
         await holdPatch(() =>
           useChatStore.setState({
@@ -786,11 +969,11 @@ export const gallery: ModuleGallery = {
         'default',
       ),
       setup: async () => {
-        const { ChatHistory } = await import(
-          '@/modules/chat/stores/ChatHistory.store'
+        const { useChatHistoryStore } = await import(
+          '@/modules/chat/stores/chatHistory'
         )
-        const { AppLayout } = await import(
-          '@/modules/layouts/app-layout/AppLayout.store'
+        const { AppLayoutDef } = await import(
+          '@/modules/layouts/app-layout/appLayout'
         )
         // ChatHistoryPage refetches on mount (which flips loading/isInitialized as
         // it resolves), so a one-shot seed races into a blank window: `loading`
@@ -800,8 +983,8 @@ export const gallery: ModuleGallery = {
         // via the loading arm (also covering the `nativeScroll===true` :143 ternary)
         // and ConversationList deterministically shows its load spinner.
         holdForever(() => {
-          AppLayout.store.setState({ nativeScroll: true } as any)
-          ChatHistory.store.setState({
+          AppLayoutDef.store.setState({ nativeScroll: true } as any)
+          useChatHistoryStore.setState({
             loading: true,
             isInitialized: false,
             conversations: [],
@@ -825,7 +1008,7 @@ export const gallery: ModuleGallery = {
       ),
       setup: async () => {
         const { useChatStore } = await import(
-          '@/modules/chat/core/stores/Chat.store'
+          '@/modules/chat/core/stores/chat'
         )
         await holdPatch(() =>
           useChatStore.setState({ loading: true, conversation: null } as any),
@@ -845,7 +1028,7 @@ export const gallery: ModuleGallery = {
       ),
       setup: async () => {
         const { useChatStore } = await import(
-          '@/modules/chat/core/stores/Chat.store'
+          '@/modules/chat/core/stores/chat'
         )
         await holdPatch(() =>
           useChatStore.setState({
@@ -862,7 +1045,7 @@ export const gallery: ModuleGallery = {
     {
       slug: 'seeded-s5-conversation-error',
       title: 'Conversation page — error banner',
-      note: 'conversation loaded + Stores.Chat.error → the inline error banner (ConversationPage:142)',
+      note: 'conversation loaded + ChatStore.error → the inline error banner (ConversationPage:142)',
       path: '/chat/:conversationId',
       initialPath: '/chat/11111111-1111-1111-1111-111111111111',
       component: lazyNamed(
@@ -871,7 +1054,7 @@ export const gallery: ModuleGallery = {
       ),
       setup: async () => {
         const { useChatStore } = await import(
-          '@/modules/chat/core/stores/Chat.store'
+          '@/modules/chat/core/stores/chat'
         )
         const { SHOWCASE_CONVERSATION_ID } = await import(
           '@/dev/gallery/fixtures/chat-deep'

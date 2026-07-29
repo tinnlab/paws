@@ -232,6 +232,22 @@ async fn ask_user_accept_returns_the_answer_to_the_model() {
         // skill
         "__load_skill",
         "__read_skill_file",
+        // js_tool (run_js auto-attaches for tool-capable chats; the START is
+        // approval-bypassed, gated sub-tools inside the script are approved).
+        "__run_js",
+        // files_mcp WRITE tools auto-attach for tool-capable chats even in an
+        // EMPTY conversation (B1 — so the model can author the first file); the
+        // READ tools stay gated on file-presence, so they do NOT attach here.
+        "__create_file",
+        "__edit_file",
+        "__edit_file_lines",
+        "__rewrite_file",
+        "__convert_document",
+        // background_mcp (agent background tasks) auto-attaches for tool-capable
+        // chats alongside the other always-on built-ins.
+        "__spawn_background",
+        "__check_status",
+        "__collect_result",
     ];
     assert!(
         tools
@@ -854,3 +870,194 @@ async fn ask_user_elicitation_works_with_a_file_attachment_in_the_same_turn() {
     );
 }
 
+
+// ─── Stringified `schema` — the reported live defect, through the REAL path ──
+
+/// **The acceptance test for the whole stringified-argument round.**
+///
+/// The model JSON-ENCODES `ask_user`'s object `schema` argument — the exact
+/// payload observed in the live session. Before the fix the string survived
+/// untouched all the way to the browser: `cap_requested_schema` and
+/// `stamp_ask_user_marker` both fall through on a non-object, the frontend did
+/// `schema?.properties || {}` on a string primitive, and the user got a card
+/// with the question, ZERO fields, and a Submit button that POSTs `content: {}`
+/// as if they had answered.
+///
+/// This drives the REAL chat path (real tool loop → the real built-in →
+/// the real SSE frame) and asserts what the client actually receives: an OBJECT
+/// carrying every question the model asked. It fails on the pre-fix code with a
+/// `requested_schema` that is a JSON string. (TEST-17, INV-1)
+#[tokio::test]
+async fn ask_user_stringified_schema_reaches_the_client_as_a_usable_form() {
+    let mut fx = setup().await;
+
+    send_turn(&fx, "STUB_PLAN=ask_user_stringified name my project").await;
+    let frames = fx
+        .probe
+        .collect_until(fx.conv_id, &["mcpElicitationRequired"], TURN_TIMEOUT)
+        .await;
+    let last = frames.last().expect("at least one frame");
+    assert_eq!(
+        last.event_type, "mcpElicitationRequired",
+        "a JSON-encoded schema must still surface a form, got '{}'",
+        last.event_type
+    );
+    let data = last.data.clone();
+
+    let schema = &data["requested_schema"];
+    assert!(
+        schema.is_object(),
+        "the client must receive an OBJECT, not a JSON string — this is the defect: {schema}"
+    );
+    let props = schema["properties"]
+        .as_object()
+        .unwrap_or_else(|| panic!("a renderable form needs `properties`: {schema}"));
+    assert_eq!(props.len(), 3, "all three questions must survive: {schema}");
+    for key in ["name", "description", "instructions"] {
+        assert!(props.contains_key(key), "missing question `{key}`: {schema}");
+    }
+    assert_eq!(props["name"]["title"], json!("Project name"));
+    assert_eq!(schema["required"], json!(["name"]));
+    // The decode has to happen early enough for the trusted rich-UX marker to be
+    // stamped, or the frontend never enters the decision UX.
+    assert_eq!(
+        schema["x-ziee-askuser"],
+        json!(true),
+        "the decoded schema must still be marked rich: {schema}"
+    );
+}
+
+/// The unrecoverable half of the same class: a `schema` string that is not valid
+/// JSON. The model must get feedback it can ACT on — what arrived, what is
+/// required, and a schema it can copy — not silence, not a hang on a form nobody
+/// can fill in, and not a bare "invalid schema".
+///
+/// Asserts the TEXT, deliberately. A test that only checked `isError` would pass
+/// on a useless message and still leave the model repeating the same malformed
+/// call, which is what the user experiences as a dead card. (TEST-18, INV-5)
+#[tokio::test]
+async fn ask_user_unusable_string_schema_returns_actionable_feedback() {
+    let mut fx = setup().await;
+
+    send_turn(&fx, "STUB_PLAN=ask_user_bad_string_schema go").await;
+    let frames = fx.probe.collect_until_terminal(fx.conv_id, TURN_TIMEOUT).await;
+
+    assert!(
+        !frames.iter().any(|f| f.event_type == "mcpElicitationRequired"),
+        "an unusable schema must NOT surface a form the user cannot fill in"
+    );
+    // Assert on the bytes the backend ACTUALLY SENT TO THE MODEL — the
+    // continuation request's message history — not on the assistant text the
+    // stub chose to echo back. The stub truncates its echo to 200 chars
+    // (`last_tool_result_text`), so asserting on the visible reply would test
+    // the fixture's echo policy rather than the product's feedback, and would
+    // have "passed" on a refusal whose corrective example was cut off. The
+    // whole requirement is that the MODEL can act on the message, so the
+    // model's own input is the right artifact.
+    let sent_to_model = fx
+        .stub
+        .requests()
+        .into_iter()
+        .find(|r| r.had_tool_result)
+        .map(|r| r.all_text)
+        .expect("the refusal must be sent back to the model as a tool result");
+
+    // (a) what was RECEIVED, (b) what is EXPECTED, (c) a copyable EXAMPLE.
+    assert!(
+        sent_to_model.contains("schema"),
+        "the refusal must name the argument; got: {sent_to_model:?}"
+    );
+    assert!(
+        sent_to_model.contains("not valid JSON"),
+        "the refusal must say what ARRIVED; got: {sent_to_model:?}"
+    );
+    assert!(
+        sent_to_model.contains("JSON object"),
+        "the refusal must say what is EXPECTED; got: {sent_to_model:?}"
+    );
+    assert!(
+        sent_to_model.contains("Example:") && sent_to_model.contains("\"type\":\"object\""),
+        "the refusal must carry a literal-JSON example the model can copy; got: {sent_to_model:?}"
+    );
+    // The example must arrive COMPLETE — a corrective example the model cannot
+    // copy in full is no better than prose.
+    assert!(
+        sent_to_model.contains("\"required\":[\"name\"]}"),
+        "the example must reach the model UNTRUNCATED; got: {sent_to_model:?}"
+    );
+}
+
+/// The elicitation RESPONSE path (the answer coming BACK). The REST route takes
+/// `content: Option<Value>` from any API consumer, so a JSON-ENCODED object
+/// would otherwise reach the model double-encoded through
+/// `ask_user_tool_result`'s `to_string`, and be POSTed to an external MCP server
+/// as a non-conformant JSON-RPC result. It is decoded at the ingress, so the
+/// model sees the answer the user actually gave. (TEST-21, ITEM-8)
+#[tokio::test]
+async fn elicitation_response_content_is_decoded_when_json_encoded() {
+    let mut fx = setup().await;
+
+    let data = drive_to_elicitation(&mut fx).await;
+    let elicitation_id = data["elicitation_id"].as_str().expect("elicitation id").to_string();
+
+    // Accept with the answer JSON-ENCODED as a string rather than as an object.
+    let resp = respond(
+        &fx.server,
+        &fx.user.token,
+        &elicitation_id,
+        json!({ "action": "accept", "content": r#"{"color":"green"}"# }),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "a decodable string content must be accepted, not refused"
+    );
+
+    let frames = fx.probe.collect_until_terminal(fx.conv_id, TURN_TIMEOUT).await;
+    let text = ChatStreamProbe::assemble_text(&frames);
+    assert!(
+        text.contains("green"),
+        "the decoded answer must reach the model; got: {text:?}"
+    );
+    // Double-encoding would surface as an escaped inner payload.
+    assert!(
+        !text.contains("\\\"color\\\""),
+        "the answer must NOT reach the model double-encoded; got: {text:?}"
+    );
+}
+
+/// …and a `content` that cannot be an object is REFUSED at the ingress with the
+/// same actionable shape, rather than being stored and forwarded as garbage.
+/// (TEST-21 companion)
+#[tokio::test]
+async fn elicitation_response_rejects_unusable_content_with_guidance() {
+    let mut fx = setup().await;
+
+    let data = drive_to_elicitation(&mut fx).await;
+    let elicitation_id = data["elicitation_id"].as_str().expect("elicitation id").to_string();
+
+    let resp = respond(
+        &fx.server,
+        &fx.user.token,
+        &elicitation_id,
+        json!({ "action": "accept", "content": "not json {" }),
+    )
+    .await;
+    assert_eq!(resp.status(), 400, "an unusable content must be refused");
+    let body = resp.text().await.unwrap_or_default();
+    assert!(
+        body.contains("content") && body.contains("JSON object") && body.contains("Example:"),
+        "the 400 must tell the caller what arrived, what is expected, and show an example; got: {body}"
+    );
+
+    // Clean up the still-pending turn so the test does not leave a blocked
+    // generation task behind (mirrors the decline in the sibling specs).
+    let _ = respond(
+        &fx.server,
+        &fx.user.token,
+        &elicitation_id,
+        json!({ "action": "decline" }),
+    )
+    .await;
+}

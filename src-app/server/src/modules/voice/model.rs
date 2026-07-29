@@ -56,11 +56,138 @@ pub const MAX_MODEL_BYTES: u64 = 5 * 1024 * 1024 * 1024;
 /// Cap on an admin-uploaded model file (same bound + rationale as [`MAX_MODEL_BYTES`]).
 pub const VOICE_MODEL_MAX_UPLOAD_BYTES: u64 = 5 * 1024 * 1024 * 1024;
 
-/// Validate that `bytes` begin with a whisper ggml (`ggml`) or GGUF (`GGUF`) magic.
-/// Uploaded / arbitrary-URL model files are checked so a non-model blob is rejected
-/// before it lands in the library.
+/// whisper.cpp's legacy ggml container magic, as declared upstream
+/// (`GGML_FILE_MAGIC`). It is written to disk as a **native-endian `u32`**, NOT as
+/// an ASCII string — so on every little-endian host (x86_64, aarch64: i.e. every
+/// platform ziee ships) a real `ggml-*.bin` begins with the bytes
+/// `6c 6d 67 67`, which read as ASCII `lmgg` — the REVERSE of `ggml`.
+///
+/// This is the whole of the "bad magic" defect: the check used to compare against
+/// the ASCII spelling `b"ggml"`, which no real whisper.cpp model file has ever
+/// begun with, so every catalog / URL / upload install of a genuine model was
+/// rejected on its first chunk. See `.lifecycle/voice-model-bad-magic/`.
+pub const GGML_FILE_MAGIC: u32 = 0x6767_6d6c;
+
+/// The on-disk byte order of [`GGML_FILE_MAGIC`] on a little-endian host —
+/// `6c 6d 67 67` (`lmgg`). This is what real whisper.cpp model files start with.
+pub const GGML_MAGIC_LE: [u8; 4] = GGML_FILE_MAGIC.to_le_bytes();
+
+/// The big-endian ordering of [`GGML_FILE_MAGIC`] — `67 67 6d 6c` (ASCII `ggml`).
+/// Accepted defensively for a file authored on a big-endian host; this is also the
+/// (only) form the pre-fix check accepted, so keeping it makes the corrected check
+/// a pure WIDENING of the previous accept-set — no input that used to pass can now
+/// fail.
+pub const GGML_MAGIC_BE: [u8; 4] = GGML_FILE_MAGIC.to_be_bytes();
+
+/// The GGUF container magic. Unlike ggml's, the GGUF spec stores this as the
+/// literal ASCII bytes `GGUF`, so no byte-order handling is needed — matching
+/// `llm_local_runtime::engine::metadata`'s check.
+pub const GGUF_MAGIC: [u8; 4] = *b"GGUF";
+
+/// Validate that `bytes` begin with a whisper ggml or GGUF container magic.
+/// Downloaded / uploaded / arbitrary-URL model files are checked so a non-model
+/// blob (an HTML error page, a zip, a truncated body) is rejected before it lands
+/// in the library.
+///
+/// Accepts [`GGML_MAGIC_LE`] (what real files are), [`GGML_MAGIC_BE`], and
+/// [`GGUF_MAGIC`]. Fewer than 4 bytes cannot identify a container and is rejected;
+/// callers distinguish that case for the user via [`ModelRejection`].
 pub fn has_whisper_magic(bytes: &[u8]) -> bool {
-    bytes.len() >= 4 && (&bytes[..4] == b"ggml" || &bytes[..4] == b"GGUF")
+    bytes.len() >= 4
+        && matches!(
+            <[u8; 4]>::try_from(&bytes[..4]),
+            Ok(GGML_MAGIC_LE) | Ok(GGML_MAGIC_BE) | Ok(GGUF_MAGIC)
+        )
+}
+
+/// Why a candidate model file was refused. Each variant is a genuinely different
+/// user situation and gets its own error code + message — the pre-fix code folded
+/// "the response body was empty" into the magic error, so an empty HTTP 200 was
+/// reported to the user as "bad magic", which is false.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelRejection {
+    /// Zero bytes arrived — an empty response body / an empty uploaded file.
+    Empty,
+    /// Fewer than 4 bytes arrived: too short to identify any container.
+    Truncated,
+    /// Bytes arrived, but they are not a whisper ggml/GGUF container.
+    BadMagic,
+}
+
+impl ModelRejection {
+    /// Classify an observed file head. `total_len` is the full byte count (which
+    /// may exceed `head.len()`, since callers only retain the first few bytes).
+    pub fn classify(head: &[u8], total_len: u64) -> Option<Self> {
+        if total_len == 0 {
+            return Some(ModelRejection::Empty);
+        }
+        if head.len() < 4 {
+            return Some(ModelRejection::Truncated);
+        }
+        if !has_whisper_magic(head) {
+            return Some(ModelRejection::BadMagic);
+        }
+        None
+    }
+
+    /// The stable error code for this rejection.
+    pub fn code(self) -> &'static str {
+        match self {
+            ModelRejection::Empty => "VOICE_MODEL_EMPTY_DOWNLOAD",
+            ModelRejection::Truncated => "VOICE_MODEL_TRUNCATED",
+            ModelRejection::BadMagic => "VOICE_MODEL_INVALID",
+        }
+    }
+
+    /// An actionable message: what was FOUND, what was EXPECTED, and the
+    /// CORRECTIVE ACTION. `source` names the thing being rejected for the user
+    /// (e.g. `"the downloaded file"` / `"the uploaded file"`).
+    pub fn message(self, source: &str, head: &[u8]) -> String {
+        let expected = "a whisper model file (a `ggml` or `GGUF` container)";
+        match self {
+            ModelRejection::Empty => format!(
+                "{source} is empty (0 bytes). Expected {expected}. \
+                 The source returned no data — check that the URL points directly at the \
+                 model file (not a web page or a redirect), then try the download again."
+            ),
+            ModelRejection::Truncated => format!(
+                "{source} ended after {} byte(s) — too short to be a model. Expected {expected}. \
+                 The transfer was cut short; try the download again, and if it keeps failing \
+                 check your connection to the source.",
+                head.len()
+            ),
+            ModelRejection::BadMagic => format!(
+                "{source} is not a whisper model: it starts with {} instead of a recognised \
+                 container header. Expected {expected}. \
+                 This usually means the URL served a web page or an error message rather than \
+                 the model itself — check that it points directly at the raw `.bin`/`.gguf` \
+                 file, then re-download. If the file is already installed, remove it and \
+                 install it again.",
+                describe_head(head)
+            ),
+        }
+    }
+
+    /// Build the `AppError` for this rejection.
+    pub fn to_error(self, source: &str, head: &[u8]) -> AppError {
+        AppError::bad_request(self.code(), self.message(source, head))
+    }
+}
+
+/// Render an observed file head as hex plus its printable ASCII, so a user (or a
+/// log reader) can tell at a glance that they got an HTML page rather than a
+/// model — e.g. ``​`3c 21 44 4f` ("<!DO")``.
+pub fn describe_head(head: &[u8]) -> String {
+    let shown = &head[..head.len().min(4)];
+    if shown.is_empty() {
+        return "no data".to_string();
+    }
+    let hex = shown.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ");
+    let printable: String = shown
+        .iter()
+        .map(|&b| if (0x20..0x7f).contains(&b) { b as char } else { '.' })
+        .collect();
+    format!("`{hex}` (\"{printable}\")")
 }
 
 /// Look up the pinned sha256 for `name`, if any.
@@ -415,10 +542,9 @@ where
             if head.len() < 4 {
                 head.extend_from_slice(&chunk[..chunk.len().min(4 - head.len())]);
                 if head.len() >= 4 && !has_whisper_magic(&head) {
-                    return Err(AppError::bad_request(
-                        "VOICE_MODEL_INVALID",
-                        "file is not a whisper ggml/GGUF model (bad magic)",
-                    ));
+                    // Fail fast on the very first bytes rather than streaming a
+                    // whole HTML error page to disk.
+                    return Err(ModelRejection::BadMagic.to_error("the downloaded file", &head));
                 }
             }
             downloaded += chunk.len() as u64;
@@ -449,12 +575,13 @@ where
     }
     drop(file);
 
-    if downloaded == 0 || !has_whisper_magic(&head) {
+    // Re-check after the stream ends. An empty body, a body shorter than the
+    // 4-byte header, and a body with the wrong magic are three DIFFERENT user
+    // situations and must not be collapsed into one message (the pre-fix code
+    // reported an empty HTTP 200 as "bad magic", which is false).
+    if let Some(rejection) = ModelRejection::classify(&head, downloaded) {
         let _ = std::fs::remove_file(&tmp);
-        return Err(AppError::bad_request(
-            "VOICE_MODEL_INVALID",
-            "download produced no valid whisper model bytes",
-        ));
+        return Err(rejection.to_error("the downloaded file", &head));
     }
 
     let actual = hex_lower(&hasher.finalize());
@@ -565,16 +692,73 @@ pub fn discard_temp(tmp: &Path) {
 }
 
 /// Rename the verified temp file into place (best-effort cross-device fallback).
+///
+/// Publishing is the LAST failure exit of an acquisition, and it is the one that
+/// can leave a **partial destination** behind: `std::fs::copy` that dies part-way
+/// (ENOSPC, EIO) leaves a truncated `ggml-<name>.bin`, which
+/// [`installed_model_path`] — an exists + non-empty check — would then report as
+/// an installed model, and the runtime would try to load it. That is the
+/// "a failed acquisition left a broken artifact behind" class this branch exists
+/// to close (INV-3), so BOTH sides are removed before the error propagates.
 fn finalize_download(tmp: &Path, dest: &Path) -> Result<(), AppError> {
     match std::fs::rename(tmp, dest) {
         Ok(()) => Ok(()),
-        Err(_) => {
-            std::fs::copy(tmp, dest)
-                .map_err(|e| AppError::internal_error(format!("publish model file: {e}")))?;
-            let _ = std::fs::remove_file(tmp);
-            Ok(())
+        Err(_) => match std::fs::copy(tmp, dest) {
+            Ok(_) => {
+                let _ = std::fs::remove_file(tmp);
+                Ok(())
+            }
+            Err(e) => {
+                // Never leave a partial `dest` that would read as installed,
+                // and never leak the temp.
+                let _ = std::fs::remove_file(dest);
+                let _ = std::fs::remove_file(tmp);
+                Err(AppError::internal_error(format!("publish model file: {e}")))
+            }
+        },
+    }
+}
+
+/// A `*.tmp` under `voice-models/` is only reclaimed by its own writer's error
+/// path. A SIGKILL / OOM-kill / power loss mid-download (or mid-upload) leaves
+/// one behind forever — up to 5 GiB of dead bytes per orphan, since the cap is
+/// enforced as they arrive. Nothing else ever deletes them: the library list
+/// comes from the DB, and [`installed_model_path`] only looks at
+/// `ggml-<name>.{bin,gguf}`, so an orphan is invisible as well as permanent.
+///
+/// Swept at module init (see `voice::VoiceModule::init`). `min_age` guards the
+/// case of another process sharing the data dir with a download genuinely in
+/// flight — a `.tmp` younger than that is left alone.
+pub const STALE_TEMP_MIN_AGE: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
+
+/// Remove `*.tmp` files under `dir` last modified more than `min_age` ago.
+/// Returns how many were reclaimed. Never fails the caller: an unreadable dir
+/// (not created yet on a fresh install) or an undeletable entry is a no-op.
+pub fn sweep_stale_temps(dir: &Path, min_age: std::time::Duration) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let now = std::time::SystemTime::now();
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("tmp") {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else { continue };
+        if !meta.is_file() {
+            continue;
+        }
+        let old_enough = meta
+            .modified()
+            .ok()
+            .and_then(|m| now.duration_since(m).ok())
+            .is_some_and(|age| age >= min_age);
+        if old_enough && std::fs::remove_file(&path).is_ok() {
+            removed += 1;
         }
     }
+    removed
 }
 
 /// Strip any `user:pass@` userinfo from a URL before it lands in a log line or an
@@ -627,15 +811,179 @@ mod tests {
         assert_eq!(hex_lower(&[0x00, 0x0a, 0xff]), "000aff");
     }
 
-    // TEST-2: magic-byte validation + upload cap.
+    /// The first four bytes of a REAL `ggml-base.bin` /`ggml-base-q5_1.bin` /
+    /// `ggml-base-q8_0.bin` fetched from `ggerganov/whisper.cpp`, transcribed
+    /// from an actual `curl … | xxd` of the published files:
+    ///
+    /// ```text
+    /// 00000000: 6c6d 6767 99ca 0000 dc05 0000 0002 0000  lmgg............
+    /// ```
+    ///
+    /// This literal is the ANCHOR of the whole fix. It is deliberately written
+    /// out by hand from an observed file rather than derived from
+    /// `GGML_FILE_MAGIC`/`has_whisper_magic`, so it stays true even if someone
+    /// "fixes" the constant back to the wrong byte order — the mistake that
+    /// shipped. Evidence: `.lifecycle/voice-model-bad-magic/BUG_ANALYSIS.md` E3.
+    const REAL_WHISPER_GGML_FILE_HEAD: [u8; 4] = [0x6c, 0x6d, 0x67, 0x67];
+
+    // TEST-8 [acceptance][INV-7] — the real on-disk format is accepted. Written
+    // against the FORMAT (an observed file's bytes), never against the
+    // implementation's own definition of the magic, so a byte-order regression
+    // turns this red even if every other fixture were rewritten to match it.
+    #[test]
+    fn accepts_the_real_on_disk_whisper_ggml_magic() {
+        assert!(
+            has_whisper_magic(&REAL_WHISPER_GGML_FILE_HEAD),
+            "a REAL whisper.cpp ggml file (head {:02x?}) must be accepted — this is the \
+             exact defect that made every model install fail",
+            REAL_WHISPER_GGML_FILE_HEAD
+        );
+        // The constant and the observed file must agree. If this fails, the
+        // constant's byte order is wrong (or upstream changed the format).
+        assert_eq!(
+            GGML_MAGIC_LE, REAL_WHISPER_GGML_FILE_HEAD,
+            "GGML_FILE_MAGIC's little-endian serialization must equal the bytes a real \
+             whisper.cpp model file begins with"
+        );
+        // And the ASCII spelling `ggml` is NOT what a real file starts with —
+        // pinning the distinction the original code got backwards.
+        assert_ne!(
+            REAL_WHISPER_GGML_FILE_HEAD, *b"ggml",
+            "a real ggml file does NOT begin with the ASCII bytes `ggml`"
+        );
+    }
+
+    // TEST-1 — the full accept/reject set.
     #[test]
     fn whisper_magic_accepts_ggml_and_gguf_rejects_junk() {
+        // The real, little-endian on-disk ordering (`lmgg`).
+        assert!(has_whisper_magic(b"lmgg....."));
+        assert!(has_whisper_magic(&GGML_MAGIC_LE));
+        // The big-endian ordering (ASCII `ggml`) — accepted defensively, and the
+        // only form the pre-fix check accepted, so this is a pure widening.
         assert!(has_whisper_magic(b"ggml....."));
+        assert!(has_whisper_magic(&GGML_MAGIC_BE));
+        // GGUF really is stored as literal ASCII.
         assert!(has_whisper_magic(b"GGUF\x00\x00"));
+        // Junk.
         assert!(!has_whisper_magic(b"<htm"));
+        assert!(!has_whisper_magic(b"<!DOCTYPE html>"));
         assert!(!has_whisper_magic(b"PK\x03\x04")); // zip
+        assert!(!has_whisper_magic(b"lmg")); // too short
         assert!(!has_whisper_magic(b"gg")); // too short
         assert!(!has_whisper_magic(b""));
+    }
+
+    // TEST-13 [ITEM-11] — the one product-code invariant from the blast-radius
+    // scan: the canonical magic bytes come from ONE named constant. A second
+    // hand-written copy is how the fixtures drifted from the format in the first
+    // place, so both byte orders must be derived, not re-spelled.
+    #[test]
+    fn magic_constants_are_derived_from_one_source() {
+        assert_eq!(GGML_MAGIC_LE, GGML_FILE_MAGIC.to_le_bytes());
+        assert_eq!(GGML_MAGIC_BE, GGML_FILE_MAGIC.to_be_bytes());
+        assert_eq!(GGML_MAGIC_BE, *b"ggml", "big-endian form is the ASCII spelling");
+        assert_eq!(GGUF_MAGIC, *b"GGUF");
+        // The two orderings must be genuinely different, else the test above is
+        // vacuous and the original bug would be undetectable.
+        assert_ne!(GGML_MAGIC_LE, GGML_MAGIC_BE);
+    }
+
+    // TEST-2 — the three rejection conditions are distinct and correctly named.
+    #[test]
+    fn rejection_classify_distinguishes_empty_truncated_and_bad_magic() {
+        // Empty body — must NOT be reported as a magic failure.
+        assert_eq!(ModelRejection::classify(&[], 0), Some(ModelRejection::Empty));
+        assert_eq!(
+            ModelRejection::classify(b"lmgg", 0),
+            Some(ModelRejection::Empty),
+            "zero total bytes is Empty regardless of any retained head"
+        );
+        // Fewer than 4 bytes: identifiable as truncated, not as bad magic.
+        assert_eq!(ModelRejection::classify(b"lm", 2), Some(ModelRejection::Truncated));
+        // Real bytes, wrong container.
+        assert_eq!(
+            ModelRejection::classify(b"<!DO", 4096),
+            Some(ModelRejection::BadMagic)
+        );
+        // Valid — no rejection.
+        assert_eq!(ModelRejection::classify(&GGML_MAGIC_LE, 147_951_465), None);
+        assert_eq!(ModelRejection::classify(b"GGUF", 1024), None);
+
+        // Distinct, stable codes.
+        assert_eq!(ModelRejection::Empty.code(), "VOICE_MODEL_EMPTY_DOWNLOAD");
+        assert_eq!(ModelRejection::Truncated.code(), "VOICE_MODEL_TRUNCATED");
+        assert_eq!(ModelRejection::BadMagic.code(), "VOICE_MODEL_INVALID");
+        let codes = [
+            ModelRejection::Empty.code(),
+            ModelRejection::Truncated.code(),
+            ModelRejection::BadMagic.code(),
+        ];
+        let unique: std::collections::HashSet<_> = codes.iter().collect();
+        assert_eq!(unique.len(), 3, "each condition needs its own code");
+    }
+
+    // TEST-5 [acceptance][INV-4] — every rejection message states what was FOUND,
+    // what was EXPECTED, and the CORRECTIVE ACTION. This fails if a message
+    // regresses to a bare "bad magic" with no found/expected/action content.
+    #[test]
+    fn rejection_messages_state_found_expected_and_action() {
+        let cases = [
+            (ModelRejection::Empty, &b""[..]),
+            (ModelRejection::Truncated, &b"lm"[..]),
+            (ModelRejection::BadMagic, &b"<!DO"[..]),
+        ];
+        for (rejection, head) in cases {
+            let msg = rejection.message("the downloaded file", head);
+            let lower = msg.to_lowercase();
+
+            // (b) EXPECTED — always names the container it wanted.
+            assert!(
+                lower.contains("expected") && lower.contains("ggml") && lower.contains("gguf"),
+                "{rejection:?}: message must say what was expected — got: {msg}"
+            );
+            // (c) ACTION — always tells the user what to do.
+            assert!(
+                ["try the download again", "re-download", "check that", "remove it"]
+                    .iter()
+                    .any(|hint| lower.contains(hint)),
+                "{rejection:?}: message must state a corrective action — got: {msg}"
+            );
+            // Names the thing being rejected, so download vs upload is unambiguous.
+            assert!(msg.contains("the downloaded file"), "got: {msg}");
+            // Never a bare unhelpful phrase.
+            assert!(
+                msg.len() > 60,
+                "{rejection:?}: message is too terse to be actionable — got: {msg}"
+            );
+        }
+
+        // (a) FOUND — the observed bytes are surfaced for the diagnosable cases.
+        let bad = ModelRejection::BadMagic.message("the downloaded file", b"<!DO");
+        assert!(
+            bad.contains("3c 21 44 4f") && bad.contains("<!DO"),
+            "bad-magic message must show the observed bytes (hex + printable) so an \
+             HTML error page is self-diagnosing — got: {bad}"
+        );
+        let empty = ModelRejection::Empty.message("the downloaded file", b"");
+        assert!(empty.contains("0 bytes"), "empty message must state the size — got: {empty}");
+        let trunc = ModelRejection::Truncated.message("the downloaded file", b"lm");
+        assert!(trunc.contains('2'), "truncated message must state how much arrived — got: {trunc}");
+
+        // The upload path reuses the same builder, so wording cannot drift.
+        let up = ModelRejection::Empty.message("the uploaded file", b"");
+        assert!(up.contains("the uploaded file"));
+    }
+
+    #[test]
+    fn describe_head_renders_hex_and_printable() {
+        assert_eq!(describe_head(b"<!DO"), "`3c 21 44 4f` (\"<!DO\")");
+        assert_eq!(describe_head(&GGML_MAGIC_LE), "`6c 6d 67 67` (\"lmgg\")");
+        // Non-printable bytes become dots rather than mangling the message.
+        assert_eq!(describe_head(&[0x00, 0x01, 0x7f, 0xff]), "`00 01 7f ff` (\"....\")");
+        assert_eq!(describe_head(b""), "no data");
+        // Never renders more than the 4 magic bytes even if handed more.
+        assert_eq!(describe_head(b"GGUF-extra-bytes"), "`47 47 55 46` (\"GGUF\")");
     }
 
     #[test]
@@ -649,6 +997,81 @@ mod tests {
     fn installed_path_prefers_bin_then_gguf_naming() {
         // Pure naming contract (no filesystem): the resolver looks for these two.
         assert_eq!(model_filename("large-v3"), "ggml-large-v3.bin");
+    }
+
+    // TEST-14 [acceptance][INV-3] — publishing is the last failure exit of an
+    // acquisition and the only one that can leave a PARTIAL destination. A
+    // truncated `ggml-<name>.bin` would satisfy `installed_model_path`'s
+    // exists + non-empty check and be served to the runtime as an installed
+    // model — the "a failed acquisition left a broken artifact behind" class.
+    #[test]
+    fn a_failed_publish_leaves_neither_a_partial_model_nor_a_temp() {
+        let dir = tempfile::tempdir().unwrap();
+        let tmp = dir.path().join("ggml-x.bin.deadbeef.tmp");
+        std::fs::write(&tmp, ggml_head_and_filler()).unwrap();
+        // Publishing into a directory that does not exist fails BOTH the rename
+        // and the copy fallback — the observable stand-in for an ENOSPC/EIO
+        // copy, which is not directly inducible in a unit test.
+        let dest = dir.path().join("no-such-subdir").join("ggml-x.bin");
+
+        let err = finalize_download(&tmp, &dest).expect_err("publish must fail");
+        assert!(
+            format!("{err:?}").contains("publish model file"),
+            "the failure must preserve context, got: {err:?}"
+        );
+        assert!(!dest.exists(), "no partial destination may survive a failed publish");
+        assert!(!tmp.exists(), "the temp must not leak on a failed publish");
+
+        // …and the success path still moves the file and clears the temp.
+        let tmp2 = dir.path().join("ggml-y.bin.cafe.tmp");
+        std::fs::write(&tmp2, ggml_head_and_filler()).unwrap();
+        let dest2 = dir.path().join("ggml-y.bin");
+        finalize_download(&tmp2, &dest2).expect("publish must succeed");
+        assert!(dest2.exists() && !tmp2.exists());
+    }
+
+    // TEST-15 [acceptance][INV-3] — orphan reclamation. Every failure exit
+    // deletes its own temp, but a SIGKILL mid-transfer cannot; nothing else ever
+    // would, so without this sweep an orphan is permanent AND invisible.
+    #[test]
+    fn sweep_reclaims_orphan_temps_and_never_touches_a_model_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let download_orphan = dir.path().join("ggml-base.bin.0f0f.tmp");
+        let upload_orphan = dir.path().join(".upload-1234.tmp");
+        let real_model = dir.path().join("ggml-base.bin");
+        for p in [&download_orphan, &upload_orphan, &real_model] {
+            std::fs::write(p, ggml_head_and_filler()).unwrap();
+        }
+
+        // A temp younger than the guard is left alone — a download may be in
+        // flight in another process sharing the data dir.
+        assert_eq!(
+            sweep_stale_temps(dir.path(), STALE_TEMP_MIN_AGE),
+            0,
+            "a fresh temp must not be reclaimed"
+        );
+        assert!(download_orphan.exists() && upload_orphan.exists());
+
+        // Past the guard, BOTH shapes of orphan go (the download path's
+        // `<filename>.<uuid>.tmp` and the upload path's `.upload-<uuid>.tmp`).
+        assert_eq!(sweep_stale_temps(dir.path(), std::time::Duration::ZERO), 2);
+        assert!(!download_orphan.exists(), "download temp must be reclaimed");
+        assert!(!upload_orphan.exists(), "upload temp must be reclaimed");
+        assert!(real_model.exists(), "an installed model file must NEVER be swept");
+
+        // A missing directory (fresh install) is a no-op, not an error.
+        assert_eq!(
+            sweep_stale_temps(&dir.path().join("nope"), std::time::Duration::ZERO),
+            0
+        );
+    }
+
+    /// Plausible model bytes for the filesystem tests — the REAL on-disk magic
+    /// plus filler, so no fixture in this module spells a magic by hand.
+    fn ggml_head_and_filler() -> Vec<u8> {
+        let mut v = GGML_MAGIC_LE.to_vec();
+        v.extend_from_slice(b"filler-bytes");
+        v
     }
 
     // TEST-3: the SSRF boundary the arbitrary-URL download path enforces

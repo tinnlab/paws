@@ -1,12 +1,15 @@
 import type { StoreProxy } from '@ziee/framework/stores'
-import type { useUsersStore, useUserGroupsStore } from '@/modules/user/stores'
-import type { useUserGroupDrawerStore } from '@/modules/user/components/group/EditUserGroupDrawer.store'
-import type { useGroupMembersDrawerStore } from '@/modules/user/components/group/GroupMembersDrawer.store'
-import type { useCreateUserDrawerStore } from '@/modules/user/components/user/CreateUserDrawer.store'
-import type { useEditUserDrawerStore } from '@/modules/user/components/user/EditUserDrawer.store'
-import type { useResetPasswordDrawerStore } from '@/modules/user/components/user/ResetPasswordDrawer.store'
-import type { useUserGroupsDrawerStore } from '@/modules/user/components/user/UserGroupsDrawer.store'
-import type { useAssignGroupDrawerStore } from '@/modules/user/components/user/AssignGroupDrawer.store'
+// Direct type import (erased) — keeps the `UsersStore` augmentation without
+// re-tethering the lazy Users store through the barrel.
+import type { useUsersStore } from '@/modules/user/stores/users'
+import type { useUserGroupsStore } from '@/modules/user/stores'
+import type { useUserGroupDrawerStore } from '@/modules/user/components/group/editUserGroupDrawer'
+import type { useGroupMembersDrawerStore } from '@/modules/user/components/group/groupMembersDrawer'
+import type { useCreateUserDrawerStore } from '@/modules/user/components/user/createUserDrawer'
+import type { useEditUserDrawerStore } from '@/modules/user/components/user/editUserDrawer'
+import type { useResetPasswordDrawerStore } from '@/modules/user/components/user/resetPasswordDrawer'
+import type { useUserGroupsDrawerStore } from '@/modules/user/components/user/userGroupsDrawer'
+import type { useAssignGroupDrawerStore } from '@/modules/user/components/user/assignGroupDrawer'
 
 // Augment the RegisteredStores interface to add Users and UserGroups stores
 declare module '@ziee/framework/stores' {

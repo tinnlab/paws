@@ -1,8 +1,10 @@
 import { Tag } from '@ziee/kit'
 import { Wrench } from 'lucide-react'
-import { Stores } from '@ziee/framework/stores'
-import { pendingConversationKey } from '@/modules/mcp/stores/McpComposer.store'
+import { pendingConversationKey } from '@/modules/mcp/stores/mcpComposer'
 import { useChatPaneOrNull } from '@/modules/chat/core/pane/ChatPaneContext'
+import { McpComposer } from '@/modules/mcp/stores/mcpComposer'
+import { McpServer } from '@/modules/mcp/stores/mcpServer'
+import { Chat } from '@/modules/chat/core/stores/chatBridge'
 
 /**
  * McpStatusRow Component
@@ -18,15 +20,15 @@ import { useChatPaneOrNull } from '@/modules/chat/core/pane/ChatPaneContext'
  * via `deselectServerForConversation`, never the focused pane's.
  */
 export function McpStatusRow() {
-  const mcpStore = Stores.McpComposer
-  const { servers } = Stores.McpServer
+  const mcpStore = McpComposer
+  const { servers } = McpServer
   // Reactive: re-render when any conversation's selection changes.
   const { conversationConfigs } = mcpStore
   // This pane's OWN conversation via its own store (the proven ConversationPage
   // pattern) rather than the focused-pane bridge — so a split pane's chips reflect
   // ITS conversation, not the focused one.
   const pane = useChatPaneOrNull()
-  const chat = (pane?.store ?? Stores.Chat) as typeof Stores.Chat
+  const chat = (pane?.store ?? Chat) as typeof Chat
   const paneId = pane?.paneId ?? null
   const conversation = chat.conversation
   // A new chat reads THIS pane's own pending config (ITEM-51), so a pending MCP

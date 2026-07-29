@@ -2,15 +2,17 @@ import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Text, Title } from '@ziee/kit'
 import { ChatInput } from '@/modules/chat/components/ChatInput'
-import { Stores } from '@ziee/framework/stores'
+import { Chat as ChatStore } from '@/modules/chat/core/stores/chatBridge'
+import { SplitView } from '@/modules/chat/core/stores/splitView'
+import { EventBus } from '@ziee/framework/stores'
 
 export default function NewChatPage() {
   const navigate = useNavigate()
 
   useEffect(() => {
-    Stores.Chat.reset()
+    ChatStore.reset()
 
-    const unsubscribe = Stores.EventBus.on(
+    const unsubscribe = EventBus.on(
       'conversation.created',
       event => {
         // Collapse the workspace to a single pane before navigating. Without
@@ -33,7 +35,7 @@ export default function NewChatPage() {
         // picker switches to its composer with local state only and never
         // navigates, so this page never mounts and its conversation still
         // adopts into that pane.
-        Stores.SplitView.reset()
+        SplitView.reset()
         navigate(`/chat/${event.data.conversation.id}`)
       },
       'NewChatPage',

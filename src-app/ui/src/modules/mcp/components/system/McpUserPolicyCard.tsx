@@ -10,10 +10,12 @@ import {
 } from '@ziee/kit'
 import { Paragraph, message } from '@ziee/kit'
 import { useEffect, useMemo, useState } from 'react'
-import { Stores } from '@ziee/framework/stores'
 import { usePermission } from '@/core/permissions'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { SettingsFormActions } from '@/modules/settings/components/SettingsFormActions'
+import { McpUserPolicy } from '@/modules/mcp/stores/mcpUserPolicy'
+import { SandboxFlavors } from '@/modules/code-sandbox/stores/sandboxFlavors'
+import { AppMode } from '@/modules/app/AppMode.store'
 
 interface PolicyForm {
   http: boolean
@@ -29,15 +31,15 @@ interface PolicyForm {
  * retention window. Hidden on single-admin desktop (multiUserMode=false).
  */
 export function McpUserPolicyCard() {
-  const { multiUserMode } = Stores.AppMode
-  const { policy } = Stores.McpUserPolicy
+  const { multiUserMode } = AppMode
+  const { policy } = McpUserPolicy
   const allowedTransports = useMemo(
     () => policy?.allowed_transports ?? [],
     [policy],
   )
   const canEdit = usePermission(Permissions.McpUserPolicyEdit)
   const [saving, setSaving] = useState(false)
-  const { flavors: rawFlavors, selectOptions: fallbackFlavorOptions } = Stores.SandboxFlavors
+  const { flavors: rawFlavors, selectOptions: fallbackFlavorOptions } = SandboxFlavors
   // Rich options: the trigger shows just the flavor name (capitalized), the
   // dropdown shows name + description + size on two lines.
   const flavorOptions = rawFlavors.length
@@ -87,7 +89,7 @@ export function McpUserPolicyCard() {
     )
     setSaving(true)
     try {
-      await Stores.McpUserPolicy.update({
+      await McpUserPolicy.update({
         allowed_transports: transports,
         user_stdio_sandbox_flavor: v.stdio ? v.flavor ?? undefined : undefined,
         tool_call_retention_days: v.retention_days,

@@ -1,6 +1,5 @@
 import { createElement, useMemo, type JSX, type ReactNode } from 'react'
 import { MarkdownTable } from '@/components/common/MarkdownTable'
-import { MarkdownCodeBlock } from '@/components/common/MarkdownCodeBlock'
 import {
   nodeToText,
   slugifyHeading,
@@ -52,9 +51,17 @@ export function useStreamdownComponents(contentId: string) {
       // Replace Streamdown's native-scroller + in-page-fullscreen table wrapper
       // with our OverlayScrollbars + open-in-popup-window version.
       table: MarkdownTable,
-      // Re-wrap Streamdown's code block so its copy/download controls get the
-      // app's styled kit Tooltip (default only carries a native `title`).
-      pre: MarkdownCodeBlock,
+      // NOTE: we intentionally do NOT override `pre`. Streamdown resolves
+      // `plugins.renderers` (the ```html → HtmlBlock / ```mermaid → MermaidBlock
+      // custom renderers) AND runs Shiki highlighting as a parse-time rehype
+      // plugin — both INSIDE its own default code component. A `pre` override
+      // replaces that component: the previous `pre: MarkdownCodeBlock` re-rendered
+      // a fresh CodeBlock from the raw fence text, which (a) never re-ran Shiki
+      // (so chat code blocks rendered UNHIGHLIGHTED) and (b) silently bypassed
+      // `plugins.renderers` (so ```html/```mermaid rendered as plain code blocks
+      // instead of their preview components). Letting Streamdown own `pre`
+      // restores highlighting + the custom renderers; the copy/download controls
+      // fall back to Streamdown's native `title` tooltip.
       h1: makeHeading(1),
       h3: makeHeading(3),
       h4: makeHeading(4),

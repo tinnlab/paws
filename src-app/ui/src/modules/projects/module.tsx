@@ -1,12 +1,7 @@
 import { Folder } from 'lucide-react'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { createModule } from '@ziee/framework'
 import { AppLayoutDef } from '@/modules/layouts/app-layout'
-import {
-  useProjectDetailStore,
-  useProjectDrawerStore,
-  useProjectsStore,
-} from '@/modules/projects/stores'
 import { lazyWithPreload } from '@/utils/lazyWithPreload'
 import '@/modules/projects/types' // store-merge declaration
 import '@/modules/projects/events' // event-bus type merge
@@ -43,11 +38,10 @@ export default createModule({
     description:
       'Chat Projects: group conversations under shared instructions, knowledge files, and defaults.',
   },
+  // smart-loading gate (build-lifted into the manifest)
+  shouldLoad: (ctx) => ctx.isAuthenticated,
   dependencies: ['router'],
   stores: [
-    { name: 'Projects', store: useProjectsStore },
-    { name: 'ProjectDetail', store: useProjectDetailStore },
-    { name: 'ProjectDrawer', store: useProjectDrawerStore },
   ],
   routes: [
     {

@@ -1,17 +1,8 @@
 import { Server } from 'lucide-react'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { createModule } from '@ziee/framework'
 import { SettingsLayoutDef } from '@/modules/settings/SettingsLayout'
 import { lazyWithPreload } from '@/utils/lazyWithPreload'
-import {
-  useRuntimeConfigStore,
-  useRuntimeDeleteConfirmStore,
-  useRuntimeDownloadDrawerStore,
-  useRuntimeDownloadProgressStore,
-  useRuntimeModelUsageStore,
-  useRuntimeUpdateStore,
-  useRuntimeVersionStore,
-} from './stores'
 import './types' // Register event types
 
 // The Local Runtimes page stacks three independently-gated sections:
@@ -44,6 +35,8 @@ export default createModule({
     version: '1.0.0',
     description: 'Local LLM runtime version management',
   },
+  // smart-loading gate (build-lifted into the manifest)
+  shouldLoad: (ctx) => ctx.isAuthenticated && ctx.can(Permissions.LocalRuntimeRead),
   routes: [
     {
       path: '/settings/llm-runtime',
@@ -55,34 +48,6 @@ export default createModule({
   ],
 
   stores: [
-    {
-      name: 'RuntimeVersion',
-      store: useRuntimeVersionStore,
-    },
-    {
-      name: 'RuntimeUpdate',
-      store: useRuntimeUpdateStore,
-    },
-    {
-      name: 'RuntimeDownloadDrawer',
-      store: useRuntimeDownloadDrawerStore,
-    },
-    {
-      name: 'RuntimeDeleteConfirm',
-      store: useRuntimeDeleteConfirmStore,
-    },
-    {
-      name: 'RuntimeConfig',
-      store: useRuntimeConfigStore,
-    },
-    {
-      name: 'RuntimeModelUsage',
-      store: useRuntimeModelUsageStore,
-    },
-    {
-      name: 'RuntimeDownloadProgress',
-      store: useRuntimeDownloadProgressStore,
-    },
   ],
 
   slots: {

@@ -1,10 +1,11 @@
 import { useEffect } from 'react'
 import { ApiClient } from '@/api-client'
-import { Stores } from '@ziee/framework/stores'
 import { usePermission } from '@/core/permissions'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { UserGroupAssignment } from '@/components/common/UserGroupAssignment'
 import { emitMcpServerGroupsChanged } from '@/modules/mcp/events'
+import { SystemMcpServer as SystemMcpServerStore } from '@/modules/mcp/stores/systemMcpServer'
+import { SystemMcpServerGroupCard } from '@/modules/mcp/components/system/mcpServerGroupsAssignmentCard'
 
 interface McpServerGroupsAssignmentCardProps {
   serverId: string
@@ -18,13 +19,13 @@ interface McpServerGroupsAssignmentCardProps {
 export function McpServerGroupsAssignmentCard({
   serverId,
 }: McpServerGroupsAssignmentCardProps) {
-  const serverData = Stores.SystemMcpServerGroupCard.serverGroups.get(serverId)
+  const serverData = SystemMcpServerGroupCard.serverGroups.get(serverId)
   const assignedGroups = serverData?.groups || []
   const loading = serverData?.loading || false
   const canManage = usePermission(Permissions.McpServersAdminEdit)
 
   useEffect(() => {
-    Stores.SystemMcpServerGroupCard.loadGroupsForServer(serverId)
+    SystemMcpServerGroupCard.loadGroupsForServer(serverId)
   }, [serverId])
 
   return (
@@ -42,7 +43,7 @@ export function McpServerGroupsAssignmentCard({
             return res.groups.map(g => ({ id: g.id, name: g.name, description: g.description, is_default: g.is_default }))
           },
           save: async ids => {
-            await Stores.SystemMcpServer.assignServerToGroups(serverId, ids)
+            await SystemMcpServerStore.assignServerToGroups(serverId, ids)
             await emitMcpServerGroupsChanged(serverId, ids)
           },
         }}

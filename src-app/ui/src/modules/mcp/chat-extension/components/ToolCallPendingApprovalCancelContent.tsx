@@ -1,7 +1,7 @@
 import { Alert, Text } from '@ziee/kit'
-import type { McpToolCall } from '@/modules/mcp/stores/McpComposer.store'
+import type { McpToolCall } from '@/modules/mcp/stores/mcpComposer'
 import { TOOL_STATUS } from '@/modules/chat/core/tool-status'
-import { mcpServerParenLabel } from '@/modules/mcp/chat-extension/serverLabel'
+import { serverParenLabel } from '@/modules/chat/core/utils/serverLabel'
 
 interface ToolCallPendingApprovalCancelContentProps {
   toolCall: McpToolCall
@@ -20,7 +20,7 @@ export function ToolCallPendingApprovalCancelContent({
   // `cancelled` status: a slashed circle in muted gray), never the red X / error
   // tone reserved for a genuinely failed tool call (finding #2).
   const CancelIcon = TOOL_STATUS.cancelled.icon
-  const serverLabel = mcpServerParenLabel(toolCall.server)
+  const serverLabel = serverParenLabel(toolCall.server)
   return (
     <div className="my-2">
       <Alert
@@ -28,7 +28,10 @@ export function ToolCallPendingApprovalCancelContent({
         data-testid="mcp-tool-approval-cancel-alert"
         icon={<CancelIcon className={TOOL_STATUS.cancelled.color} />}
         title={
-          <div className="flex items-center gap-2 min-w-0">
+          // Same wrap fix as the pending card's header: the nowrap server label
+          // would otherwise starve this `truncate` title to a rendered width of 0
+          // in a narrow card. This is the TERMINAL state of that very card.
+          <div className="flex flex-wrap items-center gap-2 min-w-0">
             <Text strong className="truncate">Tool Call Cancelled: {toolCall.tool_name}</Text>
             {serverLabel && (
               <Text type="secondary" className="text-xs whitespace-nowrap">

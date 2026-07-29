@@ -31,6 +31,7 @@ pub mod handlers;
 pub mod permissions;
 pub mod repository;
 pub mod routes;
+pub mod schema_inline;
 
 // Chunk C1: the DB-free tool-dispatch core (catalog / policy / tools) moved into
 // the `ziee-control-mcp` SDK crate. ziee re-exports the three modules via

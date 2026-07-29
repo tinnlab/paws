@@ -1,15 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Combobox, Loading, message } from '@ziee/kit'
+import { loadLlmModelCatalog } from '@/core/llmModelCatalog'
 import { ApiClient } from '@/api-client'
-import { Stores } from '@ziee/framework/stores'
 import { usePermission } from '@/core/permissions'
-import {
-  Permissions,
-  type Assistant,
-  type LlmModel,
-  type Project,
-  type UpdateProjectRequest,
-} from '@/api-client/types'
+import { type Assistant, type LlmModel, type Project, type UpdateProjectRequest } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
+import { Projects } from '@/modules/projects/stores/projects'
+import { EventBus } from '@ziee/framework/stores'
 
 interface ProjectDefaultsFormProps {
   project: Project
@@ -69,13 +66,13 @@ export function ProjectDefaultsForm({ project }: ProjectDefaultsFormProps) {
     if (!mountedRef.current) return
     setOptionsLoading(true)
     try {
-      const [assistantsResp, modelsResp] = await Promise.all([
+      const [assistantsResp, catalogModels] = await Promise.all([
         ApiClient.Assistant.list({ page: 1, limit: 100 }),
-        ApiClient.LlmModel.list({ page: 1, perPage: 100 }),
+        loadLlmModelCatalog(),
       ])
       if (!mountedRef.current) return
       setAssistants(assistantsResp.assistants ?? [])
-      setModels(modelsResp.models ?? [])
+      setModels(catalogModels)
     } catch (err) {
       console.warn('Failed to load default-asset options', err)
       if (mountedRef.current) {
@@ -97,7 +94,7 @@ export function ProjectDefaultsForm({ project }: ProjectDefaultsFormProps) {
   // the app — same set of events the drawer used to listen for.
   useEffect(() => {
     const GROUP = 'ProjectDefaultsForm'
-    const eventBus = Stores.EventBus
+    const eventBus = EventBus
     const offs = [
       eventBus.on('assistant.created', () => void refetchOptions(), GROUP),
       eventBus.on('assistant.deleted', () => void refetchOptions(), GROUP),
@@ -117,7 +114,7 @@ export function ProjectDefaultsForm({ project }: ProjectDefaultsFormProps) {
       const patch: UpdateProjectRequest = {
         default_assistant_id: (resolved ?? null) as unknown as string | undefined,
       }
-      await Stores.Projects.updateProject(project.id, patch)
+      await Projects.updateProject(project.id, patch)
       message.success('Default assistant updated')
     } catch (err) {
       message.error(
@@ -136,7 +133,7 @@ export function ProjectDefaultsForm({ project }: ProjectDefaultsFormProps) {
       const patch: UpdateProjectRequest = {
         default_model_id: (resolved ?? null) as unknown as string | undefined,
       }
-      await Stores.Projects.updateProject(project.id, patch)
+      await Projects.updateProject(project.id, patch)
       message.success('Default model updated')
     } catch (err) {
       message.error(

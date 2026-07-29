@@ -2,7 +2,6 @@ import { createModule } from '@ziee/framework'
 import { Book } from 'lucide-react'
 import { BlankLayout } from '@/modules/layouts/blank'
 import { lazyWithPreload } from '@/utils/lazyWithPreload'
-import { useOnboardingStore } from './stores/Onboarding.store'
 import { OnboardingRedirect } from './OnboardingRedirect'
 import './types/OnboardingSlot'
 import './types'
@@ -17,9 +16,10 @@ export default createModule({
     version: '1.0.0',
     description: 'Onboarding guides',
   },
+  // smart-loading gate (build-lifted into the manifest)
+  shouldLoad: (ctx) => ctx.isAuthenticated,
   dependencies: ['router', 'auth'],
   stores: [
-    { name: 'Onboarding', store: useOnboardingStore },
   ],
   routes: [
     {

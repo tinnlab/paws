@@ -41,7 +41,7 @@ export const gallery: ModuleGallery = {
     {
       slug: 'seeded-sandbox-limits-error',
       title: 'Code Sandbox limits — save error',
-      note: 'limits loaded, then Stores.SandboxResourceLimits.error → inline error alert',
+      note: 'limits loaded, then SandboxResourceLimits.error → inline error alert',
       path: '/',
       initialPath: '/',
       component: lazyNamed(
@@ -49,12 +49,12 @@ export const gallery: ModuleGallery = {
         'SandboxResourceLimitsSection',
       ),
       setup: async () => {
-        const { SandboxResourceLimits } = await import(
-          '@/modules/code-sandbox/stores/SandboxResourceLimits.store'
+        const { SandboxResourceLimitsDef } = await import(
+          '@/modules/code-sandbox/stores/sandboxResourceLimits'
         )
-        await whenTrue(() => SandboxResourceLimits.store.getState().limits != null)
+        await whenTrue(() => SandboxResourceLimitsDef.store.getState().limits != null)
         await holdPatch(() =>
-          SandboxResourceLimits.store.setState({
+          SandboxResourceLimitsDef.store.setState({
             error: 'Failed to save resource limits.',
           } as any),
         )
@@ -75,11 +75,11 @@ export const gallery: ModuleGallery = {
         'SandboxRootfsVersionsSection',
       ),
       setup: async () => {
-        const { SandboxRootfsVersions } = await import(
-          '@/modules/code-sandbox/stores/SandboxRootfsVersions.store'
+        const { SandboxRootfsVersionsDef } = await import(
+          '@/modules/code-sandbox/stores/sandboxRootfsVersions'
         )
         await holdPatch(() =>
-          SandboxRootfsVersions.store.setState({
+          SandboxRootfsVersionsDef.store.setState({
             availability: 'disabled_in_config',
             loading: false,
             error: null,
@@ -117,11 +117,11 @@ export const gallery: ModuleGallery = {
         'SandboxResourceLimitsSection',
       ),
       setup: async () => {
-        const { SandboxResourceLimits } = await import(
-          '@/modules/code-sandbox/stores/SandboxResourceLimits.store'
+        const { SandboxResourceLimitsDef } = await import(
+          '@/modules/code-sandbox/stores/sandboxResourceLimits'
         )
         await holdPatch(() =>
-          SandboxResourceLimits.store.setState({ loading: true, limits: null } as any),
+          SandboxResourceLimitsDef.store.setState({ loading: true, limits: null } as any),
         )
       },
     },

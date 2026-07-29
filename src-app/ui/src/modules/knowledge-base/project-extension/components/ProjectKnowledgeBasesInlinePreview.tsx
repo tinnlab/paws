@@ -2,10 +2,11 @@ import { useEffect, useState } from 'react'
 import { BookOpen } from 'lucide-react'
 import { Button, Text } from '@ziee/kit'
 import { ApiClient } from '@/api-client'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { usePermission } from '@/core/permissions'
-import { Stores } from '@ziee/framework/stores'
 import { useOpenManageDrawer } from '@/modules/projects/core/extensions'
+import { ProjectDetail } from '@/modules/projects/stores/projectDetail'
+import { EventBus } from '@ziee/framework/stores'
 
 /** Compact view-only summary of a project's attached knowledge bases (the
  *  knowledge card). Mirrors ProjectBibliographyInlinePreview; refetches on
@@ -16,7 +17,7 @@ export function ProjectKnowledgeBasesInlinePreview() {
   // and no 403-triggering fetch. The knowledge_kinds slot has no permission
   // field, so each kind gates itself.
   const canUse = usePermission(Permissions.KnowledgeBaseUse)
-  const project = Stores.ProjectDetail.project
+  const project = ProjectDetail.project
   const projectId = project?.id
   const openManageDrawer = useOpenManageDrawer()
   // `null` = not loaded / error (distinct from a real 0).
@@ -35,7 +36,7 @@ export function ProjectKnowledgeBasesInlinePreview() {
         })
     }
     reload()
-    const unsub = Stores.EventBus.on(
+    const unsub = EventBus.on(
       'sync:knowledge_base',
       reload,
       'ProjectKnowledgeBasesInlinePreview',

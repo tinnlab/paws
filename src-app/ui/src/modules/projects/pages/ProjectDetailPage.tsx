@@ -2,9 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Button, Card, Separator, Flex, Confirm, Result, Spin, Text, Title, Paragraph, message } from '@ziee/kit'
 import { ArrowLeft, CircleX, Copy, Pencil, Trash2 } from 'lucide-react'
-import { Stores } from '@ziee/framework/stores'
 import { Can, usePermission } from '@/core/permissions'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { ProjectFormDrawer } from '@/modules/projects/components/ProjectFormDrawer'
 import { ProjectKnowledgeSection } from '@/modules/projects/components/ProjectKnowledgeSection'
 import { ProjectConversationsList } from '@/modules/projects/chat-extension/components/ProjectConversationsList'
@@ -16,6 +15,14 @@ import { useElementMinSize } from '@/modules/layouts/app-layout/hooks/useWindowM
 import { DivScrollY } from '@/components/common/DivScrollY'
 import { useNativeScroll } from '@/modules/layouts/app-layout/hooks/useNativeScroll'
 import { cn } from '@/lib/utils'
+import { ProjectDrawer } from '@/modules/projects/stores/projectDrawer'
+import { ProjectDetail } from '@/modules/projects/stores/projectDetail'
+import { Projects } from '@/modules/projects/stores/projects'
+import { SplitView } from '@/modules/chat/core/stores/splitView'
+import { AppLayout } from '@/modules/layouts/app-layout/appLayout'
+import { ChatHistory } from '@/modules/chat/stores/chatHistory'
+import { Chat } from '@/modules/chat/core/stores/chatBridge'
+import { EventBus } from '@ziee/framework/stores'
 
 /**
  * Project detail page — Option A layout.
@@ -52,7 +59,7 @@ export function ProjectDetailPage() {
   // — the Stores proxy `get` trap calls useEffect + useStore (2 hooks per
   // access), so conditional reads cause "Rendered more hooks than during
   // the previous render".
-  const { project, loading, error, conversations } = Stores.ProjectDetail
+  const { project, loading, error, conversations } = ProjectDetail
   const canDeleteConversations = usePermission(
     Permissions.ConversationsDelete,
   )
@@ -73,7 +80,7 @@ export function ProjectDetailPage() {
   const toolbarInCardBody = pageMinSize.sm
   // Native document-scroll on mobile (iOS toolbar collapse + under-notch flow).
   useNativeScroll(true)
-  const { nativeScroll } = Stores.AppLayout
+  const { nativeScroll } = AppLayout
 
   // Drop selection on project switch so leftover ids from project A
   // can't trigger a bulk-delete after navigating to project B.
@@ -124,7 +131,7 @@ export function ProjectDetailPage() {
     let failed = 0
     for (const id of ids) {
       try {
-        await Stores.ChatHistory.deleteConversation(id)
+        await ChatHistory.deleteConversation(id)
         succeeded += 1
       } catch {
         failed += 1
@@ -151,7 +158,7 @@ export function ProjectDetailPage() {
     let failed = 0
     for (const id of ids) {
       try {
-        await Stores.Projects.detachConversation(projectId, id)
+        await Projects.detachConversation(projectId, id)
         succeeded += 1
       } catch {
         failed += 1
@@ -172,14 +179,14 @@ export function ProjectDetailPage() {
 
   useEffect(() => {
     if (projectId) {
-      void Stores.ProjectDetail.loadProject(projectId)
+      void ProjectDetail.loadProject(projectId)
     }
   }, [projectId])
 
   useEffect(() => {
     if (error) {
       message.error(error)
-      Stores.ProjectDetail.clearProjectDetailError()
+      ProjectDetail.clearProjectDetailError()
     }
   }, [error])
 
@@ -187,7 +194,7 @@ export function ProjectDetailPage() {
   // creates an unfiled conversation on first send. The project
   // chat extension at `src-app/ui/src/modules/chat/extensions/
   // project/extension.tsx` runs `afterCreateConversation`, reads
-  // `Stores.ProjectDetail.project`, and assigns the conversation
+  // `ProjectDetail.project`, and assigns the conversation
   // into this project via POST /projects/{id}/conversations/{conv}.
   // The post-hook conversation (with project_id populated) reaches
   // us via the `conversation.created` event, and we navigate to the
@@ -195,10 +202,10 @@ export function ProjectDetailPage() {
   useEffect(() => {
     if (!projectId) return
     // Clear stale chat state from a prior session so the next send
-    // takes the auto-create branch (Stores.Chat.conversation === null).
-    Stores.Chat.reset()
+    // takes the auto-create branch (Chat.conversation === null).
+    Chat.reset()
 
-    const unsubscribe = Stores.EventBus.on(
+    const unsubscribe = EventBus.on(
       'conversation.created',
       event => {
         // Collapse the split workspace before navigating, for the same reason
@@ -215,7 +222,7 @@ export function ProjectDetailPage() {
         // router's unmatched-path bounce, would otherwise destroy an open split
         // and delete its persisted workspace. Creating a conversation is
         // unambiguous, and is the only moment the hijack can occur.
-        Stores.SplitView.reset()
+        SplitView.reset()
         navigate(`/projects/${projectId}/chat/${event.data.conversation.id}`)
       },
       'ProjectDetailPage',
@@ -249,7 +256,7 @@ export function ProjectDetailPage() {
           subtitle={error ?? 'The project could not be loaded.'}
           extra={
             <Flex gap="small" justify="center">
-              <Button data-testid="project-detail-retry-btn" onClick={() => Stores.ProjectDetail.loadProject(projectId)}>
+              <Button data-testid="project-detail-retry-btn" onClick={() => ProjectDetail.loadProject(projectId)}>
                 Retry
               </Button>
               <Button data-testid="project-detail-back-btn" variant="default" onClick={() => navigate('/projects')}>
@@ -262,11 +269,11 @@ export function ProjectDetailPage() {
     )
   }
 
-  const handleEdit = () => Stores.ProjectDrawer.openProjectDrawer(project)
+  const handleEdit = () => ProjectDrawer.openProjectDrawer(project)
 
   const handleDuplicate = async () => {
     try {
-      const copy = await Stores.Projects.duplicateProject(project.id)
+      const copy = await Projects.duplicateProject(project.id)
       // `undefined` = a prior duplicate is still in flight; bail
       // silently so the user doesn't get a misleading toast or get
       // navigated to a phantom project page.

@@ -2,11 +2,14 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Input, Popover, message } from '@ziee/kit'
 import { BookOpen, Check, ChevronRight } from 'lucide-react'
-import { type KnowledgeBase, Permissions } from '@/api-client/types'
+import { type KnowledgeBase } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { usePermission } from '@/core/permissions'
-import { Stores } from '@ziee/framework/stores'
 import { kbKey } from '@/modules/knowledge-base/stores/kbSelectionKey'
 import { useChatPaneOrNull } from '@/modules/chat/core/pane/ChatPaneContext'
+import { KnowledgeBases } from '@/modules/knowledge-base/stores/knowledgeBases'
+import { KnowledgeBaseComposer } from '@/modules/knowledge-base/stores/knowledgeBaseComposer'
+import { Chat } from '@/modules/chat/core/stores/chatBridge'
 
 const EMPTY_SET: ReadonlySet<string> = new Set()
 
@@ -29,13 +32,13 @@ function statusSuffix(kb: KnowledgeBase): { text: string; className: string } | 
 export function KbMenuItem() {
   const navigate = useNavigate()
   const canUse = usePermission(Permissions.KnowledgeBaseUse)
-  const { items } = Stores.KnowledgeBases
+  const { items } = KnowledgeBases
   // Per-pane (ITEM-46/51): this pane's own conversation's selection — and, for a
   // new chat, this pane's OWN pending buffer (kbKey(null, paneId)) — resolved from
   // the pane's own store, so a pending selection here never leaks into another pane.
-  const { selectionByConversation } = Stores.KnowledgeBaseComposer
+  const { selectionByConversation } = KnowledgeBaseComposer
   const pane = useChatPaneOrNull()
-  const chat = (pane?.store ?? Stores.Chat) as typeof Stores.Chat
+  const chat = (pane?.store ?? Chat) as typeof Chat
   const paneId = pane?.paneId ?? null
   const convId = chat.conversation?.id ?? null
   const selectedKbIds = selectionByConversation.get(kbKey(convId, paneId)) ?? EMPTY_SET
@@ -50,8 +53,8 @@ export function KbMenuItem() {
 
   const toggle = (id: string) => {
     const p = selectedKbIds.has(id)
-      ? Stores.KnowledgeBaseComposer.detachFor(convId, id, paneId)
-      : Stores.KnowledgeBaseComposer.attachFor(convId, id, paneId)
+      ? KnowledgeBaseComposer.detachFor(convId, id, paneId)
+      : KnowledgeBaseComposer.attachFor(convId, id, paneId)
     p.catch((e: unknown) =>
       message.error(e instanceof Error ? e.message : 'Failed to update knowledge bases'),
     )

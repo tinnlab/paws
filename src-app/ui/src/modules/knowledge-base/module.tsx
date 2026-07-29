@@ -1,18 +1,17 @@
 import { Library } from 'lucide-react'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { createModule } from '@ziee/framework'
 import { AppLayoutDef } from '@/modules/layouts/app-layout'
-import {
-  useKnowledgeBaseComposerStore,
-  useKnowledgeBaseDetailStore,
-  useKnowledgeBasesStore,
-} from '@/modules/knowledge-base/stores'
 import { lazyWithPreload } from '@/utils/lazyWithPreload'
 import '@/modules/knowledge-base/types' // store-merge declaration
 // Side-effect imports — register the chat composer/tool-result integration and
 // the project "Knowledge bases" knowledge kind even when the respective
 // auto-discovery globs don't reach this module first.
-import '@/modules/knowledge-base/chat-extension/extension'
+// The chat-extension is auto-discovered lazily by chat's extension glob (loaded
+// with the /chat page, not at boot) — importing it here dragged the kb chat
+// slots + ChatPaneContext + the File store into the boot payload. The
+// project-extension (below) stays eager: it registers the "Knowledge bases"
+// project knowledge-kind, which the projects surface needs independent of chat.
 import '@/modules/knowledge-base/project-extension/extension'
 
 const KnowledgeBasesListPage = lazyWithPreload(() =>
@@ -33,11 +32,10 @@ export default createModule({
     description:
       'Knowledge bases: named, reusable collections the agent retrieves from (RAG at scale).',
   },
+  // smart-loading gate (build-lifted into the manifest)
+  shouldLoad: (ctx) => ctx.isAuthenticated,
   dependencies: ['router'],
   stores: [
-    { name: 'KnowledgeBases', store: useKnowledgeBasesStore },
-    { name: 'KnowledgeBaseDetail', store: useKnowledgeBaseDetailStore },
-    { name: 'KnowledgeBaseComposer', store: useKnowledgeBaseComposerStore },
   ],
   routes: [
     {

@@ -1,11 +1,10 @@
 import { createModule } from '@ziee/framework'
-import { MdOutlineMonitorHeart } from 'react-icons/md'
+import { HeartPulse } from 'lucide-react'
 import { SettingsLayoutDef } from '@/modules/settings/SettingsLayout'
-import { useHardwareStore } from '@/modules/hardware/Hardware.store'
 import '@/modules/hardware/types'
 import { BlankLayout } from '@/modules/layouts/blank' // Import type augmentation
 import { lazyWithPreload } from '@/utils/lazyWithPreload'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import '@/modules/settings/types/SettingsSlots' // Register settings slot types
 
 const HardwareSettings = lazyWithPreload(() => import('./HardwareSettings'))
@@ -19,6 +18,8 @@ export default createModule({
     version: '1.0.0',
     description: 'Hardware monitoring and information',
   },
+  // smart-loading gate (build-lifted into the manifest)
+  shouldLoad: (ctx) => ctx.isAuthenticated && ctx.can(Permissions.HardwareRead),
   routes: [
     {
       path: '/settings/hardware',
@@ -36,16 +37,12 @@ export default createModule({
     },
   ],
   stores: [
-    {
-      name: 'Hardware',
-      store: useHardwareStore,
-    },
   ],
   slots: {
     settingsAdminPages: [
       {
         id: 'hardware',
-        icon: <MdOutlineMonitorHeart />,
+        icon: <HeartPulse size="1em" />,
         label: 'Hardware',
         path: 'hardware',
         order: 30,

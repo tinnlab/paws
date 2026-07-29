@@ -3,23 +3,32 @@ import { byTestId } from '../testid'
 import { loginAsAdmin, getAdminToken } from '../../common/auth-helpers'
 
 /**
- * E2E — per-conversation assistant-picker reset on conversation switch
- * (audit all-23d59c7f31b8).
+ * E2E — per-conversation assistant-picker scoping across conversation
+ * switches (audit all-23d59c7f31b8).
  *
- * `AssistantPicker.store.ts`'s `selectedAssistantId` is scoped to the
- * ACTIVE conversation: the assistant chat-extension subscribes to
- * `state.conversation?.id` and calls `Stores.AssistantPicker.reset()`
- * whenever it changes (extension.tsx:41-46). No E2E exercised this.
+ * The picker selection lives in `AssistantPicker`'s
+ * `selectedByConversation` map, KEYED BY CONVERSATION ID (ITEM-5). The
+ * status chip reads `selectedByConversation[conversation.id]`
+ * (AssistantStatusChip.tsx), so:
+ *   - switching A → B shows NO chip (B has no entry), and
+ *   - switching back B → A RESTORES A's chip (its entry is still there).
+ *
+ * (The original version of this spec asserted the pre-ITEM-5 behaviour —
+ * a single global `selectedAssistantId` that a `conversation.id`
+ * subscriber `reset()` on every change, so returning to A showed no
+ * chip. That subscriber was deliberately removed when the selection
+ * became per-conversation; see the comment at the top of
+ * `assistant/chat-extension/extension.tsx`.)
  *
  * The proof hinges on CLIENT-SIDE navigation: switching conversations
  * via the sidebar (react-router `navigate`, no document reload) keeps
- * the picker store alive, so the chip can only clear because the
- * reset-on-conversation-change subscriber fired — not because a full
- * page reload threw the store away. Deterministic, no LLM.
+ * the picker store alive, so the chip state can only come from the
+ * per-conversation keying — not from a full page reload throwing the
+ * store away. Deterministic, no LLM.
  */
 
-test.describe('Chat — assistant picker resets across conversation switches', () => {
-  test('selecting an assistant in one conversation is cleared after switching to another (and not restored on return)', async ({
+test.describe('Chat — assistant picker is scoped per conversation', () => {
+  test('an assistant selected in one conversation does not leak into another, and is restored on return', async ({
     page,
     testInfra,
   }) => {
@@ -82,19 +91,20 @@ test.describe('Chat — assistant picker resets across conversation switches', (
     await expect(rowB).toBeVisible({ timeout: 15000 })
 
     // --- Switch to conversation B via the sidebar (SPA navigation). ---
-    // conversation.id changes A→B → the extension's subscriber fires
-    // reset() → the picker selection clears. A regression that scoped the
-    // selection globally (or dropped the subscriber) would leave the chip.
+    // The chip keys off `selectedByConversation[convB]`, which has no entry
+    // → no chip. A regression that scoped the selection GLOBALLY would leak
+    // A's assistant into B and leave the chip up.
     await rowB.click()
     await expect(page).toHaveURL(new RegExp(`/chat/${convB}`), { timeout: 15000 })
     await expect(chip()).toHaveCount(0, { timeout: 10000 })
 
     // --- Switch back to conversation A (SPA navigation). ---
-    // reset() fires again; the selection is NOT restored (the store holds a
-    // single active-conversation value, not a per-conversation map), so A's
-    // chip stays cleared — proving the reset is on every conversation change.
+    // A's entry is still in the map, so its chip comes back with the SAME
+    // assistant — the store survived the switch (client-side nav), proving
+    // the selection is per-conversation state rather than reset-on-change.
     await rowA.click()
     await expect(page).toHaveURL(new RegExp(`/chat/${convA}`), { timeout: 15000 })
-    await expect(chip()).toHaveCount(0, { timeout: 10000 })
+    await expect(chip()).toHaveCount(1, { timeout: 10000 })
+    await expect(chip()).toContainText(assistantName, { timeout: 10000 })
   })
 })

@@ -1,0 +1,111 @@
+-- mcp module: make the ITEM-13 transcript→history lookup indexes OWNER-LEADING.
+--
+-- Supersedes the two single-column partial indexes created by
+-- `202607200100_mcp_tool_calls_lookup_index.sql`.
+--
+-- ── Why a second migration instead of editing the first ───────────────────────
+-- sqlx stores a checksum per applied migration and `Migrator::run` fails with
+-- `VersionMismatch` if a file's bytes change after it was applied. The runtime
+-- migrator (`core/database/mod.rs:39`) sets only `set_ignore_missing(true)`,
+-- which relaxes the "applied but absent from the source dir" check — NOT the
+-- checksum check. So rewriting 202607200100 in place would hard-fail boot for
+-- any database that already ran it (every dev who has booted this branch). On a
+-- fresh database the table is empty when migrations run, so the create-then-drop
+-- across the two files costs microseconds.
+--
+-- ── What changed, and why: measured, not argued ───────────────────────────────
+-- 202607200100 indexed `(tool_use_id)` and `(message_id)` alone. A reviewer
+-- flagged that the query leads with an unconditional `user_id = $1` — the
+-- cross-user guard in `tool_calls/repository.rs::list_calls_for_user` — so the
+-- single-column shape might never be chosen, and that the
+-- `($n IS NULL OR col = $n)` idiom is not sargable.
+--
+-- Settled with real `EXPLAIN (ANALYZE, BUFFERS)` on PostgreSQL 18.4 against a
+-- 300 000-row / 200-user fixture, driven through PREPARE/EXECUTE because sqlx
+-- speaks the extended protocol. The harness is
+-- `.lifecycle/activity-rail/explain-mcp-tool-calls.sql`; every plan is
+-- transcribed in `.lifecycle/activity-rail/FIX_ROUND-2.md`. Results:
+--
+--   * "Never used" is WRONG. The single-column partial index IS chosen:
+--     `Index Scan using idx_mcp_tool_calls_tool_use`, 4 buffers / 0.071 ms,
+--     against 1505 buffers / 5.268 ms with no index at all.
+--   * But `user_id` lands as a post-`Filter`, not an `Index Cond` — so a row
+--     matching the id under ANOTHER user is read off the heap before being
+--     discarded. Observed directly on the `?message_id=` probe:
+--     `Filter: (user_id = …)` with `Rows Removed by Filter: 1`.
+--   * The owner-leading composite gets both columns into `Index Cond`
+--     (`(user_id = …) AND ((tool_use_id)::text = …)`), removes zero rows by
+--     filter, and turns the paired COUNT into an `Index Only Scan`.
+--   * Head-to-head with BOTH shapes present the planner picks the composite, so
+--     keeping the superseded pair buys nothing (it costs 10224 kB + 4464 kB per
+--     300k rows; the composites cost 14 MB + 10224 kB).
+--   * The unfiltered History page is unaffected — still
+--     `Index Scan using idx_mcp_tool_calls_user_created`, 53 buffers.
+--   * It matches this table's own convention: `idx_mcp_tool_calls_user_created
+--     (user_id, created_at DESC)` is already owner-leading, per
+--     coding-guidelines §4 ("composite indexes for combined filters").
+--   * Nothing else in the tree filters either column. `repository.rs` is the
+--     only file with SQL over `mcp_tool_calls`, and its two filtering statements
+--     (page + COUNT) both lead with `user_id = $1`. (The `tool_use_id` /
+--     `message_id` predicates in `chat_extension/approval/repository.rs` are on
+--     `tool_use_approvals`, a different table.) So no query loses an index by
+--     leading with the owner.
+--
+-- What the indexes buy at all (page query, `?tool_use_id=`, custom plan):
+--   * server shape (200 users, 1 500 rows each): Bitmap Heap Scan over that
+--     user's rows + Filter, 1 499 rows discarded → 1505 buffers / 5.268 ms
+--     ⟶ Index Scan → 4 buffers / 0.041 ms.
+--   * desktop shape (one user owns all 300 000 rows): Parallel Seq Scan,
+--     300 000 rows discarded → 22 223 buffers / 45.423 ms
+--     ⟶ Index Scan → 4 buffers / 0.076 ms.
+-- (202607200100's comment said the unindexed fallback is a sequential scan. On
+-- a multi-user server it is really a bitmap scan bounded by ONE user's rows —
+-- the sequential scan is the DESKTOP case, where `user_id = $1` selects
+-- everything. Same conclusion, different mechanism.)
+--
+-- ── The `($n IS NULL OR col = $n)` idiom: half true, and the half that matters
+--   * CUSTOM plan — the parameters are constants, `('x' IS NULL OR col = 'x')`
+--     folds to `col = 'x'`, and the index is used.
+--   * GENERIC plan — the clause stays opaque and the plan degrades to a bitmap
+--     scan on `idx_mcp_tool_calls_user_created` discarding 1 499 rows
+--     (1505 buffers). NO index shape rescues it: the composite produces a
+--     byte-identical generic plan, same 4184.79 cost. Only rewriting the clause
+--     as a plain `user_id = $1 AND tool_use_id = $2` does — verified: the
+--     generic plan then reads `Index Cond: ((user_id = $1) AND ((tool_use_id)
+--     ::text = $2))` at cost 8.46, i.e. the composite is ALSO what a future
+--     restructure would need.
+--   * PostgreSQL's default `plan_cache_mode = auto` does not reach the generic
+--     plan here. `auto` switches only when the generic plan is no more expensive
+--     than the average custom plan; observed costs are 8.46 (`?tool_use_id=`),
+--     189.12 (unfiltered page 50) and 755.23 (page 200) against the generic
+--     plan's 4184.81 — 5.5× to 495× cheaper. Verified behaviourally too:
+--     executed the prepared statement seven times under the default `auto` and
+--     explained the eighth; still the custom plan, still `Index Cond` on both
+--     columns, 4 buffers.
+-- So the QUERY is deliberately NOT restructured. It stays one static statement
+-- whose predicate list the COUNT query repeats verbatim and
+-- `filters_never_drop_the_owner_predicate` (TEST-17) pins; replacing it with
+-- dynamically-assembled SQL would rewrite the cross-user guard to buy a plan
+-- PostgreSQL's own cost model already rejects. Revisit only if a deployment
+-- pins `plan_cache_mode = force_generic_plan` — at which point the composite
+-- created here is exactly the index the rewrite would need.
+--
+-- Both indexes stay PARTIAL (`WHERE ... IS NOT NULL`), matching
+-- `idx_mcp_tool_calls_conv` / `idx_mcp_tool_calls_workflow_run`: a REST- or
+-- workflow-sourced row sets neither column, so those nulls are dead weight. Every
+-- query compares against a non-null value, so the partial predicate is implied.
+--
+-- Plain (not CONCURRENTLY) DDL for the reasons spelled out in 202607200100.
+
+CREATE INDEX IF NOT EXISTS idx_mcp_tool_calls_user_tool_use
+    ON public.mcp_tool_calls USING btree (user_id, tool_use_id)
+    WHERE (tool_use_id IS NOT NULL);
+
+CREATE INDEX IF NOT EXISTS idx_mcp_tool_calls_user_message
+    ON public.mcp_tool_calls USING btree (user_id, message_id)
+    WHERE (message_id IS NOT NULL);
+
+-- The superseded single-column pair. With both shapes present the planner picks
+-- the composite, so keeping these buys nothing and costs ~14.4 MB per 300k rows.
+DROP INDEX IF EXISTS public.idx_mcp_tool_calls_tool_use;
+DROP INDEX IF EXISTS public.idx_mcp_tool_calls_message;

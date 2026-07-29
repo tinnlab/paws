@@ -1,7 +1,6 @@
 import { Button, Card, Flex, Form, useForm, message } from '@ziee/kit'
 import { Drawer } from '@/modules/layouts/app-layout/components/Drawer'
 import { useEffect, useState } from 'react'
-import { Stores } from '@/modules/llm-provider/stores'
 import { LlmModelCapabilitiesSection } from '@/modules/llm-provider/components/llm-models/shared/LlmModelCapabilitiesSection'
 import { LlmModelParametersSection } from '@/modules/llm-provider/components/llm-models/shared/LlmModelParametersSection'
 import { LlmModelLlamaCppSettingsSection } from '@/modules/llm-provider/components/llm-models/shared/LlmModelLlamaCppSettingsSection'
@@ -11,6 +10,8 @@ import {
   MODEL_PARAMETERS,
 } from '@/modules/llm-provider/constants/llmModelParameters'
 import type { ModelCapabilities, ModelParameters, UpdateLlmModelRequest } from '@/api-client/types'
+import { LlmProvider } from '@/modules/llm-provider/stores/llmProvider'
+import { EditLlmModelDrawer as EditLlmModelDrawerStore } from '@/modules/llm-provider/stores/llmModelDrawers/editLlmModelDrawer'
 
 /**
  * Edit drawer for both local and remote LLM models
@@ -29,13 +30,19 @@ export function EditLlmModelDrawer() {
     },
   })
 
-  const { open, modelId } = Stores.EditLlmModelDrawer
+  const { open, modelId } = EditLlmModelDrawerStore
+  // Read the reactive `providers` proxy field EXACTLY ONCE, unconditionally: a
+  // store-kit proxy field read is a hook (useEffect + useStore(useShallow) — see
+  // framework/src/stores.ts), so reading it inside the `modelId ? …` ternary made
+  // the hook count jump when `modelId` flipped null→set as the drawer opened,
+  // tripping "change in the order of Hooks" → "Rendered more hooks" → crash.
+  const providers = LlmProvider.providers
   const currentModel = modelId
-    ? Stores.LlmProvider.findLlmModelById(modelId)
+    ? providers.flatMap(p => p.llm_models || []).find(m => m.id === modelId)
     : null
 
   // Find provider that owns this model
-  const currentProvider = Stores.LlmProvider.providers.find(p =>
+  const currentProvider = providers.find(p =>
     p.llm_models?.some(m => m.id === modelId),
   )
 
@@ -62,7 +69,7 @@ export function EditLlmModelDrawer() {
       setLoading(true)
       // Update via the store (which calls the API + reconciles
       // local provider state).
-      await Stores.LlmProvider.updateLlmModel(currentModel.id, {
+      await LlmProvider.updateLlmModel(currentModel.id, {
         name: values.name as string,
         display_name: values.display_name as string,
         description: values.description as string,
@@ -74,7 +81,7 @@ export function EditLlmModelDrawer() {
           : {}),
       })
 
-      Stores.EditLlmModelDrawer.closeEditLlmModelDrawer()
+      EditLlmModelDrawerStore.closeEditLlmModelDrawer()
       message.success('Model updated successfully')
     } catch (error) {
       console.error('Failed to update model:', error)
@@ -86,7 +93,7 @@ export function EditLlmModelDrawer() {
 
   const handleCancel = () => {
     form.reset()
-    Stores.EditLlmModelDrawer.closeEditLlmModelDrawer()
+    EditLlmModelDrawerStore.closeEditLlmModelDrawer()
   }
 
   return (

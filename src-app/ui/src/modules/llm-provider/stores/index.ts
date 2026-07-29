@@ -1,14 +1,13 @@
 // Main provider store
-export * from './LlmProvider.store'
+export { useLlmProviderStore } from './llmProvider'
+export type { LlmProviderWithModels } from './llmProvider/types'
 
 // Drawer stores
-export * from './LlmModelDrawers.store'
+export * from './llmModelDrawers'
 
 // Download store
-export * from './LlmModelDownload.store'
+export * from './llmModelDownload'
 
 // Upload store
-export * from './LlmModelUpload.store'
+export * from './llmModelUpload'
 
-// Re-export for compatibility with Stores pattern
-export { Stores } from '@ziee/framework/stores'

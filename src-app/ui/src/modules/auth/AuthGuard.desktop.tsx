@@ -15,7 +15,7 @@
  *     `true` momentarily), we just keep spinning rather than briefly
  *     flashing the setup page.
  *
- *  3. Skips `Stores.Auth.initAuth()`. The desktop-base module's
+ *  3. Skips `Auth.initAuth()`. The desktop-base module's
  *     auto-login retry loop is the single source of truth for the
  *     token; any persisted token from a previous launch is stale
  *     because the server regenerates its JWT secret per launch
@@ -41,9 +41,10 @@
  */
 
 import { Layout, Spin, Text } from '@ziee/kit'
-import { Stores } from '@ziee/framework/stores'
+import { Bootstrap } from '@ziee/desktop/modules/desktop-base/bootstrap'
 import { isTauriView } from '@ziee/desktop/core/platform'
 import { PhoneAuthPage } from '@ziee/desktop/modules/tunnel-auth/PhoneAuthPage'
+import { Auth } from '@/modules/auth/Auth.store'
 
 const { Content } = Layout
 
@@ -52,11 +53,11 @@ interface AuthGuardProps {
 }
 
 export const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
-  const { isAuthenticated } = Stores.Auth
+  const { isAuthenticated } = Auth
   // Read reactive bootstrap state via the Stores proxy (project convention)
   // rather than the raw `useBootstrapStore` hook.
   const { status: bootstrapStatus, message: bootstrapMessage } =
-    Stores.Bootstrap
+    Bootstrap
 
   if (!isAuthenticated) {
     // Phone-over-tunnel: no Tauri shell, no auto-login coming.

@@ -112,6 +112,17 @@ pub struct SSEChatStreamMcpToolStartData {
     pub server: String,
     /// Tool input parameters (for display in "Show details" panel)
     pub input: serde_json::Value,
+    /// ITEM-14 (DEC-9): RFC 3339 instant the step began, so a LIVE rail step can
+    /// tick an elapsed time while the tool runs. This is the moment the chat host
+    /// dispatched the step — the STEP's start, which necessarily precedes the
+    /// underlying `tools/call` (session acquisition happens in between) and is the
+    /// only reading available before the call exists.
+    ///
+    /// It is a display seed, NOT the authoritative timing: on completion
+    /// `mcpToolComplete` carries the recorder's own `started_at` + `duration_ms`
+    /// (the pair persisted to `mcp_tool_calls`), which supersedes this.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
 }
 
 /// Event data for an artifact file created by a tool (via MCP resource_link)
@@ -145,6 +156,20 @@ pub struct SSEChatStreamMcpToolCompleteData {
     pub is_error: bool,
     /// Tool result text, truncated to 2000 chars (for display in "Show details" panel)
     pub result: Option<String>,
+    /// ITEM-14: RFC 3339 instant the underlying `tools/call` was dispatched —
+    /// the AUTHORITATIVE `started_at`, read straight off the one clock in
+    /// `McpSession::call_tool` and identical to the value persisted on the
+    /// matching `mcp_tool_calls` row. Supersedes `mcpToolStart.started_at`.
+    ///
+    /// `None` when the step never reached a session (a pre-dispatch refusal, an
+    /// inline built-in like `ask_user`, or a cancelled call) — there is no timing
+    /// to report and we do not invent one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    /// ITEM-14: how long that call took, in milliseconds — the SAME value stored
+    /// as `mcp_tool_calls.duration_ms`. Present whenever `started_at` is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<i64>,
 }
 
 /// Event data for MCP elicitation required (server is requesting human input)
@@ -198,6 +223,30 @@ pub struct SSEChatStreamMcpApprovalRequiredData {
     pub server_id: String,
     /// Tool input parameters
     pub input: serde_json::Value,
+    /// ITEM-50 (full-disclosure): the EXTERNAL destination host the tool would
+    /// send data to (e.g. `api.example.com`), so the human reviews a
+    /// *data-egress* decision and not just a verb. `None` for built-in /
+    /// loopback / stdio servers, which have no meaningful external destination
+    /// (the card treats a `None` here as a local call).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dest_host: Option<String>,
+    /// ITEM-50 (full-disclosure): the tool's FULL, EXACT advertised description
+    /// (never summarized/truncated — poisoning hides in truncation). Best-effort
+    /// (`None` when the server is unreachable or advertises no description).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// ITEM-25 / AP-3: `true` when this call will re-prompt on EVERY turn no
+    /// matter what the user chooses now — i.e. persisting a per-(server, tool)
+    /// auto-approval would NOT prevent the next prompt, so offering "Approve for
+    /// this conversation" would be a lie.
+    ///
+    /// The server declares its own policy here. The client previously inferred it
+    /// by hardcoding the App Control built-in's UUID and the `invoke_capability`
+    /// tool name — a client-side copy of another module's identity that drifted
+    /// the moment a second such server (background's `spawn_background`) or an
+    /// admin `manual_approve` override appeared. See
+    /// `helpers::approval_is_always_reprompt` for the single source of truth.
+    pub always_reprompt: bool,
 }
 
 /// Event data for a `run_js` script's per-call tool approval.

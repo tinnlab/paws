@@ -1,10 +1,9 @@
 import { Book } from 'lucide-react'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { createModule } from '@ziee/framework'
 import { SettingsLayoutDef } from '@/modules/settings/SettingsLayout'
 import { lazyWithPreload } from '@/utils/lazyWithPreload'
-import { useCitationsStore } from './stores/Citations.store'
-// CRITICAL: enable store type declaration merging (registers `Stores.Citations`).
+// CRITICAL: enable store type declaration merging (registers `CitationsStore`).
 import './types'
 // Side-effect: register the "References" knowledge kind on the project page,
 // independent of the projects module's load order.
@@ -22,6 +21,8 @@ export default createModule({
     version: '1.0.0',
     description: 'Citation management + verification: a verified CSL-JSON library.',
   },
+  // smart-loading gate (build-lifted into the manifest)
+  shouldLoad: (ctx) => ctx.isAuthenticated,
   dependencies: ['router'],
   routes: [
     {
@@ -32,7 +33,7 @@ export default createModule({
       layout: SettingsLayoutDef,
     },
   ],
-  stores: [{ name: 'Citations', store: useCitationsStore }],
+  stores: [],
   slots: {
     settingsUserPages: [
       {

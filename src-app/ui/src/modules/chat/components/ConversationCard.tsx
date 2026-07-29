@@ -2,12 +2,12 @@ import { type ReactNode, useState } from 'react'
 import { Button, Card, Checkbox, Confirm, Separator, Text, Tooltip } from '@ziee/kit'
 import { message } from '@ziee/kit'
 import { usePermission } from '@/core/permissions'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { Trash2 } from 'lucide-react'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
 import type { ConversationResponse } from '@/api-client/types'
-import { chatExtensionRegistry } from '@/modules/chat/core/extensions'
+import { chatExtensionRegistry, useChatExtensionList } from '@/modules/chat/core/extensions'
 import { useOpenConversationInWorkspace } from '@/modules/chat/core/pane/useOpenConversation'
 import { setConversationDragData } from '@/modules/chat/core/pane/paneDnd'
 import { useConversationTearOff } from '@/modules/chat/core/popout/useConversationTearOff'
@@ -98,6 +98,14 @@ export function ConversationCard({
       onSelect(conversation.id)
     }
   }
+
+  // Subscribe to chat-extension registration. Extensions now register
+  // ASYNChronously (lazy globs — each extension.tsx is its own chunk), so a card
+  // that mounts before registration completes would compute an empty trailing
+  // (no projects "Add to project" affordance) and, with no subscription, never
+  // update. This re-renders the card once the set changes so the registry
+  // consult below re-runs with the registered extensions.
+  useChatExtensionList()
 
   // Trailing content: prop wins (caller-supplied, project page's
   // per-row Remove etc.). Otherwise consult the extension registry

@@ -1,20 +1,34 @@
-import { FaServer, FaWrench, FaRoute } from 'react-icons/fa'
-import { RiOpenaiFill, RiAnthropicFill, RiGeminiFill } from 'react-icons/ri'
-import { BsFillLightningChargeFill } from 'react-icons/bs'
-import { SiHuggingface } from 'react-icons/si'
-import { DeepSeek, Mistral } from '@/modules/llm-provider/icons'
+import { Server, Wrench, Route, Zap, type LucideProps } from 'lucide-react'
+import {
+  DeepSeek,
+  Mistral,
+  OpenAI,
+  Anthropic,
+  Gemini,
+  HuggingFace,
+} from '@/modules/llm-provider/icons'
+
+// The provider list renders every icon at 1em (font-size via `text-lg`/`text-xl`
+// at the call sites), matching the custom brand SVGs (DeepSeek/Mistral/…). lucide
+// glyphs default to a fixed 24px, so wrap them to scale to 1em for size parity
+// with the brand icons (this preserves the prior react-icons 1em behavior).
+const em = (Icon: React.ComponentType<LucideProps>) => {
+  const Wrapped = (props: LucideProps) => <Icon size="1em" {...props} />
+  Wrapped.displayName = `Em(${Icon.displayName ?? Icon.name ?? 'Icon'})`
+  return Wrapped
+}
 
 export const PROVIDER_ICONS: Record<string, any> = {
-  local: FaServer,
-  openai: RiOpenaiFill,
-  anthropic: RiAnthropicFill,
-  groq: BsFillLightningChargeFill,
-  gemini: RiGeminiFill,
+  local: em(Server),
+  openai: OpenAI,
+  anthropic: Anthropic,
+  groq: em(Zap),
+  gemini: Gemini,
   mistral: Mistral,
   deepseek: DeepSeek,
-  huggingface: SiHuggingface,
-  openrouter: FaRoute,
-  custom: FaWrench,
+  huggingface: HuggingFace,
+  openrouter: em(Route),
+  custom: em(Wrench),
 }
 
 // Model file type configuration

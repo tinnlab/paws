@@ -6,7 +6,7 @@
  * desktop bundle — updates are a native-app concern.
  *
  * Backend control surface: the desktop crate's aide-documented
- * `/api/desktop/updater/*` routes, driven through `Stores.Updater`.
+ * `/api/desktop/updater/*` routes, driven through `UpdaterStore`.
  */
 
 import { createModule, type AppModule } from '@ziee/ui-core'
@@ -14,7 +14,7 @@ import { lazy } from 'react'
 import { Info } from 'lucide-react'
 import { SettingsLayoutDef } from '@ziee/ui-core/modules/settings/SettingsLayout'
 
-import { useUpdaterStore } from '@ziee/desktop/modules/updater/stores/Updater.store'
+import { useUpdaterStore } from '@ziee/desktop/modules/updater/stores/updater'
 import { UpdateBanner } from './components/UpdateBanner'
 
 const AboutPage = lazy(() =>

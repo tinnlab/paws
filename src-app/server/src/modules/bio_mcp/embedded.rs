@@ -104,25 +104,18 @@ pub fn ensure_biomcp_extracted() -> Result<&'static PathBuf, AppError> {
         })?;
 
         let biomcp_path = bin_dir.join(binaries::BIOMCP_NAME);
-        if !biomcp_path.exists() {
-            tracing::info!("Extracting embedded BioMCP binary to {:?}", biomcp_path);
-            fs::write(&biomcp_path, binaries::BIOMCP).map_err(|e| {
-                AppError::internal_error(format!("Failed to write BioMCP binary: {}", e))
-            })?;
-
-            #[cfg(unix)]
-            set_executable(&biomcp_path)?;
-
-            tracing::info!("BioMCP binary extracted ({} bytes)", binaries::BIOMCP.len());
-        } else {
-            tracing::debug!("BioMCP binary already extracted at {:?}", biomcp_path);
-        }
+        // Cross-process-atomic extract (temp-write + rename + advisory flock) so
+        // two server processes sharing ~/.ziee/bin never exec a torn binary.
+        crate::common::embedded::extract_atomic("BioMCP", binaries::BIOMCP, &biomcp_path)?;
 
         Ok(biomcp_path)
     })
 }
 
+// Retained for the executable-bit test below; the extract path now sets the bit
+// via `common::embedded::extract_atomic`.
 #[cfg(unix)]
+#[allow(dead_code)]
 fn set_executable(path: &PathBuf) -> Result<(), AppError> {
     use std::os::unix::fs::PermissionsExt;
     let mut perms = fs::metadata(path)

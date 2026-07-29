@@ -13,27 +13,66 @@ import {
   message,
 } from '@ziee/kit'
 import type { MenuItem } from '@ziee/kit/kit/menu'
-import { RotateCw } from 'lucide-react'
-import { IoIosArrowDown } from 'react-icons/io'
-import { Stores } from '@ziee/framework/stores'
-import { evaluatePermission } from '@/core/permissions'
-import { Permissions } from '@/api-client/types'
+import { RotateCw, ChevronDown } from 'lucide-react'
+import { evaluatePermission, type PermissionExpr } from '@/core/permissions'
+import { Permissions } from '@/api-client/permissions'
 import { HeaderBarContainer } from '@/modules/layouts/app-layout/components/HeaderBarContainer'
 import { LazyComponentRenderer } from '@/core/components/LazyComponentRenderer'
 import { useNativeScroll } from '@/modules/layouts/app-layout/hooks/useNativeScroll'
 import { cn } from '@/lib/utils'
 import { useElementMinSize } from '@/modules/layouts/app-layout/hooks/useWindowMinSize'
 import { DivScrollY } from '@/components/common/DivScrollY'
+import { McpUserPolicy } from '@/modules/mcp/stores/mcpUserPolicy'
+import { AppLayout } from '@/modules/layouts/app-layout/appLayout'
+import { HubCatalog } from '@/modules/hub/stores/hub-catalog-store'
+import { Auth } from '@/modules/auth/Auth.store'
+import { ModuleSystem } from '@ziee/framework/stores'
+import { revalidateForPath } from '@/modules/loader'
+
+// Canonical hub tab segments + the read perm each one declares — the FULL set,
+// independent of which sub-module bodies are currently loaded. Smart-loading
+// only downloads the sub-modules the user is eligible for, so a forbidden tab is
+// ABSENT from the `hubTabs` slot; a deep-link to a KNOWN-but-forbidden tab must
+// still render the inline 403 (URL preserved), not redirect. "Forbidden" is
+// therefore measured against this list (keyed by the same read perm the tab's
+// own sub-module uses), since the gated module itself never loads to be asked.
+const CANONICAL_HUB_TABS: Array<{ id: string; read: PermissionExpr }> = [
+  { id: 'models', read: Permissions.HubModelsRead },
+  { id: 'assistants', read: Permissions.HubAssistantsRead },
+  { id: 'mcp-servers', read: Permissions.HubMCPServersRead },
+  { id: 'skills', read: Permissions.SkillsRead },
+  { id: 'workflows', read: Permissions.WorkflowsRead },
+  {
+    id: 'installed',
+    read: {
+      anyOf: [
+        Permissions.HubModelsRead,
+        Permissions.HubAssistantsRead,
+        Permissions.HubMCPServersRead,
+      ],
+    },
+  },
+]
 
 export function HubPage() {
   const { activeTab: urlActiveTab } = useParams()
   const navigate = useNavigate()
-  const { slots } = Stores.ModuleSystem
-  const { user, permissions } = Stores.Auth
+  const { slots } = ModuleSystem
+  const { user, permissions } = Auth
+
+  // Load the hub tab sub-modules (gated on `/hub`, so they stay off every other
+  // route). This page consumes their `hubTabs` slots, so it owns triggering the
+  // load: a mount effect fires reliably once the page commits, then the tabs
+  // register and appear reactively (ModuleSystem.slots is a live read).
+  useEffect(() => {
+    revalidateForPath(
+      typeof window !== 'undefined' ? window.location.pathname : '/hub',
+    )
+  }, [])
   // Subscribe to the MCP policy so the MCP tab's shouldRender gate re-evaluates
   // the moment an admin saves a new policy (its presence in visibleTabs deps is
   // the load-bearing piece).
-  const { policy: mcpPolicy } = Stores.McpUserPolicy
+  const { policy: mcpPolicy } = McpUserPolicy
   // Layout flips from a left side-menu to a header dropdown based on the page's
   // OWN width (mirrors the Settings page), not the viewport.
   const containerRef = useRef<HTMLDivElement>(null)
@@ -42,7 +81,7 @@ export function HubPage() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   // Native document-scroll on mobile (iOS toolbar collapse + under-notch flow).
   useNativeScroll(true)
-  const { nativeScroll } = Stores.AppLayout
+  const { nativeScroll } = AppLayout
   const [refreshing, setRefreshing] = useState(false)
 
   // Get hub tabs from slot system, sorted
@@ -69,10 +108,18 @@ export function HubPage() {
   // Redirect to first visible tab if at /hub with no segment. Skip when there
   // are no visible tabs OR the user deep-linked to a forbidden tab (403 shown).
   const hasUrlSegment = !!urlActiveTab
-  const urlSegmentIsRegistered =
-    hasUrlSegment && hubTabs.some(t => t.id === urlActiveTab)
+  // A KNOWN hub tab (canonical list) the user lacks the read perm for, and which
+  // isn't among the visible/loaded tabs → forbidden (403). Under smart-loading
+  // the forbidden tab's sub-module never loaded, so it's absent from `hubTabs`;
+  // the canonical list is what still recognizes it as a real-but-forbidden tab
+  // rather than an unknown 404 segment (which falls through to the redirect).
+  const canonicalTab = hasUrlSegment
+    ? CANONICAL_HUB_TABS.find(t => t.id === urlActiveTab)
+    : undefined
   const urlSegmentIsForbidden =
-    urlSegmentIsRegistered && !visibleTabs.some(t => t.id === urlActiveTab)
+    !!canonicalTab &&
+    !evaluatePermission(user, permissions, canonicalTab.read) &&
+    !visibleTabs.some(t => t.id === urlActiveTab)
 
   useEffect(() => {
     if (!hasUrlSegment && visibleTabs.length > 0 && !urlSegmentIsForbidden) {
@@ -88,19 +135,19 @@ export function HubPage() {
     permissions,
     Permissions.HubCatalogManage,
   )
-  const hubVersion = Stores.HubCatalog.hubVersion
-  const serverVersion = Stores.HubCatalog.serverVersion
+  const hubVersion = HubCatalog.hubVersion
+  const serverVersion = HubCatalog.serverVersion
 
   const handleRefresh = async () => {
     setRefreshing(true)
     try {
-      await Stores.HubCatalog.refresh()
+      await HubCatalog.refresh()
       // The refresh handler returns an updated/new_version tuple,
       // but the user just needs a success toast.
-      // Read via `$` snapshot (not the render-only `Stores.HubCatalog.*`
+      // Read via `$` snapshot (not the render-only `HubCatalog.*`
       // reactive read, which calls a hook — illegal inside this async handler
       // and throws React #321, swallowing the success toast).
-      message.success(`Hub catalog refreshed to v${Stores.HubCatalog.$.hubVersion ?? '?'}`)
+      message.success(`Hub catalog refreshed to v${HubCatalog.$.hubVersion ?? '?'}`)
       // Trigger each visible tab's own refresh hook so per-tab lists
       // re-render against the new catalog (the back-compat per-category
       // endpoints already serve from the rotated `current/` dir).
@@ -220,7 +267,7 @@ export function HubPage() {
                     aria-haspopup="menu"
                     aria-expanded={mobileMenuOpen}
                   >
-                    {currentTabLabel} <IoIosArrowDown />
+                    {currentTabLabel} <ChevronDown size="1em" />
                   </Button>
                 </Dropdown>
               </>

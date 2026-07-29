@@ -1,10 +1,8 @@
 import { Shrink } from 'lucide-react'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { createModule } from '@ziee/framework'
 import { SettingsLayoutDef } from '@/modules/settings/SettingsLayout'
 import { lazyWithPreload } from '@/utils/lazyWithPreload'
-import { useConversationSummarizationStore } from './stores/ConversationSummarization.store'
-import { useSummarizationAdminStore } from './stores/SummarizationAdmin.store'
 import './types'
 
 const SummarizationAdminPage = lazyWithPreload(() =>
@@ -20,6 +18,8 @@ export default createModule({
     description:
       'Conversation summarization: rolling per-branch context compaction.',
   },
+  // smart-loading gate (build-lifted into the manifest)
+  shouldLoad: (ctx) => ctx.isAuthenticated && ctx.can(Permissions.SummarizationSettingsRead),
   dependencies: ['router'],
   routes: [
     {
@@ -31,11 +31,6 @@ export default createModule({
     },
   ],
   stores: [
-    { name: 'SummarizationAdmin', store: useSummarizationAdminStore },
-    {
-      name: 'ConversationSummarization',
-      store: useConversationSummarizationStore,
-    },
   ],
   slots: {
     settingsAdminPages: [

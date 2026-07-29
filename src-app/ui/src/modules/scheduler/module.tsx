@@ -1,15 +1,12 @@
 import { CalendarClock } from 'lucide-react'
+import { useOverlayOpen } from '@/core/overlays/overlayVisibility'
 
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { createModule } from '@ziee/framework'
-import { Stores } from '@ziee/framework/stores'
 import { useDelayedFalse } from '@/hooks/useDelayedFalse'
 import { AppLayoutDef } from '@/modules/layouts/app-layout'
 import { SettingsLayoutDef } from '@/modules/settings/SettingsLayout'
 import { lazyWithPreload } from '@/utils/lazyWithPreload'
-import { useScheduledTasksStore } from './stores/ScheduledTasks.store'
-import { useSchedulerAdminStore } from './stores/SchedulerAdmin.store'
-import { useSchedulerDrawerStore } from './stores/SchedulerDrawer.store'
 import '@/modules/scheduler/types' // register Stores.* (declaration merge)
 import '@/modules/settings/types/SettingsSlots'
 
@@ -35,6 +32,8 @@ export default createModule({
     version: '1.0.0',
     description: 'Scheduled / recurring tasks',
   },
+  // smart-loading gate (build-lifted into the manifest)
+  shouldLoad: (ctx) => ctx.isAuthenticated,
   dependencies: ['router'],
   routes: [
     {
@@ -56,15 +55,13 @@ export default createModule({
     },
   ],
   stores: [
-    { name: 'ScheduledTasks', store: useScheduledTasksStore },
-    { name: 'SchedulerAdmin', store: useSchedulerAdminStore },
-    { name: 'SchedulerDrawer', store: useSchedulerDrawerStore },
+    // BOOT-EAGER (always-mounted overlay) — must stay registered.
   ],
   components: [
     {
       id: 'scheduled-task-form-drawer',
       component: ScheduledTaskFormDrawer,
-      shouldMount: () => useDelayedFalse(() => Stores.SchedulerDrawer.open),
+      shouldMount: () => useDelayedFalse(() => useOverlayOpen('scheduler')),
       order: 100,
     },
   ],

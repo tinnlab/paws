@@ -25,9 +25,9 @@ export const gallery: ModuleGallery = {
         'ProviderButtons',
       ),
       setup: async () => {
-        const { AuthProviders } = await import('@/modules/auth/AuthProviders.store')
+        const { AuthProviders } = await import('@/modules/auth/authProviders')
         await holdPatch(() =>
-          AuthProviders.store.setState({ isLoading: true, hasLoaded: false } as any),
+          AuthProviders.__setState({ isLoading: true, hasLoaded: false } as any),
         )
       },
     },
@@ -42,9 +42,9 @@ export const gallery: ModuleGallery = {
         'ProviderButtons',
       ),
       setup: async () => {
-        const { AuthProviders } = await import('@/modules/auth/AuthProviders.store')
+        const { AuthProviders } = await import('@/modules/auth/authProviders')
         await holdPatch(() =>
-          AuthProviders.store.setState({
+          AuthProviders.__setState({
             isLoading: false,
             hasLoaded: true,
             error: 'Unable to reach the sign-in service.',
@@ -64,9 +64,9 @@ export const gallery: ModuleGallery = {
         'ProviderButtons',
       ),
       setup: async () => {
-        const { AuthProviders } = await import('@/modules/auth/AuthProviders.store')
+        const { AuthProviders } = await import('@/modules/auth/authProviders')
         await holdPatch(() =>
-          AuthProviders.store.setState({
+          AuthProviders.__setState({
             isLoading: false,
             hasLoaded: true,
             error: null,
@@ -78,21 +78,21 @@ export const gallery: ModuleGallery = {
     {
       slug: 'seeded-login-error',
       title: 'Login form — error',
-      note: 'Stores.Auth.error → the login error alert',
+      note: 'AuthStore.error → the login error alert',
       path: '/',
       initialPath: '/',
       component: lazyNamed(() => import('@/modules/auth/LoginForm'), 'LoginForm'),
       setup: async () => {
         const { Auth } = await import('@/modules/auth/Auth.store')
         await holdPatch(() =>
-          Auth.store.setState({ error: 'Invalid email or password.' } as any),
+          Auth.__setState({ error: 'Invalid email or password.' } as any),
         )
       },
     },
     {
       slug: 'seeded-register-error',
       title: 'Register form — error',
-      note: 'Stores.Auth.error → the register error alert',
+      note: 'AuthStore.error → the register error alert',
       path: '/',
       initialPath: '/',
       component: lazyNamed(
@@ -102,7 +102,7 @@ export const gallery: ModuleGallery = {
       setup: async () => {
         const { Auth } = await import('@/modules/auth/Auth.store')
         await holdPatch(() =>
-          Auth.store.setState({ error: 'That email is already registered.' } as any),
+          Auth.__setState({ error: 'That email is already registered.' } as any),
         )
       },
     },
@@ -130,12 +130,12 @@ export const gallery: ModuleGallery = {
       ),
       setup: async () => {
         const { Auth } = await import('@/modules/auth/Auth.store')
-        const { App } = await import('@/modules/app/App.store')
+        const { App } = await import('@/modules/app/stores/app')
         const { AppMode } = await import('@/modules/app/AppMode.store')
         await holdPatch(() => {
-          AppMode.store.setState({ multiUserMode: true } as any)
-          App.store.setState({ needsSetup: null } as any)
-          Auth.store.setState({
+          AppMode.__setState({ multiUserMode: true } as any)
+          App.__setState({ needsSetup: null })
+          Auth.__setState({
             isInitializing: true,
             isAuthenticated: false,
           } as any)

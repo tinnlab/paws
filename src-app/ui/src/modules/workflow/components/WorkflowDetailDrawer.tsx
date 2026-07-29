@@ -1,4 +1,11 @@
-import { Calculator, CirclePlay, FlaskConical, Trash2 } from 'lucide-react'
+import {
+  Calculator,
+  CirclePlay,
+  FlaskConical,
+  Pencil,
+  Trash2,
+} from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import {
   Button,
   Descriptions,
@@ -13,9 +20,8 @@ import {
 } from '@ziee/kit'
 import { Drawer } from '@/modules/layouts/app-layout/components/Drawer'
 import { useEffect, useMemo, useState } from 'react'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { usePermission } from '@/core/permissions'
-import { Stores } from '@ziee/framework/stores'
 import { DryRunPreviewDialog } from './DryRunPreviewDialog'
 import { WorkflowRunDialog } from './WorkflowRunDialog'
 import { WorkflowRunProgressView } from './WorkflowRunProgressView'
@@ -23,6 +29,9 @@ import { WorkflowRunsList } from './WorkflowRunsList'
 import { WorkflowScopeBadge } from './WorkflowScopeBadge'
 import { WorkflowTestsPanel } from './WorkflowTestsPanel'
 import { parseWorkflowIr } from './workflowIr'
+import { Workflow as WorkflowStore } from '@/modules/workflow/stores/workflow'
+import { SystemWorkflow } from '@/modules/workflow/stores/systemWorkflow'
+import { WorkflowDrawer } from '@/modules/workflow/stores/workflowDrawer'
 
 /**
  * Workflow detail: read-only step list (from the compiled IR when
@@ -30,10 +39,12 @@ import { parseWorkflowIr } from './workflowIr'
  * kicked off, the live progress view renders inline.
  */
 export function WorkflowDetailDrawer() {
-  const { isOpen, workflow } = Stores.WorkflowDrawer
+  const { isOpen, workflow } = WorkflowDrawer
   const canExecute = usePermission(Permissions.WorkflowsExecute)
   const canManage = usePermission(Permissions.WorkflowsInstall)
   const canManageSystem = usePermission(Permissions.WorkflowsManageSystem)
+  const canEditDefinition = usePermission(Permissions.WorkflowsManage)
+  const navigate = useNavigate()
 
   const [runDialogOpen, setRunDialogOpen] = useState(false)
   const [dryRunOpen, setDryRunOpen] = useState(false)
@@ -46,7 +57,7 @@ export function WorkflowDetailDrawer() {
   const [activeRunId, setActiveRunId] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<'details' | 'runs'>('details')
 
-  // FE LOW-1: the drawer is a singleton bound to Stores.WorkflowDrawer; when
+  // FE LOW-1: the drawer is a singleton bound to WorkflowDrawer; when
   // the user opens a different workflow's card while the drawer is open the
   // store swaps `workflow` without closing it. Reset the active run so a prior
   // workflow's progress view doesn't render under the new workflow's header.
@@ -65,7 +76,7 @@ export function WorkflowDetailDrawer() {
       <Drawer
         data-testid="wf-detail-drawer-empty"
         open={isOpen}
-        onClose={() => Stores.WorkflowDrawer.close()}
+        onClose={() => WorkflowDrawer.close()}
         size={480}
         title=""
       />
@@ -73,16 +84,20 @@ export function WorkflowDetailDrawer() {
   }
 
   const editable = workflow.scope === 'system' ? canManageSystem : canManage
+  // The visual builder edits a user-scope workflow's definition in place
+  // (gated `workflows::manage`, matching the /edit route). System workflows are
+  // authored elsewhere, so the Edit affordance is user-scope only.
+  const editableDefinition = workflow.scope !== 'system' && canEditDefinition
 
   const handleDelete = async () => {
     try {
       if (workflow.scope === 'system') {
-        await Stores.SystemWorkflow.deleteSystemWorkflow(workflow.id)
+        await SystemWorkflow.deleteSystemWorkflow(workflow.id)
       } else {
-        await Stores.Workflow.deleteWorkflow(workflow.id)
+        await WorkflowStore.deleteWorkflow(workflow.id)
       }
       message.success('Workflow deleted')
-      Stores.WorkflowDrawer.close()
+      WorkflowDrawer.close()
     } catch {
       message.error('Failed to delete workflow')
     }
@@ -94,7 +109,7 @@ export function WorkflowDetailDrawer() {
       open={isOpen}
       onClose={() => {
         setActiveRunId(null)
-        Stores.WorkflowDrawer.close()
+        WorkflowDrawer.close()
       }}
       size={480}
       titleText={workflow.display_name || workflow.name}
@@ -107,11 +122,27 @@ export function WorkflowDetailDrawer() {
         </Space>
       }
       footer={
-        editable ? (
+        editable || editableDefinition ? (
           <>
-            <Button data-testid="wf-detail-delete-btn" onClick={() => setDeleteDialogOpen(true)} variant="ghost" size="default" icon={<Trash2 />}>
-              Delete
-            </Button>
+            {editableDefinition && (
+              <Button
+                data-testid="wf-detail-edit-btn"
+                onClick={() => {
+                  WorkflowDrawer.close()
+                  navigate(`/settings/workflows/${workflow.id}/edit`)
+                }}
+                variant="outline"
+                size="default"
+                icon={<Pencil />}
+              >
+                Edit
+              </Button>
+            )}
+            {editable && (
+              <Button data-testid="wf-detail-delete-btn" onClick={() => setDeleteDialogOpen(true)} variant="ghost" size="default" icon={<Trash2 />}>
+                Delete
+              </Button>
+            )}
             <Dialog
               data-testid="wf-detail-delete-dialog"
               open={deleteDialogOpen}

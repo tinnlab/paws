@@ -1,4 +1,17 @@
 {
   "__doc__": "Allow-list for lint-icon-action.mjs (taxonomy C11). Entries: { testid?: substring, file?: substring, action?: key, reason }. A matching control is excused from the icon<->action check.",
-  "entries": []
+  "entries": [
+    {
+      "testid": "settings-mobile-dropdown-trigger",
+      "file": "SettingsPage",
+      "action": "settings",
+      "reason": "The trailing ChevronDown is the dropdown DISCLOSURE caret for the mobile settings-section picker (aria-haspopup=menu), not a settings-action icon. The heuristic misfires on the word 'settings' in the aria-label 'Select settings section'. Unchanged glyph from the prior react-icons IoIosArrowDown (visual parity)."
+    },
+    {
+      "testid": "desktop-layout-drawer-close",
+      "file": "Drawer.desktop",
+      "action": "close",
+      "reason": "The desktop Drawer's close control uses a directional back-chevron (ChevronLeft), preserving the prior react-icons IoIosArrowBack glyph (visual-parity mandate) and matching the web @ziee/shell Drawer close affordance. Whether it should standardize to X is a pre-existing design question predating this migration (both drawers used the back-chevron before); left as-is for visual parity, surfaced to the human for review."
+    }
+  ]
 }

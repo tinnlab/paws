@@ -1,13 +1,23 @@
-import { defineStore } from '@ziee/framework/store-kit'
+import { defineStore , registerLazyStore } from '@ziee/framework/store-kit'
 import { ApiClient } from '@/api-client'
 import { setUnauthorizedHandler } from '@ziee/framework/api-client/core'
+import {
+  canJoinMeRefresh,
+  invalidateMeFreshness,
+  isMeFresh,
+  meRequestEpoch,
+  noteMeLoaded,
+  shouldSkipMeFetch,
+} from '@/modules/auth/meFreshness'
 import type {
   CreateUserRequest,
   LinkAccountRequest,
   LoginRequest,
   User,
 } from '@/api-client/types'
-import { type StoreProxy, Stores } from '@ziee/framework/stores'
+import { type StoreProxy} from '@ziee/framework/stores'
+import { setAuthView, type PermissionAuthView } from '@ziee/framework/permissions'
+import { EventBus as EventBusStore } from '@ziee/framework/stores'
 
 /**
  * Map an API/login failure to safe, actionable user-facing copy.
@@ -96,7 +106,10 @@ interface AuthState {
   // Re-fetch /me and refresh the cached user/permissions/hasPassword.
   // Called after a self-service profile edit so the sidebar widget and
   // password-section visibility stay in sync without a page reload.
-  refreshCurrentUser: () => Promise<void>
+  // `force: true` bypasses the boot-freshness window and always performs the
+  // round-trip — for a caller that needs SERVER truth rather than consistency
+  // with a /me that already landed.
+  refreshCurrentUser: (opts?: { force?: boolean }) => Promise<void>
   // Silently rotate the access token via POST /api/auth/refresh (web:
   // httpOnly cookie; desktop/tunnel: in-memory body token). Returns
   // true when a fresh token landed. Registered as the api-client's
@@ -138,6 +151,9 @@ let visibilityListener: (() => void) | null = null
 // post-save refresh + visibility refetch) collapse to a single in-flight
 // /me request instead of racing.
 let refreshInFlight: Promise<void> | null = null
+// The freshness epoch `refreshInFlight` was ISSUED in, so a caller arriving
+// after a mutation does not join a pre-mutation request (see refreshCurrentUser).
+let refreshInFlightEpoch = -1
 
 // ────────────────── Silent-refresh machinery (module-scope) ──────────────────
 //
@@ -167,6 +183,10 @@ let sessionEpoch = 0
 function endSession(): void {
   sessionEpoch += 1
   stopRefreshMachinery()
+  // A local teardown wipes user/permissions with NO http call, so neither the
+  // transport nor SyncClient bumps the freshness epoch — disarm the /me window
+  // explicitly or it would stay armed over a cleared store.
+  invalidateMeFreshness()
 }
 
 // The cleared-session slice. Derived from `defaultState` so a field added
@@ -378,7 +398,7 @@ function refreshSessionImpl(): Promise<boolean> {
   return refreshSessionInFlight
 }
 
-export const Auth = defineStore('Auth', {
+const AuthDef = defineStore('Auth', {
   persist: {
     name: 'auth-storage',
     // expiresAt/expiresIn ride along with the token so a reloaded tab re-arms
@@ -585,6 +605,9 @@ export const Auth = defineStore('Auth', {
         },
 
         setAuthFromAutoLogin: (response: AutoLoginResponse) => {
+          // A whole session seeded over Tauri IPC / the tunnel path: no http call
+          // the transport could see, so disarm the /me window explicitly.
+          invalidateMeFreshness()
           // The OAuth callback flow passes a null user (the server is
           // the source of truth; initAuth() re-fetches /me right
           // after). During the gap between this set() and the
@@ -666,6 +689,18 @@ export const Auth = defineStore('Auth', {
           if (state.isLoading) {
             return
           }
+          // Boot verification now starts from the auth module's `initialize()`
+          // (bootSessionVerify), and AuthGuard's mount effect still calls this
+          // as the backstop for the paths that reach the guard WITHOUT a boot
+          // (an in-session user switch, a remount after logout). On a cold boot
+          // the guard mounts a few hundred ms after the boot call has already
+          // RESOLVED, so `isLoading` is false again and it would verify a second
+          // time. Freshness closes that: a `/me` that just landed makes this a
+          // no-op, and any logout / mutation / sync frame moves the epoch, so a
+          // genuine re-verification is never suppressed.
+          if (state.isAuthenticated && isMeFresh()) {
+            return
+          }
           set({ isLoading: true, isInitializing: true, error: null })
 
           try {
@@ -688,6 +723,8 @@ export const Auth = defineStore('Auth', {
             let lastError: unknown
             for (let attempt = 0; attempt < 3; attempt++) {
               try {
+                // Stamp the epoch BEFORE issuing — see meRequestEpoch().
+                const at = meRequestEpoch()
                 const response = await ApiClient.Auth.me(undefined, undefined)
                 set({
                   user: response.user,
@@ -697,6 +734,9 @@ export const Auth = defineStore('Auth', {
                   isLoading: false,
                   isInitializing: false,
                 })
+                // A page that mounts moments later (e.g. ProfileSettingsPage's
+                // `has_password` refresh) must not re-fetch what just landed.
+                noteMeLoaded(at)
                 return
               } catch (err) {
                 lastError = err
@@ -742,9 +782,30 @@ export const Auth = defineStore('Auth', {
           }
         },
 
-        refreshCurrentUser: async () => {
-          // Collapse concurrent callers onto one in-flight /me request.
-          if (refreshInFlight) return refreshInFlight
+        refreshCurrentUser: async (opts?: { force?: boolean }) => {
+          // Collapse concurrent callers onto one in-flight /me request — but
+          // ONLY if that request was issued in the CURRENT freshness epoch. A
+          // caller arriving after a mutation must not join a /me that started
+          // before it and receive pre-mutation data (the same guard `coalesce`
+          // applies at the transport; without it INV-1 would be half-enforced
+          // in exactly the store that reads permissions).
+          if (refreshInFlight && canJoinMeRefresh(refreshInFlightEpoch, opts?.force)) {
+            return refreshInFlight
+          }
+          // Near-miss collapse: a `/me` that landed moments ago (the boot
+          // verification) already carries exactly what this refresh would
+          // fetch. Only suppressed while NOTHING has changed since — a
+          // completed mutation or an inbound sync frame moves the freshness
+          // epoch, so the post-save refresh in `updateProfile` always runs.
+          //
+          // NOTE the contract: when suppressed this resolves IMMEDIATELY
+          // without a round-trip. That is safe precisely because the two
+          // conditions together mean the store already holds what the fetch
+          // would return, so an `await`ing caller reading `Auth.$.user` /
+          // `hasPassword` right after sees current data either way.
+          if (shouldSkipMeFetch(opts?.force)) return
+          const at = meRequestEpoch()
+          refreshInFlightEpoch = at
           refreshInFlight = (async () => {
             try {
               const response = await ApiClient.Auth.me(undefined, undefined)
@@ -753,6 +814,7 @@ export const Auth = defineStore('Auth', {
                 permissions: response.permissions,
                 hasPassword: response.has_password,
               })
+              noteMeLoaded(at)
             } finally {
               refreshInFlight = null
             }
@@ -770,7 +832,7 @@ export const Auth = defineStore('Auth', {
   init: ({ set, get: getRaw, onCleanup }) => {
     const get = getRaw as () => AuthState
 
-            const eventBus = Stores.EventBus
+            const eventBus = EventBusStore
             const GROUP = 'AuthStore'
 
             // Silent refresh: register as the api-client's on-401 handler
@@ -856,7 +918,7 @@ export const Auth = defineStore('Auth', {
             onlineListener = null
           }
           refreshFallback = null
-          Stores.EventBus.removeGroupListeners('AuthStore')
+          EventBusStore.removeGroupListeners('AuthStore')
           if (visibilityListener) {
             document.removeEventListener('visibilitychange', visibilityListener)
             visibilityListener = null
@@ -866,4 +928,13 @@ export const Auth = defineStore('Auth', {
   },
 })
 
-export const useAuthStore = Auth.store
+export const useAuthStore = AuthDef.store
+
+export const Auth = registerLazyStore(AuthDef)
+
+// Inject the Auth store into the framework permission system. The SDK's
+// permission primitives (usePermission / <Can>) read the current user +
+// flattened permissions through this seam, staying app-agnostic without any
+// global `Stores.Auth` lookup. Runs at boot (Auth.store is eagerly imported by
+// App.tsx / AuthGuard before any permission hook renders).
+setAuthView(Auth as unknown as StoreProxy<PermissionAuthView>)

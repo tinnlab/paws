@@ -73,6 +73,15 @@ pub fn user_routes() -> ApiRouter {
                 tool_call_handlers::get_tool_call_docs,
             ),
         )
+        // ITEM-17 / DEC-1: admin-gated raw reveal of one call's arguments
+        // (`mcp_servers_admin::edit` + owner-scoped).
+        .api_route(
+            "/mcp/tool-calls/{id}/reveal",
+            get_with(
+                tool_call_handlers::reveal_tool_call_arguments,
+                tool_call_handlers::reveal_tool_call_arguments_docs,
+            ),
+        )
         .api_route(
             "/mcp/servers/{id}/resources",
             get_with(runtime::list_server_resources, runtime::list_server_resources_docs),
@@ -182,6 +191,23 @@ pub fn admin_routes() -> ApiRouter {
             put_with(
                 user_policy_handlers::update_user_policy,
                 user_policy_handlers::update_user_policy_docs,
+            ),
+        )
+        // Admin per-(server, tool) approval-mode defaults (ITEM-54 / DEC-112).
+        // Path uses the `/mcp/servers/{id}` shape per spec; both handlers gate
+        // on the system-MCP admin perms and 404 on a foreign / non-system id.
+        .api_route(
+            "/mcp/servers/{id}/tool-approvals",
+            get_with(
+                tool_approvals::get_server_tool_approvals,
+                tool_approvals::get_server_tool_approvals_docs,
+            ),
+        )
+        .api_route(
+            "/mcp/servers/{id}/tool-approvals/{tool}",
+            put_with(
+                tool_approvals::set_server_tool_approval,
+                tool_approvals::set_server_tool_approval_docs,
             ),
         )
 }

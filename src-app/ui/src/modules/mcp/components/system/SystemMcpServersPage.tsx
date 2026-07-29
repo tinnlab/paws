@@ -1,14 +1,16 @@
 import { Plus, Search, Eraser } from 'lucide-react'
 import { SettingsPageContainer } from '@/modules/settings/components/SettingsPageContainer'
-import { Stores } from '@ziee/framework/stores'
 import { Can } from '@/core/permissions'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { McpServerCard } from '@/modules/mcp/components/common/McpServerCard'
 import { McpServerDrawer } from '@/modules/mcp/components/common/McpServerDrawer'
 import { McpServerGroupsAssignmentCard } from '@/modules/mcp/components/system/McpServerGroupsAssignmentCard'
 import { McpUserPolicyCard } from '@/modules/mcp/components/system/McpUserPolicyCard'
 import { Button, Card, ErrorState, Flex, Text, Input, Select, Tabs } from '@ziee/kit'
 import { ListPagination } from '@/components/common/ListPagination'
+import { SystemMcpServer } from '@/modules/mcp/stores/systemMcpServer'
+import { McpServerDrawer as McpServerDrawerStore } from '@/modules/mcp/stores/mcpServerDrawer'
+import { AppMode } from '@/modules/app/AppMode.store'
 
 export function SystemMcpServersPage() {
   const {
@@ -20,15 +22,15 @@ export function SystemMcpServersPage() {
     systemServersPageSize,
     searchTerm,
     statusFilter,
-  } = Stores.SystemMcpServer
-  const setSearchTerm = Stores.SystemMcpServer.setSearchTerm
-  const setStatusFilter = Stores.SystemMcpServer.setStatusFilter
+  } = SystemMcpServer
+  const setSearchTerm = SystemMcpServer.setSearchTerm
+  const setStatusFilter = SystemMcpServer.setStatusFilter
   // Hoisted out of the .map() below: each Stores.X.<prop> read calls
   // useEffect + useStore under the hood (proxy in core/stores.ts).
   // Inside .map() the hook count becomes a function of
   // filteredServers.length — empty on first render, N on the second
   // → "Rendered more hooks than during the previous render."
-  const { multiUserMode } = Stores.AppMode
+  const { multiUserMode } = AppMode
 
   const clearAllFilters = () => {
     setSearchTerm('')
@@ -40,11 +42,11 @@ export function SystemMcpServersPage() {
     // Reset to page 1 when the user changes page size — matches
     // UsersSettings / UserGroupsSettings behavior.
     const nextPage = size && size !== systemServersPageSize ? 1 : page
-    Stores.SystemMcpServer.loadSystemServers(nextPage, nextSize)
+    SystemMcpServer.loadSystemServers(nextPage, nextSize)
   }
 
   const handleCreateServer = () => {
-    Stores.McpServerDrawer.openMcpServerDrawer(undefined, 'create-system')
+    McpServerDrawerStore.openMcpServerDrawer(undefined, 'create-system')
   }
 
   // Server-side filtering — `systemServers` already reflects
@@ -150,7 +152,7 @@ export function SystemMcpServersPage() {
         )}
 
         {/* Servers List. The per-row GroupsAssignmentCard is hidden on
-            single-admin desktop (Stores.AppMode.multiUserMode=false)
+            single-admin desktop (AppMode.multiUserMode=false)
             because there are no user groups to assign to there. */}
         <div className="flex flex-col gap-3">
           {filteredServers.map(server => (
@@ -177,7 +179,7 @@ export function SystemMcpServersPage() {
             description="Something went wrong while loading system MCP servers."
             details={systemServersError}
             onRetry={() =>
-              Stores.SystemMcpServer.loadSystemServers(
+              SystemMcpServer.loadSystemServers(
                 systemServersPage,
                 systemServersPageSize,
               )

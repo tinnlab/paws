@@ -1,9 +1,8 @@
 import { createModule } from '@ziee/framework'
 import { User } from 'lucide-react'
 import { SettingsLayoutDef } from '@/modules/settings/SettingsLayout'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { lazyWithPreload } from '@/utils/lazyWithPreload'
-import { useProfileStore } from './stores/Profile.store'
 import './types'
 import './events'
 
@@ -19,6 +18,8 @@ export default createModule({
     version: '1.0.0',
     description: 'Self-service account profile: view, edit, change password.',
   },
+  // smart-loading gate (build-lifted into the manifest)
+  shouldLoad: (ctx) => ctx.isAuthenticated,
   dependencies: ['router'],
   routes: [
     {
@@ -32,7 +33,7 @@ export default createModule({
       layout: SettingsLayoutDef,
     },
   ],
-  stores: [{ name: 'Profile', store: useProfileStore }],
+  stores: [],
   slots: {
     settingsUserPages: [
       {

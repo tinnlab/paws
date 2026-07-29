@@ -16,11 +16,12 @@ import {
 import { Drawer } from '@/modules/layouts/app-layout/components/Drawer'
 import { useEffect, useState } from 'react'
 import { LOCAL_FILE_TYPE_OPTIONS } from '@/modules/llm-provider/constants'
-import { Stores } from '@ziee/framework/stores'
 import { usePermission } from '@/core/permissions'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { formatBytes } from '@/utils/downloadUtils'
 import { LocalLlmModelCommonFields } from '@/modules/llm-provider/components/llm-models/shared/LocalLlmModelCommonFields'
+import { LlmModelUpload } from '@/modules/llm-provider/stores/llmModelUpload'
+import { AddLocalLlmModelUploadDrawer as AddLocalLlmModelUploadDrawerStore } from '@/modules/llm-provider/stores/llmModelDrawers/addLocalLlmModelUploadDrawer'
 
 /**
  * File with metadata for display
@@ -44,8 +45,8 @@ export function AddLocalLlmModelUploadDrawer() {
   })
 
   const { uploading, uploadProgress, overallUploadProgress } =
-    Stores.LlmModelUpload
-  const { open, providerId } = Stores.AddLocalLlmModelUploadDrawer
+    LlmModelUpload
+  const { open, providerId } = AddLocalLlmModelUploadDrawerStore
   const canCreate = usePermission(Permissions.LlmModelsCreate)
 
   /**
@@ -216,7 +217,7 @@ export function AddLocalLlmModelUploadDrawer() {
   const onValid = async (values: Record<string, unknown>) => {
     try {
       setLoading(true)
-      Stores.LlmModelUpload.clearUploadError()
+      LlmModelUpload.clearUploadError()
 
       // Display name is required (there is no zod resolver on this form, so the
       // FormField `required` marker alone doesn't enforce it).
@@ -271,18 +272,18 @@ export function AddLocalLlmModelUploadDrawer() {
       }
 
       // Upload and auto-commit the files as a model in a single request
-      await Stores.LlmModelUpload.uploadLocalModel({
-        name: modelId,
-        provider_id: providerId!,
-        display_name: values.display_name as string,
-        description: values.description as string,
-        main_filename: values.main_filename as string,
-        file_format: values.file_format as string,
-        capabilities: (values.capabilities as Record<string, unknown>) || {},
-        engine_type: (values.engine_type as string) || 'mistralrs',
-        engine_settings: (values.engine_settings as Record<string, unknown>) || {},
-        files: filesToUpload,
-      })
+      await LlmModelUpload.uploadLocalModel(
+        providerId!,
+        modelId,
+        values.display_name as string,
+        values.description as string,
+        values.main_filename as string,
+        values.file_format as string,
+        (values.capabilities as Record<string, unknown>) || {},
+        (values.engine_type as string) || 'mistralrs',
+        (values.engine_settings as Record<string, unknown>) || {},
+        filesToUpload,
+      )
 
       message.success('Model uploaded successfully')
 
@@ -292,7 +293,7 @@ export function AddLocalLlmModelUploadDrawer() {
       setFilteredFiles([])
 
       // Close drawer
-      Stores.AddLocalLlmModelUploadDrawer.closeAddLocalLlmModelUploadDrawer()
+      AddLocalLlmModelUploadDrawerStore.closeAddLocalLlmModelUploadDrawer()
 
       // Note: Model will be added to provider automatically by the component's parent
       // when the drawer closes and the provider detail page refreshes
@@ -310,7 +311,7 @@ export function AddLocalLlmModelUploadDrawer() {
    * Handle upload cancellation
    */
   const handleCancelUpload = () => {
-    Stores.LlmModelUpload.cancelUpload()
+    LlmModelUpload.cancelUpload()
   }
 
   /**
@@ -328,7 +329,7 @@ export function AddLocalLlmModelUploadDrawer() {
     setSelectedFiles([])
     setFilteredFiles([])
 
-    Stores.AddLocalLlmModelUploadDrawer.closeAddLocalLlmModelUploadDrawer()
+    AddLocalLlmModelUploadDrawerStore.closeAddLocalLlmModelUploadDrawer()
   }
 
   // Update filtered files when format changes

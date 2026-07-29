@@ -6,7 +6,6 @@ import type { MenuItem } from '@ziee/kit'
 import { useWindowMinSize } from '@/modules/layouts/app-layout/hooks/useWindowMinSize'
 import { SidebarHeaderSpacer } from '@/modules/layouts/app-layout/components/SidebarHeaderSpacer'
 import { SidebarSectionTitle } from '@/components/common/SidebarSectionTitle'
-import { Stores } from '@ziee/framework/stores'
 import { LazyComponentRenderer } from '@/core/components/LazyComponentRenderer'
 import { evaluatePermission } from '@/core/permissions'
 import type {
@@ -14,6 +13,9 @@ import type {
   SidebarToolItem,
   SidebarActionItem,
 } from '@/modules/layouts/app-layout/types'
+import { AppLayout as AppLayoutStore } from '@/modules/layouts/app-layout/appLayout'
+import { Auth } from '@/modules/auth/Auth.store'
+import { ModuleSystem } from '@ziee/framework/stores'
 
 /**
  * Split a group's active state into the EXACT current page vs. a broader
@@ -65,9 +67,9 @@ export function LeftSidebar({ rootStyle, rootClassName }: LeftSidebarProps = {})
   const navigate = useNavigate()
   const location = useLocation()
   const windowMinSize = useWindowMinSize()
-  const { slots } = Stores.ModuleSystem
-  const { isSidebarCollapsed } = Stores.AppLayout
-  const { user, permissions } = Stores.Auth
+  const { slots } = ModuleSystem
+  const { isSidebarCollapsed } = AppLayoutStore
+  const { user, permissions } = Auth
 
   const isAllowed = (item: { permission?: SidebarNavItem['permission'] }) =>
     !item.permission || evaluatePermission(user, permissions, item.permission)
@@ -151,7 +153,7 @@ export function LeftSidebar({ rootStyle, rootClassName }: LeftSidebarProps = {})
   // tap on the new page. Collapse first (closing the Sheet cleanly) before we
   // navigate. No-op on desktop where the sidebar is persistent.
   const navTo = (path: string) => {
-    if (windowMinSize.xs) Stores.AppLayout.setSidebarCollapsed(true)
+    if (windowMinSize.xs) AppLayoutStore.setSidebarCollapsed(true)
     navigate(path)
   }
 

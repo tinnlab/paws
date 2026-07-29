@@ -1,14 +1,8 @@
 import { Bot } from 'lucide-react'
 import { createModule } from '@ziee/framework'
-import { useAssistantDrawerStore } from '@/modules/assistant/components/AssistantDrawer.store'
-import {
-  useAssistantPickerStore,
-  useTemplateAssistantsStore,
-  useUserAssistantsStore,
-} from '@/modules/assistant/stores'
 import { SettingsLayoutDef } from '@/modules/settings/SettingsLayout'
 import '@/modules/assistant/types'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { lazyWithPreload } from '@/utils/lazyWithPreload'
 import '@/modules/settings/types/SettingsSlots' // Register settings slot types
 
@@ -30,6 +24,8 @@ export default createModule({
     description:
       'AI Assistants module for managing user and template assistants',
   },
+  // smart-loading gate (build-lifted into the manifest)
+  shouldLoad: (ctx) => ctx.isAuthenticated,
   dependencies: ['router'],
   routes: [
     {
@@ -48,22 +44,6 @@ export default createModule({
     },
   ],
   stores: [
-    {
-      name: 'UserAssistants',
-      store: useUserAssistantsStore,
-    },
-    {
-      name: 'TemplateAssistants',
-      store: useTemplateAssistantsStore,
-    },
-    {
-      name: 'AssistantDrawer',
-      store: useAssistantDrawerStore,
-    },
-    {
-      name: 'AssistantPicker',
-      store: useAssistantPickerStore,
-    },
   ],
   slots: {
     settingsUserPages: [

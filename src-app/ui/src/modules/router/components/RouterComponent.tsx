@@ -1,4 +1,4 @@
-import type { ComponentType, ReactNode } from 'react'
+import { Suspense, useEffect, useState, type ComponentType, type ReactNode } from 'react'
 import {
   BrowserRouter,
   Routes,
@@ -6,9 +6,12 @@ import {
   Navigate,
   Outlet,
   Link,
+  useLocation,
 } from 'react-router-dom'
 import { Button, Result } from '@ziee/kit'
-import { Stores } from '@ziee/framework/stores'
+import { ModuleSystem } from '@ziee/framework/stores'
+import { useRoutesStore } from '@/modules/router/stores/routes-store'
+import { ensureModuleForPath, isPathModulePending, isPathModuleForbidden, revalidateForPath } from '@/modules/loader'
 import { LazyComponentRenderer } from '@/core/components/LazyComponentRenderer'
 import { Loading } from '@/core/components/Loading'
 import { usePermission } from '@/core/permissions'
@@ -20,6 +23,23 @@ import type { LayoutDefinition, RouteConfig } from '@/modules/router/types'
  * of the route element when the current user fails the route's
  * `permission` expression — URL and layout stay intact.
  */
+/** The inline router-level 403 panel (URL + layout stay intact). */
+function ForbiddenResult() {
+  return (
+    <Result
+      data-testid="router-route-forbidden-result"
+      status="403"
+      title="Not authorized"
+      subtitle="You don't have permission to view this page."
+      extra={
+        <Link to="/">
+          <Button data-testid="router-403-back-home-btn" variant="default">Back to home</Button>
+        </Link>
+      }
+    />
+  )
+}
+
 function RoutePermissionGate({
   permission,
   children,
@@ -28,21 +48,7 @@ function RoutePermissionGate({
   children: ReactNode
 }) {
   const allowed = usePermission(permission)
-  if (!allowed) {
-    return (
-      <Result
-        data-testid="router-route-forbidden-result"
-        status="403"
-        title="Not authorized"
-        subtitle="You don't have permission to view this page."
-        extra={
-          <Link to="/">
-            <Button data-testid="router-403-back-home-btn" variant="default">Back to home</Button>
-          </Link>
-        }
-      />
-    )
-  }
+  if (!allowed) return <ForbiddenResult />
   return <>{children}</>
 }
 
@@ -79,8 +85,70 @@ function renderRouteElement(route: RouteConfig<any>) {
  * - Wraps protected routes with the registered `routeGuards`
  * - Renders routes with their layouts
  */
+/**
+ * Route-driven safety net (smart loading): on navigation to a path no
+ * currently-registered module owns, load the manifest module that DOES own it
+ * (a deep-link that arrives before the reactive load wave, or a page whose
+ * predicate hasn't fired). No-op when a loaded module already owns the path or
+ * nothing in the manifest matches (a genuine 404). The freshly-registered
+ * module's routes appear reactively, so the route resolves on the next render.
+ */
+function RouteModuleLoader() {
+  const location = useLocation()
+  useEffect(() => {
+    // ensureModuleForPath: load the module that OWNS this route (deep-link net).
+    // revalidateForPath: re-evaluate shouldLoad against the new path so
+    // location-scoped modules that own no route load on arrival. NOTE: this
+    // effect is held while a lazy route suspends the transition, so a page whose
+    // OWN content comes from location-scoped modules also calls revalidateForPath
+    // from its own mount effect (see HubPage).
+    void ensureModuleForPath(location.pathname)
+    revalidateForPath(location.pathname)
+  }, [location.pathname])
+  return null
+}
+
+/**
+ * Fallback element for the `*` route (smart loading). A hard-reload / bookmark
+ * straight onto a lazy-module route arrives BEFORE that module's reactive load
+ * wave, so no route matches yet and this `*` branch is hit. Redirecting here
+ * (the old behavior) discarded the deep-link. Instead: if an eligible manifest
+ * module OWNS this path and is still loading, render a spinner and WAIT — the
+ * module's routes appear on the next render (routes-store update re-renders the
+ * router) and the real route takes over. Only redirect once the path is settled
+ * with no match (a genuine 404) — or after a bounded timeout guards against a
+ * failed chunk load spinning forever.
+ */
+function RouteFallback({ children }: { children: ReactNode }) {
+  const location = useLocation()
+  // Re-render when routes change (a module registering its routes flows through
+  // useRoutesStore in the parent) — this component reads the parent's render.
+  const pending = isPathModulePending(location.pathname)
+  // A real route the user LACKS permission for: its owning module is deliberately
+  // NOT loaded (the ensureModuleForPath security guard — the gated code is never
+  // delivered), so no route ever matches. Render the in-place 403 here (URL
+  // preserved) rather than redirecting home, so an unauthorized deep-link keeps
+  // its address and explains itself.
+  const forbidden = isPathModuleForbidden(location.pathname)
+  const [timedOut, setTimedOut] = useState(false)
+
+  useEffect(() => {
+    setTimedOut(false)
+    if (!pending) return
+    // Safety net: a failed module load leaves the path "pending" forever
+    // (its name is removed from `loaded` on error). Bound the wait so a broken
+    // chunk redirects home instead of spinning indefinitely.
+    const t = setTimeout(() => setTimedOut(true), 10000)
+    return () => clearTimeout(t)
+  }, [location.pathname, pending])
+
+  if (pending && !timedOut) return <Loading fullscreen />
+  if (forbidden) return <ForbiddenResult />
+  return <>{children}</>
+}
+
 export function RouterComponent() {
-  const { routes } = Stores.Routes
+  const routes = useRoutesStore(s => s.routes) as RouteConfig<any>[]
 
   // Group routes by auth requirement
   const protectedRoutes = routes.filter(r => r.requiresAuth)
@@ -107,7 +175,7 @@ export function RouterComponent() {
     })
 
     return Array.from(routesByLayout.entries()).map(
-      ([layoutDef, layoutRoutes]) => {
+      ([layoutDef, layoutRoutes], layoutIdx) => {
         if (!layoutDef) {
           // No layout - render routes directly
           return layoutRoutes.map(route => (
@@ -120,16 +188,21 @@ export function RouterComponent() {
           ))
         }
 
-        // Render layout with nested routes
+        // Render layout with nested routes. The layout `component` may be a
+        // React.lazy ref (layout shells are lazily loaded so referencing a
+        // LayoutDefinition doesn't pull the shell into boot) — wrap in Suspense.
+        // `layoutIdx` keys it because a lazy component has no stable `.name`.
         const LayoutComponent = layoutDef.component
 
         return (
           <Route
-            key={layoutDef.component.name || 'layout'}
+            key={`layout-${layoutIdx}`}
             element={
-              <LayoutComponent>
-                <Outlet />
-              </LayoutComponent>
+              <Suspense fallback={<Loading fullscreen />}>
+                <LayoutComponent>
+                  <Outlet />
+                </LayoutComponent>
+              </Suspense>
             }
           >
             {layoutRoutes.map(route => (
@@ -153,12 +226,12 @@ export function RouterComponent() {
   // work in a useEffect. Used by e.g. the onboarding module to handle
   // its own redirect logic without auth or router needing to know
   // about it.
-  const routerEffects = (Stores.ModuleSystem.slots.get('routerEffects') ||
+  const routerEffects = (ModuleSystem.slots.get('routerEffects') ||
     []) as Array<{ id: string; component: ComponentType }>
 
   // Route guards contributed by features (auth fills this). The router owns
   // the slot type and composes the guards; it does NOT import any guard.
-  const guards = (Stores.ModuleSystem.slots.get('routeGuards') ||
+  const guards = (ModuleSystem.slots.get('routeGuards') ||
     []) as Array<{ id: string; component: ComponentType<{ children: ReactNode }> }>
 
   if (guards.length === 0 && protectedRoutes.length > 0) {
@@ -183,6 +256,7 @@ export function RouterComponent() {
 
   return (
     <BrowserRouter>
+      <RouteModuleLoader />
       {routerEffects.map(({ id, component: Effect }) => (
         <Effect key={id} />
       ))}
@@ -197,8 +271,17 @@ export function RouterComponent() {
         {/* Public routes */}
         {renderRoutesForLayoutGroup(publicRoutes)}
 
-        {/* Fallback route (same guard so unknown deep links hit login) */}
-        <Route path="*" element={guardProtected(<Navigate to="/" replace />)} />
+        {/* Fallback route (same guard so unknown deep links hit login). Wrapped
+            in RouteFallback so a deep-link onto a not-yet-loaded lazy-module
+            route WAITS for that module instead of being redirected away. */}
+        <Route
+          path="*"
+          element={guardProtected(
+            <RouteFallback>
+              <Navigate to="/" replace />
+            </RouteFallback>,
+          )}
+        />
       </Routes>
     </BrowserRouter>
   )

@@ -6,6 +6,7 @@ import {
   createModelViaAPI,
   assignProviderToAdministratorsGroup,
 } from '../../common/provider-helpers'
+import { byTestId } from '../testid'
 
 /**
  * An untitled conversation must be labelled by what the USER actually asked,
@@ -129,10 +130,26 @@ test.describe('untitled conversation display label', () => {
     await page.goto(`${baseURL}/chats`)
     await page.reload()
 
+    // At 390px the left sidebar is NOT inline — it is an overlay Sheet that
+    // starts closed (see settings/mobile-sidebar-mask.spec.ts), so the recent-
+    // conversations rows are not in the DOM until it is opened. Open it first;
+    // otherwise this asserts on a row mobile deliberately hides.
+    await byTestId(page, 'layout-sidebar-toggle-button').click()
+    await expect(byTestId(page, 'app-sidebar')).toBeVisible({ timeout: 10000 })
+
     const row = recentRow(page, id)
     await expect(row).toBeVisible()
 
-    // The row must clip its label, not widen the page.
+    // The row must CLIP its label rather than grow: its right edge stays within
+    // the 390px viewport…
+    const box = await row.boundingBox()
+    expect(box, 'the recent-conversations row must have a layout box').not.toBeNull()
+    expect(
+      box!.x + box!.width,
+      'the row must not extend past the 390px viewport',
+    ).toBeLessThanOrEqual(391)
+
+    // …and the page itself still must not scroll horizontally.
     const overflows = await page.evaluate(() => {
       const el = document.scrollingElement!
       return el.scrollWidth > el.clientWidth + 1
@@ -163,11 +180,25 @@ test.describe('untitled conversation display label', () => {
       firstMessage: 'an unrelated question about protein folding',
     })
 
-    await page.goto(`${baseURL}/chats/${other}`)
+    // The PaneManagerDrawer is a SMALL-SCREEN affordance. In ConversationPage
+    // the "Panes" button is branched on `useWindowMinSize().md` (≤ 768px): only
+    // there does it open the drawer — on a wide viewport the same button calls
+    // `onSplit` and tiles another pane instead, so the drawer never mounts.
+    // Drive the drawer at a narrow viewport, set BEFORE navigating so the first
+    // render already takes the small-screen branch.
+    await page.setViewportSize({ width: 390, height: 844 })
+    await page.goto(`${baseURL}/chat/${other}`)
     await page.getByTestId('chat-split-btn').click()
-    await expect(page.getByTestId('pane-manager-drawer')).toBeVisible()
+    await expect(page.getByTestId('pane-manager-drawer')).toBeVisible({
+      timeout: 10000,
+    })
 
-    const search = page.getByTestId('pane-manager-search').getByRole('textbox')
+    // The testid is ON the <input> itself, not a wrapper: the kit `Input`
+    // spreads `...props` (hence `data-testid`) onto the underlying InputBase,
+    // and only the prefix/suffix adornments get an extra wrapping <div>. So
+    // `.getByRole('textbox')` here searched INSIDE the input and matched
+    // nothing — the testid already IS the textbox.
+    const search = page.getByTestId('pane-manager-search')
 
     // Findable by what the user actually asked.
     await search.fill('TP53')
@@ -191,7 +222,7 @@ test.describe('untitled conversation display label', () => {
     const modelId = await seedModel(apiURL, token)
     const id = await seedConversation(apiURL, token, modelId, { firstMessage: PREVIEW })
 
-    await page.goto(`${baseURL}/chats/${id}`)
+    await page.goto(`${baseURL}/chat/${id}`)
 
     // The header is the EDIT affordance, so it deliberately shows the honest
     // placeholder rather than a derived label that would imply a title exists.

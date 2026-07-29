@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { X, Download, RotateCw } from 'lucide-react'
 import { Badge, Button, Flex, Popover, Tooltip, message } from '@ziee/kit'
-import { Stores } from '@ziee/framework/stores'
 import { DownloadItem } from '@/modules/llm-provider/components/downloads/DownloadItem'
 import { useHubModelDownloadGate } from '@/modules/hub/modules/llm-models/hooks/useHubModelDownloadGate'
 import type {
@@ -9,6 +8,8 @@ import type {
   DownloadFromRepositoryRequest,
   FileFormat,
 } from '@/api-client/types'
+import { LlmModelDownload } from '@/modules/llm-provider/stores/llmModelDownload'
+import { HubModels } from '@/modules/hub/modules/llm-models/stores/hub-models-store'
 
 /**
  * Rebuild a `DownloadFromRepositoryRequest` from a failed
@@ -66,7 +67,7 @@ function buildRetryRequest(
 }
 
 export function DownloadIndicatorWidget() {
-  const { downloads } = Stores.LlmModelDownload
+  const { downloads } = LlmModelDownload
   // Same gating used by the hub model card. Sharing this means the
   // Retry button surfaces the same Repository Disabled / Auth Required
   // / Cannot Connect modals the user would see clicking Retry from the
@@ -112,7 +113,7 @@ export function DownloadIndicatorWidget() {
     // toast carries the backend's error message.
     const repoPath = d.request_data.repository_path
     // Snapshot via `.$` — `handleRetry` is an event handler,
-    // not a render path. The bare `Stores.HubModels.models` proxy
+    // not a render path. The bare `HubModels.models` proxy
     // would call React hooks outside render. See
     // `feedback_stores_state_in_handlers` in project memory.
     // v2 Phase 7: walk every source's identifier (the source
@@ -120,7 +121,7 @@ export function DownloadIndicatorWidget() {
     // the download path; matching against ALL of them lets a model
     // with multiple sources still be detected on retry).
     const hubModel = repoPath
-      ? Stores.HubModels.$.models.find(m =>
+      ? HubModels.$.models.find(m =>
           (m.sources ?? []).some(s => s.identifier === repoPath),
         )
       : undefined
@@ -139,7 +140,7 @@ export function DownloadIndicatorWidget() {
         return
       }
       try {
-        await Stores.HubModels.downloadModelFromHub(
+        await HubModels.downloadModelFromHub(
           hubModel.name,
           d.provider_id,
           d.request_data.display_name ?? hubModel.display_name,
@@ -150,7 +151,7 @@ export function DownloadIndicatorWidget() {
         // popover briefly shows two rows but that's a UX nit, not a
         // data-loss bug — the new download supersedes visually.
         try {
-          await Stores.LlmModelDownload.deleteLlmModelDownload(d.id)
+          await LlmModelDownload.deleteLlmModelDownload(d.id)
         } catch {
           // ignore — the new download visually supersedes anyway
         }
@@ -174,9 +175,9 @@ export function DownloadIndicatorWidget() {
       return
     }
     try {
-      await Stores.LlmModelDownload.downloadLlmModelFromRepository(req)
+      await LlmModelDownload.downloadLlmModelFromRepository(req)
       try {
-        await Stores.LlmModelDownload.deleteLlmModelDownload(d.id)
+        await LlmModelDownload.deleteLlmModelDownload(d.id)
       } catch {
         // ignore — new download visually supersedes
       }
@@ -190,7 +191,7 @@ export function DownloadIndicatorWidget() {
 
   const handleClear = async (d: DownloadInstance) => {
     try {
-      await Stores.LlmModelDownload.deleteLlmModelDownload(d.id)
+      await LlmModelDownload.deleteLlmModelDownload(d.id)
     } catch (error) {
       message.error(
         error instanceof Error ? error.message : 'Failed to clear download',

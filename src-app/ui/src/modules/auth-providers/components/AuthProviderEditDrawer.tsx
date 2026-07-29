@@ -18,15 +18,12 @@ import {
   dialog,
 } from '@ziee/kit'
 import { Drawer } from '@/modules/layouts/app-layout/components/Drawer'
-import {
-  Permissions,
-  type AuthProviderResponse,
-  type TestProviderResponse,
-} from '@/api-client/types'
-import { Stores } from '@ziee/framework/stores'
+import { type AuthProviderResponse, type TestProviderResponse } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { Can } from '@/core/permissions/Can'
 import { usePermission } from '@/core/permissions/usePermission'
 import type { ProviderTemplate } from '../types'
+import { AuthProvidersAdmin } from '@/modules/auth-providers/stores/authProvidersAdmin'
 
 /**
  * Drawer mode: either create-from-template (no `existing` row, has
@@ -127,7 +124,7 @@ export function AuthProviderEditDrawer({
     resolver: zodResolver(formSchema),
     defaultValues: { name: '', enabled: false, config: {} },
   })
-  const { saving, error } = Stores.AuthProvidersAdmin
+  const { saving, error } = AuthProvidersAdmin
   const canManage = usePermission(Permissions.AuthProvidersManage)
   const [testing, setTesting] = useState(false)
   // Distinct from `testing` (the manual "Test config" button's
@@ -178,7 +175,7 @@ export function AuthProviderEditDrawer({
       if (!valid) return
       const values = form.getValues() as FormShape
       const normalized = normalizeConfig(values.config, providerType)
-      const res = await Stores.AuthProvidersAdmin.testConfig({
+      const res = await AuthProvidersAdmin.testConfig({
         name: values.name.trim(),
         provider_type: providerType,
         enabled: false,
@@ -218,7 +215,7 @@ export function AuthProviderEditDrawer({
         }
         const values = form.getValues() as FormShape
         const normalized = normalizeConfig(values.config, providerType)
-        const res = await Stores.AuthProvidersAdmin.testConfig({
+        const res = await AuthProvidersAdmin.testConfig({
           name: values.name.trim(),
           provider_type: providerType,
           enabled: false,
@@ -255,7 +252,7 @@ export function AuthProviderEditDrawer({
       const normalized = normalizeConfig(values.config, providerType)
       form.setValue('enabled', true)
       try {
-        await Stores.AuthProvidersAdmin.updateProvider(existing.id, {
+        await AuthProvidersAdmin.updateProvider(existing.id, {
           name: values.name.trim(),
           enabled: true,
           config: normalized,
@@ -283,7 +280,7 @@ export function AuthProviderEditDrawer({
     const normalized = normalizeConfig(values.config, providerType)
     try {
       if (template) {
-        const provider = await Stores.AuthProvidersAdmin.createProvider({
+        const provider = await AuthProvidersAdmin.createProvider({
           name: values.name.trim(),
           provider_type: providerType,
           enabled: values.enabled,
@@ -301,7 +298,7 @@ export function AuthProviderEditDrawer({
           message.success(`Created ${values.name.trim()}`)
         }
       } else if (existing) {
-        await Stores.AuthProvidersAdmin.updateProvider(existing.id, {
+        await AuthProvidersAdmin.updateProvider(existing.id, {
           name: values.name.trim(),
           enabled: values.enabled,
           config: normalized,

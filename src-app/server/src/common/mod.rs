@@ -1,6 +1,8 @@
+pub mod embedded;
 pub mod macros;
 pub mod secret;
 pub mod tokens;
+pub mod tool_args;
 pub mod r#type;
 pub mod types;
 

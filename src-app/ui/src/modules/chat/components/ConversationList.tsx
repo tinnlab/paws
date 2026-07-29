@@ -3,14 +3,15 @@ import { createPortal } from 'react-dom'
 import type { OverlayScrollbarsComponentRef } from 'overlayscrollbars-react'
 import { Card, Button, Text, Empty, ErrorState, Flex, Confirm, Input, message } from '@ziee/kit'
 import { usePermission } from '@/core/permissions'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { CircleX, Search as SearchIcon, Trash2 } from 'lucide-react'
-import { Stores } from '@ziee/framework/stores'
 import { ConversationCard } from '@/modules/chat/components/ConversationCard'
 import { VirtualizedConversationList } from '@/modules/chat/components/VirtualizedConversationList'
 import type { ConversationResponse } from '@/api-client/types'
 import { DivScrollY } from '@/components/common/DivScrollY'
 import { cn } from '@/lib/utils'
+import { AppLayout } from '@/modules/layouts/app-layout/appLayout'
+import { ChatHistory } from '@/modules/chat/stores/chatHistory'
 
 
 interface ConversationListProps {
@@ -38,7 +39,7 @@ export function ConversationList({ getSearchBoxContainer }: ConversationListProp
   const [, forceRender] = useState({})
   const [localSearchQuery, setLocalSearchQuery] = useState('')
   const canDelete = usePermission(Permissions.ConversationsDelete)
-  const { nativeScroll } = Stores.AppLayout
+  const { nativeScroll } = AppLayout
 
   // Row virtualization (chats-page-virtualization ITEM-4): the card list scrolls
   // inside this OverlayScrollbars viewport on desktop. Resolve its root element
@@ -64,7 +65,7 @@ export function ConversationList({ getSearchBoxContainer }: ConversationListProp
     total,
     isInitialized,
     error,
-  } = Stores.ChatHistory
+  } = ChatHistory
 
   // Force a second render when getSearchBoxContainer is provided to ensure container is available
   useEffect(() => {
@@ -73,31 +74,62 @@ export function ConversationList({ getSearchBoxContainer }: ConversationListProp
     }
   }, [getSearchBoxContainer])
 
-  // Debounce search query
+  // Debounce search query.
+  //
+  // Skip the NO-OP case. This effect also runs on mount, where `localSearchQuery`
+  // is `''` and the store's `searchQuery` is normally `''` too — and
+  // `setSearchQuery` unconditionally issues `loadConversations(1)`, so that mount
+  // pass fired a second full page-1 refetch ~500 ms after the page's own, on every
+  // cold `/chats` load (measured: it was request #3 of 3; see
+  // `.lifecycle/chat-boot-fetch-hygiene/MEASUREMENTS.md`).
+  //
+  // Comparing against the store rather than "is it the first run" is what keeps
+  // the real reconciliations working: the user clearing a query back to `''`
+  // still differs from the store's `'x'` and still fires, and remounting the list
+  // while the store holds a stale query still resets it to match the (empty)
+  // input the user can see.
+  //
+  // Be precise about what is skipped: `setSearchQuery` is NOT a pure setter — it
+  // unconditionally issues `loadConversations(1)`. So an equal→equal pass now
+  // suppresses a REFETCH, not merely a redundant assignment. The one behaviour
+  // that changes is a same-value round trip ('a' → 'ab' → 'a'), which previously
+  // re-fetched and now does not; after a FAILED load that path no longer
+  // self-heals, and the user takes the ErrorState's explicit Retry instead.
+  //
+  // `.$` is the NON-subscribing snapshot — a reactive proxy read is a hook and is
+  // illegal outside render.
   useEffect(() => {
+    if (localSearchQuery === ChatHistory.$.searchQuery) return
+
     const timeoutId = setTimeout(() => {
-      Stores.ChatHistory.setSearchQuery(localSearchQuery)
+      ChatHistory.setSearchQuery(localSearchQuery)
     }, 500)
 
     return () => clearTimeout(timeoutId)
   }, [localSearchQuery])
 
-  // Load conversations on mount — always re-fetch, not guarded by
-  // `isInitialized`. This `/chats` list owns its own `conversations` fetch
-  // (the sidebar's RecentConversationsWidget now loads a SEPARATE
-  // `recentConversations` cursor, so it no longer seeds this list). If
-  // conversations are created later (by another tab, an MCP tool, or — in the
-  // E2E suite — a test that seeds before navigating here), the dedicated
-  // `/chats` page must show them. `loadConversations` already dedupes
-  // concurrent calls via its internal `loading/loadingMore` in-flight check,
-  // so an unconditional refetch is safe.
-  useEffect(() => {
-    Stores.ChatHistory.loadConversations()
-  }, [])
+  // NO load-on-mount here — `ChatHistoryPage` is the SINGLE OWNER of the
+  // route-level `conversations` fetch (see its mount effect). This component has
+  // exactly one production consumer, that page, and the page renders it only once
+  // `conversations`/`loading`/`error`/`hasSearch` is truthy — every one of which
+  // is a CONSEQUENCE of a load. So a mount fetch here could never be the first
+  // caller; it could only ever be a redundant second one.
+  //
+  // And it was not free. `loadConversations`' in-flight guard does not drop a
+  // duplicate page-1 call — it sets `reloadQueued`, and the queued load is
+  // REPLAYED once the first settles. A replay that starts after the first request
+  // completed is not concurrent, so the transport's in-flight coalescer cannot
+  // merge it: it landed as a third, serial `GET /api/conversations` on every cold
+  // `/chats` load (measured 3 → 2; see
+  // `.lifecycle/chat-boot-fetch-hygiene/MEASUREMENTS.md`).
+  //
+  // Guarded by `tests/e2e/perf/chats-list-single-fetch.spec.ts`: TEST-1 fails if a
+  // second owner is reintroduced, TEST-2/TEST-3 fail if removing it cost the page
+  // its data or its pick-up of conversations created after the store was primed.
 
   const handleLoadMore = async () => {
     try {
-      await Stores.ChatHistory.loadNextPage()
+      await ChatHistory.loadNextPage()
     } catch (error) {
       console.error('Failed to load more conversations:', error)
     }
@@ -105,7 +137,7 @@ export function ConversationList({ getSearchBoxContainer }: ConversationListProp
 
   const handleDeleteSelected = async () => {
     try {
-      await Stores.ChatHistory.bulkDelete()
+      await ChatHistory.bulkDelete()
       message.success(`${selectedIds.size} conversations deleted successfully`)
     } catch (error) {
       console.error('Failed to delete selected conversations:', error)
@@ -115,11 +147,11 @@ export function ConversationList({ getSearchBoxContainer }: ConversationListProp
   // Stable across renders so the memoized row card (MemoConversationCard) can
   // skip re-rendering unchanged rows on every scroll-driven virtualizer update.
   const handleToggleSelection = useCallback((id: string) => {
-    Stores.ChatHistory.toggleSelection(id)
+    ChatHistory.toggleSelection(id)
   }, [])
 
   const handleDeleteConversation = useCallback(async (id: string) => {
-    await Stores.ChatHistory.deleteConversation(id)
+    await ChatHistory.deleteConversation(id)
   }, [])
 
   // The list is the server-filtered/sorted result set directly.
@@ -172,13 +204,13 @@ export function ConversationList({ getSearchBoxContainer }: ConversationListProp
                   <Button
                     data-testid="chat-bulk-deselect-btn"
                     icon={<CircleX />}
-                    onClick={() => Stores.ChatHistory.deselectAll()}
+                    onClick={() => ChatHistory.deselectAll()}
                   >
                     Deselect All
                   </Button>
                   <Button
                     data-testid="chat-bulk-select-all-btn"
-                    onClick={() => Stores.ChatHistory.selectAll()}
+                    onClick={() => ChatHistory.selectAll()}
                   >
                     Select All
                   </Button>
@@ -218,7 +250,7 @@ export function ConversationList({ getSearchBoxContainer }: ConversationListProp
                     resource="chat history"
                     description="Your chat history couldn't be loaded. Check your connection and try again."
                     details={error}
-                    onRetry={() => Stores.ChatHistory.loadConversations()}
+                    onRetry={() => ChatHistory.loadConversations()}
                     data-testid="chat-history-error"
                   />
                 </div>

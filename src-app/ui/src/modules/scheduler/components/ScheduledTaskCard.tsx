@@ -5,6 +5,7 @@ import {
   MoreHorizontal,
   Pencil,
   Play,
+  Repeat,
   Trash2,
 } from 'lucide-react'
 import { useState } from 'react'
@@ -27,7 +28,6 @@ import {
   Title,
   Tooltip,
 } from '@ziee/kit'
-import { Stores } from '@ziee/framework/stores'
 import { cn } from '@/lib/utils'
 
 import {
@@ -39,6 +39,8 @@ import {
 } from './runTimeline'
 import { humanizeCron } from './scheduleCron'
 import { skippedToolsNote } from './skippedToolsNote'
+import { SchedulerDrawer } from '@/modules/scheduler/stores/schedulerDrawer'
+import { ScheduledTasks } from '@/modules/scheduler/stores/scheduledTasks'
 
 /** Store mutations don't surface their own errors (no error state), so the UI
  *  layer toasts a rejected action rather than swallowing it. */
@@ -50,10 +52,36 @@ function targetSummary(t: ScheduledTask): string {
 }
 
 function scheduleSummary(t: ScheduledTask): string {
+  if (t.schedule_kind === 'self_paced') {
+    // A self-paced "loop" (/loop) carries neither run_at nor cron — after each
+    // firing the model proposes its own next cadence, so there is no fixed cron
+    // "next run" to show. Describe the loop semantics instead.
+    return 'Self-paced loop — runs, then decides its own next check'
+  }
   if (t.schedule_kind === 'once') {
     return t.run_at ? `Once at ${new Date(t.run_at).toLocaleString()}` : 'Once'
   }
   return `${humanizeCron(t.cron_expr ?? '')} (${t.timezone})`
+}
+
+/**
+ * The status line under the schedule summary. A self-paced loop phrases its
+ * upcoming firing as a model-chosen "next check" (and reads "finished" once it
+ * self-stops, `paused_reason === 'completed'`); a scheduled task keeps the cron
+ * "Next: …" wording. `last_status` is appended when known.
+ */
+function nextRunLine(t: ScheduledTask): string {
+  if (t.schedule_kind === 'self_paced') {
+    if (t.paused_reason === 'completed') return 'Loop finished'
+    const base = t.next_run_at
+      ? `Next check: ${new Date(t.next_run_at).toLocaleString()}`
+      : 'Deciding its next check'
+    return t.last_status ? `${base} · Last: ${t.last_status}` : base
+  }
+  const base = t.next_run_at
+    ? `Next: ${new Date(t.next_run_at).toLocaleString()}`
+    : 'No upcoming run'
+  return t.last_status ? `${base} · Last: ${t.last_status}` : base
 }
 
 type NavigateFn = (to: string) => void
@@ -84,7 +112,7 @@ function runActionItems(
       disabled: a.openThread === 'disabled',
       onClick: () => {
         if (a.threadConversationId)
-          navigate(`/conversations/${a.threadConversationId}`)
+          navigate(`/chat/${a.threadConversationId}`)
       },
     })
   }
@@ -93,8 +121,8 @@ function runActionItems(
     label: a.forkLabel,
     onClick: async () => {
       try {
-        const conversationId = await Stores.ScheduledTasks.continueRun(run.id)
-        if (conversationId) navigate(`/conversations/${conversationId}`)
+        const conversationId = await ScheduledTasks.continueRun(run.id)
+        if (conversationId) navigate(`/chat/${conversationId}`)
       } catch (e) {
         notifyError(e, 'Failed to open the conversation')
       }
@@ -228,11 +256,11 @@ function SeriesChooser({
   const navigate = useNavigate()
   const start = async (limit: number) => {
     try {
-      const conversationId = await Stores.ScheduledTasks.continueSeries(
+      const conversationId = await ScheduledTasks.continueSeries(
         task.id,
         limit,
       )
-      if (conversationId) navigate(`/conversations/${conversationId}`)
+      if (conversationId) navigate(`/chat/${conversationId}`)
     } catch (e) {
       notifyError(e, 'Failed to start the discussion')
     }
@@ -270,17 +298,20 @@ export function ScheduledTaskCard({ task }: { task: ScheduledTask }) {
   const [expanded, setExpanded] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
-  const runs = Stores.ScheduledTasks.runsByTask[task.id]
-  const meta = Stores.ScheduledTasks.runsMetaByTask[task.id]
+  const runs = ScheduledTasks.runsByTask[task.id]
+  const meta = ScheduledTasks.runsMetaByTask[task.id]
   const total = meta?.total ?? runs?.length ?? 0
   const page = meta?.page ?? 1
   const perPage = meta?.perPage ?? RUNS_PAGE_SIZE
   const threadActions = followupActions(task)
+  // A self-paced "loop" (/loop) vs a cron/once scheduled task — drives the Loop
+  // badge, the "next check" wording, and the in-context conversation link.
+  const isSelfPaced = task.schedule_kind === 'self_paced'
 
   const toggleRuns = () => {
     const next = !expanded
     setExpanded(next)
-    if (next && !runs) void Stores.ScheduledTasks.loadRuns(task.id, 1)
+    if (next && !runs) void ScheduledTasks.loadRuns(task.id, 1)
   }
 
   return (
@@ -308,7 +339,7 @@ export function ScheduledTaskCard({ task }: { task: ScheduledTask }) {
             checked={task.enabled}
             onCheckedChange={async v => {
               try {
-                await Stores.ScheduledTasks.setEnabled(task.id, v)
+                await ScheduledTasks.setEnabled(task.id, v)
               } catch (e) {
                 notifyError(e, 'Failed to update the task')
               }
@@ -340,7 +371,7 @@ export function ScheduledTaskCard({ task }: { task: ScheduledTask }) {
                   onClick={() => {
                     if (threadActions.threadConversationId)
                       navigate(
-                        `/conversations/${threadActions.threadConversationId}`,
+                        `/chat/${threadActions.threadConversationId}`,
                       )
                   }}
                 />
@@ -355,7 +386,7 @@ export function ScheduledTaskCard({ task }: { task: ScheduledTask }) {
                 aria-label="Run now"
                 onClick={async () => {
                   try {
-                    await Stores.ScheduledTasks.runNow(task.id)
+                    await ScheduledTasks.runNow(task.id)
                     message.info(
                       'Running now — result will land in your notifications',
                     )
@@ -372,7 +403,7 @@ export function ScheduledTaskCard({ task }: { task: ScheduledTask }) {
                 size="icon"
                 icon={<Pencil />}
                 aria-label="Edit"
-                onClick={() => Stores.SchedulerDrawer.openEdit(task)}
+                onClick={() => SchedulerDrawer.openEdit(task)}
               />
             </Tooltip>
             <Tooltip content="Delete">
@@ -398,7 +429,7 @@ export function ScheduledTaskCard({ task }: { task: ScheduledTask }) {
               onConfirm={async () => {
                 setDeleting(true)
                 try {
-                  await Stores.ScheduledTasks.deleteTask(task.id)
+                  await ScheduledTasks.deleteTask(task.id)
                   // success → the card unmounts (task removed from the list).
                 } catch (e) {
                   notifyError(e, 'Failed to delete the task')
@@ -411,6 +442,15 @@ export function ScheduledTaskCard({ task }: { task: ScheduledTask }) {
       }
     >
       <Flex className="mb-1 flex-wrap items-center gap-2">
+        {isSelfPaced && (
+          <Tag
+            tone="info"
+            icon={<Repeat />}
+            data-testid={`task-loop-${task.id}`}
+          >
+            Loop
+          </Tag>
+        )}
         <Tag data-testid={`task-kind-${task.id}`}>{targetSummary(task)}</Tag>
         {task.paused_reason === 'completed' ? (
           <Badge tone="success" data-testid={`task-completed-${task.id}`}>
@@ -427,12 +467,31 @@ export function ScheduledTaskCard({ task }: { task: ScheduledTask }) {
       <Text className="text-muted-foreground block text-sm">
         {scheduleSummary(task)}
       </Text>
+      {task.completion_condition && (
+        <Text
+          className="text-muted-foreground block text-xs [overflow-wrap:anywhere]"
+          data-testid={`task-stop-condition-${task.id}`}
+        >
+          Stops when: {task.completion_condition}
+        </Text>
+      )}
       <Text className="text-muted-foreground block text-xs">
-        {task.next_run_at
-          ? `Next: ${new Date(task.next_run_at).toLocaleString()}`
-          : 'No upcoming run'}
-        {task.last_status ? ` · Last: ${task.last_status}` : ''}
+        {nextRunLine(task)}
       </Text>
+      {isSelfPaced && task.bound_conversation_id && (
+        // The loop runs INSIDE a conversation — surface that context as a link
+        // to it (the JTBD: "know where this loop lives"). Uses SPA navigation to
+        // the real chat route `/chat/:id`.
+        <Button
+          variant="link"
+          icon={<MessagesSquare />}
+          data-testid={`task-bound-conversation-${task.id}`}
+          className="mt-0.5 h-auto justify-start gap-1 p-0 text-xs"
+          onClick={() => navigate(`/chat/${task.bound_conversation_id}`)}
+        >
+          Open its conversation
+        </Button>
+      )}
       <Button
         data-testid={`task-runs-toggle-${task.id}`}
         variant="ghost"
@@ -469,10 +528,10 @@ export function ScheduledTaskCard({ task }: { task: ScheduledTask }) {
                   pageSize={perPage}
                   itemNoun="run"
                   onChange={p =>
-                    void Stores.ScheduledTasks.loadRuns(task.id, p, perPage)
+                    void ScheduledTasks.loadRuns(task.id, p, perPage)
                   }
                   onPageSizeChange={size =>
-                    void Stores.ScheduledTasks.loadRuns(task.id, 1, size)
+                    void ScheduledTasks.loadRuns(task.id, 1, size)
                   }
                 />
               )}

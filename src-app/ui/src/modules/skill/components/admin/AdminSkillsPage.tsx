@@ -2,14 +2,16 @@ import { Import } from 'lucide-react'
 import { Button, Empty, ErrorState, Flex, Text } from '@ziee/kit'
 import { ListPagination } from '@/components/common/ListPagination'
 import { useEffect, useState } from 'react'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { Can } from '@/core/permissions'
-import { Stores } from '@ziee/framework/stores'
 import { SettingsPageContainer } from '@/modules/settings/components/SettingsPageContainer'
 import { ImportSkillDialog } from '@/modules/skill/components/ImportSkillDialog'
 import { SkillDetailDrawer } from '@/modules/skill/components/SkillDetailDrawer'
 import { SkillScopeBadge } from '@/modules/skill/components/SkillScopeBadge'
 import { AdminSkillGroupAssignment } from './AdminSkillGroupAssignment'
+import { SystemSkill } from '@/modules/skill/stores/systemSkill'
+import { SkillDrawer } from '@/modules/skill/stores/skillDrawer'
+import { AppMode } from '@/modules/app/AppMode.store'
 
 /**
  * `/settings/admin/skills` — lists system-scope skills with per-skill
@@ -17,8 +19,8 @@ import { AdminSkillGroupAssignment } from './AdminSkillGroupAssignment'
  * (scope dropdown on the hub card) or via local import.
  */
 export function AdminSkillsPage() {
-  const { systemSkills, loading, error } = Stores.SystemSkill
-  const { multiUserMode } = Stores.AppMode
+  const { systemSkills, loading, error } = SystemSkill
+  const { multiUserMode } = AppMode
   const [importOpen, setImportOpen] = useState(false)
 
   // Client-side pagination (the store loads the full list).
@@ -67,11 +69,11 @@ export function AdminSkillsPage() {
                 className="p-3 cursor-pointer focus-visible:outline focus-visible:outline-2"
                 role="button"
                 tabIndex={0}
-                onClick={() => Stores.SkillDrawer.open(skill)}
+                onClick={() => SkillDrawer.open(skill)}
                 onKeyDown={e => {
                   if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault()
-                    Stores.SkillDrawer.open(skill)
+                    SkillDrawer.open(skill)
                   }
                 }}
               >
@@ -99,7 +101,7 @@ export function AdminSkillsPage() {
             resource="system skills"
             description="Something went wrong while loading system skills."
             details={error}
-            onRetry={() => Stores.SystemSkill.loadSystemSkills()}
+            onRetry={() => SystemSkill.loadSystemSkills()}
             data-testid="skill-admin-error"
           />
         ) : (

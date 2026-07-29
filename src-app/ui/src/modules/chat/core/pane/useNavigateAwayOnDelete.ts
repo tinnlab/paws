@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { Stores } from '@ziee/framework/stores'
+import { EventBus } from '@ziee/framework/stores'
+import { SplitView } from '@/modules/chat/core/stores/splitView'
 
 /**
  * Leave `/chat/:id` when THAT conversation is deleted (issue #168).
@@ -48,7 +49,7 @@ export function useNavigateAwayOnDelete(conversationId: string | undefined) {
       // SplitView subscribes at store init and this hook at mount, so which
       // handler runs first is not contractual. Filtering makes the decision
       // order-independent.
-      const survivors = Stores.SplitView.$.panes.filter(
+      const survivors = SplitView.$.panes.filter(
         (p) => p.conversationId !== deletedId,
       )
       if (survivors.length > 0) return
@@ -57,16 +58,16 @@ export function useNavigateAwayOnDelete(conversationId: string | undefined) {
       // only conversation this was) → collapse the now-empty workspace and go to
       // the start / new-chat page. Same close-to-1 shape as `useClosePane()`.
       // `replace` so Back doesn't land on the dead id.
-      Stores.SplitView.reset()
+      SplitView.reset()
       navigate('/chat', { replace: true })
     }
 
-    const offLocal = Stores.EventBus.on(
+    const offLocal = EventBus.on(
       'conversation.deleted',
       (event) => handleDeleted(event.data.conversationId),
       'useNavigateAwayOnDelete',
     )
-    const offSync = Stores.EventBus.on(
+    const offSync = EventBus.on(
       'sync:conversation',
       (event) => {
         if (event.data.action !== 'delete') return

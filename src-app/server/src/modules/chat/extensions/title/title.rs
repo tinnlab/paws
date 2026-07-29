@@ -26,13 +26,44 @@ use crate::modules::chat::extensions::title::extension::SSEChatStreamTitleUpdate
 /// models bill hidden reasoning against the very same cap (`max_tokens` is
 /// remapped to `max_completion_tokens`, a COMBINED reasoning+output budget).
 ///
-/// The previous 50-token budget was consumed entirely by reasoning on
+/// The original 50-token budget was consumed entirely by reasoning on
 /// `openai/gpt-oss-120b`: the stream ended with `finish_reason: "length"` having
 /// emitted zero text, so title generation "failed" on every single chat through
-/// that provider. 512 leaves ample room for a short reasoning preamble plus a
-/// six-word title, and a title is a once-per-conversation call, so the cost is
-/// negligible.
-const TITLE_MAX_TOKENS: u32 = 512;
+/// that provider. It was raised to 512 — which was STILL too small, and the same
+/// bug shipped again: on a deployment serving `qwen3.6-35b-a3b` through an
+/// OpenAI-compatible bridge, **0 of 16 conversations had a title**. Measured
+/// against that exact model with this exact prompt:
+///
+/// | `max_tokens` | `finish_reason` | answer text | completion tokens |
+/// |---|---|---|---|
+/// | 512  | `length` | none | 512 (all reasoning) |
+/// | 1024 | `length` | none | 1024 (all reasoning) |
+/// | 2048 | `stop`   | "Creating a New Project" | 942 |
+/// | 4096 | `stop`   | "Request to Create New Project" | 1138 |
+///
+/// 4096 leaves ~3.5x headroom over the observed reasoning length. Because
+/// reasoning length is fundamentally unbounded, the constant alone is a fix for
+/// today's model, not for the failure MODE — so a budget-exhausted attempt is
+/// retried ONCE at [`TITLE_RETRY_MAX_TOKENS`]. A title is a once-per-conversation
+/// call, so the cost is negligible either way.
+const TITLE_MAX_TOKENS: u32 = 4096;
+
+/// Budget for the single escalated retry after a budget-exhausted first attempt
+/// (see [`TITLE_MAX_TOKENS`]). Deliberately bounded: one retry, then the
+/// extension soft-fails and the NEXT turn retries (bounded in turn by
+/// [`TITLE_RETRY_MESSAGE_LIMIT`]), so a pathological model costs a handful of
+/// calls rather than an unbounded escalation.
+const TITLE_RETRY_MAX_TOKENS: u32 = 8192;
+
+/// Wall-clock bound on ONE title attempt.
+///
+/// Title generation is AWAITED inline in `after_llm_call`, so it sits between the
+/// assistant's last token and the turn's terminal frame — the user is watching.
+/// With an escalated retry that is up to two generations on that path, and the
+/// provider client's own timeout is a per-read one (a slow-but-alive stream is
+/// effectively unbounded). A title is a nice-to-have: past this bound, abandon it
+/// and let a later turn retry rather than hold the turn open.
+const TITLE_ATTEMPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Maximum length of a stored title, in characters.
 const TITLE_MAX_CHARS: usize = 50;
@@ -194,12 +225,55 @@ fn is_budget_exhausted(finish_reason: &str) -> bool {
     finish_reason.eq_ignore_ascii_case("length") || finish_reason.eq_ignore_ascii_case("max_tokens")
 }
 
+/// Decide whether a finished title attempt deserves ONE escalated retry.
+///
+/// Pure so the condition is directly unit-testable — and it must stay narrow:
+/// retry ONLY when the model produced no usable text AND the stream ended
+/// because the budget ran out. An empty completion that ended `stop` is a model
+/// that genuinely had nothing to say; retrying it would burn a second call for
+/// nothing and would break the deliberate "an empty generation leaves the title
+/// UNSET (and retries on a LATER turn)" contract.
+fn should_retry_with_larger_budget(title: Option<&str>, finish_reason: Option<&str>) -> bool {
+    if title.is_some() {
+        return false;
+    }
+    match finish_reason {
+        Some(reason) => is_budget_exhausted(reason),
+        // No finish reason at all: some OpenAI-compatible bridges omit it on the
+        // terminal chunk. An empty answer with no stated reason is
+        // indistinguishable from the budget-starvation case, and the cost of
+        // being wrong is ONE extra call — versus silently reverting to "this
+        // deployment is permanently untitled" for that provider family.
+        None => true,
+    }
+}
+
+/// The soft-failure error for an attempt that produced no usable title, naming
+/// the budget that was actually in force.
+fn empty_title_error(budget: u32, finish_reason: Option<&str>) -> AppError {
+    match finish_reason {
+        // The budget ran out before the model emitted any answer text —
+        // characteristic of a reasoning model.
+        Some(reason) if is_budget_exhausted(reason) => AppError::internal_error(format!(
+            "generated title is empty: the model exhausted the {budget}-token budget \
+             (finish_reason={reason}) without emitting answer text"
+        )),
+        Some(reason) => {
+            AppError::internal_error(format!("generated title is empty (finish_reason={reason})"))
+        }
+        None => AppError::internal_error("generated title is empty"),
+    }
+}
+
 /// Build the (tool-less) chat request used to generate a title.
 ///
 /// Extracted so the token budget and prompt shape are unit-testable without a
 /// provider — the budget in particular is the root-cause fix and must not be
 /// silently reverted.
-fn build_title_request(model_name: &str, user_content: &str) -> ChatRequest {
+///
+/// `max_tokens` is a parameter (rather than the constant inline) so the escalated
+/// retry reissues the IDENTICAL request with only the budget raised.
+fn build_title_request(model_name: &str, user_content: &str, max_tokens: u32) -> ChatRequest {
     let title_prompt = format!(
         "Generate a concise, descriptive title (maximum 6 words) for a conversation that starts with this message: \"{}\"\n\nRespond with only the title, no quotes or additional text.",
         user_content.chars().take(200).collect::<String>()
@@ -212,7 +286,19 @@ fn build_title_request(model_name: &str, user_content: &str) -> ChatRequest {
             content: vec![ContentBlock::Text { text: title_prompt }],
         }],
         temperature: Some(0.7),
-        max_tokens: Some(TITLE_MAX_TOKENS),
+        max_tokens: Some(max_tokens),
+        // `thinking` is deliberately left UNSET (`None`).
+        //
+        // Naming a conversation needs no chain of thought, so an explicit
+        // `ThinkingConfig::disabled()` looks attractive — but it buys nothing and
+        // costs correctness: it is inert for OpenAI-compatible endpoints (which
+        // only read `thinking.effort`, never set here), a literal no-op for
+        // Anthropic (`ThinkingMode::Disabled => {}`), and ACTIVE for Gemini,
+        // whose adapter emits `thinkingConfig { thinkingBudget: 0 }` for ANY
+        // `Some(thinking)`. Models that cannot disable thinking reject that with
+        // a 400 — which this extension soft-swallows, leaving the conversation
+        // permanently untitled: the exact bug being fixed, reintroduced for a
+        // different provider. The budget + escalated retry carry the fix alone.
         ..Default::default()
     }
 }
@@ -227,16 +313,74 @@ impl TitleGenerationExtension {
         Self {}
     }
 
-    /// Generate title using AI
+    /// Generate a title using AI, with ONE escalated-budget retry.
+    ///
+    /// A reasoning model can burn the whole output budget on hidden chain of
+    /// thought and return zero answer text — the exact production failure that
+    /// left a whole deployment untitled. When that happens
+    /// ([`should_retry_with_larger_budget`]) the identical request is reissued
+    /// once at [`TITLE_RETRY_MAX_TOKENS`] before giving up for this turn.
     async fn generate_title_with_ai(
         &self,
         provider: &Provider,
         model_name: &str,
         user_content: &str,
     ) -> Result<String, AppError> {
+        let (title, finish_reason) =
+            self.attempt_title(provider, model_name, user_content, TITLE_MAX_TOKENS).await?;
+
+        if !should_retry_with_larger_budget(title.as_deref(), finish_reason.as_deref()) {
+            return title.ok_or_else(|| empty_title_error(TITLE_MAX_TOKENS, finish_reason.as_deref()));
+        }
+
+        tracing::info!(
+                model = %model_name,
+                finish_reason = %finish_reason.as_deref().unwrap_or(""),
+                "title: the {}-token budget was exhausted with no answer text; retrying once at {}",
+                TITLE_MAX_TOKENS,
+                TITLE_RETRY_MAX_TOKENS,
+        );
+        let (retry_title, retry_finish) = self
+            .attempt_title(provider, model_name, user_content, TITLE_RETRY_MAX_TOKENS)
+            .await?;
+        retry_title.ok_or_else(|| empty_title_error(TITLE_RETRY_MAX_TOKENS, retry_finish.as_deref()))
+    }
+
+    /// ONE title call: stream it, collect the answer text, and report the
+    /// cleaned title (if any) plus the stream's finish reason.
+    async fn attempt_title(
+        &self,
+        provider: &Provider,
+        model_name: &str,
+        user_content: &str,
+        max_tokens: u32,
+    ) -> Result<(Option<String>, Option<String>), AppError> {
+        // Bounded: this runs on the awaited turn-end path (see
+        // TITLE_ATTEMPT_TIMEOUT). A timeout is a soft failure like any other —
+        // the conversation stays untitled and a later turn retries.
+        tokio::time::timeout(
+            TITLE_ATTEMPT_TIMEOUT,
+            self.attempt_title_inner(provider, model_name, user_content, max_tokens),
+        )
+        .await
+        .map_err(|_| {
+            AppError::internal_error(format!(
+                "title generation exceeded {}s at a {max_tokens}-token budget",
+                TITLE_ATTEMPT_TIMEOUT.as_secs()
+            ))
+        })?
+    }
+
+    async fn attempt_title_inner(
+        &self,
+        provider: &Provider,
+        model_name: &str,
+        user_content: &str,
+        max_tokens: u32,
+    ) -> Result<(Option<String>, Option<String>), AppError> {
         // Call AI provider and collect the stream
         let mut stream = provider
-            .chat_stream(build_title_request(model_name, user_content))
+            .chat_stream(build_title_request(model_name, user_content, max_tokens))
             .await
             .map_err(|e| AppError::internal_error(format!("AI provider error: {}", e)))?;
 
@@ -265,20 +409,7 @@ impl TitleGenerationExtension {
             }
         }
 
-        clean_generated_title(&full_content).ok_or_else(|| match finish_reason.as_deref() {
-            // The budget ran out before the model emitted any answer text —
-            // characteristic of a reasoning model.
-            Some(reason) if is_budget_exhausted(reason) => AppError::internal_error(format!(
-                "generated title is empty: the model exhausted the {}-token budget \
-                 (finish_reason={}) without emitting answer text",
-                TITLE_MAX_TOKENS, reason
-            )),
-            Some(reason) => AppError::internal_error(format!(
-                "generated title is empty (finish_reason={})",
-                reason
-            )),
-            None => AppError::internal_error("generated title is empty"),
-        })
+        Ok((clean_generated_title(&full_content), finish_reason))
     }
 
     /// Resolve the provider from the stream context and generate a title.
@@ -757,7 +888,7 @@ mod tests {
         // entirely by `reasoning_content` on openai/gpt-oss-120b, the stream
         // ended with finish_reason=length having emitted no text, and the
         // conversation was permanently titled with the raw user message.
-        let req = build_title_request("some-model", "What is known about BRCA1?");
+        let req = build_title_request("some-model", "What is known about BRCA1?", TITLE_MAX_TOKENS);
         assert_eq!(req.max_tokens, Some(TITLE_MAX_TOKENS));
         assert!(
             TITLE_MAX_TOKENS >= 256,
@@ -770,7 +901,7 @@ mod tests {
     #[test]
     fn title_request_truncates_a_very_long_user_message() {
         let long = "x".repeat(5_000);
-        let req = build_title_request("m", &long);
+        let req = build_title_request("m", &long, TITLE_MAX_TOKENS);
         let ContentBlock::Text { text } = &req.messages[0].content[0] else {
             panic!("expected a text block");
         };
@@ -831,5 +962,80 @@ mod tests {
         assert_eq!(clean_generated_title("   \n  "), None);
         assert_eq!(clean_generated_title("\"\""), None);
         assert_eq!(clean_generated_title("''"), None);
+    }
+
+    // ---- the reasoning-budget fix (TEST-5 / TEST-6) -----------------------
+
+    /// TEST-5 — the request the provider receives.
+    ///
+    /// Root-cause guard for the SECOND time this shipped broken: 512 tokens were
+    /// measured to be entirely consumed by `qwen3.6-35b-a3b`'s reasoning
+    /// preamble (`finish_reason: "length"`, zero answer text), leaving every
+    /// conversation on that deployment untitled.
+    #[test]
+    fn title_request_is_reasoning_safe() {
+        let req = build_title_request("some-model", "How do I sort a list?", TITLE_MAX_TOKENS);
+
+        assert!(
+            req.max_tokens.is_some_and(|t| t >= 4096),
+            "the title budget must survive a reasoning model's preamble, got {:?}",
+            req.max_tokens
+        );
+        assert!(
+            TITLE_RETRY_MAX_TOKENS > TITLE_MAX_TOKENS,
+            "the escalated retry must actually escalate"
+        );
+        assert!(req.tools.is_empty(), "the title call must be tool-less");
+        assert!(
+            req.thinking.is_none(),
+            "`thinking` must stay UNSET: `Some(Disabled)` is inert on OpenAI, a \
+             no-op on Anthropic, and makes Gemini emit thinkingBudget:0, which \
+             models that cannot disable thinking reject with a 400 — silently \
+             leaving every conversation untitled again"
+        );
+        // The budget is a parameter so the retry reissues the SAME request.
+        assert_eq!(
+            build_title_request("m", "hi", TITLE_RETRY_MAX_TOKENS).max_tokens,
+            Some(TITLE_RETRY_MAX_TOKENS)
+        );
+    }
+
+    /// TEST-6 — the escalated retry fires ONLY on budget exhaustion.
+    #[test]
+    fn retry_only_on_budget_exhaustion_with_no_text() {
+        // The production failure: no text, budget ran out → retry.
+        assert!(should_retry_with_larger_budget(None, Some("length")));
+        assert!(should_retry_with_larger_budget(None, Some("max_tokens")));
+        assert!(should_retry_with_larger_budget(None, Some("MAX_TOKENS")));
+
+        // A model that genuinely said nothing (finish_reason `stop`) must NOT be
+        // retried — that is the deliberate "empty generation leaves the title
+        // UNSET, retry on a LATER turn" contract, and the stub-backed regression
+        // test asserts exactly ONE title call there.
+        assert!(!should_retry_with_larger_budget(None, Some("stop")));
+        assert!(!should_retry_with_larger_budget(None, Some("tool_calls")));
+
+        // A bridge that omits finish_reason entirely is indistinguishable from
+        // budget starvation, so it gets the one retry rather than silently
+        // reverting to "permanently untitled" for that provider family.
+        assert!(should_retry_with_larger_budget(None, None));
+
+        // Text was produced → nothing to retry, whatever the finish reason.
+        assert!(!should_retry_with_larger_budget(Some("A Title"), Some("length")));
+        assert!(!should_retry_with_larger_budget(Some("A Title"), Some("stop")));
+    }
+
+    /// The soft-failure message must name the budget actually in force, so a
+    /// log reader can tell a first attempt from the escalated retry.
+    #[test]
+    fn empty_title_error_names_the_budget_in_force() {
+        let e = empty_title_error(TITLE_RETRY_MAX_TOKENS, Some("length"));
+        let msg = format!("{e:?}");
+        assert!(
+            msg.contains(&TITLE_RETRY_MAX_TOKENS.to_string()),
+            "the error must name the retry budget: {msg}"
+        );
+        let e = empty_title_error(TITLE_MAX_TOKENS, Some("stop"));
+        assert!(format!("{e:?}").contains("finish_reason=stop"));
     }
 }

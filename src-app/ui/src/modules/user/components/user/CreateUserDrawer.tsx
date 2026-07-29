@@ -1,12 +1,13 @@
 import { z } from 'zod'
 import { Button, Form, FormField, Input, PasswordInput, message, useForm, zodResolver } from '@ziee/kit'
 import { Drawer } from '@/modules/layouts/app-layout/components/Drawer'
-import { Stores } from '@ziee/framework/stores'
+import { Users } from '@/modules/user/stores/users'
 import { usePermission } from '@/core/permissions'
 import type { CreateUserRequest } from '@/api-client/types'
-import { Permissions } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
 import { PermissionsField } from '@/modules/user/components/PermissionsField.tsx'
 import { EMAIL_RE } from '@/lib/validation'
+import { CreateUserDrawer as CreateUserDrawerStore } from '@/modules/user/components/user/createUserDrawer'
 
 const createUserSchema = z.object({
   username: z.string().min(1, 'Please enter username'),
@@ -19,8 +20,8 @@ const createUserSchema = z.object({
 type CreateUserValues = z.infer<typeof createUserSchema>
 
 export function CreateUserDrawer() {
-  const { isOpen } = Stores.CreateUserDrawer
-  const { creating: creatingUser } = Stores.Users
+  const { isOpen } = CreateUserDrawerStore
+  const { creating: creatingUser } = Users
   const createForm = useForm<CreateUserValues>({
     resolver: zodResolver(createUserSchema),
     defaultValues: {
@@ -45,10 +46,10 @@ export function CreateUserDrawer() {
           : undefined,
       }
 
-      await Stores.Users.createUser(userData)
+      await Users.createUser(userData)
 
       message.success('User created successfully')
-      Stores.CreateUserDrawer.closeCreateUserDrawer()
+      CreateUserDrawerStore.closeCreateUserDrawer()
       createForm.reset()
     } catch (error) {
       console.error('Failed to create user:', error)
@@ -61,7 +62,7 @@ export function CreateUserDrawer() {
       title="Create User"
       open={isOpen}
       onClose={() => {
-        Stores.CreateUserDrawer.closeCreateUserDrawer()
+        CreateUserDrawerStore.closeCreateUserDrawer()
         createForm.reset()
       }}
       footer={
@@ -69,7 +70,7 @@ export function CreateUserDrawer() {
           <Button
             variant="outline"
             onClick={() => {
-              Stores.CreateUserDrawer.closeCreateUserDrawer()
+              CreateUserDrawerStore.closeCreateUserDrawer()
               createForm.reset()
             }}
             disabled={creatingUser}

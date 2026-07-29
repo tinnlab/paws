@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { Spin } from '@ziee/kit'
-import { Stores } from '@ziee/framework/stores'
 import { lineDiff } from '@/modules/file/utils/lineDiff'
+import { FileVersions as FileVersionsStore } from '@/modules/file/stores/fileVersions'
 
 /**
  * Renders a line-level added/removed diff between two versions of a file. Text
@@ -17,12 +17,16 @@ export function FileVersionDiff({
   from: number
   to: number
 }) {
-  const cache = Stores.FileVersions.versionTextCache
-  const a =
-    cache.get(`${fileId}:${from}`) ??
-    Stores.FileVersions.getVersionText(fileId, from)
-  const b =
-    cache.get(`${fileId}:${to}`) ?? Stores.FileVersions.getVersionText(fileId, to)
+  const cache = FileVersionsStore.versionTextCache
+  // Fire-and-forget background loads if not already loaded/cached.
+  if (cache.get(`${fileId}:${from}`) === undefined) {
+    void FileVersionsStore.loadVersionText(fileId, from)
+  }
+  if (cache.get(`${fileId}:${to}`) === undefined) {
+    void FileVersionsStore.loadVersionText(fileId, to)
+  }
+  const a = cache.get(`${fileId}:${from}`) ?? null
+  const b = cache.get(`${fileId}:${to}`) ?? null
   const lines = useMemo(
     () => (a != null && b != null ? lineDiff(a, b) : []),
     [a, b],

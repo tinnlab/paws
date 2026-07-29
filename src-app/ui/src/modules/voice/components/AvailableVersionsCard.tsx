@@ -13,13 +13,13 @@ import {
   Text,
   message,
 } from '@ziee/kit'
-import { Stores } from '@ziee/framework/stores'
 import { Can } from '@/core/permissions'
-import {
-  Permissions,
-  type AvailableVersion2,
-  type DownloadSnapshot2,
-} from '@/api-client/types'
+import { type AvailableVersion2, type DownloadSnapshot2 } from '@/api-client/types'
+import { Permissions } from '@/api-client/permissions'
+import { VoiceDownloadProgress as VoiceDownloadProgressStore } from '@/modules/voice/stores/voiceDownloadProgress'
+import { VoiceUpdate } from '@/modules/voice/stores/voiceUpdate'
+import { DownloadFailureRow } from '@/modules/voice/components/DownloadFailureRow'
+import { progressByteLabel } from '@/modules/voice/stores/downloadProgress.helpers'
 
 /** Human-readable byte sizes. */
 function formatBytes(n: number): string {
@@ -36,8 +36,8 @@ function formatBytes(n: number): string {
  * llm-local-runtime's AvailableVersionsCard, single-engine.
  */
 export function AvailableVersionsCard() {
-  const { updateCheck, checking, error } = Stores.VoiceUpdate
-  const { activeByKey } = Stores.VoiceDownloadProgress
+  const { updateCheck, checking, error } = VoiceUpdate
+  const { activeByKey } = VoiceDownloadProgressStore
 
   const progressKey = (v: AvailableVersion2) => {
     const backend = v.recommended_backend ?? v.available_backends?.[0] ?? 'cpu'
@@ -46,7 +46,7 @@ export function AvailableVersionsCard() {
 
   useEffect(() => {
     if (!updateCheck && !checking) {
-      Stores.VoiceUpdate.checkForUpdates().catch(() => {})
+      VoiceUpdate.checkForUpdates().catch(() => {})
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -59,7 +59,7 @@ export function AvailableVersionsCard() {
   const handleDownload = async (v: AvailableVersion2) => {
     const backend = v.recommended_backend ?? v.available_backends?.[0] ?? 'cpu'
     try {
-      await Stores.VoiceDownloadProgress.startDownload({
+      await VoiceDownloadProgressStore.startDownload({
         version: v.version,
         platform,
         arch,
@@ -72,7 +72,7 @@ export function AvailableVersionsCard() {
 
   const handleCheckForUpdates = async () => {
     try {
-      const result = await Stores.VoiceUpdate.checkForUpdates()
+      const result = await VoiceUpdate.checkForUpdates()
       const ready = (result?.versions ?? []).filter(v => v.binary_ready)
       const newCount = ready.filter(v => !v.installed).length
       if (newCount === 0) {
@@ -124,7 +124,7 @@ export function AvailableVersionsCard() {
             resource="available runtimes"
             description="Couldn't reach the upstream release feed."
             details={error}
-            onRetry={() => void Stores.VoiceUpdate.checkForUpdates().catch(() => {})}
+            onRetry={() => void VoiceUpdate.checkForUpdates().catch(() => {})}
             data-testid="voice-available-error"
           />
         ) : !updateCheck ? (
@@ -179,7 +179,11 @@ function AvailableVersionRow({
         <Flex justify="between" align="center" gap="small" wrap>
           <Space wrap>
             <Text strong>{v.version}</Text>
-            {v.size_bytes != null && !v.installed && (
+            {/* Only a REAL asset size is worth showing. A release whose asset
+                size is 0/unknown would otherwise render a naked "0 B" on the
+                row — the same meaningless zero the models card suppresses.
+                See `.lifecycle/voice-model-bad-magic/` (INV-6, ITEM-12). */}
+            {v.size_bytes != null && v.size_bytes > 0 && !v.installed && (
               <Text type="secondary" className="text-xs">
                 {formatBytes(v.size_bytes)}
               </Text>
@@ -214,7 +218,14 @@ function AvailableVersionRow({
           </Can>
         </Flex>
         {progress && <DownloadProgressLine progress={progress} />}
-        {failed && progress?.error && <Text type="secondary">{progress.error}</Text>}
+        {failed && progress?.error && (
+          <DownloadFailureRow
+            reason={progress.error}
+            onRetry={onDownload}
+            testId={`voice-version-failed-${v.version}`}
+            retryLabel={`Retry installing ${v.version}`}
+          />
+        )}
       </Flex>
     </div>
   )
@@ -223,6 +234,13 @@ function AvailableVersionRow({
 function DownloadProgressLine({ progress }: { progress: DownloadSnapshot2 }) {
   const total = progress.total_bytes ?? 0
   const recv = progress.bytes_received
+  // `null` → render no byte text (see progressByteLabel / INV-6).
+  const byteLabel = progressByteLabel(
+    recv,
+    progress.total_bytes ?? undefined,
+    progress.status,
+    formatBytes,
+  )
   const pct =
     progress.status === 'completed'
       ? 100
@@ -247,11 +265,11 @@ function DownloadProgressLine({ progress }: { progress: DownloadSnapshot2 }) {
         size="sm"
         aria-label={`Download progress: ${pct ?? 0}%`}
       />
-      <Text type="secondary" className="text-xs">
-        {formatBytes(recv)}
-        {total > 0 ? ` / ${formatBytes(total)}` : ''}
-        {progress.status === 'completed' ? ' — Completed' : ''}
-      </Text>
+      {byteLabel && (
+        <Text type="secondary" className="text-xs">
+          {byteLabel}
+        </Text>
+      )}
     </Flex>
   )
 }

@@ -8,8 +8,16 @@ import { fileURLToPath } from 'url'
 import {
   findAvailablePorts,
   releasePortLock,
+  resolveConfigDir,
   updatePortLockHeartbeat,
 } from './port-manager'
+import {
+  serverBinaryExists,
+  serverBinaryPath,
+  terminateChild,
+} from './harness-process'
+// @ts-ignore — per-run app.data_dir isolation off shared ~/.ziee (ITEM-8)
+import { prepareE2eDataDir, e2eDataDirFor } from './e2e-data-dir.mjs'
 
 const { Pool } = pg
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -207,12 +215,17 @@ export const test = base.extend<TestFixtures & TestOptions>({
     if (!runId) {
       throw new Error('TEST_RUN_ID not set - global-setup may have failed')
     }
+    // Namespaced by the same key as the lock dir (port-manager CONFIG_NS).
     const postgresConfigPath = resolve(
-      __dirname,
-      `../.test-configs/postgres-${runId}.json`,
+      resolveConfigDir(resolve(__dirname, '..')),
+      `postgres-${runId}.json`,
     )
     const postgresConfig = JSON.parse(readFileSync(postgresConfigPath, 'utf-8'))
     const postgresPort = postgresConfig.port
+    // Optional migrated template DB built once in global-setup. When present,
+    // the per-test DB is CLONED from it (schema ready → no per-boot migrations);
+    // when absent, fall back to a raw CREATE DATABASE (server migrates on boot).
+    const templateName: string | undefined = postgresConfig.templateName
 
     console.log(`\n🔧 Setting up test infrastructure for: ${testInfo.title}`)
     console.log(`   Database: ${databaseName}`)
@@ -234,8 +247,37 @@ export const test = base.extend<TestFixtures & TestOptions>({
     })
 
     try {
-      await pool.query(`CREATE DATABASE ${databaseName}`)
-      console.log(`✅ Created database: ${databaseName}`)
+      if (templateName) {
+        // Clone the fully-migrated template. Postgres locks the template during
+        // a copy, so a concurrent clone (raised PLAYWRIGHT_WORKERS) can
+        // transiently fail with 55006 "source database is being accessed by
+        // other users" or a lock-timeout (55P03) — bounded-retry those with
+        // JITTERED backoff so lock-step workers don't re-collide on the same
+        // cadence. Per-test DB name stays unique → isolation preserved.
+        const TRANSIENT_CLONE_CODES = new Set(['55006', '55P03'])
+        let created = false
+        let lastErr: unknown
+        for (let attempt = 0; attempt < 8 && !created; attempt++) {
+          try {
+            await pool.query(`CREATE DATABASE ${databaseName} TEMPLATE ${templateName}`)
+            created = true
+          } catch (err) {
+            lastErr = err
+            const code = (err as { code?: string })?.code
+            if (code && TRANSIENT_CLONE_CODES.has(code)) {
+              // 150-450ms jittered backoff.
+              await new Promise(r => setTimeout(r, 150 + Math.floor(Math.random() * 300)))
+              continue
+            }
+            throw err
+          }
+        }
+        if (!created) throw lastErr
+        console.log(`✅ Created database ${databaseName} from template ${templateName}`)
+      } else {
+        await pool.query(`CREATE DATABASE ${databaseName}`)
+        console.log(`✅ Created database: ${databaseName}`)
+      }
     } catch (error) {
       console.error(`❌ Failed to create database ${databaseName}:`, error)
       throw error
@@ -251,13 +293,22 @@ export const test = base.extend<TestFixtures & TestOptions>({
     // }
 
     // 3. Create backend config file
-    const configDir = resolve(__dirname, '../.test-configs')
+    const configDir = resolveConfigDir(resolve(__dirname, '..'))
     if (!existsSync(configDir)) {
       mkdirSync(configDir, { recursive: true })
     }
 
     const configPath = resolve(configDir, `test-${testId}.yaml`)
-    const configContent = `postgresql:
+    // ITEM-8: isolate app.data_dir off the shared ~/.ziee. Each test writes
+    // files/workflows/skills/temp/models/sandboxes/bin under a per-worktree,
+    // per-test dir; the expensive read-only bin/lib caches are symlinked from
+    // the per-worktree shared cache (mirrors the Rust harness). NEVER ~/.ziee.
+    const worktreeRoot = resolve(__dirname, '../../../..')
+    const appDataDir = prepareE2eDataDir(worktreeRoot, testId)
+    const configContent = `app:
+  data_dir: "${appDataDir}"
+
+postgresql:
   use_embedded: false
 
   external:
@@ -319,6 +370,14 @@ logging:
   level: "info"
   format: "json"
 
+# Skip the per-boot api.github.com "latest release" update-check. It's a
+# notification-only poll (server_update module) that adds ~110ms to every one of
+# the hundreds of per-test backend boots and — sharing one egress IP across a run
+# — risks tripping GitHub's unauthenticated rate limit. Nothing in E2E depends on
+# it. (UpdateCheckConfig.enabled; default true in production.)
+update_check:
+  enabled: false
+
 jwt:
   secret: "test-secret-key-for-jwt-tokens-min-32-chars-long-${testId}"
   issuer: "ziee-test"
@@ -366,6 +425,26 @@ ${
         ? `${process.env.USERPROFILE}\\.cargo\\bin\\cargo`
         : `${process.env.HOME}/.cargo/bin/cargo`
 
+    // Spawn the PREBUILT server binary rather than `cargo run` per test. The
+    // binary is rebuilt ONCE per run by the global-setup warmup (block 8b), so
+    // it is fresh at run start; `cargo run` per test would instead pay a cargo
+    // graph-check + contend on the cross-worktree build lock, and boot in ~0.8s
+    // is far cheaper. Fall back to `cargo run` when the binary is absent (warmup
+    // skipped/failed) — same server code either way, so per-test isolation is
+    // identical. (Binary path + existence resolved via the shared helper so
+    // global-setup and this fixture never drift.)
+    const serverBinary = serverBinaryPath()
+    const usePrebuilt = serverBinaryExists()
+    const spawnCmd = usePrebuilt ? serverBinary : cargoPath
+    const spawnArgs = usePrebuilt
+      ? ['--config-file', configPath]
+      : ['run', '--bin', 'ziee', '--', '--config-file', configPath]
+    console.log(
+      usePrebuilt
+        ? `   Spawning prebuilt binary: ${serverBinary}`
+        : `   Prebuilt binary absent — falling back to cargo run`,
+    )
+
     // Isolate the hub catalog dir per test. The hub catalog
     // (`current/`) is durable global state; a refresh/activate in one
     // spec would otherwise rotate the shared dir and leak the new
@@ -374,8 +453,8 @@ ${
     const hubDataDir = resolve(configDir, `hub-${testId}`)
 
     const serverProcess = spawn(
-      cargoPath,
-      ['run', '--bin', 'ziee', '--', '--config-file', configPath],
+      spawnCmd,
+      spawnArgs,
       {
         cwd: resolve(__dirname, '../../../server'),
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -431,8 +510,9 @@ ${
       }
     })
 
-    // Wait for backend to be STABLY ready (120s budget covers cargo compilation
-    // on first run). Deep gate (not just a single 200): a cold-loading server
+    // Wait for backend to be STABLY ready (120s budget; the prebuilt binary
+    // boots in ~1s, but the budget also covers the `cargo run` fallback's
+    // compile). Deep gate (not just a single 200): a cold-loading server
     // answers /api/health while still churning, and SSE streams opened in that
     // window get reset → flaky `waitFor` timeouts. Require a stable, fast window.
     const backendReady = await waitForServerStable(
@@ -454,7 +534,12 @@ ${
     // server refuses a 2nd context, which broke the multi-context sync specs.
     // `/api` proxies to THIS test's backend.
     const distDir = resolve(projectRoot, 'dist-e2e')
+    // Absolute path to the in-memory static middleware helper (fix #2): serves
+    // every built asset from RAM with a single res.end(buffer)+Content-Length,
+    // so a CPU-starved event loop cannot cut a render chunk mid-stream.
+    const staticMwPath = resolve(__dirname, 'e2e-static-middleware.mjs')
     const viteConfigContent = `import { defineConfig } from 'vite'
+import { serveDirFromMemory } from ${JSON.stringify(staticMwPath)}
 
 export default defineConfig({
   root: ${JSON.stringify(srcRoot)},
@@ -470,8 +555,16 @@ export default defineConfig({
       // here (this hook body runs BEFORE vite installs the compression
       // middleware) forces uncompressed, Content-Length responses that cannot
       // be truncated the same way.
-      name: 'e2e-disable-preview-compression',
+      name: 'e2e-preview-static-serving-and-compression',
       configurePreviewServer(server) {
+        // FIX #2 (graph-agnostic): serve every built asset from an in-memory
+        // map with ONE res.end(buffer) BEFORE vite's own sirv static handler.
+        // The whole body reaches the OS socket buffer in a single event-loop
+        // tick, so CPU starvation afterward cannot truncate it — covering the
+        // streamdown internal chunks AND the ~200 hashed shiki grammar chunks
+        // (which no enumerated eager-include could cover). Non-asset paths (/,
+        // SPA routes, /api proxy) fall through to the behavior below.
+        server.middlewares.use(serveDirFromMemory(${JSON.stringify(distDir)}))
         server.middlewares.use((req, _res, next) => {
           delete req.headers['accept-encoding']
           next()
@@ -628,30 +721,16 @@ export default defineConfig({
     clearInterval(infrastructure.heartbeatInterval)
     console.log(`💔 Heartbeat stopped`)
 
-    // Kill backend server process (cargo and rust binary)
-    try {
-      serverProcess.kill('SIGTERM')
-    } catch {}
-
-    // Kill Vite process
-    try {
-      viteProcess.kill('SIGTERM')
-    } catch {}
-
-    // Wait for graceful shutdown
-    await new Promise(resolve => setTimeout(resolve, 1500))
-
-    // Force kill if still running
-    try {
-      serverProcess.kill('SIGKILL')
-    } catch {}
-
-    try {
-      viteProcess.kill('SIGKILL')
-    } catch {}
-
-    // Wait a bit for process cleanup
-    await new Promise(resolve => setTimeout(resolve, 500))
+    // Graceful shutdown driven by the child `exit` EVENT rather than a fixed
+    // sleep: SIGTERM, then await the process actually exiting (bounded); on
+    // timeout escalate to SIGKILL and await again (bounded). This returns as
+    // soon as the process is gone instead of always burning ~2s. The
+    // killProcessOnPort() calls below remain the unconditional port-release
+    // guarantee, so no port can leak even if a wait times out.
+    await Promise.all([
+      terminateChild(serverProcess),
+      terminateChild(viteProcess),
+    ])
 
     // Kill any remaining processes on our ports (handles orphaned processes)
     console.log(
@@ -696,6 +775,13 @@ export default defineConfig({
       })
       // Per-test isolated hub catalog dir.
       rmSync(resolve(configDir, `hub-${testId}`), {
+        recursive: true,
+        force: true,
+      })
+      // Per-test isolated app.data_dir (ITEM-8). testId-scoped — the bin/lib
+      // subdirs are SYMLINKS into the shared cache, so removing this dir removes
+      // only the links + this test's writable state, never the shared cache.
+      rmSync(e2eDataDirFor(worktreeRoot, testId), {
         recursive: true,
         force: true,
       })
@@ -756,7 +842,11 @@ async function waitForServerStable(
     stabilizeSeconds?: number
   } = {},
 ): Promise<boolean> {
-  const consecutive = opts.consecutive ?? 6
+  // 3 consecutive fast/healthy probes (~750ms window) is still a deep gate
+  // (strictly stronger than the old single-200 check) but ~1s cheaper per boot
+  // than the previous 6. The blip-reset + best-effort stabilizeSeconds fallback
+  // below keep it from ever becoming a new "failed to start".
+  const consecutive = opts.consecutive ?? 3
   const intervalMs = opts.intervalMs ?? 250
   const fastMs = opts.fastMs ?? 800
   const abortMs = opts.abortMs ?? 3000
@@ -809,39 +899,67 @@ async function waitForServerStable(
 }
 
 async function killProcessOnPort(port: number): Promise<void> {
+  const { execSync } = await import('child_process')
+
+  // True when `cmd` resolves on PATH — used to pick an AVAILABLE Unix
+  // port-killer so cleanup still works on a box WITHOUT `lsof`.
+  const hasCmd = (cmd: string): boolean => {
+    try {
+      execSync(`command -v ${cmd}`, { stdio: 'ignore' })
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  // Defense-in-depth: `port` is typed number but reaches here from callers that
+  // read lock files; refuse a non-numeric value before it hits a shell string.
+  if (!Number.isInteger(port) || port <= 0) return
+
   try {
-    const { execSync } = await import('child_process')
-    // Find process using the port
-    const cmd =
-      process.platform === 'win32'
-        ? `netstat -ano | findstr :${port}`
-        : `lsof -ti :${port}`
-
-    const output = execSync(cmd, { encoding: 'utf8', stdio: 'pipe' }).trim()
-
-    if (!output) return
-
     if (process.platform === 'win32') {
-      // Windows: extract PID from netstat output
-      const lines = output.split('\n')
-      const pids = new Set<string>()
-      for (const line of lines) {
-        const match = line.trim().match(/\s+(\d+)$/)
-        if (match) pids.add(match[1])
+      const output = execSync(`netstat -ano | findstr :${port}`, { encoding: 'utf8', stdio: 'pipe' }).trim()
+      if (output) {
+        // Windows: extract PID from netstat output
+        const pids = new Set<string>()
+        for (const line of output.split('\n')) {
+          const match = line.trim().match(/\s+(\d+)$/)
+          if (match) pids.add(match[1])
+        }
+        for (const pid of pids) {
+          try {
+            execSync(`taskkill /F /PID ${pid}`, { stdio: 'ignore' })
+          } catch {}
+        }
       }
-      for (const pid of pids) {
+    } else if (hasCmd('lsof')) {
+      // Unix, preferred: lsof returns PIDs directly.
+      const output = execSync(`lsof -ti :${port}`, { encoding: 'utf8', stdio: 'pipe' }).trim()
+      for (const pid of output.split('\n').filter(Boolean)) {
         try {
-          execSync(`taskkill /F /PID ${pid}`, { stdio: 'ignore' })
+          execSync(`kill -9 ${pid}`, { stdio: 'ignore' })
         } catch {}
       }
-    } else {
-      // Unix: lsof returns PIDs directly
-      const pids = output.split('\n').filter(Boolean)
+    } else if (hasCmd('fuser')) {
+      // Fallback: `fuser -k` SIGKILLs every holder of the TCP port directly.
+      // (The old lsof-only path silently no-op'd on a box without lsof.)
+      try {
+        execSync(`fuser -k ${port}/tcp`, { stdio: 'ignore' })
+      } catch {}
+    } else if (hasCmd('ss')) {
+      // Fallback: parse `ss` output for pid= and kill -9.
+      const output = execSync(`ss -H -ltnp 'sport = :${port}'`, { encoding: 'utf8', stdio: 'pipe' }).trim()
+      const pids = new Set<string>()
+      for (const m of output.matchAll(/pid=(\d+)/g)) pids.add(m[1])
       for (const pid of pids) {
         try {
           execSync(`kill -9 ${pid}`, { stdio: 'ignore' })
         } catch {}
       }
+    } else {
+      // No lsof/fuser/ss available — cannot reap; warn instead of silently
+      // no-opping (mirrors the port-manager.ts copy).
+      console.warn(`⚠️  no lsof/fuser/ss available to free port ${port}; leaving it`)
     }
 
     // Wait for port to be released
