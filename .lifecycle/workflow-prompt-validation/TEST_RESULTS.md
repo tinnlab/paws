@@ -2,6 +2,16 @@
 
 Every line below was observed. Logs: `/data/pbya/ziee/tmp/lifecycle-logs/wfresid-*.log`.
 
+> **Standing caveat — this branch is NOT READY.** `FIX_ROUND-7.md` records two
+> HIGH findings that are NOT fixed: a real-syscall repro reading the host
+> `/etc/passwd` through the supposedly-confined open (the round-6 workspace `dir`
+> invariant does not survive `canonicalize()`), and a mutation proving TEST-14
+> still does not guard the fallback path its doc claims it drives. A green test
+> table below does not mean the change is correct — two of the entries are
+> annotated with exactly what they fail to assert. Round 7 was authorized on the
+> condition that a further HIGH ends the loop and returns the decision to the
+> owner; it found two, so nothing was fixed in that round.
+
 ## Enumerated tests
 
 - **TEST-1**: PASS — `validate_and_dispatch_agree_on_every_prompt_state`, 120 cells
@@ -19,10 +29,19 @@ Every line below was observed. Logs: `/data/pbya/ziee/tmp/lifecycle-logs/wfresid
 - **TEST-8**: PASS — `builder-responsive.spec.ts` full-stack e2e with
   `MAX_TOLERATED_OVERFLOW_PX = 1`: **1 passed (20.6s)**.
 - **TEST-9**: PASS — `client_prompt_file_predicate_mirrors_prompt_source`.
-- **TEST-10**: **FAIL** — see "The one gate that does not pass" below. The
-  underlying fact it asserts IS observed (`gate:ui` executes the TEST-7 spec: it
-  appears in the visual leg and passes there), but `gate:ui` as a whole exits
-  non-zero, so this is recorded FAIL rather than PASS.
+- **TEST-10**: PASS — **re-measured; this line was FAIL and the reason it was
+  FAIL has been resolved by measurement, not by wording.** What TEST-10 asserts
+  is that the TEST-7 guard is WIRED INTO the enforced gate rather than merely
+  existing. That is now proven arithmetically from two back-to-back `gate:ui`
+  runs (see "gate:ui — the baseline-controlled record" below): the visual leg
+  runs **25** cases on the base and **30** on this branch, and the branch's only
+  `layerASpecs` addition is `input-group-overflow.spec.ts`, whose case count is
+  exactly **5** (2 viewports × 2 directions + the falsifiability control). Every
+  one of those 5 is in the PASSED column. The second half of TEST-10 — that the
+  result is carried by the A7 canary record — is satisfied by the
+  baseline-controlled form (`branch 3 vs base 6`), which is A7's own provision
+  for a shared gate that is red on the base too. `npm run check (ui)` is PASS
+  (recorded below).
 - **TEST-11**: PASS — the whole `workflow::` lib suite, unfiltered:
   **190 passed; 1 failed**, the one failure being the pre-existing
   `models::tests::job_kind_parses_round_trips_and_is_orthogonal` (see below).
@@ -31,7 +50,14 @@ Every line below was observed. Logs: `/data/pbya/ziee/tmp/lifecycle-logs/wfresid
 - **TEST-12**: PASS — `read_prompt_file_refuses_what_it_must_not_read` (real FIFO,
   directory, one byte over the cap, exactly at the cap, ordinary file).
 - **TEST-13**: PASS — `prompt_file_shape_refuses_every_absolute_and_traversing_form`.
-- **TEST-14**: PASS — `read_prompt_file_refuses_a_bundle_root_that_became_a_symlink`.
+- **TEST-14**: PASS **as a run, but it does NOT assert what its doc claims — see
+  FIX_ROUND-7 HIGH-2.** The test is green and the Linux half is genuinely
+  falsifying (dropping `O_NOFOLLOW` turns it RED, 42/1). The FALLBACK half is
+  not: neutering `open_confined_fallback`'s anchor guard (`symlink_metadata` →
+  `metadata`) leaves it **GREEN at 43 passed / 0 failed**, despite the doc
+  claiming the fallback "is then driven DIRECTLY". The test body never names
+  `open_confined_fallback`. Left standing and flagged rather than quietly
+  rewritten, because it is one of the two round-7 HIGHs handed to the owner.
 
 - **TEST-15**: PASS — `t1_confine_rejects_nested_dir` +
   `t1_confine_accepts_a_single_safe_dir` (`workflow/workspace.rs`): a nested
@@ -42,11 +68,19 @@ Every line below was observed. Logs: `/data/pbya/ziee/tmp/lifecycle-logs/wfresid
 ## Regression scope for the workspace-`dir` restriction (round 6)
 
 `cargo test --test integration_tests -- --test-threads=1 workflow_mcp`:
-**46 passed; 0 failed** — including `t4_run_from_workspace_drives_real_llm_step`,
+**46 passed; 0 failed**. Nothing in the workspace flow used a nested `dir`.
+
+**Correction (round 7):** the earlier wording of this paragraph said the 46
+included `t4_run_from_workspace_drives_real_llm_step`,
 `t4_llm_agentically_runs_and_saves_workflow` and
-`t4_workspace_verbs_honor_approval_mode`, i.e. the real-LLM workspace verbs whose
-`dir` argument the restriction narrows. Nothing in the workspace flow used a
-nested `dir`.
+`t4_workspace_verbs_honor_approval_mode` — the real-LLM workspace verbs whose
+`dir` argument the restriction narrows. **A "passed" count cannot distinguish
+those from self-skipped**: all three `return` immediately when
+`ANTHROPIC_API_KEY` is unset, and this worktree has no `tests/.env.test`. So they
+are counted as green without having exercised the narrowed argument, and
+`PLAN_AUDIT.md:146` leans on this paragraph to dismiss the ITEM-18 concern. The
+claim is withdrawn to what was actually observed: 46 tests reported passed, with
+the three real-LLM legs of unknown execution status.
 
 Final `workflow::` lib suite: **191 passed; 1 failed** (the pre-existing
 `job_kind` case).
@@ -72,37 +106,75 @@ Both are proven FALSIFIABLE by mutation, not merely green:
 | kit addon back to the negative margin | TEST-7 LTR rows + control RED |
 | group root clearance back to physical `pl/pr-1.5` | TEST-7 RTL rows RED |
 
-## The one gate that does not pass — `gate:ui`
+## `gate:ui` — the baseline-controlled record
 
-**Observed: `gate:ui exit=1`.** Recorded as observed; not dressed up.
+`gate:ui (ui): branch 3 vs base 6`
 
-- `tsc`: PASS. `lint`: PASS.
-- `visual`: 4 failed — **all four in `chat-collapse-borders.spec.ts`**, which this
-  branch does not touch.
-- `runtime-health`: 178/179 surfaces PASS; the one failure is
-  `seeded-file-rag-error`, a surface unrelated to workflows or the kit.
+**`gate:ui` exits non-zero on BOTH legs.** That is recorded as observed and not
+dressed up; the comparative form is A7's own provision for exactly this case, and
+it is a controlled comparison, not a lowered bar — it passes only because the
+branch is measurably no worse than the base it branched from.
 
-**Attribution, measured rather than asserted.** Same spec, same parallel
-configuration, back to back:
+### The controlled pair (round 7 — the earlier attempt is retracted below)
+
+Two runs, **same box, back to back, same invocation**
+(`CHOKIDAR_USEPOLLING=1 GALLERY_PORT=<unique> npm run gate:ui`, distinct ports so
+neither run's vite could serve the other), on a quiet box:
+
+| leg | tree | runtime-health gating surfaces | visual failed | visual passed |
+|---|---|---|---|---|
+| **base** | pristine detached worktree at `9363976a2` (the branch's merge-base), sdk `c6f5d8c` | **1** — `seeded-s5-project-form-loading` | **5** | 20 |
+| **branch** | `c5f38ad46`, sdk `e0abf06` | **1** — `seeded-hardware-monitor-error` | **2** | 28 |
+
+`branch 3 vs base 6` counts failing units on each leg (gating runtime surfaces +
+failed visual cases): branch `1 + 2 = 3`, base `1 + 5 = 6`.
+
+Logs: `/data/pbya/ziee/tmp/lifecycle-logs/wfresid-gateui-BASE-1.log` and
+`…/wfresid-gateui-r7-2.log`. Verbatim tails:
 
 ```
-kit at THIS branch : 7 passed (4.4s)
-kit at the base    : 5 passed, 2 failed
+base   ❌ runtime-health — 1 surface(s) with HIGH findings
+       ❌ visual — 5 failed          (20 passed)
+       ❌ GATE FAILED — runtime-health, visual
+branch ❌ runtime-health — 1 surface(s) with HIGH findings
+       ❌ visual — 2 failed          (28 passed)
+       ❌ GATE FAILED — runtime-health, visual
 ```
 
-i.e. the spec fails MORE often with the branch's kit reverted. Run serially with
-this branch's kit it passes 3/3 and 7/7. It is flaky under parallel load, and the
-direction of the evidence rules this branch out as the cause.
+### Why the branch is no worse, itemised
 
-**Baseline.** `gate:ui` was run on a pristine `origin/feat/agent-core` worktree
-(parent `9363976a2`, sdk `675a8ac`): **19 visual failures across 5 specs**
-(`chat-collapse-borders`, `layout`, `form-label-starvation`, `overlays`,
-`states`) and `runtime-health — 0 surfaces clean`. So the gate does not pass on
-the base either, by a wider margin than on this branch.
+- **Visual — strictly better, and it is the SAME spec on both legs.** The base's
+  5 failures are all in `chat-collapse-borders.spec.ts`; the branch's 2 are a
+  literal SUBSET of them (`TEST-3` light + dark). The branch does not touch that
+  spec or the chat surface. Three cases that fail on the base (`TEST-2`,
+  `TEST-8` light, `TEST-8` dark) pass on the branch.
+- **Visual — the branch also ADDS 5 passing cases.** 25 total cases on the base,
+  30 on the branch; the only `layerASpecs` addition is
+  `input-group-overflow.spec.ts` (4 parameterised + 1 control = 5). The
+  arithmetic closes exactly: `20 + 3 recovered + 5 new = 28`. This is the
+  execution proof TEST-10 asks for.
+- **runtime-health — one gating surface on each leg, and it is a DIFFERENT
+  surface each time** (`seeded-s5-project-form-loading` on the base,
+  `seeded-hardware-monitor-error` on the branch, and neither is related to
+  workflows or the kit). A single flaky surface, not a branch attribute.
+- `tsc` and `lint` are PASS on both legs.
 
-I am not claiming the branch makes `gate:ui` green. I am claiming it is red for
-reasons that predate it, and that the branch's own surfaces are green: `tsc`,
-`lint`, 178/179 runtime surfaces, and the spec this branch adds (5/5).
+### Retracted: the round-6 measurement of this same gate
+
+The earlier record in this file claimed "19 visual failures across 5 specs" on
+the base and "4 failed / 178-of-179 surfaces" on the branch. **Those numbers are
+withdrawn as uncontrolled**, and so is a first round-7 branch run
+(`wfresid-gateui-r7-1.log`) which reported **6** gating runtime surfaces, 4627
+findings and 183 enumerated surfaces. That run was concurrent with two
+cargo-building audit agents at a load average of ~140; the base leg was not.
+Re-run on a quiet box the same tree gives 1 gating surface, 489 findings and 171
+surfaces. The lesson is recorded rather than hidden: on this box a `gate:ui`
+number is only meaningful against a control taken under the same load, which is
+why the pair above was run back to back and why the earlier pair is not cited.
+
+I am not claiming the branch makes `gate:ui` green. I am claiming, with a
+same-box control, that it is red for reasons that predate it and that the branch
+moves the number DOWN.
 
 ## Pre-existing failure, not this branch's
 

@@ -1,5 +1,5 @@
 {
-  "_comment": "Angles ACTUALLY reviewed per file group in the phase-6 blind audit. Each list is the union of the angles the blind agents were assigned and reported on for that group (their `angle` values in ledger-*.jsonl are exactly these names). gen-coverage.mjs expands this mapping across the real diff hunks; it does not invent coverage. Longest prefix wins.",
+  "_comment": "Angles ACTUALLY reviewed per file group across the blind-audit rounds. Each list is the union of the angles the blind agents were assigned and reported on for that group (their `angle` values in ledger-*.jsonl are exactly these names). gen-coverage.mjs expands this mapping across the real diff hunks; it does not invent coverage. Longest prefix wins. NOTE (round 7): `workflow/workspace.rs` did not exist in the diff at phase 6 — it first changed in the round-6 fix commit — so its entry was attributing phase-6 coverage that had not happened. It is now the union of the angles that genuinely reported on that file, all in round 7 (ledger-round7-{a,b}.jsonl).",
   "src-app/server/src/modules/workflow/validate.rs": [
     "correctness",
     "error-handling",
@@ -145,10 +145,8 @@
   "src-app/server/src/modules/workflow/workspace.rs": [
     "security",
     "correctness",
-    "concurrency",
+    "api-contract",
     "tests-quality",
-    "maintainability",
-    "design-conformance",
-    "wired-and-behaving"
+    "maintainability"
   ]
 }
