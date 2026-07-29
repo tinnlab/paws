@@ -83,16 +83,20 @@ converged on the two most serious ones, which is what promoted them from
 ## Fixed — documentation accuracy
 
 - The doc claimed the child rules win by SPECIFICITY. Two reviewers compiled
-  Tailwind and showed both selectors are (0,1,0): the override wins by EMISSION
-  ORDER. Corrected, including the consequence (it does not survive an
-  `!important` child).
+  Tailwind and showed the then-unscoped `[&>*]` selectors were both (0,1,0), so
+  the override won by EMISSION ORDER. Corrected — and then corrected AGAIN in
+  round 2, because scoping the rules to `:is(button,a)` in this very round made
+  them (0,1,1), i.e. specificity after all. A good illustration of why a comment
+  asserting a mechanism has to be re-checked whenever the code it describes moves.
 - The documented escape hatch ("set the height on the row via `className`") does
   not work — a row-level height cannot reach the child rules. Corrected to the
   real one (re-declare the variant).
 - `KIT_MANIFEST.md` — the doc agents are told to read — described the primitive
   as "_No always-required props._" while it silently normalizes its children. The
-  full child contract now lives on the props type, so the generated manifest
-  carries it.
+  full child contract was moved onto the props type. NOTE: round 2 showed this
+  did NOT achieve what it claimed — the manifest generator emits per-PROP rows
+  only, so a type-level comment never reaches it. The comment now says so and
+  points the reader at the source instead.
 
 ## Accepted, NOT fixed (recorded and reported, not silently dropped)
 
@@ -121,6 +125,7 @@ converged on the two most serious ones, which is what promoted them from
 
 A fresh blind reviewer (no access to round 1's findings or my reasoning) audited
 the UPDATED diff across correctness, security, tests-quality, scope and
-regression risk.
+regression risk. It found NEW real defects — see `FIX_ROUND-2.md`, which is this
+round's honest result: the loop had not converged after one round.
 
-**New confirmed findings:** 0
+**New confirmed findings:** 12
