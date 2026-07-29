@@ -84,4 +84,12 @@ my own measurement before being accepted.
   sound in the direction that matters (a loaded-but-wrong surface rethrows on the
   first attempt); the rest is time-to-diagnosis only.
 
+## Round-3 verification
+
+A third fresh blind reviewer audited the post-round-2 diff, with the same
+diff-only context and an explicit instruction to MEASURE any CSS claim rather
+than trust a comment (round 2 having shown that comments in this diff had been
+wrong twice). Result recorded below once observed — this number is not written
+ahead of the run.
+
 **New confirmed findings:** 0
