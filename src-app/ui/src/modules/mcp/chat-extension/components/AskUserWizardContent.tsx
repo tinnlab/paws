@@ -3,6 +3,7 @@ import {
   Badge,
   Button,
   Card,
+  CardActions,
   Checkbox,
   Controller,
   Form,
@@ -402,7 +403,14 @@ export function AskUserWizardContent({
       className="mb-2"
       data-testid="mcp-elicitation-pending-card"
       footer={
-        <div className="flex w-full items-center justify-between gap-2">
+        // `CardActions` with the justification overridden: this footer is a SPLIT
+        // row (Decline pinned to the inline-start side, navigation to the
+        // inline-end side), not a right-aligned cluster. `cn()` is twMerge-backed
+        // and `className` merges last, so `justify-between` displaces the
+        // primitive's `justify-end` while its wrap + child-width rules still
+        // apply — which is what keeps a control from being pushed out of reach in
+        // a narrow card.
+        <CardActions className="items-center justify-between">
           <Button
             type="button"
             variant="ghost"
@@ -413,7 +421,10 @@ export function AskUserWizardContent({
           >
             Decline
           </Button>
-          <div className="flex gap-2">
+          {/* The nested navigation group is a flex container in its own right, so
+              the primitive's wrap rule does not reach its buttons — it needs its
+              own `flex-wrap` or Back/Next could still overflow together. */}
+          <div className="flex flex-wrap justify-end gap-2">
             {step > 0 && (
               <Button
                 type="button"
@@ -448,12 +459,16 @@ export function AskUserWizardContent({
               </Button>
             )}
           </div>
-        </div>
+        </CardActions>
       }
     >
-      <div className="flex items-center gap-2 min-w-0" data-testid="elicitation-wizard">
+      {/* `flex-wrap` + `min-w-0`: the trailing labels are `whitespace-nowrap`,
+          so on one line they starve the server name to a rendered width of 0 in
+          a narrow card (the measured failure on the sibling approval card).
+          Same class as the footer row — wrap instead of clip. */}
+      <div className="flex flex-wrap items-center gap-2 min-w-0" data-testid="elicitation-wizard">
         <SquarePen className="size-4 shrink-0 text-primary" />
-        <Text strong className="truncate">{server}</Text>
+        <Text strong className="truncate min-w-0">{server}</Text>
         <Text type="secondary" className="text-xs whitespace-nowrap">
           is requesting input
         </Text>
