@@ -392,9 +392,10 @@ fn default_expose_mode() -> ExposeMode {
 /// **`#[cfg(test)]` on purpose.** Nothing in production reads this list — the
 /// guard derives the emitted set from the source itself, so a `pub` const here
 /// would be public API with no caller (CODING_GUIDELINES §15) whose `pub` also
-/// suppresses the `dead_code` lint (it is `pub(crate)` so the workflow module's
-/// own tests can compare against it — see `dispatch.rs`'s PROMPT_CODES guard).
-/// It stays as a hand-curated test fixture
+/// suppresses the `dead_code` lint. It is `pub(crate)` rather than private only
+/// so the workflow module's own tests can compare against it (see `dispatch.rs`'s
+/// PROMPT_CODES guard) — crate-internal, so the no-public-API-without-a-caller
+/// reasoning above is unaffected. It stays as a hand-curated test fixture
 /// because it is the guard's CANARY: the bidirectional `stale` assertion means
 /// any future regression that makes the source scanner see FEWER emit sites
 /// (a new file it forgets, a call shape it mis-lexes) fails loudly instead of
@@ -576,11 +577,15 @@ pub fn validate_for_install(
 ///
 /// `validate_collecting` reads every `prompt_file:` (bounded at
 /// `MAX_PROMPT_FILE_BYTES` each) with blocking `std::fs`, so calling it directly
-/// from an async fn parks a tokio worker for the duration. The draft-validation
-/// handlers pass a non-existent bundle root and so read nothing, but
-/// `spawn_run`/`resume_run` pass the extracted bundle and are on the request
-/// path — they go through here. Mirrors the same `spawn_blocking` the runner
-/// already uses for the dispatch-side read.
+/// from an async fn parks a tokio worker for the duration.
+///
+/// EVERY caller holding a real bundle goes through here — `spawn_run` and
+/// `resume_run` (runner), workflow install (hub), the dev import/write handlers,
+/// and `workflow_mcp`'s workspace verbs, which carry the largest such root of all
+/// (the conversation's sandbox workspace). The only callers left on the sync form
+/// are the DRAFT-validation handlers, which pass a bundle root that does not
+/// exist and therefore read nothing at all. Mirrors the same `spawn_blocking` the
+/// runner already uses for the dispatch-side read.
 pub async fn validate_for_install_async(
     workflow: &WorkflowDef,
     bundle_root: &Path,
@@ -1212,13 +1217,15 @@ pub const MAX_PROMPT_FILE_BYTES: u64 = 1024 * 1024;
 /// the returned fd, which describes the very file that was opened rather than
 /// whatever the path names a moment later.
 ///
-/// Elsewhere it falls back to canonicalize + confinement + `O_NOFOLLOW`: on unix
-/// that closes the FINAL-component window but not the intermediate one, and on
-/// Windows there is no `O_NOFOLLOW` equivalent, so it closes neither. This is
-/// acceptable because the untrusted writer this defends against — the code
-/// sandbox — runs on a Linux kernel on ALL THREE host platforms (natively, in a
-/// libkrun microVM on macOS, in WSL2 on Windows); the fallback covers dev hosts
-/// resolving bundles the server itself extracted.
+/// Elsewhere — every non-Linux host, and Linux without `openat2` — it falls back
+/// to: refuse a non-directory or symlinked ANCHOR, canonicalize, confine, then
+/// open refusing a final-component symlink where the platform can. That closes
+/// the swapped-root attack and the final-component one; it does NOT close a
+/// racing INTERMEDIATE swap, because nothing short of a single confined
+/// resolution can. Stated plainly rather than argued away: the confinement is
+/// performed by the SERVER's kernel, so "the sandbox guest is Linux" does not
+/// make the fallback safe — it is weaker, and the residual window is a race
+/// against a directory rename inside the bundle root.
 #[cfg(target_os = "linux")]
 fn open_confined(root: &Path, rel: &str) -> Result<std::fs::File, PromptFileError> {
     use std::ffi::CString;
@@ -1257,7 +1264,12 @@ fn open_confined(root: &Path, rel: &str) -> Result<std::fs::File, PromptFileErro
     // SAFETY: `open_how` is a plain repr(C) struct of integers; all-zero is a
     // valid, and the documented-neutral, value for every field.
     let mut how: libc::open_how = unsafe { std::mem::zeroed() };
-    how.flags = (libc::O_RDONLY | libc::O_NONBLOCK | libc::O_CLOEXEC | libc::O_NOFOLLOW) as u64;
+    // No `O_NOFOLLOW` here: it applies to the FINAL component, so an in-bundle
+    // symlink to a prompt file would fail with ELOOP and be reported as a
+    // security ESCAPE — a false verdict, and precisely the Linux/fallback
+    // divergence this function exists to avoid. `RESOLVE_BENEATH` is the
+    // confinement, and it covers symlink targets.
+    how.flags = (libc::O_RDONLY | libc::O_NONBLOCK | libc::O_CLOEXEC) as u64;
     // RESOLVE_BENEATH is the confinement, and the kernel enforces it on every
     // component INCLUDING symlink targets — so a symlink that stays inside the
     // bundle still resolves, exactly as the non-Linux fallback allows, while one
@@ -1287,9 +1299,14 @@ fn open_confined(root: &Path, rel: &str) -> Result<std::fs::File, PromptFileErro
             // magic-link rejection surfaces as one; an ordinary symlink loop is
             // also not a readable prompt.)
             Some(libc::EXDEV) | Some(libc::ELOOP) => PromptFileError::Escape,
-            // openat2 landed in 5.6. An older kernel is a deployment fact, not an
-            // author error, so fall back rather than refusing every prompt file.
-            Some(libc::ENOSYS) => return open_confined_fallback(root, rel),
+            // openat2 landed in 5.6, and a seccomp filter that does not list it
+            // (Docker's default profile predates it) answers EPERM. Both are
+            // deployment facts, not author errors — refusing every `prompt_file:`
+            // in the deployment with copy that blames the author's file would be
+            // the worst possible answer, so fall back instead.
+            Some(libc::ENOSYS) | Some(libc::EPERM) => {
+                return open_confined_fallback(root, rel);
+            }
             _ => PromptFileError::Unreadable(err.to_string()),
         });
     }
@@ -1307,6 +1324,18 @@ fn open_confined(root: &Path, rel: &str) -> Result<std::fs::File, PromptFileErro
 /// an intermediate directory swapped between the check and the open is not
 /// caught here.
 fn open_confined_fallback(root: &Path, rel: &str) -> Result<std::fs::File, PromptFileError> {
+    // The ANCHOR first, exactly as the Linux path does. Without this the whole
+    // check is circular: if the root itself was replaced by a symlink, `canon`
+    // and `root_canon` both resolve under the attacker's target and
+    // `starts_with` passes. `symlink_metadata` does NOT follow the last
+    // component, so it sees the symlink rather than what it points at.
+    let root_meta = std::fs::symlink_metadata(root)
+        .map_err(|e| PromptFileError::Unreadable(format!("bundle root: {e}")))?;
+    if !root_meta.is_dir() {
+        return Err(PromptFileError::Unreadable(
+            "bundle root is not a directory".to_string(),
+        ));
+    }
     let canon = root
         .join(rel)
         .canonicalize()
@@ -1524,6 +1553,13 @@ fn prompt_file_finding(e: &PromptFileError, rel: &str, step_id: &str) -> Validat
 fn check_prompt_files(workflow: &WorkflowDef, bundle_root: &Path) -> Vec<ValidationError> {
     let mut out = Vec::new();
     let bundle_present = bundle_root.is_dir();
+    // One READ per distinct path, not per step. Nothing stops a definition
+    // pointing fifty steps at the same 1 MiB file, and this function runs on
+    // every install AND every launch — without this, ~1 KB of authored YAML buys
+    // fifty megabytes of repeated disk reads each time. The verdict is unchanged
+    // either way, so caching it is purely removing the amplification.
+    let mut seen: std::collections::HashMap<&str, Option<PromptFileError>> =
+        std::collections::HashMap::new();
     for s in &workflow.steps {
         // Filtered through the SAME emptiness rule the XOR check and the runner
         // use: an empty `prompt_file:` is ABSENT, not a path. Left unfiltered it
@@ -1547,7 +1583,15 @@ fn check_prompt_files(workflow: &WorkflowDef, bundle_root: &Path) -> Vec<Validat
         // Everything else is decided by the SAME call the runner makes, so the
         // validator cannot pass a file the run then fails on, nor refuse one the
         // run would have read (INV-1, file half).
-        if let Err(e) = read_prompt_file(bundle_root, p) {
+        let verdict = match seen.get(p) {
+            Some(cached) => cached.clone(),
+            None => {
+                let v = read_prompt_file(bundle_root, p).err();
+                seen.insert(p, v.clone());
+                v
+            }
+        };
+        if let Some(e) = verdict {
             out.push(prompt_file_finding(&e, p, &s.id));
         }
     }
@@ -2327,6 +2371,12 @@ steps:
     /// anchored at `/` — `prompt_file: "etc/passwd"` then reads the host file
     /// while still satisfying the "no absolute paths" rule, because relative-to-`/`
     /// is not spelled absolutely. No race is required.
+    ///
+    /// `#[cfg(unix)]` only because the test needs `symlink` to build the attack —
+    /// the property is asserted for BOTH resolution paths: `openat2` refuses it
+    /// via the `O_NOFOLLOW|O_DIRECTORY` anchor open, and the fallback refuses it
+    /// via the `symlink_metadata` anchor check, so cfg-disabling `openat2` leaves
+    /// this green while REMOVING either anchor guard turns it red.
     #[cfg(unix)]
     #[test]
     fn read_prompt_file_refuses_a_bundle_root_that_became_a_symlink() {

@@ -24,7 +24,7 @@ use crate::modules::workflow::repository;
 use crate::modules::workflow::runner;
 use crate::modules::workflow::validate::{
     ExposeMode, OutputDef, Severity, WorkflowDef, parse_workflow_yaml, validate_collecting,
-    validate_for_install,
+    validate_for_install_async,
 };
 use crate::modules::workflow::{compiled, cost};
 
@@ -536,7 +536,10 @@ async fn load_and_validate_workspace(root: &Path) -> Result<WorkflowDef, AppErro
         )
     })?;
     let def = parse_workflow_yaml(&content)?;
-    validate_for_install(&def, root, false)?;
+    // `_async`: a REAL bundle root, so this reads every `prompt_file:` from
+    // disk — and here the root is the conversation's sandbox workspace, i.e. the
+    // largest such read there is. Must not run on the request's tokio worker.
+    validate_for_install_async(&def, root, false).await?;
     Ok(def)
 }
 

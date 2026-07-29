@@ -2184,11 +2184,13 @@ async fn build_workflow_create_from_hub(
         ))
     })?;
     let workflow_def = workflow::validate::parse_workflow_yaml(&content)?;
-    workflow::validate::validate_for_install(
+    // `_async`: a REAL bundle root, so this reads every `prompt_file:` from disk.
+    workflow::validate::validate_for_install_async(
         &workflow_def,
         &extraction.extracted_path,
         false,
-    )?;
+    )
+    .await?;
 
     // Reject install when the computed MCP tool slug would overflow the
     // 128-char composed-name cap (slug body > 87 chars) — otherwise the

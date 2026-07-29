@@ -114,8 +114,14 @@ const HUMAN_COPY: Record<string, CopyFn> = {
   // leading-`/` reject) is a path that was WRITTEN to leave the workflow;
   // ESCAPE is a path that looked fine but RESOLVED outside it (a symlink, or a
   // chain of segments that climbs out).
+  // Widened alongside the shape check itself: this code no longer means only
+  // "an absolute or climbing path". It now also covers a Windows drive letter
+  // and any backslash — the latter because it separates directories on Windows
+  // and is a legal filename character on Unix, so one written path would name
+  // two different files. HUMAN_COPY REPLACES the backend message, so anything
+  // the backend explains has to be said here or the author never sees it.
   "WORKFLOW_PROMPT_FILE_UNSAFE": () =>
-    'The file this step reads its wording from is written as a location elsewhere on the machine — name a file that is stored with this workflow instead.',
+    'The file this step reads its wording from is not named as a plain location inside the workflow — it points elsewhere on the machine, starts with a drive letter, or uses a backslash. Name a file stored with this workflow, written with forward slashes.',
   "WORKFLOW_PROMPT_FILE_ESCAPE": () =>
     'The file this step reads its wording from ends up outside the workflow once the location is followed — point it at a file that is really stored inside this workflow.',
 
