@@ -205,12 +205,22 @@ const nonEmpty = (label: string) => {
  *  TYPE error keeps its authored copy so no zod diagnostic can reach the author
  *  (INV-1). `''`/`null` pass because the backend reads them as "no typed
  *  prompt" — clearing the box is how the author resolves `WORKFLOW_PROMPT_BOTH`
- *  on this surface. `'   '` also passes THIS field check, but note it is NOT
- *  "no typed prompt" to the backend: `prompt_source` filters on `is_empty()`,
- *  not `trim()`, so whitespace beside a `prompt_file:` is `PromptSource::Both`
- *  and the validation PANEL reports `WORKFLOW_PROMPT_BOTH` for it. Field-level
- *  requiredness and step-level exclusivity are different questions answered on
- *  different surfaces; this one only answers "must the author type something". */
+ *  on this surface.
+ *
+ *  TWO deliberate places where this field is STRICTER than the backend, both
+ *  about whitespace, and neither a disagreement about validity:
+ *   - beside a `prompt_file:`, `'   '` passes this check but is
+ *     `PromptSource::Both` to the backend, so the validation PANEL reports
+ *     `WORKFLOW_PROMPT_BOTH`. Field-level requiredness and step-level
+ *     exclusivity are different questions on different surfaces; this one only
+ *     answers "must the author type something here".
+ *   - with NO `prompt_file:`, `'   '` is a valid inline prompt to the backend
+ *     (`prompt_source` filters on `is_empty()`, not `trim()` — DEC-3) while the
+ *     `.trim().min(1)` below marks the field required. That is intentional: a
+ *     whitespace-only prompt is a typo, not an intent, and catching it as the
+ *     author types is better than sending it to a model. Being stricter in the
+ *     FORM is safe; being stricter in the backend would not be, which is why
+ *     `promptSuppliedByFile` mirrors the backend exactly and this does not. */
 const promptField = (label: string, suppliedByFile: boolean) => {
   const required = `${label} is required`
   const text = z.string({ error: required }).trim()

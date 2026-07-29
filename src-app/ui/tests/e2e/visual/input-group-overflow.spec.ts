@@ -33,6 +33,15 @@
  *    selector (`:has(> button)`), not a blanket margin — a control that injects a
  *    stronger defect than the one that existed does not prove the probe would
  *    catch a real revert.
+ *
+ * WHAT THIS SPEC DOES NOT COVER, stated so the gap is not rediscovered as a
+ * surprise: the gallery renders only `inline-end` addons carrying a `> button`
+ * (a combobox trigger) plus `command`'s `inline-start` icon addon. It therefore
+ * exercises the `has-[>button]` branch and the bare branch, but NOT the
+ * `has-[>kbd]` branch, and not an `inline-start` addon with a button child —
+ * because no consumer in this tree renders one. The probe is written over both
+ * aligns so those cells are measured the moment such a consumer appears, rather
+ * than needing the spec to be rewritten first.
  */
 import { expect, test, type Page } from '@playwright/test'
 import { STANDALONE_PATH } from './_gallery'
@@ -63,6 +72,21 @@ interface GroupProbe {
   addonPastEdge: number
   /** Whether this addon carries the `> button` child the reverted rule keyed on. */
   hasButtonChild: boolean
+  /**
+   * The control's inline padding on the ADDON's side minus its padding on the
+   * opposite side, in the WRITING direction.
+   *
+   * `InputGroup` TIGHTENS the control's padding on whichever side the addon is
+   * on (the addon's own padding already supplies the visual gap), and it selects
+   * that side from the LOGICAL `data-align`. It used to APPLY the tightening
+   * physically, which was invisible while the addon's own padding was physical
+   * too — so converting the addon left RTL tightening the side with NO addon on
+   * it. Measured: −4 (10px base, 6px tightened) in BOTH directions when correct;
+   * +4 in RTL when the rule is physical. So the invariant is "strictly
+   * negative", identically in either direction — which is a thing only an RTL
+   * render can falsify.
+   */
+  controlClearanceDelta: number | null
 }
 
 /**
@@ -82,6 +106,7 @@ async function probeGroups(page: Page): Promise<GroupProbe[]> {
       overflow: number
       addonPastEdge: number
       hasButtonChild: boolean
+      controlClearanceDelta: number | null
     }[] = []
     for (const el of Array.from(
       document.querySelectorAll('[data-slot="input-group"]'),
@@ -100,6 +125,16 @@ async function probeGroups(page: Page): Promise<GroupProbe[]> {
         // the physical side chosen by the writing direction.
         const startSide = rtl ? groupBox.right - a.right : a.left - groupBox.left
         const endSide = rtl ? groupBox.left - a.left : a.right - groupBox.right
+        const control = el.querySelector('[data-slot="input-group-control"]')
+        let controlClearanceDelta: number | null = null
+        if (control) {
+          const cs = getComputedStyle(control)
+          const padStart = Number.parseFloat(rtl ? cs.paddingRight : cs.paddingLeft)
+          const padEnd = Number.parseFloat(rtl ? cs.paddingLeft : cs.paddingRight)
+          const onAddonSide = align === 'inline-end' ? padEnd : padStart
+          const onOtherSide = align === 'inline-end' ? padStart : padEnd
+          controlClearanceDelta = Number((onAddonSide - onOtherSide).toFixed(2))
+        }
         out.push({
           where: labelled ? `[data-testid="${labelled}"]` : 'input-group',
           align,
@@ -108,6 +143,7 @@ async function probeGroups(page: Page): Promise<GroupProbe[]> {
             (align === 'inline-end' ? endSide : -startSide).toFixed(2),
           ),
           hasButtonChild: !!addon.querySelector(':scope > button'),
+          controlClearanceDelta,
         })
       }
     }
@@ -175,6 +211,24 @@ test.describe('kit — InputGroup addon containment', () => {
           bleeding,
           `addon(s) rendering past their group's border box at ${at}: ${JSON.stringify(bleeding, null, 2)}`,
         ).toEqual([])
+
+        // The control's padding must be TIGHTENED on the addon's side. This is
+        // the part an RTL render is uniquely able to observe: the group picks
+        // the side from the logical `data-align`, so applying it physically is
+        // invisible in LTR and lands on the wrong side in RTL. Without this the
+        // RTL rows would merely re-assert the LTR overflow property and could
+        // not fail on their own.
+        const misplaced = groups.filter(
+          g => g.controlClearanceDelta !== null && g.controlClearanceDelta >= 0,
+        )
+        expect(
+          misplaced,
+          `the control's padding is NOT tightened on the addon's side at ${at} (physical padding keyed off a logical attribute): ${JSON.stringify(misplaced, null, 2)}`,
+        ).toEqual([])
+        expect(
+          groups.filter(g => g.controlClearanceDelta !== null).length,
+          `no group paired an addon with a control at ${at} — the clearance assertion measured nothing`,
+        ).toBeGreaterThan(0)
       })
     }
   }

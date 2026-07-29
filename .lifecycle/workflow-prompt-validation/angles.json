@@ -84,5 +84,19 @@
     "modularity",
     "extensibility",
     "tests-quality"
+  ],
+  "src-app/ui/gallery.config.json": [
+    "design-conformance",
+    "wired-and-behaving",
+    "tests-quality",
+    "maintainability",
+    "correctness"
+  ],
+  ".github/workflows/visual-tests.yml": [
+    "design-conformance",
+    "wired-and-behaving",
+    "tests-quality",
+    "maintainability",
+    "correctness"
   ]
 }

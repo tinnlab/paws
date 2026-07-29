@@ -20,6 +20,8 @@ no migration grant), so A9/A10 do not apply.
 - **TEST-9** (tier: unit) [covers: ITEM-10] file: `src-app/server/src/modules/workflow/validate.rs` — asserts: the BACKEND suite fails if `stepForms.ts`'s `promptSuppliedByFile` stops rejecting the empty string, or starts trimming — the Rust↔TypeScript drift guard for the prompt-source rule, in the same read-the-TS-at-runtime shape this file already uses for `validationCopy.ts`.
 - **TEST-10** (tier: e2e) [covers: ITEM-11, ITEM-13] file: `src-app/ui/tests/e2e/visual/input-group-overflow.spec.ts` — asserts: `npm run gate:ui` (the repo's stated UI exit condition) actually RUNS the TEST-7 spec, proven by EXECUTION and recorded as the `gate:ui (ui): PASS` line — i.e. the guard is wired into the enforced gate rather than merely existing — and that `npm run check (ui)` still passes with the reworded author-facing copy.
 
+- **TEST-11** (tier: unit) [covers: ITEM-16, ITEM-17] file: `src-app/server/src/modules/workflow/validate.rs` — asserts: the whole `workflow::` lib suite (NOT a hand-picked filter) passes, so the module's own crate-wide `validation_codes_are_registered_and_humanised` drift guard — which round 1 broke by passing computed layer/code arguments, and which lives in a sibling module a scoped filter skipped — is green, together with `prompt_codes_list_covers_every_prompt_verdict_the_validator_emits` rebased onto the canonical `VALIDATION_CODES` registry.
+
 ## Coverage map
 
 | ITEM | covered by |
@@ -37,6 +39,10 @@ no migration grant), so A9/A10 do not apply.
 | ITEM-11 | TEST-7, TEST-10 |
 | ITEM-12 | [DESCOPED] — see DECISIONS |
 | ITEM-13 | TEST-10 |
+| ITEM-14 | [DESCOPED] — see DECISIONS |
+| ITEM-15 | [DESCOPED] — see DECISIONS |
+| ITEM-16 | TEST-1, TEST-3, TEST-6, TEST-11 |
+| ITEM-17 | TEST-7, TEST-10, TEST-11 |
 
 | INV | acceptance test |
 |---|---|

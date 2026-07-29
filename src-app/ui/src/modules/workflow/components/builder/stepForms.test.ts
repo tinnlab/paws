@@ -353,7 +353,10 @@ test('clearing the prompt box saves an ABSENT prompt, not an empty one', () => {
   // reads `Some("")` as "no typed prompt" (validate.rs: has_prompt filters
   // empty), so BOTH clears, MISSING does not fire, the panel goes green and
   // Save is enabled — and then dispatch.rs's load_raw_prompt, which matches
-  // only (Some,None)/(None,Some), fails the RUN with "invalid prompt config".
+  // only (Some,None)/(None,Some), failed the RUN with "invalid prompt config".
+  // Both sides now share `validate::prompt_source`, so that split is closed —
+  // but writing `""` through is still wrong (see the forms' comment), and this
+  // guard is what keeps the normalisation from being quietly removed.
   // The builder's own remedy would break the workflow it was fixing.
   //
   // Source-scanned: the value never reaches `configErrors` (an empty prompt

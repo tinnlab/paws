@@ -51,6 +51,12 @@ the backend disagreement, which is reachable by any hand-authored or imported
 | `prompt_file: "prompts/../prompts/real.md"` | RED `WORKFLOW_PROMPT_FILE_UNSAFE` | **Ok** — bare `bundle_root.join(rel)`, no shape or confinement check at all |
 | `prompt_file: <a symlink out of the bundle>` | RED `WORKFLOW_PROMPT_FILE_ESCAPE` | **Ok** — same |
 | `prompt_file: <a zero-byte file>` | GREEN | Ok("") — ships the empty prompt to the model that the inline half refuses |
+| `prompt: "x"` + `prompt_file: ""` | RED `WORKFLOW_PROMPT_BOTH` | Ok("x") |
+
+That last row is the one verdict this fix deliberately RELAXES rather than
+tightens: an empty path is not a second prompt source, so the step is simply an
+inline prompt, and the two sides agree on it afterwards. It is listed here so the
+relaxation is part of the design rather than a side effect (DEC-5).
 
 The last four rows were found by this branch's own phase-6 blind audit, not by the
 original residual report. They are the SAME defect — two places deciding
@@ -140,5 +146,27 @@ addon. It is in scope because this change is what made it observable.
   inside a 32px group). Real, pre-existing, and orthogonal to the horizontal
   defect the residual recorded — reported onward rather than folded in, exactly
   as FIX_ROUND-2 did for the defect this branch is now fixing.
+- **The DRAFT-validation surfaces' file verdicts.** `POST /validate` and
+  `POST /validate-def` deliberately pass a bundle root that does not exist, so
+  `check_prompt_files` SKIPS every question that needs a real bundle. A bad
+  `prompt_file:` therefore still shows a green panel there and fails later. That
+  is not this defect: answering it in the draft surfaces is what
+  `workflow-builder-ux` FIX_ROUND-4 removed as a FALSE finding (it reported
+  `WORKFLOW_PROMPT_FILE_MISSING` for every `prompt_file:` step and permanently
+  disabled Save), and install/`spawn_run`/`resume_run` re-validate authoritatively
+  against the real bundle. The shape check, which needs no bundle, DOES run there.
+- **Template refs inside a `prompt_file:` BODY.** An inline `prompt:` is scanned
+  by `check_template_refs`; a prompt file's contents are not, so
+  `{{ inputs.missing }}` in a prompt FILE validates green and fails at render.
+  Adjacent and real, but a TEMPLATE-reference question rather than a
+  prompt-CONFIGURATION one, and fixing it would pull template validation into
+  this branch and re-verdict existing bundles. [DESCOPED] as ITEM-14; reported
+  onward.
+- **The kit's other RTL debts** — `combobox.tsx`'s physical slide directions keyed
+  off a logical `data-[side=inline-*]`, its item gutter, and the fact that
+  `lint:logical-direction` cannot see submodule files at all (it diffs the parent
+  repo), so DESIGN_SYSTEM's "enforced on new/changed code" claim does not hold for
+  the kit. Real, pre-existing, and each is a separate change with its own blast
+  radius. [DESCOPED] as ITEM-15; reported onward.
 - Any other kit spacing, and any other builder surface. Beyond the two residuals,
   this branch changes only what its own fix made wrong or left unguarded.

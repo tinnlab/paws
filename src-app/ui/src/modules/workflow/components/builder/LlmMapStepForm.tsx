@@ -58,13 +58,15 @@ export function LlmMapStepForm({ store, step }: Props) {
         stepId={step.id}
         label="Prompt (per item)"
         value={step.prompt ?? ''}
-        // A CLEARED box must become absent, not `""`. The backend reads
-        // `Some("")` as "no typed prompt" (validate.rs: has_prompt filters
-        // empty), so `prompt: "" ` + `prompt_file:` passes validation GREEN —
-        // and then dispatch.rs's load_raw_prompt, which matches only
-        // (Some,None)/(None,Some), fails the RUN with "invalid prompt config".
+        // A CLEARED box must become absent, not `""`. Both the backend
+        // validator and the runner now read `Some("")` as "no typed prompt"
+        // (they share `validate::prompt_source`), so `prompt: ""` beside a
+        // `prompt_file:` validates GREEN *and* runs from the file. Writing the
+        // empty string through is nevertheless wrong: it is not what the author
+        // meant, it is not what `toWorkflowDef` should serialise, and it was
+        // what made the two sides disagree before the rule was shared.
         // WORKFLOW_PROMPT_BOTH's copy tells the author to clear this box, so
-        // without this normalisation the builder's own remedy breaks the run.
+        // this normalisation is what keeps its remedy honest.
         onChange={v => patch({ prompt: v || null })}
         placeholder="Runs once per item. Reference the current item as {{ item }} (or your item-variable name)."
         rows={5}

@@ -205,3 +205,23 @@ the group's `h-8`), and fixing it would change the vertical rhythm of every
 folding it into an unrelated feature branch.
 
 - DESCOPED: ITEM-12 — the InputGroupAddon vertical-containment defect is pre-existing, orthogonal to the recorded residual, caused by a different rule, and would change every consumer's vertical rhythm; reported onward rather than folded in, mirroring how FIX_ROUND-2 handled the horizontal defect this branch is fixing [approved: task brief scopes this branch to "the two residuals" and forbids unrelated kit changes; orchestrator carries the onward report]
+
+### DEC-15: Round-1 made the validator read the file. That read is unbounded and blocking, on a path the sandbox can write. Cap it, or move it off the validator?
+
+**Resolution:** Keep it on the validator (DEC-10 stands — reading IS the check),
+but make the read safe: `metadata()` first (never blocks, and rejects every
+non-regular file), then a `MAX_PROMPT_FILE_BYTES` = 1 MiB cap, then a bounded
+`take()` read, with `O_NOFOLLOW` on the final open.
+
+**Basis:** codebase — `workflow_workspace_root` is bind-mounted read-WRITE into
+the code sandbox, so a prompt-injected model can create a FIFO there and point
+`prompt_file:` at it; `open(2)` on a FIFO blocks until a writer appears, and the
+validator runs on every `spawn_run`/`resume_run` with nothing cancelling it. One
+per core deadlocks the server. Stat-before-open removes the whole class (FIFO,
+socket, device, directory) without giving up the readability guarantee, and the
+cap removes the OOM and the unbounded per-launch work. `O_NOFOLLOW` additionally
+closes the canonicalize→open window: the canonical path has no symlinks left in
+it, so one appearing there is exactly the attack.
+
+- DESCOPED: ITEM-14 — template references inside a `prompt_file:` BODY are unvalidated while the identical text inline is checked; it is a TEMPLATE-reference question rather than a prompt-CONFIGURATION one, and validating file bodies would re-verdict existing installed bundles [approved: task brief scopes this branch to the two recorded residuals; recorded in DESIGN §3 and reported onward]
+- DESCOPED: ITEM-15 — the kit's remaining RTL debts (combobox slide directions and item gutter) and `lint:logical-direction`'s inability to see submodule files; each is a separate change with its own blast radius across every kit consumer [approved: task brief forbids unrelated kit changes ("fix this on-system", scoped to the recorded residual); recorded in DESIGN §3 and reported onward]

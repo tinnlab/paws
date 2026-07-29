@@ -273,6 +273,15 @@ impl StepConfig {
     /// two-places-decide-separately shape that produced the validate/run
     /// disagreement this rule exists to prevent. Adding a kind here is a compile
     /// error exactly once.
+    /// [`prompt_source`] for this step, or `None` for a kind with no prompt.
+    ///
+    /// Preferred over calling `prompt_source(a, b)` directly: the two arguments
+    /// there are adjacent, same-typed and opposite in meaning, so swapping them
+    /// compiles and turns the prompt text into a file path.
+    pub fn prompt_source(&self) -> Option<PromptSource<'_>> {
+        self.prompt_fields().map(|(p, f)| prompt_source(p, f))
+    }
+
     pub fn prompt_fields(&self) -> Option<(&Option<String>, &Option<String>)> {
         match self {
             StepConfig::Llm {
@@ -389,7 +398,7 @@ fn default_expose_mode() -> ExposeMode {
 /// (a new file it forgets, a call shape it mis-lexes) fails loudly instead of
 /// making the humanisation half vacuously pass.
 #[cfg(test)]
-const VALIDATION_CODES: &[&str] = &[
+pub(crate) const VALIDATION_CODES: &[&str] = &[
     // validate.rs — whole-workflow shape
     "WORKFLOW_NO_STEPS",
     "WORKFLOW_TOO_MANY_STEPS",
@@ -706,13 +715,13 @@ fn check_steps_shape(workflow: &WorkflowDef) -> Vec<ValidationError> {
                 PromptSource::Both => out.push(ValidationError::at(
                     "semantic",
                     "WORKFLOW_PROMPT_BOTH",
-                    "step has both prompt: and prompt_file: (mutually exclusive)",
+                    PROMPT_BOTH_MESSAGE,
                     &s.id,
                 )),
                 PromptSource::Missing => out.push(ValidationError::at(
                     "semantic",
                     "WORKFLOW_PROMPT_MISSING",
-                    "step has neither prompt: nor prompt_file:",
+                    PROMPT_MISSING_MESSAGE,
                     &s.id,
                 )),
                 PromptSource::Inline(_) | PromptSource::File(_) => {}
@@ -1111,6 +1120,13 @@ pub fn prompt_source<'a>(
     }
 }
 
+/// The text for `WORKFLOW_PROMPT_BOTH`. Shared with `dispatch.rs`, which reports
+/// the same condition at run time when validation was bypassed — two hand-written
+/// copies of one sentence is how the wording drifts.
+pub const PROMPT_BOTH_MESSAGE: &str = "step has both prompt: and prompt_file: (mutually exclusive)";
+/// The text for `WORKFLOW_PROMPT_MISSING`. Shared with `dispatch.rs` — see above.
+pub const PROMPT_MISSING_MESSAGE: &str = "step has neither prompt: nor prompt_file:";
+
 /// The `prompt_file:` half of [`prompt_source`], for the one caller that needs
 /// the PATH regardless of whether the step also carries an inline `prompt:`
 /// (`check_prompt_files`, which reports on the file even in a both-state).
@@ -1138,6 +1154,41 @@ pub enum PromptFileError {
     Unreadable(String),
     /// Reads successfully but is EMPTY — a prompt file with no prompt in it.
     Empty,
+    /// Larger than `MAX_PROMPT_FILE_BYTES`. A prompt is text an author wrote;
+    /// anything of this size is a mistake or an attempt to make the validator do
+    /// unbounded work on every launch.
+    TooLarge(u64),
+}
+
+/// Ceiling on a `prompt_file:`'s size.
+///
+/// The validator reads every `prompt_file:` on every install AND on every
+/// `spawn_run`/`resume_run`, so without a cap an author-controlled file makes
+/// both the validator and the runner do unbounded work and allocate unbounded
+/// memory. 1 MiB is ~250k tokens of prose — far beyond any model's context and
+/// far beyond any prompt anyone writes.
+pub const MAX_PROMPT_FILE_BYTES: u64 = 1024 * 1024;
+
+/// Open a file WITHOUT following a final symlink, where the platform supports it.
+///
+/// `read_prompt_file` canonicalizes and confinement-checks before opening, which
+/// leaves a TOCTOU window in which the last component could be swapped for a
+/// symlink out of the bundle. `O_NOFOLLOW` closes it: the canonical path has no
+/// symlinks left in it by construction, so a symlink appearing there between the
+/// two calls is exactly the attack, and refusing to follow it is correct.
+fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(path)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::File::open(path)
+    }
 }
 
 impl PromptFileError {
@@ -1146,7 +1197,9 @@ impl PromptFileError {
         match self {
             Self::Unsafe => "WORKFLOW_PROMPT_FILE_UNSAFE",
             Self::Escape => "WORKFLOW_PROMPT_FILE_ESCAPE",
-            Self::Unreadable(_) | Self::Empty => "WORKFLOW_PROMPT_FILE_MISSING",
+            Self::Unreadable(_) | Self::Empty | Self::TooLarge(_) => {
+                "WORKFLOW_PROMPT_FILE_MISSING"
+            }
         }
     }
 
@@ -1154,7 +1207,7 @@ impl PromptFileError {
     pub fn layer(&self) -> &'static str {
         match self {
             Self::Unsafe | Self::Escape => "security",
-            Self::Unreadable(_) | Self::Empty => "semantic",
+            Self::Unreadable(_) | Self::Empty | Self::TooLarge(_) => "semantic",
         }
     }
 
@@ -1169,6 +1222,9 @@ impl PromptFileError {
                 format!("prompt_file '{rel}' cannot be read from the bundle: {why}")
             }
             Self::Empty => format!("prompt_file '{rel}' is empty"),
+            Self::TooLarge(n) => format!(
+                "prompt_file '{rel}' is {n} bytes, over the {MAX_PROMPT_FILE_BYTES}-byte limit"
+            ),
         }
     }
 }
@@ -1177,7 +1233,22 @@ impl PromptFileError {
 /// WITHOUT a materialized bundle, which is why it is separable (the draft
 /// validation surfaces have no bundle; see [`check_prompt_files`]).
 pub fn check_prompt_file_shape(rel: &str) -> Result<(), PromptFileError> {
-    if rel.contains("..") || rel.starts_with('/') {
+    // `..` anywhere, and every ABSOLUTE form. The absolute test is deliberately
+    // not `Path::is_absolute()`: that is platform-dependent, and a bundle
+    // authored on one OS is validated and run on another, so a Windows-absolute
+    // path must be refused on Linux too (and vice versa). Backslash is rejected
+    // outright — it is a separator on Windows and a legal filename character on
+    // Unix, so allowing it would mean the same string names different files on
+    // the two platforms.
+    let windows_absolute = rel
+        .as_bytes()
+        .get(1)
+        .is_some_and(|b| *b == b':' && rel.as_bytes()[0].is_ascii_alphabetic());
+    if rel.contains("..")
+        || rel.starts_with('/')
+        || rel.contains('\\')
+        || windows_absolute
+    {
         return Err(PromptFileError::Unsafe);
     }
     Ok(())
@@ -1201,9 +1272,14 @@ pub fn check_prompt_file_shape(rel: &str) -> Result<(), PromptFileError> {
 ///   zero-byte file, each of which failed (or degenerated) at run.
 ///
 /// Reading the file IS the check: it is the same operation the runner performs,
-/// so no weaker proxy for it can drift from it. (A TOCTOU window between
-/// validate and run remains — the bundle is server-owned and re-validated
-/// immediately before dispatch, so the window is not a trust boundary.)
+/// so no weaker proxy for it can drift from it.
+///
+/// The runner calls this ITSELF rather than trusting that validation ran — the
+/// two statements are not in tension: `spawn_run`/`resume_run` DO re-validate
+/// immediately before dispatch, but `POST /workflows/{id}/test` does not, so the
+/// runner cannot treat a prior validation as a precondition. That the checks run
+/// twice on the common path is the point: it is what makes the remaining
+/// validate→run window (a file swapped in between) not a trust boundary.
 pub fn read_prompt_file(bundle_root: &Path, rel: &str) -> Result<String, PromptFileError> {
     check_prompt_file_shape(rel)?;
     let resolved = bundle_root.join(rel);
@@ -1217,8 +1293,35 @@ pub fn read_prompt_file(bundle_root: &Path, rel: &str) -> Result<String, PromptF
     if !canon.starts_with(&root_canon) {
         return Err(PromptFileError::Escape);
     }
-    let body =
-        std::fs::read_to_string(&canon).map_err(|e| PromptFileError::Unreadable(e.to_string()))?;
+    // STAT BEFORE OPEN. `open(2)` on a FIFO blocks until a writer appears, and
+    // the bundle root is writable by the sandbox (`workflow_workspace_root`), so
+    // a model-authored `mkfifo prompts/p.md` + `prompt_file: prompts/p.md` would
+    // park a thread forever — permanently, once per call. `metadata` only stats,
+    // never blocks, and rejects every non-regular file (FIFO, socket, device,
+    // directory) before anything is opened.
+    let meta =
+        std::fs::metadata(&canon).map_err(|e| PromptFileError::Unreadable(e.to_string()))?;
+    if !meta.is_file() {
+        return Err(PromptFileError::Unreadable(
+            "not a regular file".to_string(),
+        ));
+    }
+    if meta.len() > MAX_PROMPT_FILE_BYTES {
+        return Err(PromptFileError::TooLarge(meta.len()));
+    }
+    let mut file = open_no_follow(&canon).map_err(|e| PromptFileError::Unreadable(e.to_string()))?;
+    // Bounded even if the file grew between the stat and the read.
+    let mut buf = Vec::with_capacity(meta.len() as usize);
+    std::io::Read::read_to_end(
+        &mut std::io::Read::take(&mut file, MAX_PROMPT_FILE_BYTES + 1),
+        &mut buf,
+    )
+        .map_err(|e| PromptFileError::Unreadable(e.to_string()))?;
+    if buf.len() as u64 > MAX_PROMPT_FILE_BYTES {
+        return Err(PromptFileError::TooLarge(buf.len() as u64));
+    }
+    let body = String::from_utf8(buf)
+        .map_err(|e| PromptFileError::Unreadable(format!("not valid UTF-8: {e}")))?;
     if body.is_empty() {
         // Symmetry with `prompt: ""`: an empty prompt is not a prompt, whichever
         // field it arrives in. Without this, the file half quietly shipped the
@@ -1226,6 +1329,40 @@ pub fn read_prompt_file(bundle_root: &Path, rel: &str) -> Result<String, PromptF
         return Err(PromptFileError::Empty);
     }
     Ok(body)
+}
+
+/// Turn a [`PromptFileError`] into its author-facing finding.
+///
+/// Deliberately a `match` with LITERAL layer/code arguments at each
+/// `ValidationError::at` call, rather than `e.layer()`/`e.code()`. The
+/// crate-wide drift guard (`humanisation_contract`) parses these call sites
+/// textually to prove every emitted code is registered AND has author-facing
+/// copy in `validationCopy.ts`; a computed argument is invisible to it, so
+/// passing `e.code()` here silently removed these three codes from BOTH halves
+/// of that guard. The `message()` argument is free-form and not scanned.
+fn prompt_file_finding(e: &PromptFileError, rel: &str, step_id: &str) -> ValidationError {
+    match e {
+        PromptFileError::Unsafe => ValidationError::at(
+            "security",
+            "WORKFLOW_PROMPT_FILE_UNSAFE",
+            e.message(rel),
+            step_id,
+        ),
+        PromptFileError::Escape => ValidationError::at(
+            "security",
+            "WORKFLOW_PROMPT_FILE_ESCAPE",
+            e.message(rel),
+            step_id,
+        ),
+        PromptFileError::Unreadable(_)
+        | PromptFileError::Empty
+        | PromptFileError::TooLarge(_) => ValidationError::at(
+            "semantic",
+            "WORKFLOW_PROMPT_FILE_MISSING",
+            e.message(rel),
+            step_id,
+        ),
+    }
 }
 
 /// `prompt_file:` checks.
@@ -1270,7 +1407,7 @@ fn check_prompt_files(workflow: &WorkflowDef, bundle_root: &Path) -> Vec<Validat
         // Shape is decidable with no bundle, and it is a SECURITY check, so it
         // always runs.
         if let Err(e) = check_prompt_file_shape(p) {
-            out.push(ValidationError::at(e.layer(), e.code(), e.message(p), &s.id));
+            out.push(prompt_file_finding(&e, p, &s.id));
             continue;
         }
         if !bundle_present {
@@ -1281,7 +1418,7 @@ fn check_prompt_files(workflow: &WorkflowDef, bundle_root: &Path) -> Vec<Validat
         // validator cannot pass a file the run then fails on, nor refuse one the
         // run would have read (INV-1, file half).
         if let Err(e) = read_prompt_file(bundle_root, p) {
-            out.push(ValidationError::at(e.layer(), e.code(), e.message(p), &s.id));
+            out.push(prompt_file_finding(&e, p, &s.id));
         }
     }
     out
@@ -1904,9 +2041,15 @@ steps:
         // run agrees, which is the point (DEC-5).
         assert_eq!(prompt_source(&some("x"), &some("")), PromptSource::Inline("x"));
 
-        // Whitespace is NOT trimmed (DEC-3) — it stays a real prompt.
+        // Whitespace is NOT trimmed (DEC-3) — it stays a real prompt, and a
+        // whitespace-only PATH stays a path (it is then reported
+        // WORKFLOW_PROMPT_FILE_MISSING, not WORKFLOW_PROMPT_MISSING). Both
+        // directions are pinned: a `trim()` creeping into either half of
+        // `prompt_source` changes which finding the author sees.
         assert_eq!(prompt_source(&some("   "), &none), PromptSource::Inline("   "));
         assert_eq!(prompt_source(&some("   "), &some("p.md")), PromptSource::Both);
+        assert_eq!(prompt_source(&none, &some("   ")), PromptSource::File("   "));
+        assert_eq!(prompt_file_ref(&some("   ")), Some("   "));
 
         // The ordinary cases are unchanged.
         assert_eq!(prompt_source(&some("hi"), &none), PromptSource::Inline("hi"));

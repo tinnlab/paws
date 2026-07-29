@@ -110,7 +110,7 @@ const HUMAN_COPY: Record<string, CopyFn> = {
   "WORKFLOW_PROMPT_FILE_MISSING": () =>
     "This step's prompt file can't be read — it may be missing, be a folder rather than a file, be empty, or not be text. Check the path and the file, or type the prompt in directly.",
   // The two file codes describe DIFFERENT author mistakes and must read
-  // differently: UNSAFE (`validate.rs::check_prompt_files`, the literal `..` /
+  // differently: UNSAFE (`validate.rs::check_prompt_file_shape`, the literal `..` /
   // leading-`/` reject) is a path that was WRITTEN to leave the workflow;
   // ESCAPE is a path that looked fine but RESOLVED outside it (a symlink, or a
   // chain of segments that climbs out).

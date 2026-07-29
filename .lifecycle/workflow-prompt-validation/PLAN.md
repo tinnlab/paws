@@ -112,6 +112,28 @@ than silently fixing.
   filter does not match — the exact change class this branch is).
 - **ITEM-12**: [DESCOPED] Fix the addon's VERTICAL containment (36px addon in a
   32px group). Pre-existing, orthogonal to the recorded residual, reported onward.
+- **ITEM-14**: [DESCOPED] Validate template references inside a `prompt_file:`
+  BODY (an inline `prompt:` is scanned; a prompt file's contents are not, so an
+  unresolvable `{{ ref }}` in a file validates green and fails at render).
+- **ITEM-15**: [DESCOPED] The kit's remaining RTL debts — `combobox.tsx`'s
+  physical slide directions keyed off a logical `data-[side=inline-*]`, its item
+  gutter, and the fact that `lint:logical-direction` diffs the parent repo and so
+  cannot see submodule files at all.
+- **ITEM-16**: Round-2 hardening of the shared file rule: stat-before-open
+  (regular files only), a `MAX_PROMPT_FILE_BYTES` cap, a bounded read, `O_NOFOLLOW`
+  on the final open, and a platform-independent shape check (`..`, leading `/`,
+  any backslash, a `X:` drive prefix). Round 1 made the validator READ the file,
+  which was right, but an unbounded blocking read of a path the sandbox can write
+  is a denial-of-service: `open(2)` on a FIFO never returns, and the validator runs
+  on every launch.
+- **ITEM-17**: Round-2 guard repairs: emit findings through a `match` with LITERAL
+  layer/code arguments (computed ones are invisible to the crate's code-drift
+  guard, which round 1 broke); rebase the prompt-code coverage guard onto
+  `VALIDATION_CODES` instead of a self-referential source scan; give TEST-7's RTL
+  legs a subject only an RTL render can falsify (the control's clearance side);
+  add `submodules: recursive` to the visual CI job, without which its new `sdk`
+  trigger fires a job that cannot install; and make `command.tsx`'s addon override
+  logical.
 - **ITEM-13**: Reword `WORKFLOW_PROMPT_FILE_MISSING`'s author-facing copy in
   `validationCopy.ts` to cover every way a prompt file cannot be read (missing,
   a folder, empty, not text). The old copy — "isn't in the workflow — add the

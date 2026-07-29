@@ -37,7 +37,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      # `submodules: recursive` is REQUIRED, not optional: the kit these specs
+      # guard lives in the `sdk` submodule, and root `package.json` declares
+      # `sdk/packages/*` as npm workspaces that `@ziee/kit` / `@ziee/gallery`
+      # link to. Without it `sdk/` checks out empty, `npm ci` cannot resolve
+      # those links, and the job fails before it can test anything — which would
+      # make the `sdk` path trigger above fire a job that structurally cannot
+      # catch a kit regression.
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - uses: actions/setup-node@v4
         with:

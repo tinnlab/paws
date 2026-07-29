@@ -117,8 +117,10 @@ pub(crate) async fn resolve_prompt(
 /// (`.lifecycle/workflow-builder-ux/FIX_ROUND-8.md`); and it joined the path
 /// with NO shape or confinement check, so a `prompt_file:` the validator refused
 /// as `WORKFLOW_PROMPT_FILE_UNSAFE` was read here anyway. The runner does not
-/// get to rely on having been validated: `POST /workflows/{id}/test` reaches
-/// dispatch without `validate_for_install`.
+/// get to rely on having been validated: `spawn_run`/`resume_run` do re-validate
+/// immediately before dispatch, but `POST /workflows/{id}/test` reaches dispatch
+/// without `validate_for_install` at all, so a prior validation is not a
+/// precondition this function may assume.
 async fn load_raw_prompt(
     step_id: &str,
     bundle_root: &Path,
@@ -144,10 +146,12 @@ async fn load_raw_prompt(
         // validation was bypassed, which is exactly when the operator has least
         // context.
         PromptSource::Missing => Err(format!(
-            "step '{step_id}' has neither prompt: nor prompt_file:"
+            "step '{step_id}': {}",
+            crate::modules::workflow::validate::PROMPT_MISSING_MESSAGE
         )),
         PromptSource::Both => Err(format!(
-            "step '{step_id}' has both prompt: and prompt_file: (mutually exclusive)"
+            "step '{step_id}': {}",
+            crate::modules::workflow::validate::PROMPT_BOTH_MESSAGE
         )),
     }
 }
@@ -1953,26 +1957,28 @@ mod tests {
     /// code that this matrix silently stops covering. Without it, a new
     /// `WORKFLOW_PROMPT_*` verdict would be invisible to TEST-1 — the matrix
     /// would keep passing while the class it guards had grown.
+    ///
+    /// Checked against `validate::VALIDATION_CODES`, the module's own canonical
+    /// registry (which its `humanisation_contract` guard already proves is
+    /// complete and matches the real emit sites), NOT against a text scan of the
+    /// source — a scan would read this file's and validate.rs's own test
+    /// modules and end up comparing the tests to themselves.
     #[test]
     fn prompt_codes_list_covers_every_prompt_verdict_the_validator_emits() {
-        let src = include_str!("validate.rs");
-        let mut found: Vec<String> = Vec::new();
-        for (idx, _) in src.match_indices("\"WORKFLOW_PROMPT") {
-            let rest = &src[idx + 1..];
-            let end = rest.find('"').unwrap();
-            let code = &rest[..end];
-            if !found.iter().any(|c| c == code) {
-                found.push(code.to_string());
-            }
-        }
-        found.sort();
-        let mut expected: Vec<String> = PROMPT_CODES.iter().map(|c| c.to_string()).collect();
-        expected.sort();
+        let mut registered: Vec<&str> = crate::modules::workflow::validate::VALIDATION_CODES
+            .iter()
+            .copied()
+            .filter(|c| c.starts_with("WORKFLOW_PROMPT"))
+            .collect();
+        registered.sort_unstable();
+        let mut covered: Vec<&str> = PROMPT_CODES.to_vec();
+        covered.sort_unstable();
         assert_eq!(
-            found, expected,
-            "validate.rs emits a different set of WORKFLOW_PROMPT_* codes than the \
-             INV-1 matrix covers — add the new code to PROMPT_CODES and give the \
-             matrix an input that produces it"
+            registered, covered,
+            "the validator's registered WORKFLOW_PROMPT_* codes differ from the set \
+             the INV-1 matrix treats as prompt verdicts — add the new code to \
+             PROMPT_CODES *and* give the matrix an input that produces it, or the \
+             agreement assertion will silently stop covering that verdict"
         );
     }
 
@@ -2104,7 +2110,7 @@ mod tests {
         let err = load_raw_prompt("llm_1", root.as_path(), &Some(String::new()), &None)
             .await
             .expect_err("an empty prompt with no prompt_file must not resolve");
-        assert_eq!(err, "step 'llm_1' has neither prompt: nor prompt_file:");
+        assert_eq!(err, "step 'llm_1': step has neither prompt: nor prompt_file:");
 
         // A genuine both-state is still rejected, with its own distinct message.
         let err = load_raw_prompt(
@@ -2117,7 +2123,7 @@ mod tests {
         .expect_err("prompt: and prompt_file: remain mutually exclusive");
         assert_eq!(
             err,
-            "step 'llm_1' has both prompt: and prompt_file: (mutually exclusive)"
+            "step 'llm_1': step has both prompt: and prompt_file: (mutually exclusive)"
         );
 
         // An inline prompt still wins when there is no file.
