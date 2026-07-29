@@ -52,6 +52,16 @@ the backend disagreement, which is reachable by any hand-authored or imported
 | `prompt_file: <a symlink out of the bundle>` | RED `WORKFLOW_PROMPT_FILE_ESCAPE` | **Ok** — same |
 | `prompt_file: <a zero-byte file>` | GREEN | Ok("") — ships the empty prompt to the model that the inline half refuses |
 | `prompt: "x"` + `prompt_file: ""` | RED `WORKFLOW_PROMPT_BOTH` | Ok("x") |
+| `prompt_file:` over 1 MiB | GREEN | Ok — an author-controlled read on every launch |
+| `prompt_file: "a\\b.md"` / `"C:\\x"` | GREEN on Linux (only `..` and a leading `/` were refused) | Ok / Err depending on the host OS |
+
+The last two rows are additional REJECTIONS this fix introduces, listed so they
+are part of the design rather than a side effect: a size cap (the validator reads
+every prompt file on every launch, so an uncapped read is author-controlled work
+and memory), and a platform-independent shape check (a bundle authored on one OS
+is validated and run on another, so a Windows-absolute path must be refused on
+Linux too). Both re-verdict a definition that used to install — see DEC-11's
+reasoning, which applies unchanged.
 
 That last row is the one verdict this fix deliberately RELAXES rather than
 tightens: an empty path is not a second prompt source, so the step is simply an

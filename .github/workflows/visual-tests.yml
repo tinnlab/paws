@@ -61,9 +61,23 @@ jobs:
         working-directory: src-app/ui
         run: npx playwright install --with-deps chromium
 
+      # Run the CURATED spec list from gallery.config.json — the same list
+      # `npm run gate:ui` runs — rather than everything under the visual testDir.
+      #
+      # This is a correction, not a narrowing. Until the `submodules: recursive`
+      # fix above, `npm ci` could not resolve the `sdk/packages/*` workspaces and
+      # this job died before reaching Playwright at all, so the unfiltered
+      # invocation had never actually executed a spec. Running it now surfaces
+      # several long-red specs unrelated to any given PR, which would make the
+      # job unable to pass for anyone. `visualSpecs` is the repo's own answer to
+      # "which visual specs gate" (gate-ui.mjs reads the same field), so CI and
+      # the local gate now agree instead of diverging.
       - name: Run Layer A (deterministic, backend-free; Layer B skipped)
         working-directory: src-app/ui
-        run: npx playwright test -c playwright.visual.config.ts
+        run: |
+          SPECS=$(node -p "require('./gallery.config.json').visualSpecs.map(s => 'tests/e2e/visual/' + s).join(' ')")
+          echo "gating specs: $SPECS"
+          npx playwright test -c playwright.visual.config.ts $SPECS
 
       - name: Upload report on failure
         if: failure()

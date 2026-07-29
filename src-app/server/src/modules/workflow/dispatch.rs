@@ -1933,11 +1933,17 @@ mod tests {
         // Not valid UTF-8: `is_file()` says yes, `read_to_string` says no.
         std::fs::write(root.join("prompts/binary.bin"), [0xff_u8, 0xfe, 0x00, 0x01]).unwrap();
         // A symlink pointing OUT of the bundle — shape-clean, confinement-dirty.
+        // Two flavours, because they defeat DIFFERENT checks: `escape.md` is a
+        // FINAL-component symlink (caught by `O_NOFOLLOW` alone), while
+        // `escapedir/` is an INTERMEDIATE one — a `canonicalize` + `starts_with`
+        // + `O_NOFOLLOW` sequence can be raced into following it, so only a
+        // single kernel-confined resolution refuses it.
         #[cfg(unix)]
         {
             let outside = tmp.path().join("outside.md");
             std::fs::write(&outside, "OUTSIDE THE BUNDLE").unwrap();
             std::os::unix::fs::symlink(&outside, root.join("prompts/escape.md")).unwrap();
+            std::os::unix::fs::symlink(tmp.path(), root.join("escapedir")).unwrap();
         }
         (tmp, root)
     }
@@ -2018,7 +2024,7 @@ mod tests {
     async fn validate_and_dispatch_agree_on_every_prompt_state() {
         let (_tmp, root) = prompt_bundle();
         let prompts: [Option<&str>; 4] = [None, Some(""), Some("   "), Some("hi")];
-        let files: [Option<&str>; 9] = [
+        let files: [Option<&str>; 10] = [
             None,
             Some(""),
             Some("prompts/real.md"),
@@ -2028,6 +2034,7 @@ mod tests {
             Some("prompts/binary.bin"),
             Some("prompts/../prompts/real.md"),
             Some("prompts/escape.md"),
+            Some("escapedir/outside.md"),
         ];
 
         let mut checked = 0usize;
@@ -2056,6 +2063,15 @@ mod tests {
                         .prompt_fields()
                         .map(|(p, f)| (p.clone(), f.clone()))
                         .expect("llm/llm_map/agent carry the prompt pair");
+                    // The step-level accessor must agree with the free function
+                    // the runner is about to be driven with — otherwise the
+                    // matrix would be proving something about a call shape no
+                    // production code uses.
+                    assert_eq!(
+                        wf.steps[0].config.prompt_source(),
+                        Some(crate::modules::workflow::validate::prompt_source(&p, &f)),
+                        "StepConfig::prompt_source must equal prompt_source(prompt, prompt_file)"
+                    );
                     let run = load_raw_prompt("s", root.as_path(), &p, &f).await;
 
                     assert_eq!(
@@ -2075,7 +2091,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(checked, 108, "the matrix must actually have been walked");
+        assert_eq!(checked, 120, "the matrix must actually have been walked");
         // Anti-vacuity: the implication is trivially true if NOTHING validates
         // clean. Per kind the 6 legitimately-runnable rows are
         // {absent, ""} x real.md  and  {"   ", "hi"} x {absent, ""}.
@@ -2151,6 +2167,25 @@ mod tests {
             .await
             .expect_err("an absolute path must be refused by the runner itself");
         assert!(err.contains("without '..'"), "{err}");
+
+        // An INTERMEDIATE symlink out of the bundle is refused. This is the cell a
+        // resolve-then-check-then-open sequence loses to: `canonicalize` +
+        // `starts_with` + `O_NOFOLLOW` guards only the LAST component, so a
+        // directory swapped for a symlink between the check and the open escapes
+        // — and for the workspace surfaces the bundle root is bind-mounted
+        // read-write into the sandbox, so that swap is something the model can do.
+        #[cfg(unix)]
+        {
+            let err = load_raw_prompt(
+                "llm_1",
+                root.as_path(),
+                &None,
+                &Some("escapedir/outside.md".into()),
+            )
+            .await
+            .expect_err("a path through a symlinked directory must not resolve");
+            assert!(err.contains("outside bundle"), "{err}");
+        }
 
         // A zero-byte prompt file is not a prompt — symmetric with `prompt: ""`.
         let err = load_raw_prompt("llm_1", root.as_path(), &None, &Some("prompts/empty.md".into()))

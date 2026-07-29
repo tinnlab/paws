@@ -40,7 +40,13 @@ jobs:
       VISUAL_SNAPSHOTS: '1'
       VISUAL_ACCENTS: ${{ inputs.accents }}
     steps:
+      # Same reason as visual-tests.yml: root `package.json` globs
+      # `sdk/packages/*` as npm workspaces and the lockfile links `@ziee/kit` /
+      # `@ziee/gallery` there, so without the submodule `npm ci` cannot resolve
+      # them and the Playwright config cannot load.
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - uses: actions/setup-node@v4
         with:

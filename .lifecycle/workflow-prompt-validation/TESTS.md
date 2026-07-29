@@ -22,6 +22,9 @@ no migration grant), so A9/A10 do not apply.
 
 - **TEST-11** (tier: unit) [covers: ITEM-16, ITEM-17] file: `src-app/server/src/modules/workflow/validate.rs` — asserts: the whole `workflow::` lib suite (NOT a hand-picked filter) passes, so the module's own crate-wide `validation_codes_are_registered_and_humanised` drift guard — which round 1 broke by passing computed layer/code arguments, and which lives in a sibling module a scoped filter skipped — is green, together with `prompt_codes_list_covers_every_prompt_verdict_the_validator_emits` rebased onto the canonical `VALIDATION_CODES` registry.
 
+- **TEST-12** (tier: unit) [covers: ITEM-16] file: `src-app/server/src/modules/workflow/validate.rs` — asserts: `read_prompt_file`'s RESOURCE guards, against real files of each offending kind — a real FIFO is refused (and the test RETURNING at all is the proof that the `O_NONBLOCK` open plus fd-type check works; a hang is the regression), a directory is refused, a file one byte over `MAX_PROMPT_FILE_BYTES` is `TooLarge` while one exactly at the cap still reads, and an ordinary file still reads.
+- **TEST-13** (tier: unit) [covers: ITEM-16] file: `src-app/server/src/modules/workflow/validate.rs` — asserts: `check_prompt_file_shape` refuses every traversing and ABSOLUTE form on every platform — `..`, a leading `/`, a `C:`/`c:` drive prefix and any backslash — while ordinary bundle-relative paths (including one with a space) pass.
+
 ## Coverage map
 
 | ITEM | covered by |
@@ -41,13 +44,33 @@ no migration grant), so A9/A10 do not apply.
 | ITEM-13 | TEST-10 |
 | ITEM-14 | [DESCOPED] — see DECISIONS |
 | ITEM-15 | [DESCOPED] — see DECISIONS |
-| ITEM-16 | TEST-1, TEST-3, TEST-6, TEST-11 |
+| ITEM-16 | TEST-1, TEST-3, TEST-6, TEST-11, TEST-12, TEST-13 |
 | ITEM-17 | TEST-7, TEST-10, TEST-11 |
 
 | INV | acceptance test |
 |---|---|
 | INV-1 | TEST-1 |
 | INV-2 | TEST-7 |
+
+## Known limits of these tests, stated rather than left to be found
+
+- **TEST-4's first and third assertions are CONTRACT statements, not falsifiable
+  guards.** `/validate-def` has no bundle, so "an empty prompt beside a
+  `prompt_file:` yields no prompt finding" was already true before this change,
+  and "a genuine both-state is still refused" is a control. Only the second
+  assertion (`prompt_file: ""` ⇒ `WORKFLOW_PROMPT_MISSING`) reddens on a revert.
+  They are kept because the endpoint's contract is what the builder's panel
+  renders, but they are not what proves the fix.
+- **TEST-1's implication cannot catch a rule deleted from the SHARED function**,
+  only a rule that drifts between the two sides — deleting the emptiness reject
+  leaves both sides agreeing. That is the correct meaning of the invariant; the
+  `ran_ok == 18` floor and TEST-2/TEST-3/TEST-6 are what pin the rules themselves.
+- **The Rust↔TypeScript drift guard is one-directional** (it catches the client
+  drifting from the rule). The Rust side is pinned by TEST-2 instead.
+- **TEST-7 covers the `has-[>button]` and bare branches of the addon variants**,
+  because those are the only shapes any consumer in this tree renders; the
+  `has-[>kbd]` branch and an `inline-start` addon with a button child have no
+  consumer to measure.
 
 ## Why there is no "run a workflow over HTTP" test for INV-1
 

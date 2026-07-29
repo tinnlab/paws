@@ -273,15 +273,6 @@ impl StepConfig {
     /// two-places-decide-separately shape that produced the validate/run
     /// disagreement this rule exists to prevent. Adding a kind here is a compile
     /// error exactly once.
-    /// [`prompt_source`] for this step, or `None` for a kind with no prompt.
-    ///
-    /// Preferred over calling `prompt_source(a, b)` directly: the two arguments
-    /// there are adjacent, same-typed and opposite in meaning, so swapping them
-    /// compiles and turns the prompt text into a file path.
-    pub fn prompt_source(&self) -> Option<PromptSource<'_>> {
-        self.prompt_fields().map(|(p, f)| prompt_source(p, f))
-    }
-
     pub fn prompt_fields(&self) -> Option<(&Option<String>, &Option<String>)> {
         match self {
             StepConfig::Llm {
@@ -297,6 +288,15 @@ impl StepConfig {
                 None
             }
         }
+    }
+
+    /// [`prompt_source`] for this step, or `None` for a kind with no prompt.
+    ///
+    /// Preferred over calling `prompt_source(a, b)` directly: the two arguments
+    /// there are adjacent, same-typed and opposite in meaning, so swapping them
+    /// compiles and turns the prompt text into a file path.
+    pub fn prompt_source(&self) -> Option<PromptSource<'_>> {
+        self.prompt_fields().map(|(p, f)| prompt_source(p, f))
     }
 }
 
@@ -392,7 +392,9 @@ fn default_expose_mode() -> ExposeMode {
 /// **`#[cfg(test)]` on purpose.** Nothing in production reads this list — the
 /// guard derives the emitted set from the source itself, so a `pub` const here
 /// would be public API with no caller (CODING_GUIDELINES §15) whose `pub` also
-/// suppresses the `dead_code` lint. It stays as a hand-curated test fixture
+/// suppresses the `dead_code` lint (it is `pub(crate)` so the workflow module's
+/// own tests can compare against it — see `dispatch.rs`'s PROMPT_CODES guard).
+/// It stays as a hand-curated test fixture
 /// because it is the guard's CANARY: the bidirectional `stale` assertion means
 /// any future regression that makes the source scanner see FEWER emit sites
 /// (a new file it forgets, a call shape it mis-lexes) fails loudly instead of
@@ -710,8 +712,8 @@ fn check_steps_shape(workflow: &WorkflowDef) -> Vec<ValidationError> {
         // prompt reason, and one it rejects cannot quietly run (INV-1). The two
         // codes and their exact messages are unchanged: the builder's
         // author-facing copy is keyed off them.
-        if let Some((prompt, prompt_file)) = s.config.prompt_fields() {
-            match prompt_source(prompt, prompt_file) {
+        if let Some(source) = s.config.prompt_source() {
+            match source {
                 PromptSource::Both => out.push(ValidationError::at(
                     "semantic",
                     "WORKFLOW_PROMPT_BOTH",
@@ -1169,49 +1171,115 @@ pub enum PromptFileError {
 /// far beyond any prompt anyone writes.
 pub const MAX_PROMPT_FILE_BYTES: u64 = 1024 * 1024;
 
-/// Open a file WITHOUT following a final symlink, where the platform supports it.
+/// Open `rel` CONFINED beneath `root`, in ONE path resolution.
 ///
-/// `read_prompt_file` canonicalizes and confinement-checks before opening, which
-/// leaves a TOCTOU window in which the last component could be swapped for a
-/// symlink out of the bundle. `O_NOFOLLOW` closes it: the canonical path has no
-/// symlinks left in it by construction, so a symlink appearing there between the
-/// two calls is exactly the attack, and refusing to follow it is correct.
-fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
+/// The confinement must survive an attacker who can rename directories under
+/// `root` while this runs, and for the workspace surfaces that attacker exists:
+/// `run_from_workspace` / `validate_from_workspace` pass the conversation's
+/// code_sandbox workspace as the bundle root, and that directory is bind-mounted
+/// READ-WRITE into the sandbox. A resolve-then-check-then-open sequence loses to
+/// it no matter how the check is written — `canonicalize` + `starts_with` +
+/// `O_NOFOLLOW` guards only the FINAL component, so swapping an INTERMEDIATE
+/// directory for a symlink (`mv prompts prompts.bak; ln -s /etc prompts`) between
+/// the check and the open reads a host file the server uid can see.
+///
+/// On Linux the kernel settles it in a single call: `openat2` with
+/// `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS` resolves
+/// relative to a directory fd and refuses to leave it or to traverse ANY symlink,
+/// atomically. `O_NONBLOCK` additionally makes the open of a FIFO return
+/// immediately instead of parking the thread forever — the type is then rejected
+/// by the `fstat` on the returned fd, which describes the very file that was
+/// opened rather than whatever the path names a moment later.
+///
+/// Elsewhere (macOS/Windows dev hosts; the sandbox itself is Linux on all three
+/// platforms) it falls back to canonicalize + confinement + `O_NOFOLLOW`, which
+/// closes the final-component window but not the intermediate one.
+#[cfg(target_os = "linux")]
+fn open_confined(root: &Path, rel: &str) -> Result<std::fs::File, PromptFileError> {
+    use std::ffi::CString;
+    use std::os::fd::FromRawFd;
+
+    let dir = std::fs::File::open(root)
+        .map_err(|e| PromptFileError::Unreadable(format!("bundle root: {e}")))?;
+    let c_rel = CString::new(rel.as_bytes()).map_err(|_| PromptFileError::Unsafe)?;
+    // `open_how` is `#[non_exhaustive]` (the kernel may grow it), so it is built
+    // zeroed — which is also what openat2(2) requires of any field this build
+    // does not know about — and then filled in.
+    // SAFETY: `open_how` is a plain repr(C) struct of integers; all-zero is a
+    // valid, and the documented-neutral, value for every field.
+    let mut how: libc::open_how = unsafe { std::mem::zeroed() };
+    how.flags = (libc::O_RDONLY | libc::O_NONBLOCK | libc::O_CLOEXEC | libc::O_NOFOLLOW) as u64;
+    how.resolve =
+        libc::RESOLVE_BENEATH | libc::RESOLVE_NO_SYMLINKS | libc::RESOLVE_NO_MAGICLINKS;
+    // SAFETY: `dir` is an open directory fd we own for the duration of the call,
+    // `c_rel` is a NUL-terminated path, and `how` is a fully-initialised
+    // `open_how` whose size we pass explicitly, per openat2(2).
+    let fd = unsafe {
+        libc::syscall(
+            libc::SYS_openat2,
+            std::os::fd::AsRawFd::as_raw_fd(&dir),
+            c_rel.as_ptr(),
+            &how as *const libc::open_how,
+            std::mem::size_of::<libc::open_how>(),
+        )
+    };
+    if fd < 0 {
+        let err = std::io::Error::last_os_error();
+        return Err(match err.raw_os_error() {
+            // The kernel's own words for "that path left the root, or traversed a
+            // symlink". Reported as an ESCAPE, which is what it is.
+            Some(libc::EXDEV) | Some(libc::ELOOP) => PromptFileError::Escape,
+            // openat2 landed in 5.6. An older kernel is a deployment fact, not an
+            // author error, so fall back rather than refusing every prompt file.
+            Some(libc::ENOSYS) => return open_confined_fallback(root, rel),
+            _ => PromptFileError::Unreadable(err.to_string()),
+        });
+    }
+    // SAFETY: `fd` is a fresh, valid, owned descriptor returned by openat2.
+    Ok(unsafe { std::fs::File::from_raw_fd(fd as std::os::fd::RawFd) })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn open_confined(root: &Path, rel: &str) -> Result<std::fs::File, PromptFileError> {
+    open_confined_fallback(root, rel)
+}
+
+/// Non-Linux (and pre-5.6-kernel) resolution: canonicalize, confine, then open
+/// refusing a final-component symlink. Documented as weaker than `openat2` —
+/// an intermediate directory swapped between the check and the open is not
+/// caught here.
+fn open_confined_fallback(root: &Path, rel: &str) -> Result<std::fs::File, PromptFileError> {
+    let canon = root
+        .join(rel)
+        .canonicalize()
+        .map_err(|e| PromptFileError::Unreadable(e.to_string()))?;
+    let root_canon = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    if !canon.starts_with(&root_canon) {
+        return Err(PromptFileError::Escape);
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
         std::fs::OpenOptions::new()
             .read(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(path)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(&canon)
+            .map_err(|e| PromptFileError::Unreadable(e.to_string()))
     }
     #[cfg(not(unix))]
     {
-        std::fs::File::open(path)
+        std::fs::File::open(&canon).map_err(|e| PromptFileError::Unreadable(e.to_string()))
     }
 }
 
 impl PromptFileError {
-    /// The validator finding code this reason is reported under.
-    pub fn code(&self) -> &'static str {
-        match self {
-            Self::Unsafe => "WORKFLOW_PROMPT_FILE_UNSAFE",
-            Self::Escape => "WORKFLOW_PROMPT_FILE_ESCAPE",
-            Self::Unreadable(_) | Self::Empty | Self::TooLarge(_) => {
-                "WORKFLOW_PROMPT_FILE_MISSING"
-            }
-        }
-    }
-
-    /// `"semantic"` / `"security"` layer for the finding.
-    pub fn layer(&self) -> &'static str {
-        match self {
-            Self::Unsafe | Self::Escape => "security",
-            Self::Unreadable(_) | Self::Empty | Self::TooLarge(_) => "semantic",
-        }
-    }
-
     /// Author-facing detail, given the path as written.
+    ///
+    /// The CODE and LAYER deliberately do NOT live here: `prompt_file_finding`
+    /// assigns them with string LITERALS, because the crate's code-drift guard
+    /// reads those call sites textually. Providing them here as well would be a
+    /// second copy of the same mapping — the very shape this module is being
+    /// fixed to remove — so there is exactly one.
     pub fn message(&self, rel: &str) -> String {
         match self {
             Self::Unsafe => {
@@ -1277,30 +1345,29 @@ pub fn check_prompt_file_shape(rel: &str) -> Result<(), PromptFileError> {
 /// The runner calls this ITSELF rather than trusting that validation ran — the
 /// two statements are not in tension: `spawn_run`/`resume_run` DO re-validate
 /// immediately before dispatch, but `POST /workflows/{id}/test` does not, so the
-/// runner cannot treat a prior validation as a precondition. That the checks run
-/// twice on the common path is the point: it is what makes the remaining
-/// validate→run window (a file swapped in between) not a trust boundary.
+/// runner cannot treat a prior validation as a precondition.
+///
+/// Confinement is enforced INSIDE this call by [`open_confined`], not by an
+/// earlier check a caller is trusted to have made, and every subsequent check
+/// interrogates the resulting file DESCRIPTOR rather than the path. The
+/// validate→run gap remains (a different file may legitimately be there by run
+/// time) but it is not a confinement hole: the run re-resolves under the same
+/// kernel constraints and refuses the same things.
 pub fn read_prompt_file(bundle_root: &Path, rel: &str) -> Result<String, PromptFileError> {
     check_prompt_file_shape(rel)?;
-    let resolved = bundle_root.join(rel);
-    // Defense: canonicalize and verify it is still inside the bundle root.
-    let canon = resolved
-        .canonicalize()
+    // ONE resolution, confined by the kernel where it can be. Everything after
+    // this point interrogates the FILE DESCRIPTOR, never the path again — so no
+    // check can be invalidated by a rename racing between two path lookups.
+    let mut file = open_confined(bundle_root, rel)?;
+    let meta = file
+        .metadata()
         .map_err(|e| PromptFileError::Unreadable(e.to_string()))?;
-    let root_canon = bundle_root
-        .canonicalize()
-        .unwrap_or_else(|_| bundle_root.to_path_buf());
-    if !canon.starts_with(&root_canon) {
-        return Err(PromptFileError::Escape);
-    }
-    // STAT BEFORE OPEN. `open(2)` on a FIFO blocks until a writer appears, and
-    // the bundle root is writable by the sandbox (`workflow_workspace_root`), so
-    // a model-authored `mkfifo prompts/p.md` + `prompt_file: prompts/p.md` would
-    // park a thread forever — permanently, once per call. `metadata` only stats,
-    // never blocks, and rejects every non-regular file (FIFO, socket, device,
-    // directory) before anything is opened.
-    let meta =
-        std::fs::metadata(&canon).map_err(|e| PromptFileError::Unreadable(e.to_string()))?;
+    // `fstat` on the OPENED fd. The open used `O_NONBLOCK`, so a FIFO returned
+    // immediately instead of parking the thread until a writer appears — and it
+    // is rejected here by TYPE, on the very file that was opened, rather than by
+    // a stat of a path that may have changed since. Directories, sockets and
+    // devices go the same way. This matters because for the workspace surfaces
+    // the bundle root is bind-mounted read-write into the sandbox.
     if !meta.is_file() {
         return Err(PromptFileError::Unreadable(
             "not a regular file".to_string(),
@@ -1309,8 +1376,7 @@ pub fn read_prompt_file(bundle_root: &Path, rel: &str) -> Result<String, PromptF
     if meta.len() > MAX_PROMPT_FILE_BYTES {
         return Err(PromptFileError::TooLarge(meta.len()));
     }
-    let mut file = open_no_follow(&canon).map_err(|e| PromptFileError::Unreadable(e.to_string()))?;
-    // Bounded even if the file grew between the stat and the read.
+    // Bounded even if the file grew between the fstat and the read.
     let mut buf = Vec::with_capacity(meta.len() as usize);
     std::io::Read::read_to_end(
         &mut std::io::Read::take(&mut file, MAX_PROMPT_FILE_BYTES + 1),
@@ -2070,7 +2136,14 @@ steps:
     ///
     /// Same shape as this file's existing `validationCopy.ts` guard: read the TS
     /// at RUNTIME (never `include_str!`, which would freeze a stale snapshot) and
-    /// fail the BACKEND suite on drift. Asserted:
+    /// fail the BACKEND suite on drift.
+    ///
+    /// It is ONE-DIRECTIONAL by construction, and that is worth being explicit
+    /// about: it catches the client drifting from the rule, not the rule drifting
+    /// from the client. The Rust side is pinned separately by TEST-2, which
+    /// asserts the same two boundaries on `prompt_source`/`prompt_file_ref`
+    /// directly — so a change to either half is caught, but by different tests.
+    /// Asserted here:
     ///
     /// * the predicate rejects the empty string, and
     /// * it does NOT trim — because `prompt_source` filters on `is_empty()`, a
@@ -2108,6 +2181,97 @@ steps:
              WORKFLOW_PROMPT_FILE_MISSING, not WORKFLOW_PROMPT_MISSING). Trimming on the \
              client makes the two surfaces disagree. Body was:\n{body}"
         );
+    }
+
+    /// **TEST-12** — the resource guards on `read_prompt_file`.
+    ///
+    /// These are the only security controls in this change and nothing pinned
+    /// them: the phase-6 round-3 audit deleted the type check, both size checks
+    /// and the bounded read at once and the whole suite stayed green. Each is
+    /// exercised here against a REAL file of the offending kind.
+    #[test]
+    fn read_prompt_file_refuses_what_it_must_not_read() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+
+        // A FIFO. `open(2)` on one blocks until a writer appears; the bundle root
+        // is bind-mounted read-write into the code sandbox for the workspace
+        // surfaces, so a model can create one. The open is O_NONBLOCK and the
+        // type is judged from the resulting fd, so this returns rather than
+        // parking the thread — a test that HANGS here is the regression.
+        #[cfg(unix)]
+        {
+            let fifo = root.join("fifo.md");
+            let c = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+            // SAFETY: a NUL-terminated path in a temp dir we own.
+            let rc = unsafe { libc::mkfifo(c.as_ptr(), 0o644) };
+            assert_eq!(rc, 0, "mkfifo failed: {}", std::io::Error::last_os_error());
+            let err = read_prompt_file(root, "fifo.md")
+                .expect_err("a FIFO must never be read as a prompt");
+            assert!(
+                matches!(err, PromptFileError::Unreadable(ref why) if why.contains("regular")),
+                "expected a not-a-regular-file rejection, got {err:?}"
+            );
+        }
+
+        // A directory, judged the same way.
+        std::fs::create_dir_all(root.join("adir")).unwrap();
+        assert!(
+            matches!(read_prompt_file(root, "adir"), Err(PromptFileError::Unreadable(_))),
+            "a directory is not a prompt"
+        );
+
+        // Over the cap. The validator reads every prompt file on every launch, so
+        // an author-controlled size is author-controlled work and memory.
+        let big = root.join("big.md");
+        std::fs::write(&big, vec![b'x'; (MAX_PROMPT_FILE_BYTES + 1) as usize]).unwrap();
+        match read_prompt_file(root, "big.md") {
+            Err(PromptFileError::TooLarge(n)) => {
+                assert!(n > MAX_PROMPT_FILE_BYTES, "reported size {n}")
+            }
+            other => panic!("an over-cap prompt_file must be refused, got {other:?}"),
+        }
+        // Exactly at the cap is fine — the boundary is inclusive.
+        let atcap = root.join("atcap.md");
+        std::fs::write(&atcap, vec![b'y'; MAX_PROMPT_FILE_BYTES as usize]).unwrap();
+        assert_eq!(
+            read_prompt_file(root, "atcap.md").map(|b| b.len()),
+            Ok(MAX_PROMPT_FILE_BYTES as usize),
+            "a prompt_file exactly at the cap must still be readable"
+        );
+
+        // And a normal file still reads.
+        std::fs::write(root.join("ok.md"), "BODY").unwrap();
+        assert_eq!(read_prompt_file(root, "ok.md").unwrap(), "BODY");
+    }
+
+    /// **TEST-13** — the path-SHAPE rejects, including the two that are not
+    /// Unix-shaped. A bundle authored on one OS is validated and run on another,
+    /// so a Windows-absolute path has to be refused on Linux too; nothing pinned
+    /// the backslash and drive-letter clauses.
+    #[test]
+    fn prompt_file_shape_refuses_every_absolute_and_traversing_form() {
+        for bad in [
+            "../secrets.md",
+            "prompts/../../secrets.md",
+            "/etc/passwd",
+            "C:\\Windows\\win.ini",
+            "c:/Windows/win.ini",
+            "prompts\\task.md",
+        ] {
+            assert_eq!(
+                check_prompt_file_shape(bad),
+                Err(PromptFileError::Unsafe),
+                "{bad:?} must be refused by shape alone, on every platform"
+            );
+        }
+        for ok in ["prompts/task.md", "task.md", "a/b/c.md", "weird name.md"] {
+            assert_eq!(
+                check_prompt_file_shape(ok),
+                Ok(()),
+                "{ok:?} is a legitimate bundle-relative path"
+            );
+        }
     }
 
     /// **TEST-3** — the validator's verdicts on the states that used to validate
