@@ -237,7 +237,7 @@ because round 19 found a 0-byte log being cited as "exit 0" (FR19-9).
 | `npm run check` (desktop/ui) | **`CHECK_DESKTOPUI_EXIT=0`** | `rail19-check-desktopui.log` |
 | `railIsolation.test.ts`, post-merge | **10 tests, 10 pass, 0 fail**, `UNIT_EXIT=0` | `rail19-unit-postmerge.log` |
 | restore regression controls (the 5 round-18 holes), post-merge | **5/5 RED**, `RESTORE_EXIT=0` | `rail19-restore-postmerge.log` |
-| e2e — rail family + the run_js matrix, post-merge | see log | `rail19-e2e-postmerge.log` |
+| e2e — rail family + the run_js matrix, post-merge | **21 passed, 0 failed (7.1m)**, `E2E_POSTMERGE_EXIT=0` | `rail19-e2e-postmerge.log` |
 
 npm run check (ui): PASS
 npm run check (desktop/ui): PASS
