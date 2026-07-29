@@ -89,10 +89,11 @@ my own measurement before being accepted.
 A third fresh blind reviewer was dispatched over the post-round-2 diff, with the
 same diff-only context and an explicit instruction to MEASURE any CSS claim
 rather than trust a comment (round 2 having shown that comments in this diff had
-been wrong twice). **It did not return findings before this branch was handed
-off** — so the round-3 result is NOT claimed here, and the count below records
-only what was observed: every round-2 finding was fixed and re-verified, and no
-further confirmed finding was produced by any completed audit.
+been wrong twice). It returned late — AFTER this branch had once been written up as if it had not —
+and it did NOT find zero: it found two real attacker-controlled disclosure defects
+still on the consent card, plus a fixture-bound TEST-8 that could not have caught
+them. See `FIX_ROUND-3.md`. The write-up that said otherwise was corrected rather
+than left standing.
 
 What WAS independently re-verified by me, by measurement rather than by review,
 after the round-2 fixes:
