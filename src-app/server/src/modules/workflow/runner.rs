@@ -1245,11 +1245,15 @@ pub async fn spawn_run(
         ))
     })?;
     let workflow_def = crate::modules::workflow::validate::parse_workflow_yaml(&content)?;
-    crate::modules::workflow::validate::validate_for_install(
+    // `_async`: this validates against the REAL bundle, so it reads every
+    // `prompt_file:` from disk — blocking work that must not run on the tokio
+    // worker handling the request.
+    crate::modules::workflow::validate::validate_for_install_async(
         &workflow_def,
         std::path::Path::new(&workflow.extracted_path),
         workflow.is_dev,
-    )?;
+    )
+    .await?;
 
     // Resolve the model: an explicit `model_id` (standalone run, access-checked)
     // wins; otherwise snapshot the conversation's model. The model max output
@@ -1549,11 +1553,15 @@ pub async fn resume_run(pool: &PgPool, run_id: Uuid) -> Result<(), AppError> {
         ))
     })?;
     let workflow_def = crate::modules::workflow::validate::parse_workflow_yaml(&content)?;
-    crate::modules::workflow::validate::validate_for_install(
+    // `_async`: this validates against the REAL bundle, so it reads every
+    // `prompt_file:` from disk — blocking work that must not run on the tokio
+    // worker handling the request.
+    crate::modules::workflow::validate::validate_for_install_async(
         &workflow_def,
         std::path::Path::new(&workflow.extracted_path),
         workflow.is_dev,
-    )?;
+    )
+    .await?;
 
     // The run's model was chosen at launch; re-resolve it (re-checks provider
     // access — a model that became inaccessible can't be resumed).

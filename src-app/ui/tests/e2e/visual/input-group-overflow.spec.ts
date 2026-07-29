@@ -26,9 +26,14 @@
  *  - for BOTH `inline-start` and `inline-end` addons, measured in the WRITING
  *    direction — the two variants are written as a symmetric pair, so a guard on
  *    one of them lets the other rot;
- *  - in LTR **and RTL**, because the fix's whole rationale was replacing physical
- *    margins with logical padding, and only an RTL render can show whether that
- *    actually holds;
+ *  - in LTR **and RTL** — but note WHICH defect each direction catches, because
+ *    it was measured and it is not symmetric: the addon's own negative margin was
+ *    PHYSICAL, so reverting it fails the LTR rows and NOT the RTL ones (a
+ *    `margin-right` does not overhang the inline end under RTL). What the RTL
+ *    rows catch is the OTHER half of the fix — the group root's clearance
+ *    padding, which is selected by the logical `data-align` and used to be
+ *    applied physically; reverting that fails the RTL rows and not the LTR ones.
+ *    Neither direction is redundant, and neither covers the other;
  *  - with a falsifiability control that re-injects the ORIGINAL conditional
  *    selector (`:has(> button)`), not a blanket margin — a control that injects a
  *    stronger defect than the one that existed does not prove the probe would
@@ -49,7 +54,16 @@ import { STANDALONE_PATH } from './_gallery'
 /** Sub-pixel slack for layout jitter / zoom rounding. NOT a defect allowance. */
 const JITTER_PX = 1
 
-/** The exact rule that was removed, re-injectable for the control. */
+/**
+ * The removed rule, re-injectable for the control.
+ *
+ * Spelled with the LOGICAL property while the kit's was physical
+ * (`margin-right`): the two are identical in LTR, which is where the control
+ * runs, and the logical form is what a re-introduction would be written as today
+ * given the rest of the file is now logical. The conditional `:has(> button)` is
+ * the part that must match, and does — a blanket margin would inject a defect
+ * stronger than the one that existed and prove less.
+ */
 const REVERTED_RULE =
   '[data-slot="input-group-addon"][data-align="inline-end"]:has(> button)' +
   '{margin-inline-end:-0.3rem}'

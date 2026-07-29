@@ -113,8 +113,9 @@ pub(crate) async fn resolve_prompt(
 ///
 /// Both halves were separately wrong before. This function matched
 /// `(Option, Option)` raw, so `Some("")` beside a `prompt_file:` read as "both"
-/// and failed the run on a workflow that had just validated clean
-/// (`.lifecycle/workflow-builder-ux/FIX_ROUND-8.md`); and it joined the path
+/// and failed the run on a workflow that had just validated clean — the state
+/// the builder's own `WORKFLOW_PROMPT_BOTH` remedy tells the author to create;
+/// and it joined the path
 /// with NO shape or confinement check, so a `prompt_file:` the validator refused
 /// as `WORKFLOW_PROMPT_FILE_UNSAFE` was read here anyway. The runner does not
 /// get to rely on having been validated: `spawn_run`/`resume_run` do re-validate
@@ -1911,8 +1912,7 @@ mod tests {
     // normalised an empty prompt to "absent") and then failed the RUN with `has
     // invalid prompt config` (the runner matched `(Option, Option)` raw); and a
     // `prompt_file:` the validator refused as UNSAFE was joined and read by the
-    // runner with no path check at all. See
-    // `.lifecycle/workflow-builder-ux/FIX_ROUND-8.md`.
+    // runner with no path check at all.
 
     /// A bundle holding every kind of `prompt_file:` target a definition can
     /// name — including the ones that used to split the two sides.
@@ -2161,19 +2161,20 @@ mod tests {
         )
         .await
         .expect_err("a '..' path must be refused by the runner itself");
-        assert!(err.contains("without '..'"), "{err}");
+        assert!(err.contains("must be a bundle-relative path"), "{err}");
 
         let err = load_raw_prompt("llm_1", root.as_path(), &None, &Some("/etc/passwd".into()))
             .await
             .expect_err("an absolute path must be refused by the runner itself");
-        assert!(err.contains("without '..'"), "{err}");
+        assert!(err.contains("must be a bundle-relative path"), "{err}");
 
-        // An INTERMEDIATE symlink out of the bundle is refused. This is the cell a
-        // resolve-then-check-then-open sequence loses to: `canonicalize` +
-        // `starts_with` + `O_NOFOLLOW` guards only the LAST component, so a
-        // directory swapped for a symlink between the check and the open escapes
-        // — and for the workspace surfaces the bundle root is bind-mounted
-        // read-write into the sandbox, so that swap is something the model can do.
+        // An INTERMEDIATE symlink out of the bundle is refused. A STATIC fixture
+        // like this one is caught by canonicalize+confine too — what it pins is
+        // that the kernel-confined path agrees. The case only the single
+        // `openat2` resolution can catch is the RACING one (a directory swapped
+        // for a symlink between the check and the open), which a unit test cannot
+        // construct deterministically; the anchor half of that attack IS pinned,
+        // by `read_prompt_file_refuses_a_bundle_root_that_became_a_symlink`.
         #[cfg(unix)]
         {
             let err = load_raw_prompt(

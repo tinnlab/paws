@@ -72,6 +72,13 @@ jobs:
       # job unable to pass for anyone. `visualSpecs` is the repo's own answer to
       # "which visual specs gate" (gate-ui.mjs reads the same field), so CI and
       # the local gate now agree instead of diverging.
+      #
+      # FOLLOW-UP, deliberately named rather than left implicit: the remaining
+      # Layer A specs under tests/e2e/visual are NOT gated by this job. Most pass;
+      # the ones that do not, at the time of writing, are chat-scroll-stability
+      # (three cases), tabular-viewer's clipboard case and user-profile-label's
+      # tooltip case. Adding a spec to `visualSpecs` is how it becomes gating, so
+      # the path back is one line per spec once those are green.
       - name: Run Layer A (deterministic, backend-free; Layer B skipped)
         working-directory: src-app/ui
         run: |
