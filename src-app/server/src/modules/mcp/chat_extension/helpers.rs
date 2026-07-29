@@ -1038,9 +1038,7 @@ mod tests {
         truncate_on_char_boundary, McpContentData, ASK_USER_SCHEMA_MARKER,
         MAX_ANTHROPIC_TOOL_NAME_LEN, MAX_STRUCTURED_CONTENT_BYTES,
         TOOL_COMPLETE_RESULT_PREVIEW_BYTES,
-        convert_mcp_tool_to_ai_tool, prepare_ask_user_schema, run_ask_user_elicitation,
-        stamp_ask_user_marker, McpContentData, ASK_USER_SCHEMA_EXAMPLE,
-        ASK_USER_SCHEMA_MARKER, MAX_ANTHROPIC_TOOL_NAME_LEN, MAX_STRUCTURED_CONTENT_BYTES,
+        prepare_ask_user_schema, ASK_USER_SCHEMA_EXAMPLE,
     };
 
     use crate::modules::mcp::client::traits::Tool as McpToolDef;
@@ -1769,6 +1767,7 @@ mod tests {
         assert!(!approval_is_always_reprompt(Some(regular), "search", &json!({}), None));
         // Unresolvable server → no basis to claim "always"; offer the button.
         assert!(!approval_is_always_reprompt(None, "search", &json!({}), None));
+    }
     // ── stringified-argument decode (the reported live defect) ───────────────
 
     /// The EXACT payload observed in the live session: the model sent
