@@ -365,6 +365,39 @@ test('FIX_ROUND-5: ChatMessage re-resolves rail steps THROUGH withSegmentationSh
  * regression's tooltip was CONDITIONAL on a degraded state, and no spec can reach
  * a state that needs mcp's transport to be absent mid-conversation.
  *
+ * ## FIX_ROUND-18 — a deletion was ATTEMPTED here and REVERTED. Read this first.
+ *
+ * Rounds 8-17 never converged: 46 of 59 findings in rounds 13-17 landed on this
+ * file, and round 17 was 21 of 22. `FIX_ROUND-17.md` §7 diagnosed the cause —
+ * these guards prove a SEMANTIC property (*the handler POSTs in exactly the
+ * states the control renders actionable*) by pattern-matching SOURCE — and
+ * recommended replacing them with a behavioural e2e.
+ *
+ * Round 18 built that e2e (`tests/e2e/chat/run-js-inner-approval.spec.ts`, the
+ * `blocked` state matrix) and then deleted the guards it appeared to make
+ * redundant. **Its own blind re-audit refuted the deletion, and it was reverted
+ * in full.** Do not attempt it again without reading `FIX_ROUND-18.md` §4.
+ *
+ * The mechanism, stated once so it is not rediscovered: `blocked` has FOUR values
+ * and only TWO of them (`null`, `resolve-failed`) are reachable from a spec —
+ * `no-transport` needs mcp's transport absent mid-conversation, and
+ * `not-registered` self-heals. So **every** defect this file guards has a
+ * spelling keyed on an unreachable value, which the matrix cannot see. Three
+ * examples, each verified GREEN under the reduced guards + the matrix and RED
+ * under these:
+ *   `{resolved === null && blocked !== 'not-registered' && (<controls/>)}`
+ *   `className={blocked === 'not-registered' ? 'mt-3 hidden' : 'mt-3'}`
+ *   `const carried = blocked === 'not-registered' ? false : await resolveElicitationVia(…)`
+ * Each leaves the card unanswerable in a state whose own on-screen copy reads
+ * "you can still answer it".
+ *
+ * **The matrix is kept and is worth having** — it pins the reachable half
+ * behaviourally, and it already caught a claim these guards could not (see
+ * `FIX_ROUND-18.md` §3, mutation A). It is a COMPLEMENT to this file, not a
+ * replacement. The structural answer that would actually retire these guards is a
+ * COMPONENT-level harness able to construct all four `blocked` values directly;
+ * that does not exist in this repo yet, and `FIX_ROUND-18.md` §6 names it.
+ *
  * FIX_ROUND-9 closed three proven evasions of the first cut — boolean-shorthand
  * `disabled`, a spread carrying it, and a `>` inside an earlier quoted attribute
  * truncating the props window — and removed the `catch { continue }` that made

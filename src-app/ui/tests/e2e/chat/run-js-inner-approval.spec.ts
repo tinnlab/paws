@@ -14,7 +14,7 @@ import {
 } from '../helpers/sse-mock-helpers'
 
 /**
- * run_js inner-tool approval (TEST-11/12/30/31).
+ * run_js inner-tool approval — the BEHAVIOURAL state matrix for the approval card.
  *
  * When a run_js script calls a GATED sub-tool it suspends IN-PROCESS and the
  * stream emits `runJsApprovalRequired`. Unlike the turn-boundary MCP approval,
@@ -22,6 +22,37 @@ import {
  * (the same in-process oneshot ask_user uses) — so the stream stays open (no
  * `complete`) until the user answers. These specs drive the approve/deny path
  * through the real `JsToolApprovalContent` component and assert the resolve POST.
+ *
+ * ## Why this file exists (FIX_ROUND-18)
+ *
+ * The card's real invariant is *the handler POSTs in exactly the states the
+ * control renders actionable*. Rounds 8-17 tried to prove that by pattern-matching
+ * the component's SOURCE, and never converged — 46 of 59 findings in rounds 13-17
+ * landed on `railIsolation.test.ts`, because the space of spellings is unbounded
+ * (`FIX_ROUND-17.md` §7). These specs measure the property instead: for each
+ * REACHABLE `blocked` state, does a POST actually leave the browser, and is the
+ * control actionable. Eight mutations were applied and run against them; seven
+ * turn them RED (`FIX_ROUND-18.md` §3).
+ *
+ * ## This file COMPLEMENTS the source guards — it does not replace them
+ *
+ * Round 18 deleted the guards these specs appeared to make redundant, and its own
+ * blind re-audit REFUTED the deletion; it was reverted in full. `blocked` has four
+ * values and only two are reachable here, so every defect has a spelling keyed on
+ * an unreachable value that these specs cannot see (`FIX_ROUND-18.md` §4).
+ *
+ * The two unreachable states, with the ACCURATE reason each is out of reach —
+ * in both cases it is that no browser-driven spec can invoke the mechanism, not
+ * that no mechanism exists:
+ *
+ * - `blocked === 'no-transport'` — reachable in production (a throwing
+ *   `subscribe` makes `setElicitationTransport` refuse the install; the registry's
+ *   `unregister` calls `clearElicitationTransportIfOwnedBy`), but neither path is
+ *   driveable from a spec.
+ * - `blocked === 'not-registered'` — genuinely reachable in production (mcp's
+ *   `initialize` awaits a dynamic import before installing the transport, so a
+ *   frame landing in that window is dropped), but it self-heals within the heal
+ *   budget, so it is not deterministically observable.
  */
 test.describe('run_js inner-tool approval', () => {
   test.beforeEach(async ({ page, testInfra }) => {
@@ -39,8 +70,10 @@ test.describe('run_js inner-tool approval', () => {
   }) => {
     const eid = 'elic-runjs-approve'
     let respondAction: string | undefined
+    let respondCount = 0
     await page.route('**/api/mcp/elicitation/*/respond', async (route) => {
       respondAction = route.request().postDataJSON()?.action
+      respondCount += 1
       await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' })
     })
 
@@ -79,7 +112,23 @@ test.describe('run_js inner-tool approval', () => {
     await expect(deny).toBeEnabled()
     await expect(approve).not.toHaveAttribute('aria-describedby', /./)
 
-    await approve.click()
+    // TEST-MATRIX (FIX_ROUND-18): blocked === null.
+    //
+    // Double-click deliberately: a single-use elicitation must be POSTed EXACTLY
+    // once in this state.
+    //
+    // MEASURED LIMIT — do not over-trust this line. Deleting the handler's
+    // `setSubmitting(true)` leaves the WHOLE FILE green (FIX_ROUND-18 §3,
+    // mutation A, re-run against all three tests). Here the second POST is
+    // prevented by the PROVIDER, not by the in-flight flag:
+    // `McpComposer.resolveElicitation` performs its optimistic `set()`
+    // synchronously, so the entry flips to `accepted`, the seam bumps, and both
+    // controls un-render inside the first discrete event. That happens whether or
+    // not the handler has a re-entrancy gate at all — so this assertion cannot
+    // enforce its stated subject in general. The flag only matters where the
+    // optimistic update is a no-op (`not-registered`, unreachable here), and it
+    // is pinned by `railIsolation.test.ts`'s in-flight-raise guard.
+    await approve.dblclick()
 
     await expect.poll(() => respondAction, { timeout: 5000 }).toBe('accept')
     await expect(page.locator(`[data-testid="run-js-approval-status-${eid}"]`)).toHaveAttribute(
@@ -87,6 +136,82 @@ test.describe('run_js inner-tool approval', () => {
       'approved',
       { timeout: 5000 },
     )
+    // Settle, then assert the count — not just that a POST happened.
+    await page.waitForTimeout(500)
+    expect(respondCount, 'a single-use elicitation must be POSTed exactly once').toBe(1)
+  })
+
+  /**
+   * TEST-MATRIX (FIX_ROUND-18): blocked === 'resolve-failed'.
+   *
+   * THE state this card has been broken in five times. A non-404 failure rolls
+   * the store entry back to `pending` (`mcpComposer/actions/resolveElicitation`),
+   * so `resolveDidFail` is true and the card enters `resolve-failed` — which is
+   * RECOVERABLE by design: the controls must stay ENABLED and a second click must
+   * genuinely POST again.
+   *
+   * FIX_ROUND-4 latched the card here (disabled on any blocked reason, and the
+   * disable gated its own reset, so the card was dead for the life of the mount);
+   * -5, -6, -7 and -8 each re-broke or re-fixed some part of it. Every one of
+   * those was found by reading code. This measures the actual behaviour: fail the
+   * first POST, assert the card is still answerable, answer it, assert the second
+   * POST really goes out and the card resolves.
+   */
+  test('resolve-failed: a rejected POST leaves the card answerable, and the retry POSTs', async ({
+    page,
+    testInfra,
+  }) => {
+    const eid = 'elic-runjs-retry'
+    const actions: string[] = []
+    await page.route('**/api/mcp/elicitation/*/respond', async (route) => {
+      actions.push(route.request().postDataJSON()?.action)
+      // First attempt fails (not 404 -> the store rolls back to 'pending');
+      // the retry succeeds.
+      if (actions.length === 1) {
+        await route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"nope"}' })
+        return
+      }
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' })
+    })
+
+    await mockChatTokenStream(page, [
+      [
+        startedEvent({ userMessageId: 'umsg-rj-retry' }),
+        {
+          event: 'runJsApprovalRequired',
+          data: { elicitation_id: eid, tool_name: 'web_search', server: 'web_search', input: {} },
+        },
+      ],
+    ])
+    await mockGetMessages(page, [mockUserMessage({ id: 'umsg-rj-retry', text: 'run a script' })])
+
+    await goToNewChatPage(page, testInfra.baseURL)
+    await sendChatMessage(page, 'run a script')
+
+    const approve = page.locator(`[data-testid="run-js-approval-approve-${eid}"]`)
+    const deny = page.locator(`[data-testid="run-js-approval-deny-${eid}"]`)
+    const status = page.locator(`[data-testid="run-js-approval-status-${eid}"]`)
+    await expect(page.locator(`[data-testid="run-js-approval-${eid}"]`).first()).toBeVisible({
+      timeout: 30000,
+    })
+
+    await approve.click()
+    await expect.poll(() => actions.length, { timeout: 10000 }).toBe(1)
+
+    // The card must report the failure AND remain answerable — both controls
+    // still rendered, still enabled, still reachable (no `hidden`, no
+    // `pointer-events-none`, no un-render).
+    await expect(status).toHaveAttribute('data-status', 'resolve-failed', { timeout: 10000 })
+    await expect(approve).toBeVisible()
+    await expect(deny).toBeVisible()
+    await expect(approve).toBeEnabled()
+    await expect(deny).toBeEnabled()
+
+    // …and the retry must actually leave the browser.
+    await approve.click()
+    await expect.poll(() => actions.length, { timeout: 10000 }).toBe(2)
+    expect(actions).toEqual(['accept', 'accept'])
+    await expect(status).toHaveAttribute('data-status', 'approved', { timeout: 10000 })
   })
 
   test('deny: prompt resolves via /respond with decline', async ({ page, testInfra }) => {
