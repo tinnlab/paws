@@ -98,5 +98,48 @@
     "tests-quality",
     "maintainability",
     "correctness"
+  ],
+  "src-app/server/src/modules/hub/handlers.rs": [
+    "security",
+    "correctness",
+    "concurrency",
+    "error-handling",
+    "maintainability",
+    "patterns-conformance",
+    "design-conformance"
+  ],
+  "src-app/server/src/modules/workflow/handlers/dev.rs": [
+    "security",
+    "correctness",
+    "concurrency",
+    "error-handling",
+    "maintainability",
+    "patterns-conformance",
+    "design-conformance"
+  ],
+  "src-app/server/src/modules/workflow/runner.rs": [
+    "security",
+    "correctness",
+    "concurrency",
+    "error-handling",
+    "maintainability",
+    "patterns-conformance",
+    "design-conformance"
+  ],
+  "src-app/server/src/modules/workflow_mcp/tools.rs": [
+    "security",
+    "correctness",
+    "concurrency",
+    "error-handling",
+    "maintainability",
+    "patterns-conformance",
+    "design-conformance"
+  ],
+  ".github/workflows/visual-snapshots.yml": [
+    "design-conformance",
+    "wired-and-behaving",
+    "tests-quality",
+    "maintainability",
+    "correctness"
   ]
 }

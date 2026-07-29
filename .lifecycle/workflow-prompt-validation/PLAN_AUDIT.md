@@ -101,3 +101,43 @@ phase 8 by `npm run check`.
   it means ITEM-8 cannot be certified by the cheap gallery probe alone. Resolved
   by enumerating TEST-8 as the real run of that spec at phase 8, not by leaving
   the constant at 4.
+
+## Per-item verdicts — items added after the blind-audit rounds
+
+These items did not exist at plan time; each was added because a blind round
+found the original plan incomplete. Audited against the codebase on the same
+terms as the originals.
+
+- **ITEM-9** — verdict: PASS — the group root's clearance conversion is two
+  utilities in one string in `input-group.tsx`, and the `StepConfig::prompt_fields`
+  accessor is an exhaustive match beside the existing `kind_str()`. Both mirror
+  their immediate siblings; neither adds a dependency.
+- **ITEM-10** — verdict: PASS — the Rust→TS drift guard reuses this file's own
+  `validationCopy.ts` mechanism (read the TS at test time, fail the backend
+  suite), including its "read at RUNTIME, never `include_str!`" rule.
+- **ITEM-11** — verdict: CONCERN — wiring the spec into `gate:ui` is a one-line
+  config addition, but adding `sdk` to the CI path filter changes when a SHARED
+  workflow runs. Resolved by verifying end to end rather than by narrowing the
+  item: the job could not install without `submodules: recursive` (added), and it
+  then ran the whole visual testDir where several specs are long red, so the step
+  now runs the same curated list `gate:ui` runs, with the excluded specs named in
+  a comment. Re-verified by executing the exact command the workflow computes.
+- **ITEM-12** — verdict: PASS — `[DESCOPED]`, with an approved disposition in
+  DECISIONS.md (DEC-14) and the reasoning in DESIGN §3. No code.
+- **ITEM-13** — verdict: PASS — copy-only change to `validationCopy.ts`, keyed off
+  an unchanged code, so no client or guard is affected.
+- **ITEM-14** — verdict: PASS — `[DESCOPED]`, approved disposition recorded.
+- **ITEM-15** — verdict: PASS — `[DESCOPED]`, approved disposition recorded.
+- **ITEM-16** — verdict: CONCERN — this is the item that carries real breakage
+  risk: it tightens what a `prompt_file:` may be (regular file, ≤ 1 MiB, readable
+  as UTF-8, non-empty, confined) and `validate_for_install` re-runs on every
+  launch, so a previously-installed definition can newly fail to start. The
+  concern is intended and bounded — every newly-refused state is one that already
+  failed at RUN — and it is answered by DEC-11 rather than by narrowing the item.
+  The `openat2` path is Linux-only with a documented weaker fallback; the `unsafe`
+  is two blocks, both with SAFETY comments, and the syscall's `open_how` is built
+  zeroed because it is `#[non_exhaustive]`.
+- **ITEM-17** — verdict: PASS — guard repairs. The one with a real trap is the
+  literal-argument emit sites: passing computed `layer()`/`code()` there is
+  invisible to the crate's textual drift scanner, which is why
+  `prompt_file_finding` is a `match` with literals and says so in a comment.
