@@ -112,10 +112,14 @@ test.describe('run_js inner-tool approval', () => {
     // it was written for. FIX_ROUND-5's tooltip was CONDITIONAL on the degraded
     // state — `tooltip={blocked ? '…' : undefined}` — and this test runs at
     // `blocked === null`, where it evaluates to `undefined`. Re-adding it in its
-    // historical spelling leaves this whole file GREEN (3 passed); the same
-    // mutation is RED under `railIsolation.test.ts`'s FIX_ROUND-8 guard. So the
-    // property is held by that SOURCE guard, not by this line. What this line does
-    // pin is an UNCONDITIONAL tooltip, and the distinct names in the healthy state.
+    // historical spelling leaves this whole file GREEN (3 passed). The property
+    // is now held by the COMPONENT HARNESS
+    // (`src/modules/js-tool/chat-extension/components/JsToolApprovalContent.test.tsx`),
+    // which requires the two controls to announce DISTINCT accessible names —
+    // the regression itself, rather than one syntax that causes it — and is
+    // measured RED for the tooltip mutation by `scripts/mutate-approval-card.mjs`
+    // (`A11Y-a`). The SOURCE guard that used to hold it is deleted. What this
+    // line pins is an UNCONDITIONAL tooltip, and distinct names in the healthy state.
     // (`FIX_ROUND-8.md` §0 is the round where exactly this confusion — a control
     // that went red for a mutation that was not the regression — was first caught.)
     await expect(approve).toHaveAccessibleName(/approve/i)
@@ -141,8 +145,10 @@ test.describe('run_js inner-tool approval', () => {
     // not the handler has a re-entrancy gate at all — so this assertion cannot
     // enforce its stated subject in general. The flag only matters where the
     // optimistic update is a no-op (the not-open-locally condition, unreachable
-    // here), and it
-    // is pinned by `railIsolation.test.ts`'s in-flight-raise guard.
+    // here), and it is pinned BEHAVIOURALLY by the component harness
+    // (`JsToolApprovalContent.test.tsx` §5), which holds the resolve in flight
+    // with a never-settling provider and requires exactly one POST across three
+    // clicks. `scripts/mutate-approval-card.mjs` (`REENTRANCY-a`) is the proof.
     await approve.dblclick()
 
     await expect.poll(() => respondAction, { timeout: 5000 }).toBe('accept')

@@ -12,6 +12,15 @@
  * `include` is scoped to `*.store.test.ts` and the node:test-authored
  * `*.store.test.ts` files are excluded, so `npx vitest run` never double-runs
  * a `node:test` spec.
+ *
+ * ## `*.test.tsx` — the COMPONENT harness glob
+ *
+ * `node --test` (the `test:unit` runner) cannot load a `.tsx` file at all, and
+ * its glob is `src/**\/*.test.ts`, so a `.tsx` spec is invisible to it. Vitest
+ * is therefore the only runner in this workspace that can MOUNT a component,
+ * which is what closes the class of defect nineteen source-scanning fix rounds
+ * could not (see `JsToolApprovalContent.test.tsx`'s header). The two globs are
+ * disjoint by extension, so nothing double-runs.
  */
 import path from 'node:path'
 import { defineConfig } from 'vitest/config'
@@ -25,7 +34,7 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     globals: false,
-    include: ['src/**/*.store.test.ts'],
+    include: ['src/**/*.store.test.ts', 'src/**/*.test.tsx'],
     exclude: [
       'node_modules',
       'dist',
