@@ -13,7 +13,7 @@ one and initially masked the real before/after. See MEASUREMENTS.md §Instrument
 
 `ITEM-5` is `[DESCOPED]` with an approved disposition in DECISIONS.md (DEC-2) and
 is therefore exempt from needing a covering test — but INV-3, the invariant that
-*causes* the descope, is still pinned by an executable acceptance test (TEST-5).
+*causes* the descope, is still pinned by an executable acceptance test (TEST-8).
 
 ## Tests
 
@@ -22,7 +22,9 @@ is therefore exempt from needing a covering test — but INV-3, the invariant th
 - **TEST-3** (tier: e2e) [covers: ITEM-3] file: `src-app/ui/tests/e2e/perf/chats-list-single-fetch.spec.ts` — asserts: the exact case the removed `ConversationList` comment cited — a conversation created AFTER the store has already been primed (visit `/chats`, create a conversation out-of-band via the API, navigate away and back) still appears in the list. Proves the surviving page-level fetch covers the reactivity the removed effect claimed to provide.
 - **TEST-4** (tier: e2e) [covers: ITEM-4] file: `src-app/ui/tests/e2e/perf/boot-tier-permission-gate.spec.ts` — asserts: the measured Rank-4 shape on an ADMIN boot — `GET /api/auth/me` is issued, and the permission-gated `GET /api/server-update/status` is issued only after `/api/auth/me` has RESOLVED (its start is at/after `/api/auth/me`'s end). This documents the serialization as a measured fact rather than a claim, and is the positive control for TEST-5.
 - **TEST-6** (tier: e2e) [covers: ITEM-6] file: `src-app/ui/tests/e2e/perf/chats-list-single-fetch.spec.ts` — asserts: the no-op guard added by ITEM-6 did NOT break real search — typing a query that matches only one of two seeded conversations filters the list to it, and CLEARING the query back to empty restores the other one. The clear-to-empty leg is the load-bearing half: it is the case where `localSearchQuery` is `''` (identical to a mount pass) but the store holds a non-empty query, so a guard written as "skip the first run" instead of "skip when equal to the store" would strand the user in a filtered list. This is the direct regression guard for the risk ITEM-6 introduces.
-- **TEST-5** (tier: e2e) [acceptance] [invariant: INV-3] [covers: ITEM-4] file: `src-app/ui/tests/e2e/perf/boot-tier-permission-gate.spec.ts` — asserts: a NON-ADMIN user (who lacks `server_update::read` — granted by no migration, so held only by admins via `*`) boots the app and issues **ZERO** requests to `GET /api/server-update/status`, and receives **ZERO** 403 responses on any `/api/` request during boot. This is the executable proof that the `hasPermissionNow` gate is load-bearing and not decorative: it fails the moment anyone "optimistically fires and tolerates a 403" (ITEM-5), which is precisely the change this round declines to make. It asserts the DESIGN's promise (the no-403 rule), not the current code's behaviour — flipping the invariant off turns it red.
+- **TEST-5** (tier: e2e) [covers: ITEM-4] file: `src-app/ui/tests/e2e/perf/boot-tier-permission-gate.spec.ts` — asserts: a NON-ADMIN user (who lacks `server_update::read` — granted by no migration, so held only by admins via `*`) boots the app and issues **ZERO** requests to `GET /api/server-update/status`, and receives no 403 on that path. This proves the OUTCOME the no-403 rule promises. It deliberately does **not** carry the acceptance tag: `server-update`'s module declares `shouldLoad: ctx => … && ctx.can(ServerUpdateRead)`, so for an unpermitted user the module never loads and the store's `init()` never runs — delete the store's `hasPermissionNow` line and this test still passes. Isolating the store gate is TEST-8's job. (Re-scoped in phase 6; see DRIFT-2.1.)
+- **TEST-7** (tier: e2e) [covers: ITEM-4] file: `src-app/ui/tests/e2e/perf/boot-tier-permission-gate.spec.ts` — asserts: the positive control for TEST-8 — an ADMIN booting `/` DOES issue `GET /api/memory/admin-settings`. This is what makes TEST-8's "zero requests" non-vacuous: it establishes that the surface really does initialize the `MemoryAdmin` store and reach its gate, so a zero on the restricted user means the gate fired, not that nothing ran.
+- **TEST-8** (tier: e2e) [acceptance] [invariant: INV-3] [covers: ITEM-4] file: `src-app/ui/tests/e2e/perf/boot-tier-permission-gate.spec.ts` — asserts: a user lacking `memory::admin::read` boots `/` and issues **ZERO** requests to `GET /api/memory/admin-settings`. This ISOLATES the store-level self-gate, which is what INV-3 actually promises: the `memory` module declares only `shouldLoad: ctx => ctx.isAuthenticated`, so its store genuinely initializes for this user (`MemoryStatusPill` reads `MemoryAdmin.settings` before its own `canUse` early-return), and `memory::admin::read` is granted by no migration so it is absent from the default Users group `createTestUser` lands the user in. The ONLY thing that can stop the request is `hasPermissionNow(Permissions.MemoryAdminRead)` in the store's `init()` — remove it and this goes red. That is the D2 property the acceptance tag requires: the test fails if the invariant is violated, rather than merely restating current behaviour.
 
 ## Coverage map
 
@@ -32,14 +34,14 @@ is therefore exempt from needing a covering test — but INV-3, the invariant th
 | ITEM-2 | TEST-1 |
 | ITEM-6 | TEST-1, TEST-6 |
 | ITEM-3 | TEST-2, TEST-3 |
-| ITEM-4 | TEST-4, TEST-5 |
+| ITEM-4 | TEST-4, TEST-5, TEST-7, TEST-8 |
 | ITEM-5 | `[DESCOPED]` — approved disposition in DECISIONS.md (DEC-2) |
 
 | INV | pinned by |
 |---|---|
 | INV-1 | TEST-2 `[acceptance]` |
 | INV-2 | TEST-1 `[acceptance]` |
-| INV-3 | TEST-5 `[acceptance]` |
+| INV-3 | TEST-8 `[acceptance]` |
 
 ## Tier note
 
