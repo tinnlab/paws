@@ -69,9 +69,17 @@ reverting the two labels to `truncate`/`whitespace-nowrap` turns it red with
 - `JsToolApprovalContent` orders Approve before Deny, inverting the negative-first
   order this branch standardises on its siblings.
 
+## Round-4 verification — it did NOT return zero
+
+A fourth blind reviewer audited the post-round-3 diff and found **7 confirmed
+findings**, including a HIGH regression introduced BY this round's own fix (the
+tool-name change removed the bound, not just the truncation) and a HIGH
+tests-quality finding that this round's rewritten TEST-8 could not fail on it.
+See `FIX_ROUND-4.md`. Recorded here rather than claimed as convergence.
+
 ## Verification after this round
 
 Full enumerated spec: **20 passed, 0 failed** (`round3-final.log`).
 `npm run check (ui)`: exit 0 (`npm-check5.log`).
 
-**New confirmed findings:** 0
+**New confirmed findings:** 7

@@ -112,4 +112,4 @@ defects — round 2 found a hole in the round-1 fix — a further round should b
 assumed to have a non-zero yield, and the reviewer of this branch should not read
 "2 rounds" as "converged".
 
-**New confirmed findings:** 0
+**New confirmed findings:** 9

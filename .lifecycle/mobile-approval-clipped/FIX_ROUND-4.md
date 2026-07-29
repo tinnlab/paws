@@ -87,4 +87,15 @@ judgement, and it is flagged for the owner rather than settled by me.
 Full enumerated spec: **22 passed, 0 failed** (`round4-final2.log`).
 `npm run check (ui)`: exit 0 (`npm-check7.log`).
 
-**New confirmed findings:** 0
+## Round-5 verification
+
+A fifth blind reviewer is auditing the post-round-4 diff, told to probe exactly
+the new clamp (extreme inputs, the Show-more escape hatch, whether the complete
+string is really still in the DOM, and interaction with the description's
+collapsible). The number below records its result and is not written ahead of it.
+
+Finding profile so far — **12, 9, 7, ?** — is decaying but has not reached zero,
+and every round to date has found something real. Do not read this branch as
+converged until the profile actually bottoms out.
+
+**New confirmed findings:** PENDING
