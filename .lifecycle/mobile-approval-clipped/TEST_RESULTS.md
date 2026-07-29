@@ -34,16 +34,48 @@ TEST-9/INV-2) is among the passes above.
   hooks + logical-direction + tooltip-placement + kit-manifest + testid-registry +
   design-spec + gallery-coverage + gallery-crawl + fixtures + state-matrix +
   overlay/override/seed registries + store-actions.
-- `gate:ui (ui): PENDING` — a final run is in flight. What has been OBSERVED so
-  far (`denyclip-gateui2.log`), on the same tree modulo the round-2 refinements:
-  `tsc PASS`, `lint PASS`, `runtime-health PASS — 158/158 surfaces clean, 0
-  gating HIGH findings` (the approval surfaces themselves show only 2 LOW
-  `spacing-grid` findings each), and `visual FAIL` on TWO cases of the
-  PRE-EXISTING `chat-collapse-borders.spec.ts`. That last one was NOT accepted on
-  faith: I ran that spec against the UNTOUCHED base (7 passed) and against this
-  branch (7 passed) in isolation — it fails only inside the parallel visual layer,
-  i.e. it is flaky under load rather than a regression from this change. This line
-  will not be written as PASS until a run is observed passing.
+- `gate:ui (ui): FAIL on this host — NOT a pass, and not claimed as one.` The
+  honest result of the final run (`denyclip-gateui-final.log`):
+
+  ```
+  PASS  tsc
+  PASS  lint
+  FAIL  runtime-health      (174/176 surfaces PASS)
+  FAIL  visual              (2 of 25 cases)
+  ```
+
+  Both failures were INVESTIGATED against the untouched base rather than waved
+  through, and neither is in this diff's blast radius:
+
+  - `visual` — the two failures are the PRE-EXISTING
+    `chat-collapse-borders.spec.ts` TEST-3 (light + dark). Run in isolation that
+    spec passes **7/7 on the untouched base** AND **7/7 on this branch**
+    (`collapse-BASE.log`, `collapse-MINE.log`); it fails only inside the parallel
+    visual layer, i.e. it is flaky under load.
+  - `runtime-health` — the two failing surfaces are `seeded-file-rag-error`
+    (6 HIGH: "Rendered more hooks than during the previous render" + an
+    ErrorBoundary crash) and `hardware-monitor` (2 HIGH: "Internal React error:
+    Expected static flag was missing"). Neither renders anything this diff
+    touches. Scoped re-runs (`runtime-health --only-match=file-rag-error`) report
+    **0 gating HIGH on the base AND 0 gating HIGH on this branch**
+    (`rh-base.log`, `rh-mine.log`). A hooks-count change between renders is the
+    expected symptom of a lazily-imported module arriving mid-render, which is
+    exactly the documented module-fetch failure on this host.
+
+  **The surfaces this diff actually changes are clean in every run**: across the
+  five approval/elicitation gallery surfaces the ONLY findings are 10 LOW
+  `spacing-grid` entries — zero HIGH, zero MEDIUM, no console error, no crash, no
+  failed request, no contrast failure.
+
+  An earlier run on the same tree (`denyclip-gateui2.log`) did reach
+  `runtime-health PASS — 158/158 surfaces clean, 0 gating HIGH`, which is the
+  same verdict for this diff seen on a quieter moment of the box.
+
+  **This line is deliberately not written as PASS.** The lifecycle's A7 canary
+  therefore stays RED, which is the correct state: I will not record a gate as
+  green that I did not observe green. The orchestrator should re-run
+  `npm run gate:ui` on a quiet box (with `CHOKIDAR_USEPOLLING=1`, and after
+  killing any stale Vite belonging to this worktree) before merging.
 
 `src-app/desktop/ui/**` is not touched by this diff (it consumes the same
 `@ziee/kit` and `../../ui/src` via its Vite/`@source` config, verified by a
