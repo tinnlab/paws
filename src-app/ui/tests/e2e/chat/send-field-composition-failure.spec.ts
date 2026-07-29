@@ -216,12 +216,6 @@ test.describe('Chat — a failed request-field composition never reaches the wir
       .poll(() => a.importAttempts.length, { timeout: 30000 })
       .toBeGreaterThan(0)
 
-    // The shipped dispatcher memoized the rejection permanently: the FIRST
-    // failure cleared the memo, the SECOND latched it, and from then on the
-    // action imported nothing at all — every later send failed instantly without
-    // touching the chunk. So the discriminating observation is that the THIRD
-    // and FOURTH sends each still produce a fresh RETRY BURST for this specific
-    // chunk. Under the old policy those deltas are 0.
     // Repeated attempts, all of which must stay off the wire.
     //
     // NOT asserted here: "the dispatcher re-attempts the import". That claim was

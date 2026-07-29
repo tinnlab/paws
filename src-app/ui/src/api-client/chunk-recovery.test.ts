@@ -2,6 +2,7 @@ import { test, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   __resetStaleBuildForTests,
+  clearStaleBuild,
   installChunkLoadRecovery,
   isStaleBuild,
   markStaleBuild,
@@ -158,9 +159,17 @@ test('TEST-11d: with no event target (SSR / node) install is a harmless no-op', 
   assert.equal(isStaleBuild(), false)
 })
 
-test('TEST-11e: markStaleBuild is idempotent and sticky', () => {
+test('TEST-11e: the mark is idempotent, and CLEARED by a successful load', () => {
   assert.equal(isStaleBuild(), false)
   markStaleBuild()
   markStaleBuild()
   assert.equal(isStaleBuild(), true)
+
+  // Not permanently sticky. An earlier draft never reset it, which contradicted
+  // the dispatcher's own thesis (an import failure is TRANSIENT) and had a real
+  // cost: one 300ms blip during boot latched the flag for the whole session,
+  // which disabled store-kit's lazy-action prefetch for every store registered
+  // afterwards even though the network had recovered.
+  clearStaleBuild()
+  assert.equal(isStaleBuild(), false)
 })

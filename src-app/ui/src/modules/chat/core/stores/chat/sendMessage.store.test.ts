@@ -552,15 +552,15 @@ test('TEST-18: a pre-flight abort CLEARS the latched branch fork (no silent re-f
   // the SUCCESS path. Without clearing on abort, the user's next composer
   // message silently forks at the stale assistant anchor — the branching fields
   // are injected unconditionally further down.
-  let cleared = 0
   stubRegistry({ composeRequestFields: async () => ({ content: 'hello' }) })
   const { set, get, state } = makeStore({
     pendingBranchFromMessageId: 'msg-42',
     pendingBranchForkLevel: 'assistant',
+    // NOT the vehicle: `clearPendingBranch` is a LAZY action (it would itself
+    // fail in the stale-build case this abort exists for) and it also clears
+    // `editingMessage`. The abort must clear the two fork fields DIRECTLY.
     clearPendingBranch: async () => {
-      cleared++
-      ;(state as Record<string, unknown>).pendingBranchFromMessageId = null
-      ;(state as Record<string, unknown>).pendingBranchForkLevel = null
+      throw new Error('clearPendingBranch must not be dispatched on a pre-flight abort')
     },
   })
   const sendMessage = makeSendMessage(set as never, get as never)
@@ -570,8 +570,8 @@ test('TEST-18: a pre-flight abort CLEARS the latched branch fork (no silent re-f
       await sendMessage().catch(() => {})
     })
     expect(calls.n).toBe(0)
-    expect(cleared, 'the abort must clear the pending branch').toBe(1)
-    expect(state.pendingBranchFromMessageId).toBeNull()
+    expect(state.pendingBranchFromMessageId, 'the abort must clear the fork anchor').toBeNull()
+    expect(state.pendingBranchForkLevel).toBeNull()
 
     // The proof that matters: the NEXT (healthy) send must not carry the stale
     // fork anchor.
@@ -628,6 +628,46 @@ test('TEST-20: an extension-contributed branch_id still WINS (precedence preserv
     await sendMessage()
     expect(calls.n).toBe(1)
     expect(calls.bodies[0].branch_id).toBe('from-extension')
+  } finally {
+    restore()
+  }
+})
+
+test('TEST-21: an aborted EDIT keeps its fork anchor and stays in edit mode', async () => {
+  // The mirror image of TEST-18, and a regression this change nearly shipped:
+  // `startEditMessage` latches the SAME fork fields as regenerate but also sets
+  // `editingMessage`, and the user stays in edit mode after a failed send — so
+  // the anchor is exactly what makes their retry branch correctly. Clearing it
+  // (or clearing `editingMessage`, which the lazy `clearPendingBranch` action
+  // also does) would silently turn the retry into an appended turn.
+  stubRegistry({ composeRequestFields: async () => ({ content: 'edited' }) })
+  const { set, get, state } = makeStore({
+    editingMessage: { id: 'msg-7', model_id: 'm-1' },
+    pendingBranchFromMessageId: 'msg-7',
+    pendingBranchForkLevel: 'user',
+    clearPendingBranch: async () => {
+      throw new Error('clearPendingBranch must NOT be called on an edit abort')
+    },
+  })
+  const sendMessage = makeSendMessage(set as never, get as never)
+  const { calls, restore } = stubSend()
+  try {
+    await captureConsoleError(async () => {
+      await sendMessage().catch(() => {})
+    })
+    expect(calls.n).toBe(0)
+    expect(state.editingMessage, 'the user must stay in edit mode').not.toBeNull()
+    expect(state.pendingBranchFromMessageId).toBe('msg-7')
+    expect(state.pendingBranchForkLevel).toBe('user')
+
+    // The retry still branches from the edited message.
+    stubRegistry({
+      composeRequestFields: async () => ({ content: 'edited', model_id: 'm-1' }),
+    })
+    await sendMessage()
+    expect(calls.n).toBe(1)
+    expect(calls.bodies[0].create_branch_from_message_id).toBe('msg-7')
+    expect(calls.bodies[0].fork_level).toBe('user')
   } finally {
     restore()
   }

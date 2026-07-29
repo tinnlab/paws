@@ -134,21 +134,30 @@ export default (set: ChatSet, getRaw: () => ChatInitialState) => {
               },
             )
           }
-          // A pre-flight abort must not leave a latched branch fork behind.
-          // `startRegenerateMessage` sets `pendingBranchFromMessageId` +
-          // `fork_level: 'assistant'` and trims the transcript BEFORE calling us,
-          // and has no catch of its own; `clearPendingBranch()` otherwise runs
-          // only on the success path. Without this, the user's NEXT composer
-          // message would silently fork at the stale assistant anchor (the
-          // branching fields below are injected unconditionally). Best-effort:
-          // the abort itself must still propagate.
-          try {
-            await get().clearPendingBranch()
-          } catch (clearError) {
-            console.error(
-              '[Chat.store] failed to clear the pending branch after a pre-flight abort',
-              clearError,
-            )
+          // A pre-flight abort must not leave a latched branch fork behind —
+          // but ONLY for the regenerate flow, and ONLY by clearing the two fork
+          // fields directly.
+          //
+          // `startRegenerateMessage` latches `pendingBranchFromMessageId` +
+          // `fork_level: 'assistant'` and trims the transcript BEFORE calling us
+          // and has no catch of its own, while `clearPendingBranch()` runs only on
+          // the success path — so without this the user's NEXT composer message
+          // silently forks at the stale assistant anchor (the branching fields
+          // below are injected unconditionally).
+          //
+          // The EDIT flow is deliberately excluded: `startEditMessage` latches the
+          // same fork fields but ALSO sets `editingMessage`, and the user stays in
+          // edit mode after a failed send — the anchor is exactly what makes their
+          // retry branch correctly, so dropping it would silently turn the retry
+          // into an appended turn.
+          //
+          // Written with `set` rather than `clearPendingBranch()` for two reasons:
+          // that action ALSO clears `editingMessage` (too broad), and it is a LAZY
+          // action — dispatching it in the stale-build case this abort exists for
+          // would itself fail, so the "guarantee" would not hold in the one
+          // scenario it was written for.
+          if (!get().editingMessage) {
+            set({ pendingBranchFromMessageId: null, pendingBranchForkLevel: null })
           }
           throw error
         }
@@ -243,9 +252,13 @@ export default (set: ChatSet, getRaw: () => ChatInitialState) => {
           // Fire-and-forget: the assistant reply streams over the chat-token
           // stream (applied by `applyStreamFrame` via the `chat:token` router),
           // not this response.
-          // Typed payload — the `as any` this replaced erased the compiler's
-          // knowledge that `content`/`model_id` are required, which is how a body
-          // missing `model_id` reached the wire and came back a raw 422.
+          // Typed payload. NOTE what this does and does not buy: the declared
+          // `{ id: string } & SendMessageRequest` type is what stops a future edit
+          // from dropping `id`/`branch_id` or renaming a field, but `content` and
+          // `model_id` are still read out of an open `Record<string, unknown>`, so
+          // their assertions are no sounder than the `as any` they replaced. The
+          // "verify before the POST" guarantee is carried by the RUNTIME
+          // `assertRequiredRequestFields` calls, not by the compiler.
           //
           // Key ORDER is deliberate and preserves the previous precedence: `id`
           // and `branch_id` come FIRST so an extension-contributed value still

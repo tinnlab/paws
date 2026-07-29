@@ -105,24 +105,29 @@ test('TEST-2: EVERY contributor still runs, and all failures are named', async (
 
 test('TEST-2b: the failure is still logged with its stack (the log did not regress)', async () => {
   const original = console.error
-  const lines: string[] = []
+  const calls: unknown[][] = []
   console.error = (...args: unknown[]) => {
-    lines.push(args.map(a => (a instanceof Error ? a.message : String(a))).join(' '))
+    calls.push(args)
   }
+  const thrown = new Error('boom')
   try {
     await composeRequestFieldsFrom([
-      {
-        name: 'model',
-        compose: async () => {
-          throw new Error('boom')
-        },
-      },
+      { name: 'model', compose: async () => { throw thrown } },
     ]).catch(() => {})
   } finally {
     console.error = original
   }
-  assert.equal(lines.length, 1)
-  assert.match(lines[0], /\[ChatExtensions\] Error in model\.composeRequestFields/)
+  assert.equal(calls.length, 1)
+  assert.match(String(calls[0][0]), /\[ChatExtensions\] Error in model\.composeRequestFields/)
+  // The ERROR OBJECT itself must be passed, not a pre-stringified message —
+  // that is what puts the stack in the console. Capturing `String(arg)` would
+  // have kept this green with the stack thrown away, which is exactly the
+  // hollow-assertion trap.
+  assert.equal(
+    calls[0][1],
+    thrown,
+    'the raw Error must reach console.error so its stack survives',
+  )
 })
 
 test('TEST-3: the all-succeed path is unchanged (merge, later contributor wins)', async () => {

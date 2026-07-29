@@ -97,7 +97,12 @@ export function isLoadFailureCause(cause: unknown): boolean {
         : typeof (cause as { message?: unknown } | null | undefined)?.message === 'string'
           ? (cause as { message: string }).message
           : ''
-  return /dynamically imported module|Importing a module script failed|Unable to preload|resolved with no module|chunk/i.test(
+  // Every alternative is a SPECIFIC phrase. A bare `chunk` was tried and removed:
+  // this app surfaces the word in ordinary domain errors (file/RAG chunking,
+  // `file_chunks`), and an API error body reaches this function verbatim — so a
+  // server-side chunking failure would have been handed "reload the page", the
+  // exact mis-advice this predicate exists to prevent.
+  return /dynamically imported module|Importing a module script failed|Unable to preload|resolved with no module|loading chunk .* failed|chunk load failed/i.test(
     text,
   )
 }
@@ -131,16 +136,20 @@ export function buildCompositionFailureMessage(
  * Build the user-facing message for a composed body that is missing a field the
  * server declares required.
  *
- * A missing required field is almost always a contributor that failed to load,
- * so the reload advice IS appropriate here — but it is still gated on the stale
- * mark when we have one, rather than asserted blindly.
+ * The reload advice is gated on the stale mark, for the same reason it is gated
+ * on the cause above: a missing field is USUALLY a contributor that failed to
+ * load, but not always. `branch_id` in particular can be genuinely absent — the
+ * server declares `Conversation.active_branch_id` optional — and telling that
+ * user to reload just refetches the same row and loops them. When the page is
+ * NOT known to be running against a stale build, the message states what is
+ * missing and stops there.
  */
 export function buildMissingFieldMessage(
   missing: string[],
   stale: boolean = isStaleBuild(),
 ): string {
   const head = `Couldn't send your message: it is missing ${missing.join(' and ')}.`
-  return stale ? `${head} ${STALE_BUILD_HINT} ${RECOVERY_HINT}` : `${head} ${RECOVERY_HINT}`
+  return stale ? `${head} ${STALE_BUILD_HINT} ${RECOVERY_HINT}` : head
 }
 
 /**

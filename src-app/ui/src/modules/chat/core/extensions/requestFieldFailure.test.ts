@@ -149,12 +149,36 @@ test('TEST-5c: isLoadFailureCause recognises every browser + bundler dialect', (
   }
 })
 
-test('TEST-5b: the missing-required-field message is actionable and stale-aware', () => {
+test('TEST-5b: the missing-required-field message is stale-gated too', () => {
   const msg = buildMissingFieldMessage(['a model selection'], false)
   assert.match(msg, /model/)
-  assert.ok(msg.includes(RECOVERY_HINT))
   assert.doesNotMatch(msg, /missing field `/)
-  assert.ok(buildMissingFieldMessage(['a model selection'], true).includes(STALE_BUILD_HINT))
+  // No reload advice when the build is not known to be stale: `branch_id` can be
+  // genuinely absent (the server declares active_branch_id optional), and
+  // reloading just refetches the same row and loops the user.
+  assert.ok(
+    !msg.includes(RECOVERY_HINT),
+    `a non-stale missing-field message must not prescribe a reload: ${msg}`,
+  )
+
+  const stale = buildMissingFieldMessage(['a model selection'], true)
+  assert.ok(stale.includes(STALE_BUILD_HINT))
+  assert.ok(stale.includes(RECOVERY_HINT))
+})
+
+test('TEST-5d: a domain error merely CONTAINING "chunk" is not a load failure', () => {
+  // An API error body reaches these builders verbatim, and this app surfaces the
+  // word in ordinary domain errors (file/RAG chunking). A bare `chunk` alternative
+  // would hand those users "reload the page" — the mis-advice this predicate
+  // exists to prevent.
+  for (const text of [
+    'HTTP error! status: 500 - failed to embed chunk 12 of document',
+    'chunking failed for file_chunks',
+  ]) {
+    assert.ok(!isLoadFailureCause(new Error(text)), `should NOT be a load failure: ${text}`)
+  }
+  // …while the real bundler dialects still are.
+  assert.ok(isLoadFailureCause(new Error('Loading chunk 42 failed.')))
 })
 
 // ── The required-field guard (the table + the assertion together) ────────────

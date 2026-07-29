@@ -4,6 +4,7 @@ import { createLazyDispatcher } from '../../../../sdk/packages/framework/src/laz
 import {
   __resetStaleBuildForTests,
   isStaleBuild,
+  markStaleBuild,
 } from '../../../../sdk/packages/framework/src/chunk-recovery.ts'
 
 /** Inject-away the retry backoff: the constants are deliberately tuned, and
@@ -234,6 +235,30 @@ test('TEST-6d: a definitive give-up marks the build stale (so the user can be to
     isStaleBuild(),
     true,
     'the give-up path must record the stale build itself — vite:preloadError only fires for __vitePreload in a production build, so dev / plain import() would otherwise leave the user-facing message with no explanation',
+  )
+  __resetStaleBuildForTests()
+})
+
+test('TEST-6e: a SUCCESSFUL import clears the stale mark (a blip must not latch it)', async () => {
+  // The mark gates both the user-facing "the app may have been updated" hint and
+  // store-kit's prefetch bail. Left permanently latched, one 300ms blip during
+  // boot disabled lazy-action prefetch for the rest of the session even though
+  // the network had recovered — and it contradicted this module's own thesis
+  // that an import failure is TRANSIENT.
+  __resetStaleBuildForTests()
+  markStaleBuild()
+  assert.equal(isStaleBuild(), true)
+
+  const dispatch = createLazyDispatcher(
+    async () => ({ default: () => 'ok' }),
+    (m: any) => m.default,
+    { sleep: noSleep },
+  )
+  assert.equal(await dispatch(), 'ok')
+  assert.equal(
+    isStaleBuild(),
+    false,
+    'a chunk just loaded — chunk loading is demonstrably working again',
   )
   __resetStaleBuildForTests()
 })
