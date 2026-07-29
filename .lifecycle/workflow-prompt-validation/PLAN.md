@@ -134,6 +134,12 @@ than silently fixing.
   add `submodules: recursive` to the visual CI job, without which its new `sdk`
   trigger fires a job that cannot install; and make `command.tsx`'s addon override
   logical.
+- **ITEM-18**: Restrict `resolve_conversation_workspace_dir`'s `dir` to a SINGLE
+  path component, and convert the last blocking workspace validator. Added after
+  round 6 demonstrated (with a C repro against the real syscalls) that a
+  multi-component `dir` puts an INTERMEDIATE directory of the returned bundle
+  root under the model's control — and the anchor guard in `read_prompt_file` can
+  only refuse a swapped FINAL component. The two rules are one mechanism.
 - **ITEM-13**: Reword `WORKFLOW_PROMPT_FILE_MISSING`'s author-facing copy in
   `validationCopy.ts` to cover every way a prompt file cannot be read (missing,
   a folder, empty, not text). The old copy — "isn't in the workflow — add the

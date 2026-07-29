@@ -141,3 +141,11 @@ terms as the originals.
   literal-argument emit sites: passing computed `layer()`/`code()` there is
   invisible to the crate's textual drift scanner, which is why
   `prompt_file_finding` is a `match` with literals and says so in a comment.
+- **ITEM-18** — verdict: CONCERN — this narrows a MODEL-FACING argument: a
+  `dir` of `a/b` was accepted and is now refused, so a caller relying on a nested
+  workspace dir breaks. The concern is answered by measurement rather than by
+  narrowing the item — the full `workflow_mcp` integration suite (46 tests,
+  including the three real-LLM workspace verbs) passes unchanged, and no fixture
+  or caller in the tree uses a nested `dir`. The alternative was leaving an
+  intermediate component of a sandbox-writable bundle root under model control,
+  which round 6 showed is a live path to reading host files.

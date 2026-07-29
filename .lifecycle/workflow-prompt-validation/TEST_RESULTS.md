@@ -33,7 +33,23 @@ Every line below was observed. Logs: `/data/pbya/ziee/tmp/lifecycle-logs/wfresid
 - **TEST-13**: PASS — `prompt_file_shape_refuses_every_absolute_and_traversing_form`.
 - **TEST-14**: PASS — `read_prompt_file_refuses_a_bundle_root_that_became_a_symlink`.
 
+- **TEST-15**: PASS — `t1_confine_rejects_nested_dir` +
+  `t1_confine_accepts_a_single_safe_dir` (`workflow/workspace.rs`): a nested
+  workspace `dir` is refused, a single-component one still resolves.
+
 `npm run check (ui): PASS`
+
+## Regression scope for the workspace-`dir` restriction (round 6)
+
+`cargo test --test integration_tests -- --test-threads=1 workflow_mcp`:
+**46 passed; 0 failed** — including `t4_run_from_workspace_drives_real_llm_step`,
+`t4_llm_agentically_runs_and_saves_workflow` and
+`t4_workspace_verbs_honor_approval_mode`, i.e. the real-LLM workspace verbs whose
+`dir` argument the restriction narrows. Nothing in the workspace flow used a
+nested `dir`.
+
+Final `workflow::` lib suite: **191 passed; 1 failed** (the pre-existing
+`job_kind` case).
 
 ## Acceptance tests (design-invariant proofs)
 

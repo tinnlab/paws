@@ -598,6 +598,23 @@ pub async fn validate_for_install_async(
         .map_err(|e| AppError::internal_error(format!("workflow: validation task failed: {e}")))?
 }
 
+/// `validate_collecting` for an async caller holding a REAL bundle.
+///
+/// Same reasoning as [`validate_for_install_async`]: this reads every
+/// `prompt_file:` with blocking `std::fs`, so an async caller with a real bundle
+/// must not run it inline.
+pub async fn validate_collecting_async(
+    workflow: &WorkflowDef,
+    bundle_root: &Path,
+    is_dev: bool,
+) -> Result<Vec<ValidationError>, AppError> {
+    let wf = workflow.clone();
+    let root = bundle_root.to_path_buf();
+    tokio::task::spawn_blocking(move || validate_collecting(&wf, &root, is_dev))
+        .await
+        .map_err(|e| AppError::internal_error(format!("workflow: validation task failed: {e}")))
+}
+
 /// Same as `validate_for_install` but returns ALL errors. Used by
 /// `/validate` REST endpoint (B6).
 pub fn validate_collecting(
@@ -1242,6 +1259,15 @@ fn open_confined(root: &Path, rel: &str) -> Result<std::fs::File, PromptFileErro
     // since "relative to /" IS absolute. `O_NOFOLLOW` refuses exactly that
     // swapped final component, and `O_DIRECTORY` refuses anything that is not a
     // directory.
+    //
+    // SCOPE, precisely: this covers the root's FINAL component only. INTERMEDIATE
+    // components of `root` are resolved by the caller's own path lookup and
+    // cannot be checked from in here — which is why
+    // `resolve_conversation_workspace_dir` restricts its `dir` to a SINGLE
+    // component. With `dir = "a/b"` the model would control `a`, an intermediate
+    // component, and no guard inside this function could see it. The two rules
+    // are one mechanism: this refuses a swapped final component, that makes the
+    // final component the only one the model can swap.
     let dir = {
         #[cfg(unix)]
         {
@@ -2372,11 +2398,11 @@ steps:
     /// while still satisfying the "no absolute paths" rule, because relative-to-`/`
     /// is not spelled absolutely. No race is required.
     ///
-    /// `#[cfg(unix)]` only because the test needs `symlink` to build the attack —
-    /// the property is asserted for BOTH resolution paths: `openat2` refuses it
-    /// via the `O_NOFOLLOW|O_DIRECTORY` anchor open, and the fallback refuses it
-    /// via the `symlink_metadata` anchor check, so cfg-disabling `openat2` leaves
-    /// this green while REMOVING either anchor guard turns it red.
+    /// `#[cfg(unix)]` only because the test needs `symlink` to build the attack.
+    /// BOTH resolution paths are asserted, and deliberately not by relying on
+    /// which one this platform takes: `read_prompt_file` exercises whichever is
+    /// live (on Linux, `openat2`), and `open_confined_fallback` is then driven
+    /// DIRECTLY — so removing either anchor guard turns this red on Linux.
     #[cfg(unix)]
     #[test]
     fn read_prompt_file_refuses_a_bundle_root_that_became_a_symlink() {

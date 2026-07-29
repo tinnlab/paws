@@ -70,9 +70,23 @@ pub fn resolve_conversation_workspace_dir(
         ));
     }
     // Only Normal components — no `..`, no root/prefix. `./` is tolerated.
+    //
+    // And exactly ONE of them. A multi-component `dir` puts an INTERMEDIATE
+    // directory of the returned root under the model's control, and this
+    // workspace is bind-mounted read-write into the code sandbox: with
+    // `dir = "a/b"` a sandbox step can run `mv a a.bak && ln -s / a`, and every
+    // later resolution of that root — including `read_prompt_file`'s kernel-
+    // confined one, which can only guarantee the anchor's FINAL component — is
+    // then anchored wherever `a` now points. With a single component, the only
+    // model-controlled part of the root IS that final component, which the anchor
+    // open refuses to follow.
+    let mut normals = 0usize;
     for c in rel.components() {
         match c {
-            Component::Normal(_) | Component::CurDir => {}
+            Component::Normal(_) => {
+                normals += 1;
+            }
+            Component::CurDir => {}
             _ => {
                 return Err(AppError::bad_request(
                     "WORKFLOW_WORKSPACE_BAD_DIR",
@@ -80,6 +94,13 @@ pub fn resolve_conversation_workspace_dir(
                 ));
             }
         }
+    }
+    if normals != 1 {
+        return Err(AppError::bad_request(
+            "WORKFLOW_WORKSPACE_BAD_DIR",
+            "'dir' must name a single directory directly inside the conversation \
+             workspace, not a nested path",
+        ));
     }
     let base = runner::workflow_workspace_root().join(conv.to_string());
     let candidate = base.join(rel);
@@ -152,21 +173,35 @@ mod tests {
     #[test]
     fn t1_confine_rejects_missing_dir() {
         // A well-formed relative dir that doesn't exist under the (temp) root.
-        let err =
-            resolve_conversation_workspace_dir(Some(Uuid::new_v4()), "nope/here").unwrap_err();
+        let err = resolve_conversation_workspace_dir(Some(Uuid::new_v4()), "nope").unwrap_err();
         assert_eq!(err.error_code(), "WORKFLOW_WORKSPACE_MISSING");
     }
 
     #[test]
-    fn t1_confine_accepts_nested_safe_dir() {
+    fn t1_confine_accepts_a_single_safe_dir() {
         // Build a real dir under the actual workspace root so canonicalize +
         // confinement succeed end-to-end.
         let conv = Uuid::new_v4();
         let base = runner::workflow_workspace_root().join(conv.to_string());
-        let nested = base.join("proj/flow");
-        fs::create_dir_all(&nested).unwrap();
-        let out = resolve_conversation_workspace_dir(Some(conv), "proj/flow").unwrap();
-        assert!(out.ends_with("proj/flow"));
+        let dir = base.join("proj");
+        fs::create_dir_all(&dir).unwrap();
+        let out = resolve_conversation_workspace_dir(Some(conv), "proj").unwrap();
+        assert!(out.ends_with("proj"));
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// A NESTED `dir` is refused: it would put an intermediate directory of the
+    /// returned root under the model's control, and that root is bind-mounted
+    /// read-write into the code sandbox. `read_prompt_file`'s anchor guard can
+    /// only refuse a swapped FINAL component, so the final component has to be
+    /// the only one the model can swap.
+    #[test]
+    fn t1_confine_rejects_nested_dir() {
+        let conv = Uuid::new_v4();
+        let base = runner::workflow_workspace_root().join(conv.to_string());
+        fs::create_dir_all(base.join("proj/flow")).unwrap();
+        let err = resolve_conversation_workspace_dir(Some(conv), "proj/flow").unwrap_err();
+        assert_eq!(err.error_code(), "WORKFLOW_WORKSPACE_BAD_DIR");
         let _ = fs::remove_dir_all(&base);
     }
 }

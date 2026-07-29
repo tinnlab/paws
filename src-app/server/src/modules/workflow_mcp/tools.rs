@@ -23,7 +23,8 @@ use crate::modules::workflow::registry;
 use crate::modules::workflow::repository;
 use crate::modules::workflow::runner;
 use crate::modules::workflow::validate::{
-    ExposeMode, OutputDef, Severity, WorkflowDef, parse_workflow_yaml, validate_collecting,
+    ExposeMode, OutputDef, Severity, WorkflowDef, parse_workflow_yaml,
+    validate_collecting_async,
     validate_for_install_async,
 };
 use crate::modules::workflow::{compiled, cost};
@@ -683,7 +684,9 @@ async fn validate_from_workspace(
         Err(e) => return Ok(error_tool_result("WORKFLOW_INVALID_YAML", e.to_string())),
     };
     // Real gate: is_dev=false so mocks would be flagged.
-    let findings = validate_collecting(&def, &root, false);
+    // `_async`: a REAL workspace root written by the model, so this reads every
+    // `prompt_file:` from disk and must not block the request's tokio worker.
+    let findings = validate_collecting_async(&def, &root, false).await?;
     let mut errors: Vec<Value> = Vec::new();
     let mut warnings: Vec<Value> = Vec::new();
     for f in findings {

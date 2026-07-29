@@ -25,6 +25,8 @@ no migration grant), so A9/A10 do not apply.
 - **TEST-12** (tier: unit) [covers: ITEM-16] file: `src-app/server/src/modules/workflow/validate.rs` — asserts: `read_prompt_file`'s RESOURCE guards, against real files of each offending kind — a real FIFO is refused (and the test RETURNING at all is the proof that the `O_NONBLOCK` open plus fd-type check works; a hang is the regression), a directory is refused, a file one byte over `MAX_PROMPT_FILE_BYTES` is `TooLarge` while one exactly at the cap still reads, and an ordinary file still reads.
 - **TEST-13** (tier: unit) [covers: ITEM-16] file: `src-app/server/src/modules/workflow/validate.rs` — asserts: `check_prompt_file_shape` refuses every traversing and ABSOLUTE form on every platform — `..`, a leading `/`, a `C:`/`c:` drive prefix and any backslash — while ordinary bundle-relative paths (including one with a space) pass.
 
+- **TEST-15** (tier: unit) [covers: ITEM-18] file: `src-app/server/src/modules/workflow/workspace.rs` — asserts: `resolve_conversation_workspace_dir` refuses a NESTED `dir` and still accepts a single-component one — the rule that makes the final component the only part of a workspace bundle root the model can swap, which is what the anchor guard in `read_prompt_file` is able to refuse.
+
 ## Coverage map
 
 | ITEM | covered by |
@@ -46,6 +48,7 @@ no migration grant), so A9/A10 do not apply.
 | ITEM-15 | [DESCOPED] — see DECISIONS |
 | ITEM-16 | TEST-1, TEST-3, TEST-6, TEST-11, TEST-12, TEST-13 |
 | ITEM-17 | TEST-7, TEST-10, TEST-11 |
+| ITEM-18 | TEST-14, TEST-15 |
 
 | INV | acceptance test |
 |---|---|
