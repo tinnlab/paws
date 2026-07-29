@@ -141,10 +141,13 @@ function makeFakeZustandStore() {
 
 test('TEST-10: the shared dispatcher keeps its chunk memoization', async () => {
   let loads = 0
+  // Two-stage loader: the chunk IMPORT and the impl BUILD have opposite failure
+  // policies, so the dispatcher takes them separately. This spec only cares
+  // about memoization, so the build stage is identity.
   const dispatch = createLazyDispatcher(async () => {
     loads++
     return async () => 'ok'
-  })
+  }, impl => impl)
   await Promise.all([dispatch(), dispatch(), dispatch()])
   await dispatch()
   assert.equal(loads, 1, 'the action chunk is fetched exactly once')

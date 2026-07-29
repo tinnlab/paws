@@ -579,11 +579,11 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/chat/core/extensions/registry",
     requiredStates: ["empty"],
     signals: [
-      { kind: "branch", condition: "!state", line: 141 },
-      { kind: "branch", condition: "this.initialized", line: 432 },
-      { kind: "empty", condition: "extensions.length === 0", line: 610 },
-      { kind: "empty", condition: "extensions.length === 0", line: 643 },
-      { kind: "empty", condition: "!registered || registered.length === 0", line: 932 },
+      { kind: "branch", condition: "!state", line: 142 },
+      { kind: "branch", condition: "this.initialized", line: 433 },
+      { kind: "empty", condition: "extensions.length === 0", line: 611 },
+      { kind: "empty", condition: "extensions.length === 0", line: 644 },
+      { kind: "empty", condition: "!registered || registered.length === 0", line: 933 },
     ],
   },
   "modules/chat/core/extensions/utils": {
