@@ -88,10 +88,12 @@ The string `ziee-chat` survives only in:
 - **Cosign cert-identity verify regexes** for the sandbox rootfs, which must
   **dual-accept** `phibya/ziee-chat` OR `ziee-ai/ziee` for now — rootfs
   artifacts signed before the org migration carry the old OIDC identity, those
-  signed after carry the new one. See the dual-accept comments in
-  `.github/workflows/code_sandbox.yml` and
-  `scripts/bootstrap-first-rootfs-release.sh`. Drop the `phibya/ziee-chat`
-  alternative once every pre-migration rootfs release has been superseded.
+  signed after carry the new one. The verify regex now lives with the rootfs
+  build in the standalone **`ziee-ai/sandbox-rootfs`** repo (ziee's own
+  `code_sandbox.yml` workflow was removed); the local remnant is the dual-accept
+  comment in `scripts/bootstrap-first-rootfs-release.sh`. Drop the
+  `phibya/ziee-chat` alternative once every pre-migration rootfs release has been
+  superseded.
 - The legacy reference project's local path `~/projects/ziee-chat-ref`
   (provenance comments only; not a repo we publish).
 - Historical log/diagnostic artifacts under `src-app/server/test-logs/` and
@@ -448,22 +450,31 @@ The sandbox needs an Ubuntu-based **squashfs** rootfs (~1.6-2.0 GB
 compressed) mounted via `squashfuse` and bind-mounted read-only into
 each bwrap call.
 
-```bash
-# Build locally (10-15 min one-time)
-just sandbox-build full        # or `minimal` for ~150 MB fast iteration
+**The rootfs is NOT built from this repo.** `src-app/sandbox-rootfs/` was
+deleted on 2026-05-29 (`4454f97df`) when **`ziee-ai/sandbox-rootfs`** became the
+source of truth for build inputs. Two `just` recipes still point at that deleted
+directory and therefore FAIL — they are kept only because removing them is a
+separate change:
 
-# Mount + flip the `current` symlink
-just sandbox-mount
+| recipe | state |
+|---|---|
+| `just sandbox-build` | **BROKEN** — calls the deleted `src-app/sandbox-rootfs/build.sh` |
+| `just sandbox-mount` | **BROKEN** — same deleted path |
+| `just sandbox-clean` | works (operates on the cache dir only) |
 
-# Tear down (unmount + rm)
-just sandbox-clean
-```
+For normal work you do not need any of them: a server with
+`code_sandbox.enabled: true` **lazily fetches and mounts** the matching rootfs on
+the first `execute_command` call, verifying sha256 + sigstore. To get one without
+GitHub, build it in the standalone repo and pre-stage the `.squashfs` into the
+cache dir (see *Air-gapped operators* below), or use `just dev-release` for the
+local-mirror path.
 
 The boot probe at server start reads
 `<rootfs>/.ziee-sandbox-rootfs-schema` and refuses to enable on
 mismatch with the binary's embedded `SANDBOX_ROOTFS_SCHEMA_VERSION`.
-See `src-app/sandbox-rootfs/README.md` for the bootstrap (first
-release) procedure.
+The bootstrap (first-release) procedure lives in the
+`ziee-ai/sandbox-rootfs` repo; `scripts/bootstrap-first-rootfs-release.sh` is
+the local remnant.
 
 ### Startup hardening line
 
@@ -506,12 +517,15 @@ The sandbox test suite is organized into 6 tiers:
 | 5 — real-LLM chat | 3 | ANTHROPIC_API_KEY + rootfs | ~2 min | `just check-sandbox-llm` |
 | 6 — HTTP-E2E | ~22 | rootfs mounted | ~45 s | `just check-sandbox` |
 
-**CI runs zero tests** — `.github/workflows/code_sandbox.yml` is
-build-and-publish-only (triggered on `sandbox-rootfs-v*` tags, signs
-artifacts with keyless cosign, publishes to GitHub Releases, auto-PRs
-an update to `known_revisions.toml`). Cosign keyless signing is the
-one thing that genuinely requires GitHub Actions (the OIDC issuer is
-only valid for real Actions runs); everything else is faster locally.
+**No sandbox CI in this repo.** ziee's `code_sandbox.yml` workflow was
+removed — the rootfs build, keyless-cosign signing and release publishing all
+live in the standalone **`ziee-ai/sandbox-rootfs`** repo, which is the source of
+truth for build inputs. (Cosign keyless signing is the one step that genuinely
+requires GitHub Actions: the OIDC issuer is only valid for real Actions runs.
+Everything else is faster locally.) ziee's remaining workflows are exactly two,
+both tag-triggered: `desktop-release.yml` and `server-release.yml`.
+
+The test tiers below are therefore **local-only** — nothing runs them for you.
 
 Maintainer's responsibility before pushing:
 
@@ -651,9 +665,11 @@ sudo chown -R <server-uid>:<server-gid> /sys/fs/cgroup/ziee-sandbox.slice
 
 ### Rootfs release process
 
-See [`src-app/sandbox-rootfs/RELEASE-RUNBOOK.md`](./src-app/sandbox-rootfs/RELEASE-RUNBOOK.md)
-for the bootstrap script (`scripts/bootstrap-first-rootfs-release.sh`)
-and the ongoing release workflow.
+Lives in the standalone **`ziee-ai/sandbox-rootfs`** repo, along with the build
+inputs and the publishing workflow — `RELEASE-RUNBOOK.md` moved there with the
+rest on 2026-05-29 (`4454f97df`). The only piece still in this repo is
+`scripts/bootstrap-first-rootfs-release.sh` (first-release bootstrap, and the
+`phibya/ziee-chat` cosign dual-accept remnant noted under *Naming convention*).
 
 ---
 
@@ -1896,16 +1912,40 @@ cargo test &  # Output is lost or fragmented
 
 ### Database Migrations
 
-```bash
-# Create migration
-sqlx migrate add description
+**Migrations are PER-MODULE, not one global directory.** There is no
+`src-app/server/migrations/`, so the bare `sqlx migrate` workflow does not apply
+— those commands assume a single dir and will find nothing. As of this writing:
+**106 `.sql` files across 33 module directories**, at
 
-# Run migrations
-sqlx migrate run
-
-# Revert last
-sqlx migrate revert
 ```
+src-app/server/src/modules/<module>/migrations/<timestamp>_<name>.sql
+src-app/desktop/tauri/migrations/<timestamp>_<name>.sql      # desktop-only
+```
+
+Names are timestamp-prefixed, and there are **TWO independent sequences** — do
+not conflate them, and do not take the global max as "the next number":
+
+| sequence | range | max in use |
+|---|---|---|
+| server (`modules/*/migrations/`) | `2026…` timestamps | `202607200200` |
+| desktop (`desktop/tauri/migrations/`) | a deliberate `1e13` block | `10000000000005` |
+
+The desktop block sits ABOVE every server timestamp on purpose, so desktop
+migrations always apply last. A new SERVER migration must sort above the server
+max — not above `10000000000005`. Prefixes must be unique within a sequence
+(FKs depend on the order), so check before adding:
+
+```bash
+# next server prefix must exceed this
+find src-app/server -path '*/migrations/*.sql' -printf '%f\n' | cut -d_ -f1 | sort -n | tail -1
+
+# duplicate prefixes across modules (must print nothing)
+find src-app -path '*/migrations/*.sql' -printf '%f\n' | cut -d_ -f1 | sort | uniq -d
+```
+
+Migrations run automatically: `build.rs` applies them to the per-worktree build
+DB for sqlx verification (see *Per-worktree isolation* above), and the server
+applies them at boot. After editing one, `cargo clean` so `build.rs` re-runs.
 
 ### Kill Stale Vite Processes
 
