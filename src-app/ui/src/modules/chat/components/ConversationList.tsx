@@ -87,7 +87,14 @@ export function ConversationList({ getSearchBoxContainer }: ConversationListProp
   // the real reconciliations working: the user clearing a query back to `''`
   // still differs from the store's `'x'` and still fires, and remounting the list
   // while the store holds a stale query still resets it to match the (empty)
-  // input the user can see. Only a genuine equal→equal pass is skipped.
+  // input the user can see.
+  //
+  // Be precise about what is skipped: `setSearchQuery` is NOT a pure setter — it
+  // unconditionally issues `loadConversations(1)`. So an equal→equal pass now
+  // suppresses a REFETCH, not merely a redundant assignment. The one behaviour
+  // that changes is a same-value round trip ('a' → 'ab' → 'a'), which previously
+  // re-fetched and now does not; after a FAILED load that path no longer
+  // self-heals, and the user takes the ErrorState's explicit Retry instead.
   //
   // `.$` is the NON-subscribing snapshot — a reactive proxy read is a hook and is
   // illegal outside render.

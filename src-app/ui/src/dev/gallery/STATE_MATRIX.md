@@ -8,7 +8,7 @@
 ## Summary
 
 - **340** surfaces carry at least one renderable-state signal.
-- **2093** signals total: 1643 branch, 138 empty, 119 error, 93 loading, 96 overlay, 4 panel.
+- **2094** signals total: 1644 branch, 138 empty, 119 error, 93 loading, 96 overlay, 4 panel.
 - **4** right-panel renderers registered (each a right-panel-open state).
 - **35** slot registrations (sidebar / settings / chat mount points).
 
@@ -476,14 +476,15 @@ Required states: `delayed`, `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!getSearchBoxContainer` | 154 |
-| branch | `selectedIds.size > 0` | 161 |
-| branch | `canDelete` | 186 |
-| loading | `visibleConversations.length === 0 && !loading` | 215 |
-| error | `error` | 216 |
-| loading | `loading && !isInitialized` | 240 |
-| branch | `visibleConversations.length > 0` | 267 |
-| branch | `hasMore` | 276 |
+| branch | `localSearchQuery === ChatHistory.$.searchQuery` | 102 |
+| branch | `!getSearchBoxContainer` | 185 |
+| branch | `selectedIds.size > 0` | 192 |
+| branch | `canDelete` | 217 |
+| loading | `visibleConversations.length === 0 && !loading` | 246 |
+| error | `error` | 247 |
+| loading | `loading && !isInitialized` | 271 |
+| branch | `visibleConversations.length > 0` | 298 |
+| branch | `hasMore` | 307 |
 
 ### `modules/chat/components/ConversationPickerPane`
 
@@ -909,12 +910,12 @@ Required states: `delayed`, `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!isNarrow` | 96 |
-| branch | `isNarrow` | 106 |
-| loading | `(conversations.length > 0 \|\| loading)` | 126 |
-| branch | `isNarrow && searchOpenInNarrow` | 147 |
-| error | `(conversations.length > 0 \|\| loading \|\| error \|\| hasSearch)` | 156 |
-| error | `!loading && conversations.length === 0 && !error && !hasSearch` | 176 |
+| branch | `!isNarrow` | 110 |
+| branch | `isNarrow` | 120 |
+| loading | `(conversations.length > 0 \|\| loading)` | 140 |
+| branch | `isNarrow && searchOpenInNarrow` | 161 |
+| error | `(conversations.length > 0 \|\| loading \|\| error \|\| hasSearch)` | 170 |
+| error | `!loading && conversations.length === 0 && !error && !hasSearch` | 190 |
 
 ### `modules/chat/pages/ConversationPage`
 

@@ -22,6 +22,17 @@ import { loginAsAdmin, getAdminToken } from '../../common/auth-helpers'
  *
  * Both redundant callers are gone; the route now has a single owner.
  *
+ * SCOPE of the "exactly one" claim, stated honestly:
+ *   - It is measured on the PRODUCTION build the harness serves (`vite preview`).
+ *     Under a DEV build React.StrictMode double-invokes effects, so the surviving
+ *     page effect calls `loadConversations` twice and the second call still
+ *     replays via `reloadQueued`. That is a pre-existing property of the store's
+ *     mid-flight guard, unchanged by this work, and not what ships.
+ *   - It covers a COLD load. Re-entering `/chats` by client-side navigation while
+ *     the store still holds a non-empty `searchQuery` legitimately produces a
+ *     second request (the list mounts filtered, its debounce then commits the
+ *     empty input). Also pre-existing and out of scope here.
+ *
  * These specs drive the REAL backend through the UI — no `page.route` mocking, no
  * stubbed responses. TEST-1 counts requests with a PASSTHROUGH `window.fetch`
  * observer installed before navigation: it records the call and then calls the
@@ -146,12 +157,21 @@ test.describe('chat-boot-fetch-hygiene — /chats issues ONE list fetch', () => 
 
     await page.goto(`${baseURL}/chats`, { waitUntil: 'domcontentloaded' })
 
-    // The seeded conversation is listed…
-    await expect(page.getByText(title, { exact: false }).first()).toBeVisible({
+    // Scope to the LIST ROWS. The sidebar's recent-conversations widget renders
+    // the same titles from a separate `recentConversations` cursor on every
+    // authenticated route, so an unscoped `getByText` would be satisfied by the
+    // sidebar even if this page's own list never loaded — the assertion would
+    // pass while proving nothing about /chats.
+    const rows = page.getByTestId('chat-conversation-list-rows')
+    await expect(rows.getByText(title, { exact: false }).first()).toBeVisible({
       timeout: 30000,
     })
-    // …and the page did NOT fall through to the empty state, which is what a
-    // fetch lost to over-eager de-duplication would look like.
+    // A VISIBLE ROW inside that container is itself proof the list settled with
+    // data: `chat-conversation-list-rows` is rendered only on the non-spinner
+    // branch (ConversationList renders the spinner instead while
+    // `loading && !isInitialized`). So a stuck-loading list cannot satisfy the
+    // assertion above — no separate "not spinning" check is needed, and adding
+    // one keyed on a testid the spinner does not have would be vacuous.
     await expect(page.getByText('No chat history yet')).toHaveCount(0)
   })
 
@@ -205,24 +225,54 @@ test.describe('chat-boot-fetch-hygiene — /chats issues ONE list fetch', () => 
     const { baseURL, apiURL } = testInfra
     await loginAsAdmin(page, baseURL)
 
-    // Prime the store first: visit /chats with one conversation present.
+    // Prime the store: visit /chats with one conversation present.
     const first = `primed-${Date.now()}`
     await seedConversation(page, apiURL, first)
     await page.goto(`${baseURL}/chats`, { waitUntil: 'domcontentloaded' })
-    await expect(page.getByText(first, { exact: false }).first()).toBeVisible({
+    const rows = page.getByTestId('chat-conversation-list-rows')
+    await expect(rows.getByText(first, { exact: false }).first()).toBeVisible({
       timeout: 30000,
     })
 
-    // Now create one OUT OF BAND (the case the removed ConversationList comment
-    // cited: "created later by another tab, an MCP tool, or a test that seeds
-    // before navigating here"), navigate away, and come back.
+    // Create one OUT OF BAND — the case the removed ConversationList comment
+    // cited ("created later by another tab, an MCP tool, or a test that seeds
+    // before navigating here").
     const later = `created-later-${Date.now()}`
     await seedConversation(page, apiURL, later)
-    await page.goto(`${baseURL}/settings/profile`, { waitUntil: 'domcontentloaded' })
-    await expect(page.getByRole('main')).toBeVisible({ timeout: 30000 })
-    await page.goto(`${baseURL}/chats`, { waitUntil: 'domcontentloaded' })
 
-    await expect(page.getByText(later, { exact: false }).first()).toBeVisible({
+    // Leave and return by CLIENT-SIDE navigation (sidebar links), NOT page.goto.
+    // A full document navigation reloads the SPA and wipes every in-memory store,
+    // which would destroy this test's whole premise: it would no longer be "the
+    // store was already primed", just another cold load identical to TEST-2.
+    // Clicking the nav keeps the store alive across the round trip, so this
+    // genuinely exercises a remount against a primed store.
+    // Out via the header's new-chat button (router `navigate('/chat')` = a
+    // pushState), back via a history POP. Both are handled by the router in-page,
+    // so no document is reloaded and the store survives the round trip.
+    const storeAliveMarker = await page.evaluate(() => {
+      ;(window as any).__SPA_MARKER__ = 'alive'
+      return (window as any).__SPA_MARKER__
+    })
+    expect(storeAliveMarker).toBe('alive')
+
+    await page.getByTestId('chat-history-header-new-chat-btn').click()
+    await expect(page).toHaveURL(/\/chat$/, { timeout: 15000 })
+    await page.goBack()
+    await expect(page).toHaveURL(/\/chats$/, { timeout: 15000 })
+
+    // Proves the round trip never reloaded the document — if it had, the marker
+    // would be gone and this test would silently degrade into another cold load
+    // (which is TEST-2), no longer exercising a remount against a primed store.
+    expect(
+      await page.evaluate(() => (window as any).__SPA_MARKER__),
+      'the /chats round trip must be client-side; a full reload would wipe the ' +
+        'store and destroy this test\'s premise',
+    ).toBe('alive')
+
+    // Scoped to the list rows: the sidebar's recent-conversations widget renders
+    // the same titles from a separate cursor and would satisfy an unscoped match
+    // even if this page's own list never refetched.
+    await expect(rows.getByText(later, { exact: false }).first()).toBeVisible({
       timeout: 30000,
     })
   })

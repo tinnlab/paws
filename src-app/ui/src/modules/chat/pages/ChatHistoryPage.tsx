@@ -60,11 +60,18 @@ export default function ChatHistoryPage() {
   // navigates here) must still show up.
   //
   // This page is the only owner BECAUSE it is the only mount site that covers
-  // every case: `<ConversationList>` does not mount at all in the empty state, and
-  // when it does mount it is strictly after this fetch has already started. It
-  // therefore deliberately does NOT fetch (it used to, and the duplicate cost a
-  // real extra round-trip via `loadConversations`' `reloadQueued` replay — see the
-  // comment there). Do not add a second caller.
+  // every case: `<ConversationList>` does not mount at all in the empty state, so
+  // a fetch living only in the list would never run there. The list therefore
+  // deliberately does NOT fetch (it used to, and the duplicate cost a real extra
+  // round-trip via `loadConversations`' `reloadQueued` replay — see the comment
+  // there). Do not add a second caller.
+  //
+  // Note the ordering is NOT "the list always mounts after this fetch starts":
+  // React runs CHILD effects before PARENT effects, so on an SPA re-entry where
+  // the store still holds rows, the render predicate below is already true on the
+  // first render and `<ConversationList>`'s effects run BEFORE this one. That is
+  // harmless (the stale rows paint, then this refetch refreshes them) — but the
+  // reason a second caller is unnecessary is COVERAGE, not ordering.
   useEffect(() => {
     ChatHistory.loadConversations()
   }, [])

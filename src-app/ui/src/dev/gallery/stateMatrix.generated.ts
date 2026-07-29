@@ -4,7 +4,7 @@
 // renders + overlay triggers + panel/slot registrations) that the reconciliation
 // gate (scripts/reconcile-state-matrix.mjs) checks the gallery entries against.
 //
-// 340 surfaces carry renderable-state signals; 2093 signals total.
+// 340 surfaces carry renderable-state signals; 2094 signals total.
 
 /** A signal is one mechanically-detected render fork (a state the surface can be in). */
 export interface StateSignal {
@@ -400,14 +400,15 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/chat/components/ConversationList",
     requiredStates: ["delayed","error"],
     signals: [
-      { kind: "branch", condition: "!getSearchBoxContainer", line: 154 },
-      { kind: "branch", condition: "selectedIds.size > 0", line: 161 },
-      { kind: "branch", condition: "canDelete", line: 186 },
-      { kind: "loading", condition: "visibleConversations.length === 0 && !loading", line: 215 },
-      { kind: "error", condition: "error", line: 216 },
-      { kind: "loading", condition: "loading && !isInitialized", line: 240 },
-      { kind: "branch", condition: "visibleConversations.length > 0", line: 267 },
-      { kind: "branch", condition: "hasMore", line: 276 },
+      { kind: "branch", condition: "localSearchQuery === ChatHistory.$.searchQuery", line: 102 },
+      { kind: "branch", condition: "!getSearchBoxContainer", line: 185 },
+      { kind: "branch", condition: "selectedIds.size > 0", line: 192 },
+      { kind: "branch", condition: "canDelete", line: 217 },
+      { kind: "loading", condition: "visibleConversations.length === 0 && !loading", line: 246 },
+      { kind: "error", condition: "error", line: 247 },
+      { kind: "loading", condition: "loading && !isInitialized", line: 271 },
+      { kind: "branch", condition: "visibleConversations.length > 0", line: 298 },
+      { kind: "branch", condition: "hasMore", line: 307 },
     ],
   },
   "modules/chat/components/ConversationPickerPane": {
@@ -791,12 +792,12 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/chat/pages/ChatHistoryPage",
     requiredStates: ["delayed","error"],
     signals: [
-      { kind: "branch", condition: "!isNarrow", line: 96 },
-      { kind: "branch", condition: "isNarrow", line: 106 },
-      { kind: "loading", condition: "(conversations.length > 0 || loading)", line: 126 },
-      { kind: "branch", condition: "isNarrow && searchOpenInNarrow", line: 147 },
-      { kind: "error", condition: "(conversations.length > 0 || loading || error || hasSearch)", line: 156 },
-      { kind: "error", condition: "!loading && conversations.length === 0 && !error && !hasSearch", line: 176 },
+      { kind: "branch", condition: "!isNarrow", line: 110 },
+      { kind: "branch", condition: "isNarrow", line: 120 },
+      { kind: "loading", condition: "(conversations.length > 0 || loading)", line: 140 },
+      { kind: "branch", condition: "isNarrow && searchOpenInNarrow", line: 161 },
+      { kind: "error", condition: "(conversations.length > 0 || loading || error || hasSearch)", line: 170 },
+      { kind: "error", condition: "!loading && conversations.length === 0 && !error && !hasSearch", line: 190 },
     ],
   },
   "modules/chat/pages/ConversationPage": {

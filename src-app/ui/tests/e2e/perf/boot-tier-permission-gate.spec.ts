@@ -2,9 +2,27 @@ import { test, expect } from '../../fixtures/test-context'
 import {
   loginAsAdmin,
   getAdminToken,
+  getCurrentUserToken,
   createTestUser,
   login,
 } from '../../common/auth-helpers'
+
+/** Create a conversation AS the currently-logged-in user and return its id. */
+async function createOwnConversation(
+  page: import('@playwright/test').Page,
+  apiURL: string,
+  title: string,
+): Promise<string> {
+  const token = await getCurrentUserToken(page)
+  const res = await page.request.post(`${apiURL}/api/conversations`, {
+    headers: { Authorization: `Bearer ${token}` },
+    data: { title },
+  })
+  if (!res.ok()) {
+    throw new Error(`createOwnConversation failed: ${res.status()} ${await res.text()}`)
+  }
+  return (await res.json()).id as string
+}
 
 /**
  * Second boot tier — the permission self-gate is LOAD-BEARING
@@ -46,30 +64,45 @@ import {
 interface Req {
   url: string
   method: string
+  /** Wall-clock at the `request` event. */
   start: number
-  end: number
-  status: number
+  /** Wall-clock at the `response` event; undefined if no response arrived in-window. */
+  end?: number
+  /** undefined when the request was issued but never answered inside the window. */
+  status?: number
 }
 
+/**
+ * Record every `/api` request while `body()` runs.
+ *
+ * Recorded on the **`request`** event, not the `response` event. That matters for
+ * the assertions below: they are of the form "an unpermitted user issued ZERO
+ * requests to X", and a response-keyed recorder cannot see a request that is
+ * issued but aborted, still in flight at the cutoff, or fails at the network
+ * layer — so a genuinely-issued gated request could vanish and the test would
+ * green. The response event only fills in `end`/`status`.
+ */
 async function recordApi(
   page: import('@playwright/test').Page,
   body: () => Promise<void>,
 ) {
-  const started = new Map<unknown, number>()
+  const byRequest = new Map<unknown, Req>()
   const reqs: Req[] = []
   const onReq = (r: import('@playwright/test').Request) => {
-    if (r.url().includes('/api/')) started.set(r, Date.now())
+    if (!r.url().includes('/api/')) return
+    const rec: Req = {
+      url: new URL(r.url()).pathname,
+      method: r.method(),
+      start: Date.now(),
+    }
+    byRequest.set(r, rec)
+    reqs.push(rec)
   }
   const onRes = (r: import('@playwright/test').Response) => {
-    const t = started.get(r.request())
-    if (t === undefined) return
-    reqs.push({
-      url: new URL(r.url()).pathname,
-      method: r.request().method(),
-      start: t,
-      end: Date.now(),
-      status: r.status(),
-    })
+    const rec = byRequest.get(r.request())
+    if (!rec) return
+    rec.end = Date.now()
+    rec.status = r.status()
   }
   page.on('request', onReq)
   page.on('response', onRes)
@@ -80,6 +113,26 @@ async function recordApi(
     page.off('response', onRes)
   }
   return reqs
+}
+
+/**
+ * Browser-side Resource Timing for an `/api` path, on the PAGE's clock.
+ *
+ * Ordering must not be judged from `recordApi`'s timestamps: those are taken in
+ * the Node process when Playwright delivers a CDP event, and CDP delivery is
+ * asynchronous and can reorder under load — a busy box could fail (or mask) a
+ * causality assertion that is actually about what the browser did. Resource
+ * Timing is recorded by the browser itself, so `startTime`/`responseEnd` reflect
+ * real in-page ordering.
+ */
+async function apiTiming(page: import('@playwright/test').Page, path: string) {
+  return page.evaluate(p => {
+    const hit = performance
+      .getEntriesByType('resource')
+      .filter(e => new URL(e.name, location.origin).pathname === p)
+      .sort((a, b) => a.startTime - b.startTime)[0] as PerformanceResourceTiming | undefined
+    return hit ? { start: hit.startTime, end: hit.responseEnd } : null
+  }, path)
 }
 
 const first = (reqs: Req[], path: string) =>
@@ -147,14 +200,20 @@ test.describe('chat-boot-fetch-hygiene — the second boot tier self-gates on pe
     ).toBeTruthy()
 
     // The measured serialization: the gated fetch cannot start before the
-    // permission set exists, and only `/api/auth/me` supplies it.
+    // permission set exists, and only `/api/auth/me` supplies it. Judged on the
+    // BROWSER's clock (Resource Timing), not on Playwright's CDP event stamps —
+    // see `apiTiming`.
+    const meT = await apiTiming(page, '/api/auth/me')
+    const gatedT = await apiTiming(page, GATED)
+    expect(meT, 'Resource Timing for /api/auth/me').toBeTruthy()
+    expect(gatedT, `Resource Timing for ${GATED}`).toBeTruthy()
     expect(
-      gated.start,
-      `${GATED} [${gated.start}-${gated.end}] started before /api/auth/me ` +
-        `[${me.start}-${me.end}] resolved — the permission set it self-gates on ` +
-        `did not exist yet, so either the gate was dropped or /auth/me is no ` +
-        `longer its source`,
-    ).toBeGreaterThanOrEqual(me.end)
+      gatedT!.start,
+      `${GATED} [${gatedT!.start.toFixed(0)}-${gatedT!.end.toFixed(0)}] started ` +
+        `before /api/auth/me [${meT!.start.toFixed(0)}-${meT!.end.toFixed(0)}] ` +
+        `resolved — the permission set it self-gates on did not exist yet, so ` +
+        `either the gate was dropped or /auth/me is no longer its source`,
+    ).toBeGreaterThanOrEqual(meT!.end)
   })
 
   test('TEST-5: a user LACKING server_update::read issues ZERO requests to the gated endpoint', async ({
@@ -210,27 +269,27 @@ test.describe('chat-boot-fetch-hygiene — the second boot tier self-gates on pe
     ).toBe(0)
   })
 
-  test('TEST-7: an ADMIN boot DOES issue the store-gated request (positive control for TEST-8)', async ({
+  test('TEST-7: an ADMIN on the pill surface DOES issue the store-gated request (positive control)', async ({
     page,
     testInfra,
   }) => {
-    const { baseURL } = testInfra
+    const { baseURL, apiURL } = testInfra
     await loginAsAdmin(page, baseURL)
+    const convId = await createOwnConversation(page, apiURL, `pill-admin-${Date.now()}`)
 
     const reqs = await recordApi(page, async () => {
-      await page.goto(`${baseURL}/`, { waitUntil: 'domcontentloaded' })
-      await expect(page.getByRole('main')).toBeVisible({ timeout: 30000 })
-      await page.waitForTimeout(5000)
+      await page.goto(`${baseURL}/chat/${convId}`, { waitUntil: 'domcontentloaded' })
+      await expect(page.getByTestId('memory-status-pill')).toBeVisible({ timeout: 30000 })
+      await page.waitForTimeout(4000)
     })
 
-    // Load-bearing: this establishes that booting `/` really does initialize the
-    // MemoryAdmin store and reach its gate. Without it, TEST-8's "zero requests"
-    // would be vacuous — it could pass simply because nothing ever ran.
+    // Load-bearing: establishes that THIS surface initializes the MemoryAdmin
+    // store and reaches its gate. Without it, TEST-8's zero would be vacuous.
     expect(
       first(reqs, STORE_GATED),
-      `an admin holds memory::admin::read via '*', so booting / MUST reach ` +
-        `${STORE_GATED}. If this is absent the surface no longer initializes the ` +
-        `MemoryAdmin store and TEST-8 has stopped proving anything`,
+      `an admin holds memory::admin::read via '*', so this surface MUST reach ` +
+        `${STORE_GATED}. Its absence would mean the surface no longer initializes ` +
+        `the MemoryAdmin store, and TEST-8 would have stopped proving anything`,
     ).toBeTruthy()
   })
 
@@ -251,13 +310,20 @@ test.describe('chat-boot-fetch-hygiene — the second boot tier self-gates on pe
       password,
       RESTRICTED_PERMISSIONS,
     )
-
     await login(page, baseURL, username, password)
+    const convId = await createOwnConversation(page, apiURL, `pill-restricted-${stamp}`)
 
     const reqs = await recordApi(page, async () => {
-      await page.goto(`${baseURL}/`, { waitUntil: 'domcontentloaded' })
-      await expect(page.getByRole('main')).toBeVisible({ timeout: 30000 })
-      await page.waitForTimeout(5000)
+      await page.goto(`${baseURL}/chat/${convId}`, { waitUntil: 'domcontentloaded' })
+      // SAME-PERSONA WITNESS. The pill rendering for THIS user is the proof that
+      // the MemoryAdmin store was initialized on this boot: MemoryStatusPill reads
+      // `MemoryAdmin.settings` at the top of its body, before every early return.
+      // Asserting it here — rather than inferring store initialization from the
+      // ADMIN run in TEST-7 — is what stops this test going vacuously green if the
+      // pill ever stops mounting for a non-admin (a module-manifest change, an
+      // error boundary, a composer layout change).
+      await expect(page.getByTestId('memory-status-pill')).toBeVisible({ timeout: 30000 })
+      await page.waitForTimeout(4000)
     })
 
     expect(
@@ -270,11 +336,11 @@ test.describe('chat-boot-fetch-hygiene — the second boot tier self-gates on pe
       calls.length,
       `a user WITHOUT memory::admin::read issued ${calls.length} request(s) to ` +
         `${STORE_GATED}. The memory module is NOT permission-gated at load time ` +
-        `(shouldLoad: ctx => ctx.isAuthenticated), so its store DID initialize — ` +
-        `the only thing that can have stopped this request is ` +
-        `hasPermissionNow(Permissions.MemoryAdminRead) in the store's init(). ` +
-        `Removing that gate turns this red, which is exactly the no-403 rule ` +
-        `(CLAUDE.md §"Realtime Sync → Frontend") being enforced executably.`,
+        `(shouldLoad: ctx => ctx.isAuthenticated) and the pill above proves its ` +
+        `store DID initialize on this very boot — so the only thing that can have ` +
+        `stopped this request is hasPermissionNow(Permissions.MemoryAdminRead) in ` +
+        `the store's init(). Removing that gate turns this red, which is the ` +
+        `no-403 rule (CLAUDE.md §"Realtime Sync → Frontend") enforced executably.`,
     ).toBe(0)
 
     expect(

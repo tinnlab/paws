@@ -119,6 +119,29 @@ Two independently sufficient reasons not to:
    rows, so `server_update::read` reaches only administrators via the `*`
    wildcard. Every ordinary user's boot would carry a guaranteed 403.
 
+### The dependency runs deeper than the store gate — the MODULE LOADER is permission-driven
+
+Found while auditing the test (and it materially strengthens the verdict).
+`server-update`'s module declares:
+
+```ts
+// src-app/ui/src/modules/server-update/module.tsx:26
+shouldLoad: (ctx) => ctx.isAuthenticated && ctx.can(Permissions.ServerUpdateRead),
+```
+
+So for that tier the permission set is not merely consulted by the store — it
+decides whether the module is **loaded at all**. "Fire the second tier in parallel
+with `/api/auth/me`" is therefore not a small reordering of two fetches; it would
+require the smart-module-loading system to resolve `ctx.can(...)` before the
+permissions exist. There is no version of the triage's suggestion that is a local
+change to three `init()` gates.
+
+Not every module is gated this way, which is what made an isolating test possible:
+`memory` and `notification` declare only `shouldLoad: ctx => ctx.isAuthenticated`,
+so their stores DO initialize for every authenticated user and the store's own
+`hasPermissionNow` is the sole thing preventing a 403. That asymmetry is the basis
+of TEST-7/TEST-8 (below).
+
 Measured benefit on offer: ≈ one RTT, on a LOW-severity finding. Declined.
 
 The verdict is made falsifiable rather than left as prose:
@@ -126,10 +149,27 @@ The verdict is made falsifiable rather than left as prose:
 - **TEST-4** (positive control) — on an ADMIN boot the gated
   `GET /api/server-update/status` IS issued, and its start is at/after
   `/api/auth/me`'s end. This is the serialization, measured.
-- **TEST-5** (acceptance / INV-3) — a user **lacking** `server_update::read`
-  issues **zero** requests to that endpoint. This goes red the moment anyone
-  implements the triage's suggestion, which is precisely the guard a documented
-  "we deliberately did not change this" needs in order to stay true.
+- **TEST-5** — a user **lacking** `server_update::read` issues **zero** requests
+  to that endpoint. This proves the OUTCOME the no-403 rule promises. It does
+  **not** isolate the store gate (the module-load gate above would deliver the
+  same zero), so it deliberately does not carry the acceptance tag.
+- **TEST-7 / TEST-8** (TEST-8 = acceptance / INV-3) — the isolating pair, over
+  the `memory` tier. TEST-7 is the positive control (an admin booting `/` DOES
+  reach `GET /api/memory/admin-settings`, proving the surface initializes the
+  store); TEST-8 asserts a user lacking `memory::admin::read` issues zero. Since
+  `memory`'s module is not permission-gated, the ONLY thing that can produce that
+  zero is `hasPermissionNow(Permissions.MemoryAdminRead)` in the store's `init()`.
+
+**Falsifiability of TEST-8, verified by running it** (not asserted): the store's
+gate was temporarily replaced with `if (true)`, and TEST-8 failed —
+
+```
+Error: a user WITHOUT memory::admin::read issued 1 request(s) to /api/memory/admin-settings
+Expected: 0   Received: 1
+```
+
+— then the gate was restored and it passed. So the acceptance test genuinely goes
+red when the invariant is violated, rather than restating whatever the code does.
 
 `onboarding` is left alone for a different reason (DEC-3): its endpoint is
 JwtAuth-only, so it *could* fire on a bare token — but its gate is not a

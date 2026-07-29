@@ -1,0 +1,7 @@
+file	start	end	angles
+src-app/ui/src/modules/chat/components/ConversationList.tsx	77	93	correctness,state-management,concurrency,perf,maintainability,patterns-conformance,design-conformance
+src-app/ui/src/modules/chat/components/ConversationList.tsx	95	96	correctness,state-management,concurrency,perf,patterns-conformance,design-conformance,a11y
+src-app/ui/src/modules/chat/components/ConversationList.tsx	104	121	correctness,modularity,extensibility,maintainability,wired-and-behaving,design-conformance,i18n/copy
+src-app/ui/src/modules/chat/pages/ChatHistoryPage.tsx	54	67	correctness,api-contract,patterns-conformance,wired-and-behaving,maintainability,design-conformance
+src-app/ui/tests/e2e/perf/boot-tier-permission-gate.spec.ts	1	285	tests-quality,test-reality,perms/authz,security,design-conformance,correctness
+src-app/ui/tests/e2e/perf/chats-list-single-fetch.spec.ts	1	229	tests-quality,test-reality,security,correctness,perf,design-conformance
