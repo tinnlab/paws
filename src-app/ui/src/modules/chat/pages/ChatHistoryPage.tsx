@@ -51,13 +51,20 @@ export default function ChatHistoryPage() {
   // wrong "No chat history yet" page state and no way to edit the query.
   const hasSearch = searchQuery.trim().length > 0
 
-  // Refetch on mount. The sidebar's RecentConversationsWidget may have
-  // eager-primed the store with an empty list at login (before any
-  // conversations existed), leaving `isInitialized=true` and the
-  // render below short-circuiting into the empty state — which means
-  // `<ConversationList>` never mounts and its own load-on-mount
-  // useEffect never fires. Trigger the refetch here so newly-created
-  // conversations always appear.
+  // SINGLE OWNER of the route-level `conversations` fetch. Refetch on mount,
+  // unconditionally (not guarded by `isInitialized`): the sidebar's
+  // RecentConversationsWidget may have eager-primed the store with an empty list
+  // at login (before any conversations existed), leaving `isInitialized=true` and
+  // the render below short-circuiting into the empty state — so a conversation
+  // created later (by another tab, an MCP tool, or a test seeding before it
+  // navigates here) must still show up.
+  //
+  // This page is the only owner BECAUSE it is the only mount site that covers
+  // every case: `<ConversationList>` does not mount at all in the empty state, and
+  // when it does mount it is strictly after this fetch has already started. It
+  // therefore deliberately does NOT fetch (it used to, and the duplicate cost a
+  // real extra round-trip via `loadConversations`' `reloadQueued` replay — see the
+  // comment there). Do not add a second caller.
   useEffect(() => {
     ChatHistory.loadConversations()
   }, [])

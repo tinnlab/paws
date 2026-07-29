@@ -74,8 +74,26 @@ export function ConversationList({ getSearchBoxContainer }: ConversationListProp
     }
   }, [getSearchBoxContainer])
 
-  // Debounce search query
+  // Debounce search query.
+  //
+  // Skip the NO-OP case. This effect also runs on mount, where `localSearchQuery`
+  // is `''` and the store's `searchQuery` is normally `''` too — and
+  // `setSearchQuery` unconditionally issues `loadConversations(1)`, so that mount
+  // pass fired a second full page-1 refetch ~500 ms after the page's own, on every
+  // cold `/chats` load (measured: it was request #3 of 3; see
+  // `.lifecycle/chat-boot-fetch-hygiene/MEASUREMENTS.md`).
+  //
+  // Comparing against the store rather than "is it the first run" is what keeps
+  // the real reconciliations working: the user clearing a query back to `''`
+  // still differs from the store's `'x'` and still fires, and remounting the list
+  // while the store holds a stale query still resets it to match the (empty)
+  // input the user can see. Only a genuine equal→equal pass is skipped.
+  //
+  // `.$` is the NON-subscribing snapshot — a reactive proxy read is a hook and is
+  // illegal outside render.
   useEffect(() => {
+    if (localSearchQuery === ChatHistory.$.searchQuery) return
+
     const timeoutId = setTimeout(() => {
       ChatHistory.setSearchQuery(localSearchQuery)
     }, 500)
@@ -83,18 +101,24 @@ export function ConversationList({ getSearchBoxContainer }: ConversationListProp
     return () => clearTimeout(timeoutId)
   }, [localSearchQuery])
 
-  // Load conversations on mount — always re-fetch, not guarded by
-  // `isInitialized`. This `/chats` list owns its own `conversations` fetch
-  // (the sidebar's RecentConversationsWidget now loads a SEPARATE
-  // `recentConversations` cursor, so it no longer seeds this list). If
-  // conversations are created later (by another tab, an MCP tool, or — in the
-  // E2E suite — a test that seeds before navigating here), the dedicated
-  // `/chats` page must show them. `loadConversations` already dedupes
-  // concurrent calls via its internal `loading/loadingMore` in-flight check,
-  // so an unconditional refetch is safe.
-  useEffect(() => {
-    ChatHistory.loadConversations()
-  }, [])
+  // NO load-on-mount here — `ChatHistoryPage` is the SINGLE OWNER of the
+  // route-level `conversations` fetch (see its mount effect). This component has
+  // exactly one production consumer, that page, and the page renders it only once
+  // `conversations`/`loading`/`error`/`hasSearch` is truthy — every one of which
+  // is a CONSEQUENCE of a load. So a mount fetch here could never be the first
+  // caller; it could only ever be a redundant second one.
+  //
+  // And it was not free. `loadConversations`' in-flight guard does not drop a
+  // duplicate page-1 call — it sets `reloadQueued`, and the queued load is
+  // REPLAYED once the first settles. A replay that starts after the first request
+  // completed is not concurrent, so the transport's in-flight coalescer cannot
+  // merge it: it landed as a third, serial `GET /api/conversations` on every cold
+  // `/chats` load (measured 3 → 2; see
+  // `.lifecycle/chat-boot-fetch-hygiene/MEASUREMENTS.md`).
+  //
+  // Guarded by `tests/e2e/perf/chats-list-single-fetch.spec.ts`: TEST-1 fails if a
+  // second owner is reintroduced, TEST-2/TEST-3 fail if removing it cost the page
+  // its data or its pick-up of conversations created after the store was primed.
 
   const handleLoadMore = async () => {
     try {
