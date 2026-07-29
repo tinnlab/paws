@@ -135,3 +135,48 @@ sentence, where `not-registered` used to outrank it. The cell differs only when 
 installed, holds no entry, AND a resolve failed — which `resolveDidFail` reports only when nothing
 was carried at all, i.e. the provider threw. "That didn't go through" is the accurate sentence for
 a failure the user just caused. Asserted in `transport.test.ts`.
+
+### DEC-13: Does `thinking` join the rail?
+**Resolution:** **Yes** — reasoning is a rail STEP, contributed by the `text` extension. This
+REVERSES `DESIGN.md` § "Explicitly out of the rail", which is amended in place.
+
+**Basis:** owner decision, 2026-07-29, after being the first human to view the rail in a browser
+(`HUMAN_FEEDBACK.md` recorded "no human has looked at the rail in a browser" until that point).
+Three reasons, in order of weight:
+
+1. **The exclusion was never argued.** `observation` earns its place on that list via DEC-11 — it
+   arrives asynchronously long after the turn and is a *message*, not a step. `thinking` had no
+   equivalent decision anywhere in this file; it simply appeared in a list.
+2. **It contradicted the feature's own problem statement.** `DESIGN.md` § Problem measures "14
+   boxes, 7 of them Thinking". Excluding thinking meant the rail quieted the tool boxes and left an
+   equal number of bordered reasoning cards untouched — roughly half the clutter the feature exists
+   to remove, which is what the owner saw on screen.
+3. **It contradicted DEC-3 in spirit.** DEC-3 ruled a single completed tool call renders as "one
+   quiet muted line". A bordered, chevroned Thinking card sitting directly above that line is the
+   louder element while carrying less information.
+
+**The one measurement near this does not support the exclusion.** `DESIGN.md` § Problem asserts
+that "treating `thinking` as run-continuing changes the card count by exactly zero". That answers
+whether a thinking block should BREAK a tool run — not whether reasoning should BE a step. No
+backing artifact for the claim exists in this directory; it is asserted in `DESIGN.md` and repeated
+in `PLAN.md` with nothing behind it.
+
+**Consequences, decided here rather than left to the implementation:**
+- `RAIL_EXCLUDED_TYPES` loses `thinking`. **INV-6 is unaffected**: the invariant is that the rail
+  can never swallow the ANSWER, and the answer is `text`, which remains excluded. A span may now
+  cross a thinking block — that is the intent (one timeline per turn).
+- **No fabricated duration.** The row is labelled "Thought", not "Thought for Ns". No duration is
+  stored on a thinking block: `ThinkingMetadata` carries only `signature`, `redacted_data` and
+  `token_count`, and `created_at` is a save-time stamp. `token_count` is shown when present because
+  it is the one real magnitude available.
+- **Status is always terminal (`success`), never `running`.** The obvious heuristic — "last block in
+  the message ⇒ still thinking" — is wrong: a finalised turn can legitimately end on a thinking
+  block (the "empty completion" case `emptyCompletion.ts` exists to notice), so that rule would
+  leave a permanent spinner on a turn that is over. There is no live seam to consult either:
+  `getRailLiveStep` is keyed by `tool_use_id`, which reasoning has none of.
+- **The contribution ships its own `renderDetail`.** Delegating to the registered content renderer
+  would re-render `ThinkingContent` — itself a bordered Card with a header and chevron — nested
+  inside a rail row, reinstating the exact box this change removes. `ThinkingContent` stays
+  registered for any thinking block reaching the content path outside a rail span.
+- **Owned by the `text` extension**, which already owns the `thinking` wire vocabulary, so INV-1
+  holds: nothing in `chat/components/rail/` learns "thinking" as an extension concern.

@@ -39,7 +39,24 @@ fact landed correctly and passes; the e2e agent's nine specs existed and were su
 
 ## No further human feedback received
 
-**No human feedback received** on the rendered UI — no human has looked at the rail in a browser.
+**FB-5 — DEC-13, owner, 2026-07-29** — first human view of the rail in a browser. Owner: *"looks
+like rail didn't follow the design, isn't it? thinking is not in rail?"* The premise was checked
+before answering: the implementation was FAITHFUL — `thinking` was on `DESIGN.md`'s "Explicitly out
+of the rail" list and `DESIGN_FIDELITY.md` INV-6 confirms the list was carried into the plan
+verbatim. The DESIGN was wrong, not the build. → **Reasoning becomes a rail step.**
+**Resolved:** `textRailContributions` in the `text` extension; `thinking` removed from
+`RAIL_EXCLUDED_TYPES`; `DESIGN.md` amended in place; DEC-13 records the reversal. Pinned by the
+`DEC-13` case in `railSegmentation.test.ts` (with a `text`-still-excluded negative control) and 11
+contribution tests in `railContribution.test.ts`.
+**[generalizable: yes** — *an exclusion list entry needs a recorded REASON, exactly like an
+inclusion decision. `observation` had DEC-11 and survived scrutiny; `thinking` had only a list entry
+and did not. A design-phase gate should require every "explicitly out of scope" item to name its
+basis, so unargued exclusions cannot silently narrow a feature to half its stated problem.*]
+
+**Superseded note:** until 2026-07-29 this file read "No human feedback received on the rendered UI
+— no human has looked at the rail in a browser." That was accurate for 20 audit rounds, and is the
+reason a design defect of this size survived all of them: every round audited the code against the
+design, and none could question the design itself.
 
 No human has reviewed the rendered rail. Two consequences are stated rather than glossed:
 

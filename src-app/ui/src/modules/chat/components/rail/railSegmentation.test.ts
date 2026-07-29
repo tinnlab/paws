@@ -81,14 +81,51 @@ test('TEST-11: observation, user attachments and images are NEVER absorbed into 
     status: 'success' as const,
     consumed: 1,
   })
-  for (const t of ['observation', 'file_attachment', 'image', 'text', 'thinking']) {
+  for (const t of ['observation', 'file_attachment', 'image', 'text']) {
     const segs = segmentRail([blk(t)], greedy)
     assert.deepEqual(kinds(segs), ['prose'], `${t} must stay prose even if a contribution claims it`)
   }
-  // And the exclusion set is exactly the design's list.
+  // And the exclusion set is exactly the design's list, as amended by DEC-13
+  // (which removed `thinking` — see the next test).
   assert.deepEqual(
     [...RAIL_EXCLUDED_TYPES].sort(),
-    ['file_attachment', 'image', 'observation', 'text', 'thinking'],
+    ['file_attachment', 'image', 'observation', 'text'],
+  )
+})
+
+test('DEC-13: `thinking` IS a rail candidate — reasoning becomes a step, not a bordered card', () => {
+  // The positive half of TEST-11. Removing a name from an exclusion set only
+  // stops something being FORBIDDEN; without this, nothing asserts it is now
+  // ALLOWED, and re-adding `thinking` to the set would leave the suite green.
+  const claims = () => ({
+    key: 'k',
+    label: 'Thought',
+    status: 'success' as const,
+    consumed: 1,
+  })
+  assert.deepEqual(
+    kinds(segmentRail([blk('thinking')], claims)),
+    ['span'],
+    'a claimed thinking block must segment as a rail step',
+  )
+
+  // The point of the change: reasoning between two tool calls no longer splits
+  // the timeline into two rails with a card wedged between them. Before DEC-13
+  // this produced ['span', 'prose', 'span'].
+  const mixed = [blk('tool_use'), blk('thinking'), blk('tool_use')]
+  assert.deepEqual(
+    kinds(segmentRail(mixed, claims)),
+    ['span'],
+    'thinking must no longer break a run into separate rails',
+  )
+
+  // NEGATIVE CONTROL — the guarantee that actually matters (INV-6) is untouched:
+  // the answer is still unswallowable. If a future edit widened the removal to
+  // `text`, the assertion above would still pass and this one would fail.
+  assert.deepEqual(
+    kinds(segmentRail([blk('tool_use'), blk('text'), blk('tool_use')], claims)),
+    ['span', 'prose', 'span'],
+    'prose answer must still split the rail — INV-6',
   )
 })
 

@@ -23,9 +23,6 @@ import type { RailActivityContext, RailStepDescriptor } from '@/modules/chat/com
  * § "Explicitly out of the rail":
  *
  * - `text` — prose; it IS the answer.
- * - `thinking` — a standalone answer element. Deliberately untouched: the
- *   grouping simulation measured that folding it in changes the rendered card
- *   count by exactly zero, so absorbing it would be risk without benefit.
  * - `observation` — a background sub-agent result that arrives asynchronously.
  *   It rides a user-ROLE message but is a MESSAGE, not a step
  *   (`ChatMessage.tsx` already forces it full-width).
@@ -34,10 +31,23 @@ import type { RailActivityContext, RailStepDescriptor } from '@/modules/chat/com
  *
  * Excluded here as a belt-and-braces guard so a future contribution cannot
  * accidentally swallow the answer (INV-6), even if it registers for the type.
+ *
+ * ## `thinking` was removed from this set (DEC-13)
+ *
+ * Reasoning is now a rail STEP, contributed by the `text` extension (which owns
+ * the `thinking` wire vocabulary), not an excluded standalone element. The
+ * original exclusion was unargued — `observation` has DEC-11 to justify it,
+ * `thinking` had only a list entry — and it left the rail solving half its own
+ * stated problem, since the design's motivating measurement was "14 boxes, 7 of
+ * them Thinking".
+ *
+ * INV-6 is UNAFFECTED: the invariant is that the rail can never swallow the
+ * ANSWER, and the answer is `text`, which remains excluded. A span may now cross
+ * a thinking block, which is precisely the intent — one timeline for the turn
+ * rather than a rail interrupted by bordered reasoning cards.
  */
 export const RAIL_EXCLUDED_TYPES: ReadonlySet<string> = new Set([
   'text',
-  'thinking',
   'observation',
   'file_attachment',
   'image',

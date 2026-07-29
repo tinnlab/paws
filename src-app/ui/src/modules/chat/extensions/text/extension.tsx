@@ -7,6 +7,7 @@ import {
 } from '@/modules/chat/core/extensions'
 import { TextContent } from '@/modules/chat/extensions/text/components/TextContent'
 import { ThinkingContent } from '@/modules/chat/extensions/text/components/ThinkingContent'
+import { textRailContributions } from '@/modules/chat/extensions/text/railContribution'
 import { ObservationContent } from '@/modules/chat/extensions/text/components/ObservationContent'
 import { TextInput } from '@/modules/chat/extensions/text/components/TextInput'
 import { createTextStore } from '@/modules/chat/extensions/text/textStore'
@@ -158,6 +159,13 @@ const textExtension: ChatExtension = createExtension({
     thinking: ThinkingContent as React.ComponentType<ContentRendererProps>,
     observation: ObservationContent as React.ComponentType<ContentRendererProps>,
   },
+
+  /**
+   * Reasoning as a rail step (DEC-13). `ThinkingContent` stays registered above:
+   * it is still the renderer for any `thinking` block that reaches the content
+   * path outside a rail span.
+   */
+  railContributions: textRailContributions,
 
   /**
    * Compose request fields

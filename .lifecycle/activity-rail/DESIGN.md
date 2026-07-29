@@ -52,9 +52,14 @@ fidelity verdict in phase 2, and pinned to an executable acceptance test in phas
 
 ## Explicitly out of the rail
 
-`text`, `thinking` as a standalone answer element, `observation` (a background sub-agent result that
+`text`, `observation` (a background sub-agent result that
 arrives asynchronously and is a message, not a step), user attachments and images lifted above the
 bubble, the summary boundary marker, and all composer chrome.
+
+> **AMENDED by DEC-13 (2026-07-29).** `thinking` was originally on this list and has been REMOVED.
+> Reasoning is now a rail step contributed by the `text` extension. The exclusion was never argued
+> (unlike `observation`, which has DEC-11), and it left the rail solving at most half of the very
+> problem stated above — "14 boxes, 7 of them Thinking". See DECISIONS.md § DEC-13.
 
 ## Rejected alternatives
 
