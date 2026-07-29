@@ -47,11 +47,26 @@ the backend disagreement, which is reachable by any hand-authored or imported
 | `prompt: ""` alone | RED (`WORKFLOW_PROMPT_MISSING`) | Ok("") — runs an empty prompt |
 | `prompt_file: ""` alone | GREEN (`has_file = is_some()`; `join("")` = the bundle dir, which exists) | Err "read prompt_file '': Is a directory" |
 | `prompt_file: <a directory in the bundle>` | GREEN (existence-only check) | Err "Is a directory" |
+| `prompt_file: <a real but non-UTF-8 file>` | GREEN (existence-only check) | Err "stream did not contain valid UTF-8" |
+| `prompt_file: "prompts/../prompts/real.md"` | RED `WORKFLOW_PROMPT_FILE_UNSAFE` | **Ok** — bare `bundle_root.join(rel)`, no shape or confinement check at all |
+| `prompt_file: <a symlink out of the bundle>` | RED `WORKFLOW_PROMPT_FILE_ESCAPE` | **Ok** — same |
+| `prompt_file: <a zero-byte file>` | GREEN | Ok("") — ships the empty prompt to the model that the inline half refuses |
+
+The last four rows were found by this branch's own phase-6 blind audit, not by the
+original residual report. They are the SAME defect — two places deciding
+separately — one level down: the reported cells are about which FIELD supplies the
+prompt, these are about whether the named FILE can be used. Closing only the
+reported cells would leave the class open and make the acceptance test assert a
+promise the code does not keep. Note the `..`/symlink rows are validate-RED /
+run-OK, i.e. the SECOND half of the invariant, and they are reachable with no
+validation at all: `POST /workflows/{id}/test` dispatches without calling
+`validate_for_install`.
 
 The root cause is that **two independent pieces of code decide, differently,
-where a step's prompt comes from**: `validate.rs`'s `has_prompt`/`has_file` pair
-(which normalises an empty prompt to "absent") and `dispatch.rs`'s raw
-`match (prompt, prompt_file)` (which does not normalise anything).
+where a step's prompt comes from and whether it can be used**: `validate.rs`'s
+`has_prompt`/`has_file` pair plus its existence-only file check, and
+`dispatch.rs`'s raw `match (prompt, prompt_file)` plus its unchecked
+`bundle_root.join(rel)`.
 
 ### The non-negotiable
 
@@ -104,11 +119,26 @@ The addon must sit **inside** its group. Fix it on-system — grid-aligned
 (4px-base, kit 2px half-steps) logical-direction padding, not a magic offset —
 and return `MAX_TOLERATED_OVERFLOW_PX` to 1.
 
+### §2 scope note (amended after the phase-6 audit)
+
+The `inline-end` addon is the one the residual named, but the two inline variants
+are written as a symmetric PAIR in one `cva` block and carried the same defect, so
+both are fixed — guarding one alone lets the other rot. Converting the addon's own
+padding to logical properties additionally EXPOSED a latent bug one line above it:
+`InputGroup`'s root compensates the input with PHYSICAL `pl`/`pr` keyed off the
+LOGICAL `data-align`, previously masked by the addon's own physical padding.
+Measured in `dir=rtl`, that left the input's clearance on the side AWAY from the
+addon. It is in scope because this change is what made it observable.
+
 ## §3 Out of scope
 
 - The `prompt: "   "` (whitespace-only) cell. Today `validate` treats it as a
   prompt and `dispatch` runs it; the two AGREE, so it is not part of this
   defect class. Changing it would be a behaviour change with no defect behind
   it (DEC-3).
-- Any other kit spacing, and any other builder surface. This branch fixes the
-  two recorded residuals and nothing else.
+- The `InputGroupAddon`'s VERTICAL containment (its `py-1.5` makes it 36px tall
+  inside a 32px group). Real, pre-existing, and orthogonal to the horizontal
+  defect the residual recorded — reported onward rather than folded in, exactly
+  as FIX_ROUND-2 did for the defect this branch is now fixing.
+- Any other kit spacing, and any other builder surface. Beyond the two residuals,
+  this branch changes only what its own fix made wrong or left unguarded.

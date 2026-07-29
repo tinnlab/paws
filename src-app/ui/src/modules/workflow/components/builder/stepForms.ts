@@ -187,10 +187,12 @@ const nonEmpty = (label: string) => {
 /** The prompt field on `agent` / `llm` / `llm_map`, which is required only when
  *  the step does NOT supply its wording from a file.
  *
- *  MIRRORS `validate.rs` (~681-691), the sole authority on this rule:
- *      has_prompt = prompt.filter(|s| !s.is_empty()).is_some()
- *      has_file   = prompt_file.is_some()
- *      WORKFLOW_PROMPT_MISSING fires only on `!has_prompt && !has_file`
+ *  MIRRORS `validate.rs::prompt_source`, the sole authority on this rule:
+ *      inline = prompt.filter(|s| !s.is_empty())
+ *      file   = prompt_file.filter(|s| !s.is_empty())
+ *      WORKFLOW_PROMPT_MISSING fires only when NEITHER is present
+ *  (an EMPTY string is absent on BOTH fields — an empty `prompt_file:` resolves
+ *  to the bundle directory, which can never be read).
  *  So a step with a `prompt_file:` is COMPLETE to the backend with no typed
  *  prompt at all — and, since `prompt` is declared
  *  `skip_serializing_if = "Option::is_none"`, it reaches the builder with no
@@ -201,25 +203,20 @@ const nonEmpty = (label: string) => {
  *
  *  When the wording comes from a file the field is `nullish`, not dropped: the
  *  TYPE error keeps its authored copy so no zod diagnostic can reach the author
- *  (INV-1). `''`/`'   '`/`null` all pass, matching the backend's reading of
- *  "no typed prompt" — clearing the box is how the author resolves
- *  `WORKFLOW_PROMPT_BOTH` on this surface. */
+ *  (INV-1). `''`/`null` pass because the backend reads them as "no typed
+ *  prompt" — clearing the box is how the author resolves `WORKFLOW_PROMPT_BOTH`
+ *  on this surface. `'   '` also passes THIS field check, but note it is NOT
+ *  "no typed prompt" to the backend: `prompt_source` filters on `is_empty()`,
+ *  not `trim()`, so whitespace beside a `prompt_file:` is `PromptSource::Both`
+ *  and the validation PANEL reports `WORKFLOW_PROMPT_BOTH` for it. Field-level
+ *  requiredness and step-level exclusivity are different questions answered on
+ *  different surfaces; this one only answers "must the author type something". */
 const promptField = (label: string, suppliedByFile: boolean) => {
   const required = `${label} is required`
   const text = z.string({ error: required }).trim()
   return suppliedByFile ? text.nullish() : text.min(1, required)
 }
 
-/** Whether a step supplies its wording from a file, by the backend's rule
- *  (`validate.rs::prompt_source` — a NON-EMPTY `prompt_file:` string; anything
- *  serde would not deserialize into `Some(String)`, and the empty string, are
- *  not a file).
- *
- *  The emptiness half matters: `prompt_file: ""` resolves to the bundle
- *  DIRECTORY, which can never be read, so the backend calls such a step
- *  `WORKFLOW_PROMPT_MISSING`. Accepting it here would lift the prompt
- *  requirement on a step the backend reports incomplete — the client-side twin
- *  of the validate/dispatch disagreement this rule exists to prevent. */
 /**
  * What the author is told when a step's wording comes from `prompt_file:`.
  *
@@ -233,6 +230,21 @@ export const PROMPT_FROM_FILE_NOTE =
   'there is nothing to type here. Type something to override it — but then ' +
   'remove the file, since a step cannot use both.'
 
+/** Whether a step supplies its wording from a file, by the backend's rule
+ *  (`validate.rs::prompt_source` — a NON-EMPTY `prompt_file:` string; anything
+ *  serde would not deserialize into `Some(String)`, and the empty string, are
+ *  not a file).
+ *
+ *  The emptiness half matters: `prompt_file: ""` resolves to the bundle
+ *  DIRECTORY, which can never be read, so the backend calls such a step
+ *  `WORKFLOW_PROMPT_MISSING`. Accepting it here would lift the prompt
+ *  requirement on a step the backend reports incomplete — the client-side twin
+ *  of the validate/dispatch disagreement this rule exists to prevent.
+ *
+ *  The `!s.is_empty()` (NOT `trim()`) boundary is load-bearing and is pinned
+ *  against the Rust source by
+ *  `validate.rs::client_prompt_file_predicate_mirrors_prompt_source`, which
+ *  fails the BACKEND suite if these two drift. */
 export function promptSuppliedByFile(step: unknown): boolean {
   const pf = (step as { prompt_file?: unknown })?.prompt_file
   return typeof pf === 'string' && pf.length > 0

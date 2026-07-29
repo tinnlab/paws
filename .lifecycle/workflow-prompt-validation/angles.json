@@ -1,0 +1,88 @@
+{
+  "_comment": "Angles ACTUALLY reviewed per file group in the phase-6 blind audit. Each list is the union of the angles the blind agents were assigned and reported on for that group (their `angle` values in ledger-*.jsonl are exactly these names). gen-coverage.mjs expands this mapping across the real diff hunks; it does not invent coverage. Longest prefix wins.",
+  "src-app/server/src/modules/workflow/validate.rs": [
+    "correctness",
+    "error-handling",
+    "concurrency",
+    "security",
+    "perms-authz",
+    "api-contract",
+    "tests-quality",
+    "dead-code",
+    "coverage-gaps",
+    "modularity",
+    "extensibility",
+    "maintainability",
+    "api-friendliness",
+    "design-conformance",
+    "acceptance-hollowness",
+    "wired-and-behaving"
+  ],
+  "src-app/server/src/modules/workflow/dispatch.rs": [
+    "correctness",
+    "error-handling",
+    "concurrency",
+    "security",
+    "perms-authz",
+    "api-contract",
+    "tests-quality",
+    "dead-code",
+    "coverage-gaps",
+    "modularity",
+    "extensibility",
+    "maintainability",
+    "api-friendliness",
+    "design-conformance",
+    "acceptance-hollowness",
+    "wired-and-behaving"
+  ],
+  "src-app/server/tests": [
+    "tests-quality",
+    "coverage-gaps",
+    "correctness",
+    "error-handling",
+    "api-contract",
+    "security",
+    "maintainability",
+    "design-conformance",
+    "acceptance-hollowness"
+  ],
+  "src-app/ui/src": [
+    "correctness",
+    "tests-quality",
+    "coverage-gaps",
+    "dead-code",
+    "api-contract",
+    "modularity",
+    "extensibility",
+    "maintainability",
+    "api-friendliness",
+    "design-conformance"
+  ],
+  "src-app/ui/tests/e2e/visual": [
+    "tests-quality",
+    "coverage-gaps",
+    "design-conformance",
+    "acceptance-hollowness",
+    "responsive-fidelity",
+    "a11y",
+    "correctness"
+  ],
+  "src-app/ui/tests/e2e/workflows": [
+    "tests-quality",
+    "coverage-gaps",
+    "design-conformance",
+    "responsive-fidelity",
+    "correctness"
+  ],
+  "sdk": [
+    "design-conformance",
+    "responsive-fidelity",
+    "a11y",
+    "correctness",
+    "maintainability",
+    "modularity",
+    "extensibility",
+    "tests-quality"
+  ]
+}

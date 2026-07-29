@@ -16,6 +16,11 @@ on:
   pull_request:
     paths:
       - 'src-app/ui/**'
+      # The kit these specs actually guard lives in the `sdk` submodule, so a
+      # kit regression arrives as a gitlink bump touching ONLY this path. Without
+      # it, the one job that runs the visual layer unfiltered never fires for the
+      # exact change class that broke (and fixed) the InputGroup addon.
+      - 'sdk'
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/visual-tests.yml'

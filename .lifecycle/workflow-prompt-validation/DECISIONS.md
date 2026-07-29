@@ -118,3 +118,90 @@ self-consistent, and the orchestrator publishes sdk before the parent pointer.
 **Basis:** user — stated verbatim in the task brief ("commit in the submodule and
 say so clearly; do not push — the orchestrator publishes sdk before the parent
 pointer").
+
+---
+
+## Decisions added after the phase-6 blind audit
+
+### DEC-9: The runner reads a `prompt_file:` with no path check of its own. Fold the confinement into dispatch, or keep relying on the validator having run?
+
+**Resolution:** Fold it in. `load_raw_prompt` resolves the file through the shared
+`read_prompt_file`, which does the shape check, the confinement check, the read
+and the emptiness check — the same call the validator's verdict is computed from.
+
+**Basis:** codebase — the reliance was not sound. `POST /api/workflows/{id}/test`
+(`handlers/dev.rs`) reaches dispatch via `parse_workflow_yaml` alone; it never
+calls `validate_for_install` the way `spawn_run`/`resume_run` do. So
+`prompt_file: "../../etc/passwd"` was `WORKFLOW_PROMPT_FILE_UNSAFE` to the
+validator and `Ok(<file contents>)` to the runner, with the resolved prompt then
+written verbatim to the step's prompt log. That is INV-1's second half failing,
+and it is also §2 of `CODING_GUIDELINES.md` (validate the untrusted path AT the
+consumer). The narrowed `(step_id, &Path)` signature from ITEM-3 was the natural
+place for it.
+
+### DEC-10: How far does "the validator must answer the question the runner asks" go — `is_file()`, or actually READ the file?
+
+**Resolution:** Actually read it. `read_prompt_file` performs
+`std::fs::read_to_string` and additionally rejects an EMPTY result.
+
+**Basis:** convention — any weaker proxy can drift from the real operation, which
+is the entire failure mode this branch exists to remove. `is_file()` still said
+yes to a non-UTF-8 file (the run then failed on `read_to_string`) and to a
+zero-byte file (the run then shipped an empty prompt to the model, the exact
+degenerate call DEC-2 refuses on the inline side). Reading IS the check, so no
+gap can open between them. Cost: one small read per `prompt_file:` step per
+validation; prompts are text files, and the runner reads the same bytes moments
+later. The residual TOCTOU window is not a trust boundary — the bundle is
+server-owned and `spawn_run`/`resume_run` re-validate immediately before dispatch.
+
+### DEC-11: The tightened file check makes previously-installable definitions fail at launch (`validate_for_install` runs on every `spawn_run`/`resume_run`), including MOCKED steps whose `prompt_file:` is never read. Accept, or exempt mocked steps?
+
+**Resolution:** Accept. No exemption.
+
+**Basis:** codebase — this is not a new class. `check_prompt_files` ALREADY
+reported `WORKFLOW_PROMPT_FILE_MISSING` for a mocked step whose `prompt_file:`
+does not exist, and `validate_for_install` already ran on every launch, so a
+mocked step with a broken `prompt_file:` already failed to launch. The change
+makes the empty/directory/non-text/zero-byte cases behave like the
+already-shipped missing case rather than introducing a new gate. Exempting
+mocked steps would ALSO reopen INV-1 in the other direction: `force_mocks` is a
+run-time flag the validator cannot see, so the exemption would have to be
+unconditional.
+
+### DEC-12: `WORKFLOW_PROMPT_FILE_MISSING` now covers four distinct causes. New code, or reworded copy?
+
+**Resolution:** Keep the one code; REWORD the author-facing copy (ITEM-13).
+
+**Basis:** convention — the code is the stable machine identifier and clients key
+off it (`validationCopy.ts`, the crate-wide "every code has copy" guard); adding
+codes for each cause multiplies that surface for no author benefit, since the
+remedy is the same investigation ("look at the file this path names"). What was
+genuinely wrong is that the copy named ONE remedy ("add the file") that cannot
+fix three of the four causes — so the copy, not the code, is the thing to fix.
+This corrects an over-claim in DEC-5, which said no copy change would be needed.
+
+### DEC-13: The new visual guard exists but no enforced gate runs it. Wire it in, or leave it to a manual run?
+
+**Resolution:** Wire it in (ITEM-11): add it to `gallery.config.json`'s
+`visualSpecs` so `npm run gate:ui` executes it, and add `sdk` to
+`visual-tests.yml`'s path filter.
+
+**Basis:** convention — a guard nothing runs is the same failure as the tolerance
+constant it replaces. `gate:ui` runs an explicit ALLOW-LIST of visual specs, so a
+new spec is invisible to it by default; and the CI job that runs the visual
+config unfiltered is path-gated on `src-app/ui/**`, which a kit regression — a
+submodule-pointer bump, exactly this change's shape — does not match. Both are
+one-line additions and both are required for the guard to mean anything.
+
+### DEC-14: The addon's VERTICAL containment (36px addon inside a 32px group) — fix here or report onward?
+
+**Resolution:** [DESCOPED] as ITEM-12. Report onward.
+
+**Basis:** convention — it is pre-existing, orthogonal to the horizontal defect
+the residual recorded, caused by a different rule (the addon's `py-1.5` against
+the group's `h-8`), and fixing it would change the vertical rhythm of every
+`InputGroup` consumer. That is a kit change deserving its own review, exactly as
+`FIX_ROUND-2` treated the horizontal defect this branch is now fixing rather than
+folding it into an unrelated feature branch.
+
+- DESCOPED: ITEM-12 — the InputGroupAddon vertical-containment defect is pre-existing, orthogonal to the recorded residual, caused by a different rule, and would change every consumer's vertical rhythm; reported onward rather than folded in, mirroring how FIX_ROUND-2 handled the horizontal defect this branch is fixing [approved: task brief scopes this branch to "the two residuals" and forbids unrelated kit changes; orchestrator carries the onward report]

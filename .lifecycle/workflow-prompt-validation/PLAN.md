@@ -39,6 +39,12 @@ than silently fixing.
   `check_prompt_files` (ITEM-4) both call — `check_prompt_files` needs the PATH
   even in a both-state, so without the split the emptiness rule would have been
   written twice, which is precisely the duplication this item exists to remove.
+  Amended again after the phase-6 audit: the FILE half gets the same treatment —
+  `read_prompt_file(bundle_root, rel) -> Result<String, PromptFileError>` (shape
+  check, confinement, read, emptiness, in one place) is called by both
+  `check_prompt_files` and `load_raw_prompt`, and `PromptFileError` carries the
+  finding code/layer/message so the two sides cannot even disagree about how a
+  rejection is REPORTED.
 - **ITEM-2**: `validate.rs`'s prompt XOR check derives its verdict from
   `prompt_source` instead of its own `has_prompt`/`has_file` pair. The two
   emitted codes and their exact messages are unchanged (the branch's
@@ -47,13 +53,25 @@ than silently fixing.
   `prompt_source` instead of `match (prompt, prompt_file)`, so `Some("")` beside
   a `prompt_file:` reads the FILE and `Some("")` alone is an error rather than an
   empty LLM call. Its signature drops the whole `RunContext` for the one field it
-  uses (`extracted_path`), making it directly unit-testable.
-- **ITEM-4**: `check_prompt_files` stops answering a question it gets wrong:
-  an empty `prompt_file` is "absent" (so `WORKFLOW_PROMPT_MISSING` fires rather
-  than a green verdict), and a `prompt_file` that resolves to something that is
-  not a regular FILE is `WORKFLOW_PROMPT_FILE_MISSING` (today a directory path
-  passes existence and then fails the run with "Is a directory"). Reuses the
-  existing code, so no new author-facing copy is required.
+  uses (`extracted_path`), making it directly unit-testable. Amended after the
+  phase-6 audit: it also resolves the FILE through the shared
+  `read_prompt_file` (below) rather than a bare `bundle_root.join(rel)` — the
+  runner previously applied NO path-shape or confinement check of its own, so a
+  `prompt_file:` the validator refused as `WORKFLOW_PROMPT_FILE_UNSAFE`/`ESCAPE`
+  was read anyway. That is reachable without validation at all
+  (`POST /workflows/{id}/test` dispatches without `validate_for_install`). Its two
+  error arms are also distinguished, since the enum knows which it is.
+- **ITEM-4**: `check_prompt_files` stops answering a question it gets wrong: an
+  empty `prompt_file` is "absent" (so `WORKFLOW_PROMPT_MISSING` fires rather than
+  a green verdict), and a `prompt_file` that cannot be USED is
+  `WORKFLOW_PROMPT_FILE_MISSING`. Amended after the phase-6 audit: "cannot be
+  used" is decided by actually READING the file through the shared
+  `read_prompt_file`, not by an `is_file()` proxy — an existence/is-file check
+  still said yes to a non-UTF-8 file (run: "stream did not contain valid UTF-8")
+  and to a zero-byte file (run: a degenerate empty prompt to the model). Reading
+  it is the same operation the runner performs, so no weaker proxy can drift from
+  it. The code is reused, but its author-facing copy IS reworded (ITEM-13) — the
+  old wording named a remedy that cannot fix three of the four cases.
 - **ITEM-5**: Mirror the normalisation on the client so the builder cannot
   disagree with the backend either: `promptSuppliedByFile` requires a NON-EMPTY
   `prompt_file` string (today `typeof … === 'string'` accepts `""`, which would
@@ -73,6 +91,31 @@ than silently fixing.
   `src-app/ui/tests/e2e/workflows/builder-responsive.spec.ts` and rewrite its
   doc comment (it currently documents the defect as permanent), discharging
   INV-2's stated exit condition.
+- **ITEM-9**: Convert the group ROOT's input-clearance compensation to logical
+  properties too (`pl-1.5`/`pr-1.5` -> `ps-1.5`/`pe-1.5`). Added after the phase-6
+  audit measured a real RTL REGRESSION introduced by ITEM-6: the root keys that
+  compensation off the LOGICAL `data-align` but applied it physically, and the
+  addon's own physical padding had been accidentally masking it. Also add an
+  exhaustive `StepConfig::prompt_fields()` accessor so the `(prompt, prompt_file)`
+  pair is not re-extracted by hand at each site with a silent `_ => None`
+  fallthrough — a new step kind carrying a prompt would otherwise be skipped by
+  the validator and the runner alike.
+- **ITEM-10**: Add a Rust->TypeScript drift guard for the prompt-source rule
+  (`validate.rs` reads `stepForms.ts` at test time and fails the BACKEND suite if
+  `promptSuppliedByFile` stops rejecting the empty string, or starts trimming).
+  The same rule is now implemented in two languages and nothing else connects
+  them; this module already ships exactly this mechanism for `validationCopy.ts`.
+- **ITEM-11**: Wire TEST-7 into the gates that actually run. Add it to
+  `gallery.config.json`'s `visualSpecs` (so `npm run gate:ui`, the repo's stated UI
+  exit condition, executes it) and add `sdk` to `visual-tests.yml`'s path filter
+  (a kit regression arrives as a submodule-pointer bump, which the `src-app/ui/**`
+  filter does not match — the exact change class this branch is).
+- **ITEM-12**: [DESCOPED] Fix the addon's VERTICAL containment (36px addon in a
+  32px group). Pre-existing, orthogonal to the recorded residual, reported onward.
+- **ITEM-13**: Reword `WORKFLOW_PROMPT_FILE_MISSING`'s author-facing copy in
+  `validationCopy.ts` to cover every way a prompt file cannot be read (missing,
+  a folder, empty, not text). The old copy — "isn't in the workflow — add the
+  file" — is a remedy the author cannot act on for three of those four cases.
 
 ## Files to touch
 
@@ -81,7 +124,9 @@ than silently fixing.
 - `src-app/server/tests/workflow/validate_and_dry_run.rs` (integration coverage)
 - `src-app/ui/src/modules/workflow/components/builder/stepForms.ts` (ITEM-5)
 - `src-app/ui/src/modules/workflow/components/builder/stepForms.test.ts` (ITEM-5 test)
-- `sdk/packages/kit/src/shadcn/input-group.tsx` (ITEM-6, submodule)
+- `sdk/packages/kit/src/shadcn/input-group.tsx` (ITEM-6 + ITEM-9, submodule)
+- `src-app/ui/src/modules/workflow/components/builder/validationCopy.ts` (ITEM-13)
+- `src-app/ui/gallery.config.json`, `.github/workflows/visual-tests.yml` (ITEM-11)
 - `src-app/ui/tests/e2e/visual/input-group-overflow.spec.ts` (ITEM-7, new)
 - `src-app/ui/tests/e2e/workflows/builder-responsive.spec.ts` (ITEM-8)
 

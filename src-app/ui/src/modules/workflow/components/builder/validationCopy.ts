@@ -101,8 +101,14 @@ const HUMAN_COPY: Record<string, CopyFn> = {
     step?.kind === 'agent'
       ? 'This step has both a typed-in task and a task file — clear the task box here to use the file, or drop the file from the workflow and import it again.'
       : 'This step has both a typed-in prompt and a prompt file — clear the prompt box here to use the file, or drop the file from the workflow and import it again.',
+  // Covers every way a `prompt_file:` cannot be USED as a prompt, not just a
+  // path that is absent: the validator now answers the same question the runner
+  // asks (it reads the file), so this code also reports a path that names a
+  // folder, a file that is not text, and a file that is there but empty. The
+  // old copy ("isn't in the workflow — add the file") was a remedy the author
+  // could not act on for three of those four cases.
   "WORKFLOW_PROMPT_FILE_MISSING": () =>
-    "This step points at a prompt file that isn't in the workflow — add the file, or type the prompt in directly.",
+    "This step's prompt file can't be read — it may be missing, be a folder rather than a file, be empty, or not be text. Check the path and the file, or type the prompt in directly.",
   // The two file codes describe DIFFERENT author mistakes and must read
   // differently: UNSAFE (`validate.rs::check_prompt_files`, the literal `..` /
   // leading-`/` reject) is a path that was WRITTEN to leave the workflow;

@@ -104,13 +104,21 @@ pub(crate) async fn resolve_prompt(
 /// validate↔dispatch agreement matrix (INV-1) drive this function for real
 /// against a real bundle directory instead of a stand-in.
 ///
-/// **Which arm is taken is NOT decided here.** It is decided by
-/// `validate::prompt_source`, the ONE rule the validator also uses — so a
-/// definition the validator reports green cannot fail here, and one it reports
-/// red cannot quietly succeed here. Before that rule existed this function
-/// matched `(Option, Option)` raw, which read `Some("")` beside a `prompt_file:`
-/// as "both" and failed the run on a workflow that had just validated clean
-/// (`.lifecycle/workflow-builder-ux/FIX_ROUND-8.md`).
+/// **Nothing about WHICH prompt is used is decided here.** Both halves are
+/// decided by `validate.rs`: `prompt_source` picks the source, and
+/// `read_prompt_file` resolves + confines + reads the file. Those are the same
+/// two functions the validator's verdict is computed from, so a definition the
+/// validator reports green cannot fail here, and one it reports red cannot
+/// quietly succeed here (INV-1, both directions).
+///
+/// Both halves were separately wrong before. This function matched
+/// `(Option, Option)` raw, so `Some("")` beside a `prompt_file:` read as "both"
+/// and failed the run on a workflow that had just validated clean
+/// (`.lifecycle/workflow-builder-ux/FIX_ROUND-8.md`); and it joined the path
+/// with NO shape or confinement check, so a `prompt_file:` the validator refused
+/// as `WORKFLOW_PROMPT_FILE_UNSAFE` was read here anyway. The runner does not
+/// get to rely on having been validated: `POST /workflows/{id}/test` reaches
+/// dispatch without `validate_for_install`.
 async fn load_raw_prompt(
     step_id: &str,
     bundle_root: &Path,
@@ -120,14 +128,27 @@ async fn load_raw_prompt(
     match prompt_source(prompt, prompt_file) {
         PromptSource::Inline(p) => Ok(p.to_string()),
         PromptSource::File(rel) => {
-            let path = bundle_root.join(rel);
-            tokio::fs::read_to_string(&path)
-                .await
-                .map_err(|e| format!("read prompt_file '{rel}': {e}"))
+            // `read_prompt_file` is sync (the validator is a sync fn), and it
+            // stats + reads, so it goes on the blocking pool rather than a tokio
+            // worker.
+            let (root, rel_owned) = (bundle_root.to_path_buf(), rel.to_string());
+            let read = tokio::task::spawn_blocking(move || {
+                crate::modules::workflow::validate::read_prompt_file(&root, &rel_owned)
+            })
+            .await
+            .map_err(|e| format!("read prompt_file '{rel}': {e}"))?;
+            read.map_err(|e| e.message(rel))
         }
-        PromptSource::Missing | PromptSource::Both => {
-            Err(format!("step '{step_id}' has invalid prompt config"))
-        }
+        // Distinguished: the enum knows which it is, and "no prompt at all" and
+        // "two competing prompts" need different remedies. Only reachable when
+        // validation was bypassed, which is exactly when the operator has least
+        // context.
+        PromptSource::Missing => Err(format!(
+            "step '{step_id}' has neither prompt: nor prompt_file:"
+        )),
+        PromptSource::Both => Err(format!(
+            "step '{step_id}' has both prompt: and prompt_file: (mutually exclusive)"
+        )),
     }
 }
 
@@ -1881,25 +1902,45 @@ mod tests {
     // ───────────────────────── INV-1: validate ⇔ dispatch ─────────────────────
     //
     // The validator and the runner must answer "where does this step's prompt
-    // come from" the SAME way. They did not: a step carrying `prompt: ""` beside
-    // a `prompt_file:` validated GREEN (the validator normalises an empty prompt
-    // to "absent") and then failed the RUN with `has invalid prompt config` (the
-    // runner matched `(Option, Option)` raw). See
+    // come from, and can it be read" the SAME way. They did not: a step carrying
+    // `prompt: ""` beside a `prompt_file:` validated GREEN (the validator
+    // normalised an empty prompt to "absent") and then failed the RUN with `has
+    // invalid prompt config` (the runner matched `(Option, Option)` raw); and a
+    // `prompt_file:` the validator refused as UNSAFE was joined and read by the
+    // runner with no path check at all. See
     // `.lifecycle/workflow-builder-ux/FIX_ROUND-8.md`.
 
-    /// A bundle with the three kinds of `prompt_file:` target a definition can
-    /// name: a real file, a directory, and nothing at all.
-    fn prompt_bundle() -> tempfile::TempDir {
+    /// A bundle holding every kind of `prompt_file:` target a definition can
+    /// name — including the ones that used to split the two sides.
+    ///
+    /// Returns the temp dir (kept alive by the caller) and the BUNDLE ROOT,
+    /// which is a SUBDIRECTORY of it — so `prompts/escape.md` can point at a
+    /// file that is genuinely outside the bundle. A fixture whose "outside" file
+    /// lives under the root does not exercise confinement at all: it resolves
+    /// cleanly and both sides agree for the wrong reason.
+    fn prompt_bundle() -> (tempfile::TempDir, std::path::PathBuf) {
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(tmp.path().join("prompts")).unwrap();
-        std::fs::write(tmp.path().join("prompts/real.md"), "FILE PROMPT BODY").unwrap();
-        std::fs::create_dir_all(tmp.path().join("prompts/adir")).unwrap();
-        tmp
+        let root = tmp.path().join("bundle");
+        std::fs::create_dir_all(root.join("prompts")).unwrap();
+        std::fs::write(root.join("prompts/real.md"), "FILE PROMPT BODY").unwrap();
+        std::fs::create_dir_all(root.join("prompts/adir")).unwrap();
+        // Zero-byte: readable, but there is no prompt in it.
+        std::fs::write(root.join("prompts/empty.md"), "").unwrap();
+        // Not valid UTF-8: `is_file()` says yes, `read_to_string` says no.
+        std::fs::write(root.join("prompts/binary.bin"), [0xff_u8, 0xfe, 0x00, 0x01]).unwrap();
+        // A symlink pointing OUT of the bundle — shape-clean, confinement-dirty.
+        #[cfg(unix)]
+        {
+            let outside = tmp.path().join("outside.md");
+            std::fs::write(&outside, "OUTSIDE THE BUNDLE").unwrap();
+            std::os::unix::fs::symlink(&outside, root.join("prompts/escape.md")).unwrap();
+        }
+        (tmp, root)
     }
 
     /// Every finding code that answers "is this step's prompt configuration
-    /// acceptable". These are the verdicts INV-1 binds to the run outcome; any
-    /// other finding (a bad ref, a missing output) is a different question.
+    /// usable". These are the verdicts INV-1 binds to the run outcome; any other
+    /// finding (a bad ref, a missing output) is a different question.
     const PROMPT_CODES: &[&str] = &[
         "WORKFLOW_PROMPT_BOTH",
         "WORKFLOW_PROMPT_MISSING",
@@ -1907,6 +1948,33 @@ mod tests {
         "WORKFLOW_PROMPT_FILE_UNSAFE",
         "WORKFLOW_PROMPT_FILE_ESCAPE",
     ];
+
+    /// Guard on the list above: the validator must not gain a prompt-related
+    /// code that this matrix silently stops covering. Without it, a new
+    /// `WORKFLOW_PROMPT_*` verdict would be invisible to TEST-1 — the matrix
+    /// would keep passing while the class it guards had grown.
+    #[test]
+    fn prompt_codes_list_covers_every_prompt_verdict_the_validator_emits() {
+        let src = include_str!("validate.rs");
+        let mut found: Vec<String> = Vec::new();
+        for (idx, _) in src.match_indices("\"WORKFLOW_PROMPT") {
+            let rest = &src[idx + 1..];
+            let end = rest.find('"').unwrap();
+            let code = &rest[..end];
+            if !found.iter().any(|c| c == code) {
+                found.push(code.to_string());
+            }
+        }
+        found.sort();
+        let mut expected: Vec<String> = PROMPT_CODES.iter().map(|c| c.to_string()).collect();
+        expected.sort();
+        assert_eq!(
+            found, expected,
+            "validate.rs emits a different set of WORKFLOW_PROMPT_* codes than the \
+             INV-1 matrix covers — add the new code to PROMPT_CODES and give the \
+             matrix an input that produces it"
+        );
+    }
 
     /// Render one YAML step of `kind` carrying the given prompt fields.
     /// `None` = the key is ABSENT (not empty) — the distinction the whole
@@ -1925,24 +1993,6 @@ mod tests {
         y
     }
 
-    /// Pull the two prompt fields back off the PARSED definition, so the
-    /// dispatch side is driven by exactly what serde produced for the validator
-    /// — not by the test's own idea of the values.
-    fn prompt_fields(cfg: &StepConfig) -> (Option<String>, Option<String>) {
-        match cfg {
-            StepConfig::Llm {
-                prompt, prompt_file, ..
-            }
-            | StepConfig::LlmMap {
-                prompt, prompt_file, ..
-            }
-            | StepConfig::Agent {
-                prompt, prompt_file, ..
-            } => (prompt.clone(), prompt_file.clone()),
-            _ => (None, None),
-        }
-    }
-
     /// **TEST-1 — INV-1 acceptance.**
     ///
     /// Over the whole authorable state space, the REAL validator
@@ -1954,19 +2004,28 @@ mod tests {
     ///
     /// This asserts the design's promise, not either side's behaviour: it goes
     /// red if EITHER the validator or the runner changes its rule unilaterally.
+    /// The `files` list deliberately includes the path shapes the runner used to
+    /// read without any check (`..`, absolute, an escaping symlink) and the file
+    /// contents an existence-only check said yes to (a directory, non-UTF-8,
+    /// zero-byte) — those are the rows where the implication used to fail.
     #[tokio::test]
     async fn validate_and_dispatch_agree_on_every_prompt_state() {
-        let tmp = prompt_bundle();
+        let (_tmp, root) = prompt_bundle();
         let prompts: [Option<&str>; 4] = [None, Some(""), Some("   "), Some("hi")];
-        let files: [Option<&str>; 5] = [
+        let files: [Option<&str>; 9] = [
             None,
             Some(""),
             Some("prompts/real.md"),
             Some("prompts/adir"),
             Some("prompts/nope.md"),
+            Some("prompts/empty.md"),
+            Some("prompts/binary.bin"),
+            Some("prompts/../prompts/real.md"),
+            Some("prompts/escape.md"),
         ];
 
         let mut checked = 0usize;
+        let mut ran_ok = 0usize;
         for kind in ["llm", "llm_map", "agent"] {
             for prompt in prompts {
                 for file in files {
@@ -1977,7 +2036,7 @@ mod tests {
                     let findings =
                         crate::modules::workflow::validate::validate_collecting(
                             &wf,
-                            tmp.path(),
+                            root.as_path(),
                             false,
                         );
                     let prompt_findings: Vec<&str> = findings
@@ -1986,8 +2045,12 @@ mod tests {
                         .map(|e| e.code)
                         .collect();
 
-                    let (p, f) = prompt_fields(&wf.steps[0].config);
-                    let run = load_raw_prompt("s", tmp.path(), &p, &f).await;
+                    let (p, f) = wf.steps[0]
+                        .config
+                        .prompt_fields()
+                        .map(|(p, f)| (p.clone(), f.clone()))
+                        .expect("llm/llm_map/agent carry the prompt pair");
+                    let run = load_raw_prompt("s", root.as_path(), &p, &f).await;
 
                     assert_eq!(
                         prompt_findings.is_empty(),
@@ -2000,10 +2063,21 @@ mod tests {
                         if run.is_ok() { "OK" } else { "REJECTED" },
                     );
                     checked += 1;
+                    if run.is_ok() {
+                        ran_ok += 1;
+                    }
                 }
             }
         }
-        assert_eq!(checked, 60, "the matrix must actually have been walked");
+        assert_eq!(checked, 108, "the matrix must actually have been walked");
+        // Anti-vacuity: the implication is trivially true if NOTHING validates
+        // clean. Per kind the 6 legitimately-runnable rows are
+        // {absent, ""} x real.md  and  {"   ", "hi"} x {absent, ""}.
+        assert_eq!(
+            ran_ok, 18,
+            "the matrix must contain rows that legitimately RUN, or the \
+             implication holds vacuously"
+        );
     }
 
     /// **TEST-6** — the individual cells FIX_ROUND-8 named, with their exact
@@ -2011,12 +2085,12 @@ mod tests {
     /// implication by failing on both sides for the wrong reason.
     #[tokio::test]
     async fn load_raw_prompt_reads_the_file_when_the_prompt_box_was_cleared() {
-        let tmp = prompt_bundle();
+        let (_tmp, root) = prompt_bundle();
 
         // The exact state the builder's own WORKFLOW_PROMPT_BOTH remedy produced.
         let body = load_raw_prompt(
             "llm_1",
-            tmp.path(),
+            root.as_path(),
             &Some(String::new()),
             &Some("prompts/real.md".into()),
         )
@@ -2025,30 +2099,57 @@ mod tests {
         assert_eq!(body, "FILE PROMPT BODY");
 
         // An empty prompt with NO file is `WORKFLOW_PROMPT_MISSING` at validate,
-        // so the run must refuse rather than send an empty prompt to the model.
-        let err = load_raw_prompt("llm_1", tmp.path(), &Some(String::new()), &None)
+        // so the run must refuse rather than send an empty prompt to the model —
+        // and must SAY which of the two invalid shapes it is.
+        let err = load_raw_prompt("llm_1", root.as_path(), &Some(String::new()), &None)
             .await
             .expect_err("an empty prompt with no prompt_file must not resolve");
-        assert_eq!(err, "step 'llm_1' has invalid prompt config");
+        assert_eq!(err, "step 'llm_1' has neither prompt: nor prompt_file:");
 
-        // A genuine both-state is still rejected, unchanged.
+        // A genuine both-state is still rejected, with its own distinct message.
         let err = load_raw_prompt(
             "llm_1",
-            tmp.path(),
+            root.as_path(),
             &Some("inline".into()),
             &Some("prompts/real.md".into()),
         )
         .await
         .expect_err("prompt: and prompt_file: remain mutually exclusive");
-        assert_eq!(err, "step 'llm_1' has invalid prompt config");
+        assert_eq!(
+            err,
+            "step 'llm_1' has both prompt: and prompt_file: (mutually exclusive)"
+        );
 
         // An inline prompt still wins when there is no file.
         assert_eq!(
-            load_raw_prompt("llm_1", tmp.path(), &Some("inline".into()), &None)
+            load_raw_prompt("llm_1", root.as_path(), &Some("inline".into()), &None)
                 .await
                 .unwrap(),
             "inline"
         );
+
+        // The runner does not get to assume it was validated: a traversal path
+        // is refused HERE, not merely upstream. `POST /workflows/{id}/test`
+        // reaches dispatch without `validate_for_install`.
+        let err = load_raw_prompt(
+            "llm_1",
+            root.as_path(),
+            &None,
+            &Some("prompts/../prompts/real.md".into()),
+        )
+        .await
+        .expect_err("a '..' path must be refused by the runner itself");
+        assert!(err.contains("without '..'"), "{err}");
+
+        let err = load_raw_prompt("llm_1", root.as_path(), &None, &Some("/etc/passwd".into()))
+            .await
+            .expect_err("an absolute path must be refused by the runner itself");
+        assert!(err.contains("without '..'"), "{err}");
+
+        // A zero-byte prompt file is not a prompt — symmetric with `prompt: ""`.
+        let err = load_raw_prompt("llm_1", root.as_path(), &None, &Some("prompts/empty.md".into()))
+            .await
+            .expect_err("a zero-byte prompt_file must not ship an empty prompt to the model");
+        assert!(err.contains("is empty"), "{err}");
     }
 }
-
