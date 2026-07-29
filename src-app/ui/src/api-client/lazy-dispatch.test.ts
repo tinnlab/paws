@@ -5,6 +5,13 @@ import { createLazyDispatcher } from '../../../../sdk/packages/framework/src/laz
 /**
  * TEST-4 (ITEM-4) — store-kit's lazy action dispatcher.
  *
+ * NOTE ON THE SIGNATURE: the dispatcher takes the module IMPORT and the impl
+ * BUILD as two separate stages, because their failures need opposite policies (a
+ * transient chunk 404 must be retried and never memoized; a deterministic
+ * factory throw must be memoized so it cannot loop). These specs pass an
+ * identity builder where the distinction is irrelevant, and drive the two stages
+ * explicitly where it is.
+ *
  * A lazy action's body — and therefore its OWN in-flight guard
  * (`if (state.loading) return`) — cannot run until its chunk resolves, so two
  * synchronous callers used to both slip past every guard and issue the same
@@ -56,7 +63,7 @@ test('TEST-4: the CHUNK is fetched once no matter how many callers race it', asy
     loaderCalls++
     await chunk
     return action.impl
-  })
+  }, impl => impl)
 
   const a = dispatch()
   const b = dispatch()
@@ -84,7 +91,7 @@ test('TEST-4: the CHUNK is fetched once no matter how many callers race it', asy
 test('TEST-4: once the chunk has resolved, dispatch is unchanged (each call runs)', async () => {
   const action = makeGuardedAction()
   action.releaseWork()
-  const dispatch = createLazyDispatcher(async () => action.impl)
+  const dispatch = createLazyDispatcher(async () => action.impl, impl => impl)
 
   await dispatch() // warms the impl
   assert.equal(action.bodyCalls, 1)
@@ -110,7 +117,7 @@ test('TEST-4: EVERY cold-window call reaches the body — no silent merge', asyn
   const dispatch = createLazyDispatcher(async () => {
     await chunk
     return async (cb: () => void) => cb()
-  })
+  }, impl => impl)
 
   const a = dispatch(() => fired.push('a'))
   const b = dispatch(() => fired.push('b'))
@@ -132,7 +139,7 @@ test('TEST-4: two identical cold-window MUTATION dispatches both run', async () 
     return async (_id: string) => {
       creates++
     }
-  })
+  }, impl => impl)
   const a = dispatch('same-id')
   const b = dispatch('same-id')
   releaseChunk()
@@ -141,28 +148,48 @@ test('TEST-4: two identical cold-window MUTATION dispatches both run', async () 
 })
 
 test('TEST-4: a TRANSIENT chunk failure is retried — it does not brick the action', async () => {
+  // Widened after a live-UI audit: this used to fail EXACTLY ONCE, which is the
+  // only case the old one-retry policy survived. A real blip (or any deploy
+  // while the tab is open) fails repeatedly, and the rejection was then memoized
+  // for the whole session — every later dispatch failed without re-importing.
+  // The property is "no number of transient failures bricks the action", so the
+  // spec now fails through a whole dispatch's retry budget and beyond.
   let attempts = 0
   const dispatch = createLazyDispatcher(async () => {
     attempts++
-    if (attempts === 1) throw new Error('chunk 404')
+    // Fails through TWO whole dispatch retry budgets (3 attempts each).
+    if (attempts <= 6) throw new Error('chunk 404')
     return async () => 'ok'
-  })
+  }, impl => impl)
+  await assert.rejects(dispatch(), /chunk 404/)
+  const attemptsAfterFirstDispatch = attempts
+  assert.ok(
+    attemptsAfterFirstDispatch > 1,
+    'one dispatch must retry a failing import before giving up',
+  )
   await assert.rejects(dispatch(), /chunk 404/)
   assert.equal(await dispatch(), 'ok', 'a transient chunk failure must not brick the action')
-  assert.equal(attempts, 2)
 })
 
 test('TEST-4: a DETERMINISTIC resolve failure is memoized — no unbounded retry loop', async () => {
   // A throw from the action FACTORY is an authoring bug, not a blip. Retrying it
   // forever would turn one bug into an unbounded loop for a component that
   // dispatches from a render/effect, so after the single retry it fails fast.
-  let attempts = 0
-  const dispatch = createLazyDispatcher(async () => {
-    attempts++
-    throw new Error('factory blew up')
-  })
+  //
+  // This now drives the BUILD stage explicitly. It used to throw from the single
+  // combined loader, which conflated it with a chunk-download failure — and that
+  // conflation is precisely why a transient blip inherited the memoize-forever
+  // policy meant only for authoring bugs.
+  let builds = 0
+  const dispatch = createLazyDispatcher(
+    async () => ({}),
+    () => {
+      builds++
+      throw new Error('factory blew up')
+    },
+  )
   for (let i = 0; i < 5; i++) await assert.rejects(dispatch(), /factory blew up/)
-  assert.equal(attempts, 2, 'one retry, then the rejection is memoized')
+  assert.equal(builds, 2, 'one retry, then the rejection is memoized')
 })
 
 test('TEST-4: preload warms the chunk without invoking the body', async () => {
@@ -172,7 +199,7 @@ test('TEST-4: preload warms the chunk without invoking the body', async () => {
   const dispatch = createLazyDispatcher(async () => {
     loaderCalls++
     return action.impl
-  })
+  }, impl => impl)
   await dispatch.preload()
   assert.equal(loaderCalls, 1)
   assert.equal(action.bodyCalls, 0, 'preload must not invoke the action')

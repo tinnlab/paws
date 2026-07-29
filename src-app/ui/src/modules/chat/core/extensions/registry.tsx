@@ -9,6 +9,7 @@ import type {
   ContentRendererProps,
 } from '@/modules/chat/core/extensions/types'
 import { resolveCancel } from '@/modules/chat/core/extensions/beforeSendCancel'
+import { composeRequestFieldsFrom } from '@/modules/chat/core/extensions/composeRequestFields'
 import React from 'react'
 import { createSlotRegistry } from '@ziee/framework/slots'
 
@@ -991,31 +992,23 @@ export class ChatExtensionRegistry {
   /**
    * Compose request fields from all extensions
    * Extensions access ChatStore directly for conversation data
+   *
+   * FAIL-CLOSED: if any contributor throws, this REJECTS with a
+   * `RequestFieldCompositionError` instead of returning fields silently missing
+   * that contributor's keys. The merge/failure algebra (and the reasoning for
+   * fail-closed) lives in the pure, unit-tested `composeRequestFields.ts`.
    */
   async composeRequestFields(
     ctx: import('./types').ChatHookCtx,
   ): Promise<ExtensionRequestFields> {
-    const extensions = this.getExtensions().filter(ext =>
-      ext.composeRequestFields !== undefined,
-    )
+    const contributors = this.getExtensions()
+      .filter(ext => ext.composeRequestFields !== undefined)
+      .map(ext => ({
+        name: ext.name,
+        compose: () => ext.composeRequestFields!(ctx),
+      }))
 
-    let fields: ExtensionRequestFields = {}
-
-    for (const extension of extensions) {
-      try {
-        if (extension.composeRequestFields) {
-          const extensionFields = await extension.composeRequestFields(ctx)
-          fields = { ...fields, ...extensionFields }
-        }
-      } catch (error) {
-        console.error(
-          `[ChatExtensions] Error in ${extension.name}.composeRequestFields:`,
-          error,
-        )
-      }
-    }
-
-    return fields
+    return composeRequestFieldsFrom(contributors)
   }
 
   /**

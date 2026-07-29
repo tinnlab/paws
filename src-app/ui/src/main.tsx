@@ -2,7 +2,17 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from '@/App'
 import { AppErrorBoundary } from '@/components/AppErrorBoundary'
+import { installChunkLoadRecovery } from '@ziee/framework/chunk-recovery'
 import '@/index.css'
+
+// Code-split chunk failure recovery. A deploy while this tab is open invalidates
+// every hashed chunk URL the loaded page still holds, so a lazy surface 404s;
+// without this the failure surfaces only as an unhandled page-level error, with
+// nothing shown to the user. Installs a `vite:preloadError` listener that logs +
+// preventDefaults + marks the build stale (which makes the send path's error
+// message tell the user to reload). Never auto-reloads — that would destroy an
+// unsent composer draft and tear down an in-flight stream.
+installChunkLoadRecovery()
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

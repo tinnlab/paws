@@ -77,7 +77,11 @@ let saved: Record<string, unknown> = {}
 function stubRegistry(over: Record<string, unknown> = {}) {
   const base: Record<string, unknown> = {
     beforeSendMessage: async () => ({ cancel: false }),
-    composeRequestFields: async () => ({ content: 'hello' }),
+    // A VALID composed body: the server declares `content` + `model_id`
+    // required, and `sendMessage` now refuses to POST without them. The
+    // specs that deliberately compose an INVALID body (TEST-10/10b/12)
+    // override this per test.
+    composeRequestFields: async () => ({ content: 'hello', model_id: 'm-1' }),
     provideUserContent: async () => [],
     onMessageSent: async () => {},
     onStreamError: async () => {},
@@ -249,13 +253,14 @@ test('a throwing onStreamError hook is LOGGED and the state reset still runs', a
 // the composer forever — so every exit path is asserted below by calling the
 // SAME action instance a second time and requiring that it still sends.
 
-/** Stub `ApiClient.Message.send`, counting calls; returns a restore fn. */
+/** Stub `ApiClient.Message.send`, counting calls + recording each body. */
 function stubSend(impl?: () => Promise<unknown>) {
   const ns = (ApiClient as unknown as Record<string, Record<string, unknown>>).Message
   const original = ns.send
-  const calls = { n: 0 }
-  ns.send = async () => {
+  const calls = { n: 0, bodies: [] as Record<string, unknown>[] }
+  ns.send = async (body: Record<string, unknown>) => {
     calls.n += 1
+    calls.bodies.push(body)
     if (impl) return await impl()
     return { user_message_id: 'user-1', assistant_message_id: 'asst-1' }
   }
@@ -385,6 +390,156 @@ test('two SEPARATE store instances (split panes) are NOT serialized by one latch
   try {
     await Promise.all([sendA(), sendB()])
     expect(calls.n).toBe(2)
+  } finally {
+    restore()
+  }
+})
+
+// ── TEST-9 / TEST-10 / TEST-12 — a failed request-field composition must never
+// reach the wire ────────────────────────────────────────────────────────────
+//
+// Live-UI-rig triage §4 Rank 1: a `composeRequestFields` contributor failure was
+// caught + logged, and the send PROCEEDED with a structurally invalid body — the
+// user saw a raw `422 missing field \`model_id\`` and nothing actionable, and
+// (because the failed chunk was memoized) every later send failed the same way.
+//
+// TEST-9 drives the REAL registry — fake extensions registered on the singleton,
+// its own `composeRequestFields` left un-stubbed — so the swallow-or-throw
+// decision under test is the production one, not a test double.
+
+/** Register fake extensions on the real singleton; returns an unregister fn. */
+function withExtensions(
+  contributors: Array<{ name: string; compose: () => Promise<Record<string, unknown>> }>,
+) {
+  const registry = chatExtensionRegistry as unknown as {
+    register: (e: unknown) => void
+    unregister: (n: string) => void
+  }
+  const log = console.log
+  console.log = () => {}
+  try {
+    for (const c of contributors) {
+      registry.register({
+        name: c.name,
+        description: c.name,
+        composeRequestFields: c.compose,
+      })
+    }
+  } finally {
+    console.log = log
+  }
+  return () => {
+    const l = console.log
+    console.log = () => {}
+    try {
+      for (const c of contributors) registry.unregister(c.name)
+    } finally {
+      console.log = l
+    }
+  }
+}
+
+test('TEST-9: a contributor failure sends NOTHING and surfaces an actionable error', async () => {
+  stubRegistry()
+  // Un-shadow the method under test so the REAL registry composition runs.
+  delete (reg as Record<string, unknown>).composeRequestFields
+
+  const unregister = withExtensions([
+    { name: 'test-text', compose: async () => ({ content: 'hello' }) },
+    {
+      name: 'test-model',
+      compose: async () => {
+        throw new Error('Failed to fetch dynamically imported module')
+      },
+    },
+  ])
+  const { set, get, state } = makeStore()
+  const sendMessage = makeSendMessage(set as never, get as never)
+  const { calls, restore } = stubSend()
+  try {
+    await captureConsoleError(async () => {
+      await sendMessage().catch(() => {})
+    })
+
+    // THE defect, asserted directly: no structurally-invalid POST may leave the
+    // client. Pre-fix this was 1 — a body carrying `content` but no `model_id`.
+    expect(
+      calls.n,
+      'a failed field composition must not produce a send request',
+    ).toBe(0)
+
+    // …and the user is told something they can act on, on the store's error
+    // surface (the conversation error Alert), not just a console line.
+    const error = String(state.error ?? '')
+    expect(error, 'the failure must be surfaced on store.error').not.toBe('')
+    expect(error).toContain('test-model')
+    expect(error).toMatch(/reload/i)
+    expect(
+      error,
+      'the user must not be shown the raw server validation string',
+    ).not.toMatch(/missing field/i)
+  } finally {
+    restore()
+    unregister()
+  }
+})
+
+test('TEST-10: a composed body MISSING model_id is never POSTed (pre-send guard)', async () => {
+  // The contributor RESOLVES — it throws nothing — so the fail-closed registry
+  // cannot be what stops this. Only the pre-POST required-field check can, which
+  // is what keeps this proof independent of TEST-9's mechanism.
+  stubRegistry({ composeRequestFields: async () => ({ content: 'hello' }) })
+  const { set, get, state } = makeStore()
+  const sendMessage = makeSendMessage(set as never, get as never)
+  const { calls, restore } = stubSend()
+  try {
+    await captureConsoleError(async () => {
+      await sendMessage().catch(() => {})
+    })
+    expect(
+      calls.n,
+      'a body without model_id must not be POSTed (the server requires it)',
+    ).toBe(0)
+    expect(String(state.error ?? '')).toMatch(/model/i)
+  } finally {
+    restore()
+  }
+})
+
+test('TEST-10b: a composed body MISSING content is never POSTed either', async () => {
+  stubRegistry({ composeRequestFields: async () => ({ model_id: 'm-1' }) })
+  const { set, get, state } = makeStore()
+  const sendMessage = makeSendMessage(set as never, get as never)
+  const { calls, restore } = stubSend()
+  try {
+    await captureConsoleError(async () => {
+      await sendMessage().catch(() => {})
+    })
+    expect(calls.n).toBe(0)
+    expect(String(state.error ?? '')).not.toBe('')
+  } finally {
+    restore()
+  }
+})
+
+test('TEST-12: the in-flight latch is released after a composition abort', async () => {
+  stubRegistry({ composeRequestFields: async () => ({ content: 'hello' }) })
+  const { set, get } = makeStore()
+  const sendMessage = makeSendMessage(set as never, get as never)
+  const { calls, restore } = stubSend()
+  try {
+    await captureConsoleError(async () => {
+      await sendMessage().catch(() => {})
+    })
+    expect(calls.n).toBe(0)
+
+    // A healthy send on the SAME action instance must still go through — a
+    // fail-closed abort must not wedge the composer.
+    stubRegistry({
+      composeRequestFields: async () => ({ content: 'hello', model_id: 'm-1' }),
+    })
+    await sendMessage()
+    expect(calls.n).toBe(1)
   } finally {
     restore()
   }

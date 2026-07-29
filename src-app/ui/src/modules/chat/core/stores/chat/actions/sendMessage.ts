@@ -1,6 +1,10 @@
 import { ApiClient } from '@/api-client'
 import { chatExtensionRegistry } from '@/modules/chat/core/extensions'
-import type { MessageWithContent } from '@/api-client/types'
+import type { MessageWithContent, SendMessageRequest } from '@/api-client/types'
+import {
+  buildMissingFieldMessage,
+  RequestFieldCompositionError,
+} from '@/modules/chat/core/extensions/requestFieldFailure'
 
 import type { ChatSet, ChatInitialState, ChatState } from '@/modules/chat/core/stores/chat'
 import type { ExtensionLifecycle } from '@/modules/chat/core/extensions/types'
@@ -82,10 +86,60 @@ export default (set: ChatSet, getRaw: () => ChatInitialState) => {
         // Collect all request fields from extensions. Pass THIS pane's
         // conversation id so per-conversation composer selections (e.g. model)
         // resolve to the sending pane (ITEM-5); null = a new-chat pane.
-        const allRequestFields = await chatExtensionRegistry.composeRequestFields({
-          conversationId: get().conversation?.id ?? null,
-          paneId: get().paneId,
-        })
+        //
+        // FAIL-CLOSED (see `extensions/composeRequestFields.ts`): a contributor
+        // failure REJECTS here rather than yielding a silently-incomplete body.
+        // The throw must still reach the caller — the composers turn it into a
+        // toast, and a loud extension veto uses the same path — but it is also
+        // recorded on `store.error` first, because the PROGRAMMATIC callers
+        // (`startRegenerateMessage`, the tool-approval transmit) have no local
+        // catch that shows anything, and the conversation error Alert is the one
+        // surface every path renders.
+        let allRequestFields: Awaited<
+          ReturnType<typeof chatExtensionRegistry.composeRequestFields>
+        >
+        try {
+          allRequestFields = await chatExtensionRegistry.composeRequestFields({
+            conversationId: get().conversation?.id ?? null,
+            paneId: get().paneId,
+          })
+          // The server declares `content` and `model_id` REQUIRED
+          // (`SendMessageRequest` in server/src/modules/chat/core/extension/
+          // request.rs), and both are extension-contributed — so a contributor
+          // that resolves but returns nothing (rather than throwing) leaves the
+          // body just as invalid, and nothing between here and the POST used to
+          // notice. Validate ONCE, here, before anything with a side effect:
+          // this runs before the conversation is auto-created and before the
+          // optimistic user bubble, so a rejected turn leaves no debris.
+          //
+          // PRESENCE + type only — an empty `content` is legitimate at this
+          // layer (an attachment-only turn); "the composer is empty" is
+          // `beforeSendMessage`'s veto, not this guard's.
+          const missing: string[] = []
+          if (typeof allRequestFields.content !== 'string') {
+            missing.push('the message text')
+          }
+          if (
+            typeof allRequestFields.model_id !== 'string' ||
+            !allRequestFields.model_id.trim()
+          ) {
+            missing.push('a model selection')
+          }
+          if (missing.length > 0) {
+            throw new RequestFieldCompositionError(
+              buildMissingFieldMessage(missing),
+              { missingFields: missing },
+            )
+          }
+        } catch (error) {
+          set({
+            error:
+              error instanceof Error && error.message.trim()
+                ? error.message
+                : SEND_FAILED_FALLBACK_MESSAGE,
+          })
+          throw error
+        }
 
         // Inject branching fields directly (moved from branching extension)
         const pendingBranchFromMessageId = get().pendingBranchFromMessageId
@@ -177,12 +231,20 @@ export default (set: ChatSet, getRaw: () => ChatInitialState) => {
           // Fire-and-forget: the assistant reply streams over the chat-token
           // stream (applied by `applyStreamFrame` via the `chat:token` router),
           // not this response.
+          // Typed payload — the `as any` this replaced erased the compiler's
+          // knowledge that `content`/`model_id` are required, which is how a
+          // body missing `model_id` reached the wire and came back a raw 422.
+          // The extension-contributed record is narrowed once, and the three
+          // fields the server requires are supplied explicitly and checked.
+          const sendPayload: { id: string } & SendMessageRequest = {
+            ...(allRequestFields as Partial<SendMessageRequest>),
+            id: conversation.id,
+            branch_id: conversation.active_branch_id || '',
+            content: allRequestFields.content as string,
+            model_id: allRequestFields.model_id as string,
+          }
           const { user_message_id, assistant_message_id } =
-            await ApiClient.Message.send({
-              id: conversation.id,
-              branch_id: conversation.active_branch_id || '',
-              ...allRequestFields,
-            } as any)
+            await ApiClient.Message.send(sendPayload)
 
           // Remember the assistant message so the stop button can address it.
           set({ streamingMessageId: assistant_message_id })

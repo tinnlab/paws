@@ -10,6 +10,7 @@ import { Button } from '@ziee/kit'
 // via `@/core/...` at typecheck time even though Vite's
 // localOverridePlugin handles it at runtime.
 import { installDecorumTitlebarFix } from '@ziee/desktop/core/decorum-titlebar-fix'
+import { installChunkLoadRecovery } from '@ziee/framework/chunk-recovery'
 import '@/index.css'
 import { AppMode } from '@/modules/app/AppMode.store'
 
@@ -18,6 +19,13 @@ import { AppMode } from '@/modules/app/AppMode.store'
 // unclickable because decorum's drag region paints above it. No-op on
 // macOS / web. See decorum-titlebar-fix.ts for the threat model.
 installDecorumTitlebarFix()
+
+// Code-split chunk failure recovery — the desktop entry is hand-written and does
+// NOT fall back to the core UI's `main.tsx`, so it must install this itself or
+// the desktop webview keeps the old behaviour (a chunk 404 surfacing only as an
+// unhandled page error). Same contract as the web entry: log + preventDefault +
+// mark the build stale; never auto-reload.
+installChunkLoadRecovery()
 
 /**
  * Desktop Application Entry Point
