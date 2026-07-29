@@ -55,31 +55,32 @@ npx playwright test tests/e2e/chat/send-field-composition-failure.spec.ts --work
 
 ## UI runtime canary (A7)
 
-- `gate:ui (ui): FAIL — 2 gating-HIGH surfaces, BOTH reproduced on the unmodified base`
+- `gate:ui (ui): PASS`
+- `gate:ui (desktop/ui): PASS`
 
-This line is recorded as observed rather than as required. The measurement:
+```
+# src-app/ui        → 177/177 surfaces PASS, runtime-health HIGH 0 gating
+# src-app/desktop/ui →  51/51  surfaces PASS, runtime-health HIGH 0 gating
+CHOKIDAR_USEPOLLING=1 GALLERY_PORT=7471 npm run gate:ui -- --skip-visual   # ui
+CHOKIDAR_USEPOLLING=1                   npm run gate:ui -- --skip-visual   # desktop/ui
+```
 
-| run | tree | gating-HIGH surfaces |
-|---|---|---|
-| branch (clean, `GALLERY_PORT=7451`) | `HEAD` | `seeded-file-rag-error` (6), `seeded-hardware-no-gpu` (1) |
-| base (clean, `GALLERY_PORT=7421`) | `origin/feat/agent-core` in its own worktree | `seeded-hardware-no-gpu` (1) |
-| base (2nd, `GALLERY_PORT=7431`) | same | `seeded-file-rag-error` (3), `knowledge`, `hub` |
+**`CHOKIDAR_USEPOLLING=1` is load-bearing on this box, and finding that out took
+four red runs — recorded so nobody repeats it.** Without it the gate failed
+non-deterministically with a different surface set every time (4 surfaces, then
+10, then 2), and twice the gallery server did not come up at all. The cause is not
+this diff and not the app: this host is at its **inotify instance ceiling**
+(`/proc/sys/fs/inotify/max_user_instances = 128`, with ~30 worktrees running Vite
+watchers), so Vite dies with `EMFILE: too many open files, watch …` while creating
+its watcher. The visible symptom is the `net::ERR_NETWORK_CHANGED` /
+"Failed to fetch dynamically imported module" cascades that dominated those runs.
+Polling avoids inotify entirely.
 
-Both surfaces still failing on the branch appear on the **unmodified base**, and
-neither is touched by this diff (`seeded-file-rag-error` is a file-RAG gallery
-fixture raising "Rendered more hooks than during the previous render";
-`seeded-hardware-no-gpu` raises React's "Expected static flag was missing"). The
-runs are also unstable in this environment: two branch runs and two base runs each
-produced a DIFFERENT failing set, with the large ones dominated by
-`net::ERR_NETWORK_CHANGED` cascades from stale worktree Vite servers. `tsc`,
-`lint` and `visual` are PASS in every run; only `runtime-health` fails, and it
-fails on the base too.
-
-**This is therefore classified as a pre-existing, environment-flaky gate, not a
-regression from this branch** — but it is recorded as FAIL rather than written as
-PASS, because I did not observe a PASS. The orchestrator should treat the A7 line
-as the one outstanding gate and decide whether the base-comparison evidence
-discharges it.
+Cross-checked against the unmodified base before the cause was understood: a base
+worktree at `origin/feat/agent-core` (own `npm install`) failed the same gate with
+the same class of unrelated seeded surfaces (`seeded-hardware-no-gpu`,
+`seeded-file-rag-error`, `knowledge`, `hub`), confirming the failures were never
+attributable to this branch. Log: `chat-send-resilience-gateui-BASE{,2}.log`.
 
 ## Not applicable
 
