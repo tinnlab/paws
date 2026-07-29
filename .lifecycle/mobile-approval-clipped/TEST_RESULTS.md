@@ -37,34 +37,36 @@ TEST-9/INV-2, TEST-10/INV-4) is among the passes above.
   hooks + logical-direction + tooltip-placement + kit-manifest + testid-registry +
   design-spec + gallery-coverage + gallery-crawl + fixtures + state-matrix +
   overlay/override/seed registries + store-actions.
-- `gate:ui (ui): branch 3 vs base 10` — the baseline-controlled form, from two
-  FULL `gate:ui` runs on the SAME box, back-to-back, differing only in whether
-  the product diff was checked out (`A7-branch2.log`, `A7-base.log`):
+- `gate:ui (ui): FAIL` — I have TWO paired branch/base runs on this box and they
+  give OPPOSITE verdicts, so I do not have a measurement I can stand behind.
+  Recorded as FAIL rather than reporting the flattering half.
 
-  | | gating-HIGH surfaces | visual failures | total |
+  | pair | branch (gatingHIGH + visual) | base | verdict |
   |---|---|---|---|
-  | **branch** | **0** (189/189 clean) | 3 | **3** |
-  | **base**   | **8** (180/188 clean) | 2 | **10** |
+  | A (`A7-branch2.log` / `A7-base.log`) | 0 + 3 = **3** (189/189 clean) | 8 + 2 = **10** | branch better |
+  | B (`A7-branch-final.log` / `A7-base-final.log`) | 12 + 2 = **14** (156/168) | 7 + 3 = **10** | branch worse |
 
-  The count is `surfaces with gating HIGH runtime findings + failing visual test
-  cases`, i.e. everything `gate:ui` itself fails on. Branch 3 <= base 10, and on
-  the runtime-health axis the branch is strictly better (0 vs 8: the base run
-  showed `seeded-live-logs-empty` at 255 HIGH, `seeded-s1-array-empty` at 243,
-  and six more, none of which this diff can reach).
+  What I did to resolve it, rather than pick:
 
-  **The one axis where the branch looks worse, stated plainly:** 3 visual
-  failures vs 2. All are the SAME pre-existing spec, `chat-collapse-borders`
-  TEST-3/TEST-8, and it is flaky on both sides. Paired standalone sampling on
-  this box, same command, same day: **base 7/7, 7/7, 6/7** and **branch 6/7,
-  7/7** — same spec, same failing case (TEST-3 dark), comparable rate. Nothing in
-  the sample supports "the branch made it worse", and the branch's own 22-test
-  spec passes 22/22.
+  - The dominant signal in pair B is **2142 `ERR_NETWORK_CHANGED`** plus failed
+    `@fs/` and dynamic-module fetches — the EMFILE/inotify cascade
+    (`fs.inotify.max_user_instances` = 128 against ~65 Vite watchers). Those are
+    network/loader failures; a CSS layout change cannot produce them.
+  - Pair B's branch run implicated surfaces that DO render code I touched
+    (`deep-chat-collapsed-tool-boxes`, `deep-chat-tool-group`,
+    `deep-chat-mcp-toolcall-error`), so I checked the most-loaded one directly
+    instead of assuming: scoped `runtime-health --only-match=collapsed-tool-boxes`
+    gives **0 gating HIGH on the base AND 0 on the branch** (`rh2-base.log`,
+    `rh2-branch.log`).
+  - Across every run in this record, the five surfaces this diff actually changes
+    carry **only LOW `spacing-grid`** findings — zero HIGH, zero MEDIUM.
 
-  `tsc` and `lint` are clean in both runs. **Absolute PASS was not attainable on
-  this box**: `fs.inotify.max_user_instances` is 128 against ~65 Vite watchers, so
-  Vite dies with EMFILE and the failing-surface set changes every run —
-  `CHOKIDAR_USEPOLLING=1` (used for every run recorded here) reduces but does not
-  eliminate it, which is exactly the situation the comparative form exists for.
+  So the evidence says the branch is not worse, but the measurement is dominated
+  by an environmental cascade that varies run to run, and one of two paired
+  samples came out against it. **The orchestrator should re-run this gate on a
+  quiet box** (`CHOKIDAR_USEPOLLING=1`, after killing any stale Vite for this
+  worktree) and record the comparative line from that. `tsc` and `lint` were
+  clean in all four runs.
 
 `src-app/desktop/ui/**` is not touched by this diff (it consumes the same
 `@ziee/kit` and `../../ui/src` via its Vite/`@source` config, verified by a
