@@ -1306,3 +1306,95 @@ async fn test_delete_entry_cascades_project_link() {
     assert_eq!(lib["entries"].as_array().unwrap().len(), 0, "entry gone from library too");
 }
 
+
+// ───────── stringified batch arguments (the ask_user twin, silent variants) ─────────
+
+/// The two SILENT WRONG ANSWERS this class produced, proved over the REAL
+/// JSON-RPC surface.
+///
+/// `remove_citations` read `ids` with `.and_then(|v| v.as_array()).unwrap_or_default()`,
+/// so a model that JSON-ENCODED the array (which they routinely do) got an empty
+/// vec — and the tool answered **"0 citation(s) deleted." as SUCCESS**. Nothing
+/// was removed, no error was raised, and both the model and the user believed it
+/// had worked. That is strictly worse than the reported empty-form bug, because
+/// there is no visible symptom at all. (TEST-28)
+#[tokio::test]
+async fn stringified_batch_arguments_are_decoded_over_the_real_surface() {
+    let server = TestServer::start().await;
+    let user = create_user_with_permissions(&server, "cit_stringified", &["citations::use"]).await;
+
+    // Add an identifier-less entry via a STRINGIFIED `items` array. Before the
+    // fix this failed with "missing `items` array" — a lie, since `items` was
+    // present.
+    let res = jsonrpc(
+        &server,
+        &user.token,
+        "tools/call",
+        json!({
+            "name": "add_citations",
+            "arguments": {
+                "items": r#"[{"title":"A stringified-argument regression test","csl":{"type":"book","title":"A stringified-argument regression test"}}]"#
+            }
+        }),
+    )
+    .send()
+    .await
+    .unwrap();
+    let body: Value = res.json().await.unwrap();
+    assert!(
+        body["error"].is_null(),
+        "a JSON-encoded `items` must be decoded, not refused: {body}"
+    );
+
+    let entries = list_entries(&server, &user.token).await;
+    assert_eq!(entries.len(), 1, "the entry must actually be stored: {entries:?}");
+    let id = entries[0]["id"].as_str().expect("entry id").to_string();
+
+    // …now remove it with a STRINGIFIED `ids`. THIS is the silent one.
+    let res = jsonrpc(
+        &server,
+        &user.token,
+        "tools/call",
+        json!({ "name": "remove_citations", "arguments": { "ids": format!("[\"{id}\"]") } }),
+    )
+    .send()
+    .await
+    .unwrap();
+    let body: Value = res.json().await.unwrap();
+    assert!(body["error"].is_null(), "a JSON-encoded `ids` must be decoded: {body}");
+
+    let after = list_entries(&server, &user.token).await;
+    assert!(
+        after.is_empty(),
+        "the entry must actually be REMOVED — reporting '0 deleted' as success is the defect: {after:?}"
+    );
+}
+
+/// …and an `ids` that cannot be an array is REFUSED with feedback the model can
+/// act on, rather than silently selecting nothing (or, for `format_citations`,
+/// silently selecting the user's ENTIRE library). Asserts the message TEXT.
+/// (TEST-28 companion)
+#[tokio::test]
+async fn unusable_batch_arguments_are_refused_with_actionable_text() {
+    let server = TestServer::start().await;
+    let user = create_user_with_permissions(&server, "cit_unusable", &["citations::use"]).await;
+
+    let res = jsonrpc(
+        &server,
+        &user.token,
+        "tools/call",
+        json!({ "name": "remove_citations", "arguments": { "ids": "not json {" } }),
+    )
+    .send()
+    .await
+    .unwrap();
+    let body: Value = res.json().await.unwrap();
+    let msg = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(!msg.is_empty(), "an unusable `ids` must be an ERROR, not a silent no-op: {body}");
+    assert!(msg.contains("ids"), "must name the argument: {msg}");
+    assert!(msg.contains("JSON array"), "must say what is expected: {msg}");
+    assert!(
+        msg.contains("Example:") && msg.contains('['),
+        "must carry a copyable literal-JSON example: {msg}"
+    );
+}

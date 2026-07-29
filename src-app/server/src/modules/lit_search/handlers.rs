@@ -150,6 +150,33 @@ async fn dispatch_tool_call(
     result.map_err(|e| (StatusCode::OK, JsonRpcError::from_app_error(&e)))
 }
 
+/// Decode the named ARRAY arguments of a model-supplied tool payload before the
+/// typed deserialization consumes them.
+///
+/// Every tool below reads its arrays through a `#[derive(Deserialize)]` struct
+/// with a `Vec<…>` field, so a JSON-ENCODED array — which models routinely
+/// send — hard-failed with `invalid type: string "…", expected a sequence`,
+/// naming serde's expectation rather than the model's mistake.
+fn decode_array_args(args: &Value, specs: &[(&str, &str)]) -> Result<Value, AppError> {
+    let mut out = args.clone();
+    let arg_specs: Vec<crate::common::tool_args::ArgSpec<'_>> = specs
+        .iter()
+        .map(|(key, example)| crate::common::tool_args::ArgSpec {
+            key,
+            shape: crate::common::tool_args::ArgShape::Array,
+            example,
+        })
+        .collect();
+    crate::common::tool_args::coerce_args_in_place(&mut out, &arg_specs)
+        .map_err(|e| AppError::bad_request("INVALID_ARGS", e.into_message()))?;
+    Ok(out)
+}
+
+const LIT_QUERIES_EXAMPLE: &str = r#"["CRISPR off-target","base editing safety"]"#;
+const LIT_IDS_EXAMPLE: &str = r#"["PMID:31978945","DOI:10.1038/s41586-020-2649-2"]"#;
+const LIT_RECORD_SETS_EXAMPLE: &str = r#"[[{"doi":"10.1000/a"}],[{"doi":"10.1000/b"}]]"#;
+const LIT_DECISIONS_EXAMPLE: &str = r#"[{"id":"PMID:31978945","include":true,"reason":"…"}]"#;
+
 #[derive(Debug, Deserialize)]
 struct SearchArgs {
     /// Single query (the common case).
@@ -175,7 +202,8 @@ struct SearchArgs {
 // text + a `lit_dir`/`note` structuredContent) and is built inline.
 async fn do_search(user_id: Uuid, args: &Value) -> Result<Value, AppError> {
     use chrono::Datelike;
-    let args: SearchArgs = serde_json::from_value(args.clone())
+    let args = decode_array_args(args, &[("queries", LIT_QUERIES_EXAMPLE)])?;
+    let args: SearchArgs = serde_json::from_value(args)
         .map_err(|e| AppError::bad_request("INVALID_ARGS", e.to_string()))?;
 
     // Resolve the query list. `queries` (batch) takes precedence over `query`
@@ -432,7 +460,8 @@ async fn do_fetch_fulltext(
     conversation_id: Option<Uuid>,
     args: &Value,
 ) -> Result<Value, AppError> {
-    let args: FulltextArgs = serde_json::from_value(args.clone())
+    let args = decode_array_args(args, &[("ids", LIT_IDS_EXAMPLE)])?;
+    let args: FulltextArgs = serde_json::from_value(args)
         .map_err(|e| AppError::bad_request("INVALID_ARGS", e.to_string()))?;
     let ids: Vec<String> = args
         .ids
@@ -500,7 +529,8 @@ struct DedupArgs {
 /// point. Mirrors `aggregate_search`'s dedup→rank→completeness tail.
 async fn do_dedup_records(args: &Value) -> Result<Value, AppError> {
     use chrono::Datelike;
-    let args: DedupArgs = serde_json::from_value(args.clone())
+    let args = decode_array_args(args, &[("record_sets", LIT_RECORD_SETS_EXAMPLE)])?;
+    let args: DedupArgs = serde_json::from_value(args)
         .map_err(|e| AppError::bad_request("INVALID_ARGS", e.to_string()))?;
     let query = args.query.unwrap_or_default();
 
@@ -516,6 +546,18 @@ async fn do_dedup_records(args: &Value) -> Result<Value, AppError> {
     let mut union_capped = false;
     'flatten: for set in args.record_sets {
         for rec_val in set {
+            // A model that stringifies the OUTER array often stringifies the
+            // inner records too. Undecoded, each one failed `from_value` and was
+            // silently counted as `dropped` — the caller saw a smaller union
+            // with no indication why. Decode per element; a genuinely malformed
+            // record still falls to `dropped`.
+            let rec_val = crate::common::tool_args::coerce_value(
+                rec_val.clone(),
+                crate::common::tool_args::ArgShape::Object,
+                "record_sets[][]",
+                LIT_RECORD_SETS_EXAMPLE,
+            )
+            .unwrap_or(rec_val);
             match serde_json::from_value::<super::models::LitRecord>(rec_val) {
                 Ok(rec) => {
                     *identified.entry(rec.source.clone()).or_insert(0) += 1;
@@ -588,7 +630,8 @@ struct SelectIncludedArgs {
 /// (no LLM, no I/O). Turns an AI `screen` (llm_map) output into the deduped id list
 /// `fetch_paper_fulltext` consumes, plus PRISMA include/exclude counts.
 async fn do_select_included(args: &Value) -> Result<Value, AppError> {
-    let args: SelectIncludedArgs = serde_json::from_value(args.clone())
+    let args = decode_array_args(args, &[("decisions", LIT_DECISIONS_EXAMPLE)])?;
+    let args: SelectIncludedArgs = serde_json::from_value(args)
         .map_err(|e| AppError::bad_request("INVALID_ARGS", e.to_string()))?;
     let include = args.include_value.as_deref().unwrap_or("include");
 
@@ -596,7 +639,17 @@ async fn do_select_included(args: &Value) -> Result<Value, AppError> {
     let mut excluded = 0usize;
     let mut skipped = 0usize;
     for d in &args.decisions {
-        let Some(obj) = d.as_object() else {
+        // Same inner-element stringification as `record_sets` above: a
+        // JSON-encoded decision object used to fall straight to `skipped`,
+        // quietly shrinking the PRISMA include set.
+        let decoded = crate::common::tool_args::coerce_value(
+            d.clone(),
+            crate::common::tool_args::ArgShape::Object,
+            "decisions[]",
+            LIT_DECISIONS_EXAMPLE,
+        )
+        .unwrap_or_else(|_| d.clone());
+        let Some(obj) = decoded.as_object() else {
             // null (a dropped llm_map item) or a non-object record → not a decision.
             skipped += 1;
             continue;
@@ -752,7 +805,8 @@ async fn do_fetch_references(args: &Value) -> Result<Value, AppError> {
     // unbounded burst of outbound S2 requests (mirrors `fetch_paper_fulltext`'s
     // `max_papers` cap).
     const MAX_SNOWBALL_SEEDS: usize = 50;
-    let args: FetchReferencesArgs = serde_json::from_value(args.clone())
+    let args = decode_array_args(args, &[("ids", LIT_IDS_EXAMPLE)])?;
+    let args: FetchReferencesArgs = serde_json::from_value(args)
         .map_err(|e| AppError::bad_request("INVALID_ARGS", e.to_string()))?;
     let ids: Vec<String> = args
         .ids
@@ -1473,5 +1527,54 @@ mod tests {
         assert_eq!(sc["included"], 2, "unique included studies");
         assert_eq!(sc["excluded"], 1);
         assert_eq!(sc["skipped"], 1, "the null decision is skipped");
+    }
+}
+
+#[cfg(test)]
+mod stringified_arg_tests {
+    use super::*;
+    use crate::common::tool_args::conformance::{assert_arg_conformance, ArgSite};
+    use crate::common::tool_args::ArgShape;
+    use serde_json::json;
+
+    /// All five lit_search array arguments decode before their typed
+    /// deserialization, which used to hard-fail with serde's "expected a
+    /// sequence". (TEST-32)
+    #[test]
+    fn lit_search_array_args_decode_before_typed_deserialization() {
+        let out = decode_array_args(
+            &json!({ "queries": r#"["CRISPR","base editing"]"# }),
+            &[("queries", LIT_QUERIES_EXAMPLE)],
+        )
+        .unwrap();
+        let parsed: SearchArgs = serde_json::from_value(out).expect("typed parse must now succeed");
+        assert_eq!(parsed.queries.unwrap().len(), 2);
+
+        let err = decode_array_args(
+            &json!({ "ids": "not json {" }),
+            &[("ids", LIT_IDS_EXAMPLE)],
+        )
+        .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("ids") && msg.contains("JSON array"), "got: {msg}");
+        assert!(msg.contains("PMID"), "must carry a copyable example: {msg}");
+    }
+
+    /// The shared conformance battery. (TEST-41)
+    #[test]
+    fn lit_search_ids_pass_the_shared_argument_conformance_battery() {
+        assert_arg_conformance(ArgSite {
+            site: "lit_search.ids",
+            arg: "ids",
+            shape: ArgShape::Array,
+            canonical: json!(["PMID:31978945"]),
+            example: LIT_IDS_EXAMPLE,
+            absent_yields: None,
+            extract: |args: serde_json::Value| {
+                decode_array_args(&args, &[("ids", LIT_IDS_EXAMPLE)])
+                    .map(|v| v.get("ids").cloned().filter(|x| !x.is_null()))
+                    .map_err(|e| format!("{e}"))
+            },
+        });
     }
 }

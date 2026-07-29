@@ -203,10 +203,10 @@ async fn dispatch_tool_call(
         "remove_citations" => {
             let project_id = arg_uuid(&call.arguments, "project_id");
             verify_project_owned(user_id, project_id).await.map_err(internal)?;
-            let ids: Vec<Uuid> = call
-                .arguments
-                .get("ids")
-                .and_then(|v| v.as_array())
+            // A stringified `ids` used to fall to `unwrap_or_default()` and
+            // report "0 citation(s) deleted." as SUCCESS — the model and the
+            // user both believed the removal happened.
+            let ids: Vec<Uuid> = array_arg(&call.arguments, "ids", CITATION_IDS_EXAMPLE)?
                 .map(|a| {
                     a.iter()
                         .filter_map(|v| v.as_str())
@@ -289,10 +289,11 @@ async fn dispatch_tool_call(
             // those directly — NO DB load and NO library write (lets a workflow
             // export from its own state). Otherwise load saved entries by
             // `ids` / `project_id`.
-            let inline: Vec<Value> = call
-                .arguments
-                .get("items")
-                .and_then(|v| v.as_array())
+            // A stringified `items` used to fall to `unwrap_or_default()`, and
+            // the empty-vec branch below then formatted the user's ENTIRE
+            // library instead of the records the model supplied — a silent
+            // wrong answer with no error anywhere.
+            let inline: Vec<Value> = array_arg(&call.arguments, "items", CITATION_ITEMS_EXAMPLE)?
                 .map(|a| a.iter().filter(|v| v.is_object()).cloned().collect())
                 .unwrap_or_default();
             if inline.len() > MAX_BATCH_ITEMS {
@@ -307,10 +308,9 @@ async fn dispatch_tool_call(
             let items: Vec<Value> = if !inline.is_empty() {
                 inline
             } else {
-                let ids: Vec<Uuid> = call
-                    .arguments
-                    .get("ids")
-                    .and_then(|v| v.as_array())
+                // Same silent-fallthrough as `items` above: a stringified `ids`
+                // used to select the whole library rather than the named entries.
+                let ids: Vec<Uuid> = array_arg(&call.arguments, "ids", CITATION_IDS_EXAMPLE)?
                     .map(|a| {
                         a.iter()
                             .filter_map(|v| v.as_str())
@@ -356,16 +356,53 @@ async fn dispatch_tool_call(
 
 // ─────────────────────────── batch orchestration ───────────────────────────
 
+/// Copyable literal-JSON examples carried by every argument refusal here.
+const CITATION_ITEMS_EXAMPLE: &str =
+    r#"[{"doi":"10.1000/xyz123"},{"title":"An article title"}]"#;
+const CITATION_IDS_EXAMPLE: &str =
+    r#"["3f1c2a44-0000-0000-0000-000000000000"]"#;
+const CITATION_CSL_EXAMPLE: &str =
+    r#"{"type":"article-journal","title":"…","author":[{"family":"Doe","given":"J"}]}"#;
+
+/// Read a model-supplied ARRAY argument, decoding a JSON-encoded one.
+///
+/// Models routinely stringify a nested array argument. Before this, every one of
+/// these sites did `.get(key).and_then(|v| v.as_array())` and treated the
+/// resulting `None` as "absent" — which produced two SILENT WRONG ANSWERS: a
+/// stringified `format_citations.items` fell through to formatting the user's
+/// entire library, and a stringified `remove_citations.ids` reported
+/// "0 citation(s) deleted." as success.
+fn array_arg(
+    args: &Value,
+    key: &str,
+    example: &str,
+) -> Result<Option<Vec<Value>>, (StatusCode, JsonRpcError)> {
+    match crate::common::tool_args::coerce_arg(
+        args,
+        key,
+        crate::common::tool_args::ArgShape::Array,
+        example,
+    ) {
+        Ok(None) => Ok(None),
+        Ok(Some(v)) => Ok(v.as_array().cloned()),
+        Err(e) => Err((
+            StatusCode::OK,
+            JsonRpcError::invalid_params(e.into_message()),
+        )),
+    }
+}
+
 fn parse_items(args: &Value) -> Result<Vec<CitationInput>, (StatusCode, JsonRpcError)> {
-    let arr = args
-        .get("items")
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| {
-            (
-                StatusCode::OK,
-                JsonRpcError::invalid_params("missing `items` array".to_string()),
-            )
-        })?;
+    let arr = array_arg(args, "items", CITATION_ITEMS_EXAMPLE)?.ok_or_else(|| {
+        (
+            StatusCode::OK,
+            JsonRpcError::invalid_params(format!(
+                "`items` was not supplied, but a JSON array of citations is required. \
+                 Send `items` as a JSON array. Example: {CITATION_ITEMS_EXAMPLE}"
+            )),
+        )
+    })?;
+    let arr = &arr;
     if arr.len() > MAX_BATCH_ITEMS {
         return Err((
             StatusCode::OK,
@@ -377,7 +414,28 @@ fn parse_items(args: &Value) -> Result<Vec<CitationInput>, (StatusCode, JsonRpcE
     }
     let mut out = Vec::with_capacity(arr.len());
     for v in arr {
-        let item: CitationInput = serde_json::from_value(v.clone())
+        // The nested `csl` record is itself an object argument, so it suffers
+        // the same stringification. Left undecoded it deserializes happily as a
+        // `Value::String`, and every downstream consumer (`dedup::…`,
+        // `resolve::csl_title`, `format::…`) does `.get(…)`/`as_array()` on it
+        // and silently sees nothing — the entry is then STORED with an empty
+        // CSL record. Silent corruption, so it is decoded here.
+        let mut v = v.clone();
+        crate::common::tool_args::coerce_args_in_place(
+            &mut v,
+            &[crate::common::tool_args::ArgSpec {
+                key: "csl",
+                shape: crate::common::tool_args::ArgShape::Object,
+                example: CITATION_CSL_EXAMPLE,
+            }],
+        )
+        .map_err(|e| {
+            (
+                StatusCode::OK,
+                JsonRpcError::invalid_params(e.into_message()),
+            )
+        })?;
+        let item: CitationInput = serde_json::from_value(v)
             .map_err(|e| (StatusCode::OK, JsonRpcError::invalid_params(e.to_string())))?;
         out.push(item);
     }
@@ -787,4 +845,70 @@ fn item_source(input: &CitationInput) -> &'static str {
 /// web_search/lit_search. Carried over the wire at HTTP 200 (JSON-RPC in-band).
 fn internal(e: crate::common::AppError) -> (StatusCode, JsonRpcError) {
     (StatusCode::OK, JsonRpcError::from_app_error(&e))
+}
+
+#[cfg(test)]
+mod stringified_arg_tests {
+    use super::*;
+    use crate::common::tool_args::conformance::{assert_arg_conformance, ArgSite};
+    use crate::common::tool_args::ArgShape;
+    use serde_json::json;
+
+    /// The two SILENT WRONG ANSWERS this round fixes, pinned.
+    ///
+    /// A stringified `format_citations.items` used to fall to
+    /// `unwrap_or_default()` and the empty-vec branch then formatted the user's
+    /// ENTIRE library; a stringified `remove_citations.ids` used to report
+    /// "0 citation(s) deleted." as SUCCESS. Both now decode; an undecodable one
+    /// is an actionable refusal rather than a plausible wrong answer.
+    /// (TEST-26 / TEST-27, INV-1)
+    #[test]
+    fn citations_array_args_decode_instead_of_silently_selecting_everything() {
+        let decoded = array_arg(
+            &json!({ "items": r#"[{"doi":"10.1000/xyz"}]"# }),
+            "items",
+            CITATION_ITEMS_EXAMPLE,
+        )
+        .expect("a stringified items array must decode")
+        .expect("must not read as absent");
+        assert_eq!(decoded, vec![json!({ "doi": "10.1000/xyz" })]);
+
+        let ids = array_arg(
+            &json!({ "ids": r#"["3f1c2a44-0000-0000-0000-000000000000"]"# }),
+            "ids",
+            CITATION_IDS_EXAMPLE,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(ids.len(), 1, "a stringified ids array must select those entries");
+
+        // Absent still reads as absent, so the documented "no ids → whole
+        // library" behaviour is untouched.
+        assert!(array_arg(&json!({}), "ids", CITATION_IDS_EXAMPLE).unwrap().is_none());
+
+        // Undecodable is refused with actionable text, not a silent empty vec.
+        let err = array_arg(&json!({ "ids": "not json {" }), "ids", CITATION_IDS_EXAMPLE)
+            .expect_err("an undecodable ids must be refused, never treated as absent");
+        let msg = err.1.message.clone();
+        assert!(msg.contains("ids") && msg.contains("JSON array"), "got: {msg}");
+        assert!(msg.contains("3f1c2a44"), "must carry a copyable example: {msg}");
+    }
+
+    /// The shared conformance battery, applied to `citations.items`. (TEST-41)
+    #[test]
+    fn citations_items_passes_the_shared_argument_conformance_battery() {
+        assert_arg_conformance(ArgSite {
+            site: "citations.items",
+            arg: "items",
+            shape: ArgShape::Array,
+            canonical: json!([{ "doi": "10.1000/xyz" }]),
+            example: CITATION_ITEMS_EXAMPLE,
+            absent_yields: None,
+            extract: |args: serde_json::Value| {
+                array_arg(&args, "items", CITATION_ITEMS_EXAMPLE)
+                    .map(|o| o.map(serde_json::Value::Array))
+                    .map_err(|e| e.1.message.clone())
+            },
+        });
+    }
 }

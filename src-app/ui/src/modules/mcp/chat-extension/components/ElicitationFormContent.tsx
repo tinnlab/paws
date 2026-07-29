@@ -19,9 +19,9 @@ import {
 } from 'lucide-react'
 import type { ContentRendererProps } from '@/modules/chat/core/extensions'
 import {
-  ASK_USER_MARKER,
   buildFormSchema,
   getOptions,
+  normalizeElicitationSchema,
   type FieldSchema,
 } from './elicitationOptions'
 import { renderInputField } from './elicitationFields'
@@ -144,9 +144,16 @@ export function ElicitationFormContent({
   const responseContent =
     mcpEntry?.response_content ?? elicitation.response_content
 
-  const schema = elicitation.requested_schema
-  const properties = schema?.properties || {}
-  const requiredFields = new Set(schema?.required || [])
+  // Every degenerate `requested_schema` shape — a JSON-encoded string, null, a
+  // missing/empty/non-object `properties`, a non-iterable `required` — is
+  // resolved here rather than by a chain of `?.`/`|| {}` fallthroughs, which is
+  // what used to render a card with a Submit button and zero fields.
+  const {
+    properties,
+    requiredFields,
+    isRich: isRichAskUser,
+    notice: schemaNotice,
+  } = normalizeElicitationSchema(elicitation.requested_schema)
 
   // Build a dynamic zod schema from the elicitation field specs.
   const formSchema = buildFormSchema(properties, requiredFields)
@@ -293,12 +300,69 @@ export function ElicitationFormContent({
 
   // --- Pending state: interactive form ---
 
+  // No field can be rendered. Showing the normal form here would be a card that
+  // LIES: it looks answerable, and its Submit silently POSTs `content: {}` as if
+  // the user had answered. Say what happened and offer the two real choices
+  // instead. This runs BEFORE the rich/flat branch so it covers the ask_user
+  // wizard and the external-MCP form with one guard.
+  if (schemaNotice) {
+    return (
+      <div
+        className="my-2"
+        data-testid={`elicitation-pending-${elicitation.elicitation_id}`}
+      >
+        <Card
+          size="sm"
+          className="mb-2"
+          data-testid="mcp-elicitation-no-fields-card"
+          footer={
+            <div className="flex w-full justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleDecline}
+                loading={isSubmitting}
+                size="default"
+                data-testid="elicitation-decline"
+              >
+                Decline
+              </Button>
+              <Button
+                type="button"
+                loading={isSubmitting}
+                size="default"
+                onClick={() => onValid({})}
+                data-testid="elicitation-accept-no-values"
+              >
+                Accept without values
+              </Button>
+            </div>
+          }
+        >
+          {cardHeader(
+            <SquarePen className="size-4 shrink-0 text-primary" />,
+            'is requesting input',
+          )}
+          {elicitation.message ? (
+            <Text className="text-sm mt-2 block">{elicitation.message}</Text>
+          ) : null}
+          <Text
+            type="secondary"
+            className="text-sm mt-2 block"
+            data-testid="mcp-elicitation-no-fields-notice"
+          >
+            {schemaNotice}
+          </Text>
+        </Card>
+      </div>
+    )
+  }
+
   // Rich decision UX (per-option cards + 1–4 question wizard + Other-escape) is
   // enabled ONLY for the ziee-internal `ask_user` path, which the backend marks
-  // with ASK_USER_MARKER. External MCP-server elicitation is never marked and
-  // renders the flat, spec-compliant form below (unchanged).
-  const isRichAskUser =
-    (schema as Record<string, unknown> | undefined)?.[ASK_USER_MARKER] === true
+  // with ASK_USER_MARKER (read by `normalizeElicitationSchema`). External
+  // MCP-server elicitation is never marked and renders the flat,
+  // spec-compliant form below (unchanged).
   if (isRichAskUser) {
     return (
       <div

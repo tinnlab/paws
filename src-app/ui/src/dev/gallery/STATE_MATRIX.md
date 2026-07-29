@@ -7,8 +7,8 @@
 
 ## Summary
 
-- **347** surfaces carry at least one renderable-state signal.
-- **2108** signals total: 1652 branch, 139 empty, 122 error, 94 loading, 96 overlay, 5 panel.
+- **349** surfaces carry at least one renderable-state signal.
+- **2135** signals total: 1678 branch, 140 empty, 122 error, 94 loading, 96 overlay, 5 panel.
 - **5** right-panel renderers registered (each a right-panel-open state).
 - **35** slot registrations (sidebar / settings / chat mount points).
 
@@ -478,14 +478,15 @@ Required states: `delayed`, `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!getSearchBoxContainer` | 154 |
-| branch | `selectedIds.size > 0` | 161 |
-| branch | `canDelete` | 186 |
-| loading | `visibleConversations.length === 0 && !loading` | 215 |
-| error | `error` | 216 |
-| loading | `loading && !isInitialized` | 240 |
-| branch | `visibleConversations.length > 0` | 267 |
-| branch | `hasMore` | 276 |
+| branch | `localSearchQuery === ChatHistory.$.searchQuery` | 102 |
+| branch | `!getSearchBoxContainer` | 185 |
+| branch | `selectedIds.size > 0` | 192 |
+| branch | `canDelete` | 217 |
+| loading | `visibleConversations.length === 0 && !loading` | 246 |
+| error | `error` | 247 |
+| loading | `loading && !isInitialized` | 271 |
+| branch | `visibleConversations.length > 0` | 298 |
+| branch | `hasMore` | 307 |
 
 ### `modules/chat/components/ConversationPickerPane`
 
@@ -730,11 +731,11 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!state` | 169 |
-| branch | `this.initialized` | 495 |
-| empty | `extensions.length === 0` | 673 |
-| empty | `extensions.length === 0` | 706 |
-| empty | `!registered \|\| registered.length === 0` | 1082 |
+| branch | `!state` | 170 |
+| branch | `this.initialized` | 496 |
+| empty | `extensions.length === 0` | 674 |
+| empty | `extensions.length === 0` | 707 |
+| empty | `!registered \|\| registered.length === 0` | 1083 |
 
 ### `modules/chat/core/extensions/utils`
 
@@ -976,12 +977,12 @@ Required states: `delayed`, `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!isNarrow` | 96 |
-| branch | `isNarrow` | 106 |
-| loading | `(conversations.length > 0 \|\| loading)` | 126 |
-| branch | `isNarrow && searchOpenInNarrow` | 147 |
-| error | `(conversations.length > 0 \|\| loading \|\| error \|\| hasSearch)` | 156 |
-| error | `!loading && conversations.length === 0 && !error && !hasSearch` | 176 |
+| branch | `!isNarrow` | 110 |
+| branch | `isNarrow` | 120 |
+| loading | `(conversations.length > 0 \|\| loading)` | 140 |
+| branch | `isNarrow && searchOpenInNarrow` | 161 |
+| error | `(conversations.length > 0 \|\| loading \|\| error \|\| hasSearch)` | 170 |
+| error | `!loading && conversations.length === 0 && !error && !hasSearch` | 190 |
 
 ### `modules/chat/pages/ConversationPage`
 
@@ -2888,11 +2889,13 @@ Required states: _(branch-only — proven via dynamic coverage)_
 |---|---|---|
 | branch | `isSelectField` | 69 |
 | branch | `isMultiSelect` | 71 |
-| branch | `status === 'accepted'` | 208 |
-| branch | `items.length > 0` | 237 |
-| branch | `status === 'declined'` | 251 |
-| branch | `status === 'cancelled'` | 271 |
-| branch | `isRichAskUser` | 302 |
+| branch | `status === 'accepted'` | 215 |
+| branch | `items.length > 0` | 244 |
+| branch | `status === 'declined'` | 258 |
+| branch | `status === 'cancelled'` | 278 |
+| branch | `schemaNotice` | 308 |
+| branch | `elicitation.message` | 346 |
+| branch | `isRichAskUser` | 366 |
 
 ### `modules/mcp/chat-extension/components/McpConfigModalMount`
 
@@ -3686,12 +3689,9 @@ Required states: `delayed`, `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!f` | 51 |
-| loading | `loading && !settings` | 60 |
-| branch | `!canManage` | 80 |
-| error | `error` | 89 |
-| branch | `f` | 98 |
-| branch | `canManage` | 186 |
+| error | `error && !settings` | 98 |
+| loading | `isLoading` | 129 |
+| branch | `!canManage` | 163 |
 
 ### `modules/server-update/AboutSettings`
 
@@ -4092,18 +4092,19 @@ Required states: `empty`, `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `sourceRepo` | 106 |
-| branch | `checking && !hasLoaded` | 119 |
-| error | `error && !hasLoaded` | 121 |
-| branch | `!sourceReachable` | 133 |
-| empty | `total === 0` | 138 |
-| branch | `total > PAGE_SIZE` | 155 |
-| branch | `model.size_bytes != null && !model.installed` | 212 |
-| branch | `model.quantization` | 217 |
-| branch | `model.sha256` | 232 |
-| branch | `model.installed` | 241 |
-| branch | `progress` | 268 |
-| error | `failed && progress?.error` | 269 |
+| branch | `sourceRepo` | 108 |
+| branch | `checking && !hasLoaded` | 121 |
+| error | `error && !hasLoaded` | 123 |
+| branch | `!sourceReachable` | 135 |
+| empty | `total === 0` | 140 |
+| branch | `total > PAGE_SIZE` | 157 |
+| branch | `model.size_bytes != null && model.size_bytes > 0 && !model.installed` | 218 |
+| branch | `model.quantization` | 223 |
+| branch | `model.sha256` | 238 |
+| branch | `model.installed` | 247 |
+| branch | `progress` | 274 |
+| error | `failed && progress?.error` | 275 |
+| branch | `byteLabel` | 324 |
 
 ### `modules/voice/components/AvailableVersionsCard`
 
@@ -4111,18 +4112,27 @@ Required states: `empty`, `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `platform && arch` | 107 |
-| branch | `checking && !updateCheck` | 118 |
-| error | `error && !updateCheck` | 120 |
-| branch | `!updateCheck` | 128 |
-| empty | `readyUpstream.length === 0` | 130 |
-| branch | `readyUpstream.length > 10` | 145 |
-| branch | `v.size_bytes != null && !v.installed` | 180 |
-| branch | `isLatest` | 185 |
-| branch | `v.installed` | 190 |
-| branch | `v.prerelease` | 195 |
-| branch | `progress` | 214 |
-| error | `failed && progress?.error` | 215 |
+| branch | `platform && arch` | 109 |
+| branch | `checking && !updateCheck` | 120 |
+| error | `error && !updateCheck` | 122 |
+| branch | `!updateCheck` | 130 |
+| empty | `readyUpstream.length === 0` | 132 |
+| branch | `readyUpstream.length > 10` | 147 |
+| branch | `v.size_bytes != null && v.size_bytes > 0 && !v.installed` | 186 |
+| branch | `isLatest` | 191 |
+| branch | `v.installed` | 196 |
+| branch | `v.prerelease` | 201 |
+| branch | `progress` | 220 |
+| error | `failed && progress?.error` | 221 |
+| branch | `byteLabel` | 268 |
+
+### `modules/voice/components/DownloadFailureRow`
+
+Required states: _(branch-only — proven via dynamic coverage)_
+
+| kind | condition | line |
+|---|---|---|
+| branch | `onRetry` | 62 |
 
 ### `modules/voice/components/InstalledModelsCard`
 
@@ -4517,13 +4527,15 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `finding.location` | 24 |
-| branch | `validating` | 47 |
-| branch | `!validation && !validating` | 50 |
-| empty | `validation && errors.length === 0` | 56 |
-| branch | `errors.length > 0` | 63 |
-| branch | `warnings.length > 0` | 71 |
-| branch | `cost` | 79 |
+| branch | `!finding.stepId` | 51 |
+| branch | `!el` | 124 |
+| branch | `validating` | 141 |
+| branch | `errorText` | 144 |
+| branch | `!validation && !validating && !errorText` | 157 |
+| empty | `validation && errors.length === 0 && !checkFailed` | 167 |
+| branch | `errors.length > 0` | 174 |
+| branch | `warnings.length > 0` | 182 |
+| branch | `cost` | 190 |
 
 ### `modules/workflow/components/builder/RefInsertMenu`
 
@@ -4531,7 +4543,8 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `ref.hint` | 50 |
+| branch | `ref.hint` | 56 |
+| branch | `compact` | 66 |
 
 ### `modules/workflow/components/builder/StepConfigPanel`
 
@@ -4547,8 +4560,27 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `from == null` | 26 |
-| empty | `steps.length === 0` | 38 |
+| branch | `from == null` | 47 |
+| empty | `steps.length === 0` | 59 |
+| branch | `problems > 0` | 115 |
+| empty | `problems === 0 && cautions > 0` | 128 |
+
+### `modules/workflow/components/builder/ToolArgumentsForm`
+
+Required states: _(branch-only — proven via dynamic coverage)_
+
+| kind | condition | line |
+|---|---|---|
+| branch | `canHoldTemplate` | 112 |
+| branch | `isTemplateValue(value)` | 113 |
+| branch | `templated` | 158 |
+| branch | `canHoldTemplate` | 182 |
+| branch | `templated` | 217 |
+| branch | `v === undefined` | 251 |
+| branch | `!pendingNumberClear.current` | 259 |
+| branch | `(numberInput.current?.value ?? '').trim() !== ''` | 263 |
+| branch | `templated` | 350 |
+| branch | `spec.overflowNames.length > 0` | 399 |
 
 ### `modules/workflow/components/builder/ToolStepForm`
 
@@ -4556,7 +4588,16 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| empty | `rows.length === 0` | 175 |
+| branch | `!step.server` | 249 |
+| branch | `serverId` | 250 |
+| branch | `!useGenerated \|\| !spec` | 323 |
+| branch | `!key \|\| !spec.fields.some(f => f.name === key)` | 325 |
+| branch | `blockingFailure` | 364 |
+| branch | `isRetryableFailure(blockingFailure)` | 374 |
+| branch | `usePicker` | 396 |
+| branch | `v === (step.tool ?? '')` | 407 |
+| branch | `useGenerated && spec` | 438 |
+| empty | `rows.length === 0` | 463 |
 
 ### `modules/workflow/components/builder/WorkflowBuilderPage`
 
@@ -4565,13 +4606,13 @@ Required states: `delayed`, `error`
 | kind | condition | line |
 |---|---|---|
 | branch | `!canAccess` | 42 |
-| branch | `!canAccess` | 90 |
-| branch | `deletedExternally` | 108 |
-| error | `loadError` | 117 |
-| loading | `loading` | 125 |
-| branch | `isEdit` | 143 |
-| branch | `existingName` | 144 |
-| branch | `dirty` | 162 |
+| branch | `!canAccess` | 99 |
+| branch | `deletedExternally` | 117 |
+| error | `loadError` | 126 |
+| loading | `loading` | 134 |
+| branch | `isEdit` | 152 |
+| branch | `existingName` | 153 |
+| branch | `dirty` | 171 |
 
 ### `modules/workflow/components/builder/WorkflowInputsEditor`
 

@@ -74,6 +74,71 @@ test.describe('Voice model management — read-only user (TEST-24)', () => {
     // The config card renders its read-only banner (no Save/manage).
     await expect(byTestId(page, 'voice-config-readonly-alert')).toBeVisible()
   })
+
+  /**
+   * TEST-16 [negative-perm][acceptance][INV-8] — a failed install's RETRY is a
+   * mutation and must be gated like the Install button beside it.
+   *
+   * `GET /voice/models/downloads` is served under `voice::admin::read`, and
+   * `loadActive()` seeds terminal tasks too — so a read-only voice admin really
+   * does see the failure row on page load, without clicking anything. The
+   * failure MESSAGE is theirs to read; the Retry control is not, because it
+   * re-issues `POST /voice/models/download` (`voice::admin::manage`) and could
+   * only ever 403.
+   *
+   * The pre-existing TEST-24 above enumerates the manage controls by test-id, so
+   * it stayed green when `DownloadFailureRow` introduced a NEW ungated one —
+   * which is why this assertion is written against the failure row specifically.
+   */
+  test('read-only voice admin sees a failed install but gets no Retry control', async ({
+    page,
+    testInfra,
+  }) => {
+    const { baseURL, apiURL } = testInfra
+    await installVoiceBrowserMocks(page)
+    const state = defaultVoiceState({ models: [] })
+    // A terminal FAILED task already in the registry — the exact live shape
+    // (0 bytes received, no total) that produced the owner's screenshot.
+    state.modelDownloads = [
+      {
+        task_id: 'model-task-base',
+        key: 'model@base',
+        name: 'base',
+        status: 'failed',
+        bytes_received: 0,
+        error:
+          'the downloaded file is empty (0 bytes). Expected a whisper model file (a `ggml` or `GGUF` container). The source returned no data — check that the URL points directly at the model file, then try the download again.',
+      },
+    ]
+    await routeVoice(page, state)
+
+    await loginWithPerms(
+      page,
+      baseURL,
+      apiURL,
+      [Permissions.VoiceAdminRead],
+      'voice-ro-fail',
+    )
+    await page.goto(`${baseURL}/settings/voice`)
+    await expect(byTestId(page, 'voice-settings-page-title')).toBeVisible({
+      timeout: 30000,
+    })
+
+    // The failure is visible and labelled — a read-only admin is entitled to
+    // know WHY the install failed.
+    const failure = byTestId(page, 'voice-available-model-failed-base')
+    await expect(failure).toBeVisible({ timeout: 15000 })
+    await expect(failure).toContainText(/install failed/i)
+    await expect(failure).toContainText(/empty \(0 bytes\)/i)
+
+    // …but the mutating control is absent, exactly like the Install button.
+    await expect(
+      byTestId(page, 'voice-available-model-failed-base-retry'),
+    ).toHaveCount(0)
+    await expect(
+      byTestId(page, 'voice-available-model-install-base'),
+    ).toHaveCount(0)
+  })
 })
 
 test.describe('Voice settings — no read permission (TEST-24 negative)', () => {

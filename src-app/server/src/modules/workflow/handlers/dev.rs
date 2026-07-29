@@ -98,9 +98,11 @@ pub async fn validate_workflow(
     // time (validate is a dev affordance). FIX-4: prompt_file resolution uses a
     // guaranteed-nonexistent unique path (never created) instead of the shared
     // `/tmp` root, so a `WorkflowsInstall` caller can't probe real /tmp
-    // contents. Since we don't have the bundle here, any `prompt_file:` is
-    // reported as a (soft) missing-file error — acceptable for the YAML-only
-    // validate surface.
+    // contents. Since we don't have the bundle here, `check_prompt_files` SKIPS
+    // its existence/confinement half against a root that does not exist (see its
+    // doc comment) rather than reporting a missing-file error it cannot
+    // determine; install re-validates against the real bundle. The textual
+    // path-shape reject still runs.
     let tmp = std::env::temp_dir().join(format!("ziee-wf-validate-{}", Uuid::new_v4()));
     let raw = validate::validate_collecting(&parsed, &tmp, true);
     // Split findings by severity: errors gate `valid`; warnings (the
@@ -942,6 +944,11 @@ pub async fn validate_workflow_def(
     // FIX-4: a guaranteed-nonexistent unique path (never created) as the bundle
     // root, so `prompt_file:` resolution can't stat real shared-/tmp contents
     // (a `WorkflowsRead` caller must not be able to probe path existence).
+    // Because that root does not exist, `check_prompt_files` skips its
+    // existence/confinement half entirely (see its doc comment): a draft has no
+    // bundle, so this endpoint reports no `prompt_file` file verdict at all
+    // rather than a permanent false one the builder cannot let the author clear.
+    // The save/install path validates against the real bundle root.
     let tmp = std::env::temp_dir().join(format!("ziee-wf-validate-{}", Uuid::new_v4()));
     let raw = validate::validate_collecting(&def, &tmp, true);
     let mut errors = Vec::new();

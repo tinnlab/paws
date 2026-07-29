@@ -230,7 +230,7 @@ src-app/ui/src/modules/chat/components/rail/RailStep.tsx	1	232	correctness-logic
 src-app/ui/src/modules/chat/components/rail/RailStepDetail.tsx	1	90	correctness-logic,concurrency-lifecycle,error-handling,frontend-state,ux-accessibility,design-fidelity,security-secrets,api-contract,dead-code,test-quality,modularity-coupling,performance,cross-platform
 src-app/ui/src/modules/chat/components/rail/describeActivity.test.ts	1	183	correctness-logic,concurrency-lifecycle,error-handling,frontend-state,ux-accessibility,design-fidelity,security-secrets,api-contract,dead-code,test-quality,modularity-coupling,performance,cross-platform
 src-app/ui/src/modules/chat/components/rail/railBlocks.ts	1	251	correctness-logic,concurrency-lifecycle,error-handling,frontend-state,ux-accessibility,design-fidelity,security-secrets,api-contract,dead-code,test-quality,modularity-coupling,performance,cross-platform
-src-app/ui/src/modules/chat/components/rail/railIsolation.test.ts	1	832	correctness-logic,concurrency-lifecycle,error-handling,frontend-state,ux-accessibility,design-fidelity,security-secrets,api-contract,dead-code,test-quality,modularity-coupling,performance,cross-platform
+src-app/ui/src/modules/chat/components/rail/railIsolation.test.ts	1	1642	correctness-logic,concurrency-lifecycle,error-handling,frontend-state,ux-accessibility,design-fidelity,security-secrets,api-contract,dead-code,test-quality,modularity-coupling,performance,cross-platform
 src-app/ui/src/modules/chat/components/rail/railSegmentation.test.ts	1	283	correctness-logic,concurrency-lifecycle,error-handling,frontend-state,ux-accessibility,design-fidelity,security-secrets,api-contract,dead-code,test-quality,modularity-coupling,performance,cross-platform
 src-app/ui/src/modules/chat/components/rail/railSegmentation.ts	1	255	correctness-logic,concurrency-lifecycle,error-handling,frontend-state,ux-accessibility,design-fidelity,security-secrets,api-contract,dead-code,test-quality,modularity-coupling,performance,cross-platform
 src-app/ui/src/modules/chat/components/rail/railStatus.test.ts	1	98	correctness-logic,concurrency-lifecycle,error-handling,frontend-state,ux-accessibility,design-fidelity,security-secrets,api-contract,dead-code,test-quality,modularity-coupling,performance,cross-platform
@@ -432,4 +432,9 @@ src-app/ui/tests/e2e/chat/activity-rail-reveal.spec.ts	1	255	test-quality,ux-acc
 src-app/ui/tests/e2e/chat/activity-rail-seeded.spec.ts	1	391	test-quality,ux-accessibility,design-fidelity
 src-app/ui/tests/e2e/chat/activity-rail-state.spec.ts	1	161	test-quality,ux-accessibility,design-fidelity
 src-app/ui/tests/e2e/chat/helpers/rail-helpers.ts	1	367	test-quality,ux-accessibility,design-fidelity
-src-app/ui/tests/e2e/chat/run-js-inner-approval.spec.ts	65	82	test-quality,ux-accessibility,design-fidelity
+src-app/ui/tests/e2e/chat/run-js-inner-approval.spec.ts	17	17	test-quality,ux-accessibility,design-fidelity
+src-app/ui/tests/e2e/chat/run-js-inner-approval.spec.ts	25	55	test-quality,ux-accessibility,design-fidelity
+src-app/ui/tests/e2e/chat/run-js-inner-approval.spec.ts	73	73	test-quality,ux-accessibility,design-fidelity
+src-app/ui/tests/e2e/chat/run-js-inner-approval.spec.ts	76	76	test-quality,ux-accessibility,design-fidelity
+src-app/ui/tests/e2e/chat/run-js-inner-approval.spec.ts	98	140	test-quality,ux-accessibility,design-fidelity
+src-app/ui/tests/e2e/chat/run-js-inner-approval.spec.ts	148	229	test-quality,ux-accessibility,design-fidelity

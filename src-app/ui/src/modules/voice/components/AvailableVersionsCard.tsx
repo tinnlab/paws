@@ -18,6 +18,8 @@ import { type AvailableVersion2, type DownloadSnapshot2 } from '@/api-client/typ
 import { Permissions } from '@/api-client/permissions'
 import { VoiceDownloadProgress as VoiceDownloadProgressStore } from '@/modules/voice/stores/voiceDownloadProgress'
 import { VoiceUpdate } from '@/modules/voice/stores/voiceUpdate'
+import { DownloadFailureRow } from '@/modules/voice/components/DownloadFailureRow'
+import { progressByteLabel } from '@/modules/voice/stores/downloadProgress.helpers'
 
 /** Human-readable byte sizes. */
 function formatBytes(n: number): string {
@@ -177,7 +179,11 @@ function AvailableVersionRow({
         <Flex justify="between" align="center" gap="small" wrap>
           <Space wrap>
             <Text strong>{v.version}</Text>
-            {v.size_bytes != null && !v.installed && (
+            {/* Only a REAL asset size is worth showing. A release whose asset
+                size is 0/unknown would otherwise render a naked "0 B" on the
+                row — the same meaningless zero the models card suppresses.
+                See `.lifecycle/voice-model-bad-magic/` (INV-6, ITEM-12). */}
+            {v.size_bytes != null && v.size_bytes > 0 && !v.installed && (
               <Text type="secondary" className="text-xs">
                 {formatBytes(v.size_bytes)}
               </Text>
@@ -212,7 +218,14 @@ function AvailableVersionRow({
           </Can>
         </Flex>
         {progress && <DownloadProgressLine progress={progress} />}
-        {failed && progress?.error && <Text type="secondary">{progress.error}</Text>}
+        {failed && progress?.error && (
+          <DownloadFailureRow
+            reason={progress.error}
+            onRetry={onDownload}
+            testId={`voice-version-failed-${v.version}`}
+            retryLabel={`Retry installing ${v.version}`}
+          />
+        )}
       </Flex>
     </div>
   )
@@ -221,6 +234,13 @@ function AvailableVersionRow({
 function DownloadProgressLine({ progress }: { progress: DownloadSnapshot2 }) {
   const total = progress.total_bytes ?? 0
   const recv = progress.bytes_received
+  // `null` → render no byte text (see progressByteLabel / INV-6).
+  const byteLabel = progressByteLabel(
+    recv,
+    progress.total_bytes ?? undefined,
+    progress.status,
+    formatBytes,
+  )
   const pct =
     progress.status === 'completed'
       ? 100
@@ -245,11 +265,11 @@ function DownloadProgressLine({ progress }: { progress: DownloadSnapshot2 }) {
         size="sm"
         aria-label={`Download progress: ${pct ?? 0}%`}
       />
-      <Text type="secondary" className="text-xs">
-        {formatBytes(recv)}
-        {total > 0 ? ` / ${formatBytes(total)}` : ''}
-        {progress.status === 'completed' ? ' — Completed' : ''}
-      </Text>
+      {byteLabel && (
+        <Text type="secondary" className="text-xs">
+          {byteLabel}
+        </Text>
+      )}
     </Flex>
   )
 }

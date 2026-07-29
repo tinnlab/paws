@@ -1151,6 +1151,43 @@ struct InvokeArgs {
     body: Option<Value>,
 }
 
+/// Copyable literal-JSON examples carried by every `invoke_capability` argument
+/// refusal, so the model is shown the shape rather than told about it.
+const INVOKE_BODY_EXAMPLE: &str = r#"{"name":"My project","description":"..."}"#;
+const INVOKE_QUERY_EXAMPLE: &str = r#"{"page":1,"per_page":50}"#;
+const INVOKE_PATH_PARAMS_EXAMPLE: &str = r#"{"id":"3f1c…-uuid"}"#;
+
+/// Decode the JSON-ENCODED object arguments of an `invoke_capability` call.
+///
+/// Extracted as a pure function so the whole shape distribution can be driven
+/// through it directly — the defect this fixes shipped because every existing
+/// fixture built these arguments as well-formed objects.
+fn decode_invoke_args(args: &Value) -> Result<Value, AppError> {
+    let mut out = args.clone();
+    crate::common::tool_args::coerce_args_in_place(
+        &mut out,
+        &[
+            crate::common::tool_args::ArgSpec {
+                key: "body",
+                shape: crate::common::tool_args::ArgShape::Object,
+                example: INVOKE_BODY_EXAMPLE,
+            },
+            crate::common::tool_args::ArgSpec {
+                key: "query",
+                shape: crate::common::tool_args::ArgShape::Object,
+                example: INVOKE_QUERY_EXAMPLE,
+            },
+            crate::common::tool_args::ArgSpec {
+                key: "path_params",
+                shape: crate::common::tool_args::ArgShape::Object,
+                example: INVOKE_PATH_PARAMS_EXAMPLE,
+            },
+        ],
+    )
+    .map_err(|e| AppError::bad_request("INVALID_PARAMS", e.into_message()))?;
+    Ok(out)
+}
+
 async fn invoke_capability(
     user: &User,
     groups: &[Group],
@@ -1158,16 +1195,30 @@ async fn invoke_capability(
     headers: &HeaderMap,
     args: &Value,
 ) -> Result<Value, AppError> {
-    let args: InvokeArgs = serde_json::from_value(args.clone())
+    // Models routinely JSON-ENCODE a nested object argument one level too many.
+    // Decode `body` / `query` / `path_params` BEFORE the typed deserialization
+    // below, which would otherwise: hard-fail on `path_params` naming the whole
+    // args blob; SILENTLY DROP a stringified `query` (the loopback call then ran
+    // with no query params and returned a plausible 200 for the wrong query);
+    // and POST a stringified `body` as a JSON string literal, so the real route
+    // answered 422 and blamed the wrong layer. Each refusal names what arrived,
+    // what is required, and shows a body the model can copy.
+    let args_value = decode_invoke_args(args)?;
+
+    let args: InvokeArgs = serde_json::from_value(args_value)
         .map_err(|e| AppError::bad_request("INVALID_PARAMS", format!("invoke args: {e}")))?;
     let op = resolve_op(user, groups, catalog, &args.operation_id)?;
 
     // Validate the body shape up front (deterministic; nested validation is the
-    // real route's job — it returns 400s we relay back).
-    if let (Some(schema), Some(body)) = (&op.request_schema, &args.body)
-        && let Err(msg) = validate_body(schema, body, catalog.components())
-    {
-        return Err(AppError::bad_request("INVALID_BODY", msg));
+    // real route's job — it returns 400s we relay back). Checked even when the
+    // operation declares NO request schema: `validate_body` short-circuits on
+    // the schema, so a non-object body used to skip validation entirely there
+    // and surfaced as a confusing 422 from the target route instead.
+    if let Some(body) = &args.body {
+        let schema = op.request_schema.clone().unwrap_or(Value::Null);
+        if let Err(msg) = validate_body(&schema, body, catalog.components()) {
+            return Err(AppError::bad_request("INVALID_BODY", msg));
+        }
     }
 
     // Substitute + strictly validate path params.
@@ -1319,6 +1370,27 @@ fn is_path_safe(c: char) -> bool {
 /// (which returns a 400 we relay back), so we never falsely reject on an
 /// OpenAPI/JSON-Schema dialect quirk.
 fn validate_body(schema: &Value, body: &Value, components: &Value) -> Result<(), String> {
+    // A scalar body is never a valid JSON request body for ANY route, so this
+    // check runs BEFORE the schema short-circuits below. It used to sit after
+    // them, so an operation with no (or a non-object) request schema skipped
+    // validation entirely and a JSON-ENCODED body was POSTed as a string
+    // literal — the target route then answered 422 and the model was blamed by
+    // the wrong layer. Arrays are deliberately still allowed through here: a
+    // route taking `Json<Vec<T>>` legitimately receives one, and the
+    // object-typed schema branch below rejects an array when the schema does
+    // say `object`.
+    if matches!(body, Value::String(_) | Value::Number(_) | Value::Bool(_)) {
+        return Err(format!(
+            "`body` arrived as {}, but a JSON object is required. Send `body` as a JSON \
+             object, not a JSON-encoded string. Example: {INVOKE_BODY_EXAMPLE}",
+            match body {
+                Value::String(_) => "a string",
+                Value::Number(_) => "a number",
+                _ => "a boolean",
+            }
+        ));
+    }
+
     let resolved = resolve_schema_ref(schema, components);
     let Some(obj) = resolved.as_object() else {
         return Ok(());
@@ -1330,7 +1402,12 @@ fn validate_body(schema: &Value, body: &Value, components: &Value) -> Result<(),
     let body_obj = match body {
         Value::Object(m) => m,
         Value::Null => return Ok(()),
-        _ => return Err("request body must be a JSON object".to_string()),
+        _ => {
+            return Err(format!(
+                "`body` arrived as an array, but this operation requires a JSON object. \
+                 Send `body` as a JSON object. Example: {INVOKE_BODY_EXAMPLE}"
+            ));
+        }
     };
 
     if let Some(required) = obj.get("required").and_then(|r| r.as_array()) {
@@ -2066,4 +2143,113 @@ mod tests {
         assert!(!d.contains("JSON Schema"), "{d}");
     }
 
+
+    // ── stringified object arguments (the ask_user twin) ─────────────────────
+
+    /// `invoke_capability`'s three object arguments each decode when the model
+    /// JSON-ENCODES them — the same mistake that broke `ask_user`.
+    ///
+    /// `query` is the worst of the three: it used to fail the
+    /// `if let Some(Value::Object(q))` match and be **silently dropped**, so the
+    /// loopback call ran with NO query params and returned a plausible 200 for
+    /// the wrong query. Nothing anywhere reported a problem. (TEST-22, INV-1)
+    #[test]
+    fn invoke_args_decode_stringified_body_query_and_path_params() {
+        let decoded = decode_invoke_args(&json!({
+            "operation_id": "Project.create",
+            "body": r#"{"name":"My project"}"#,
+            "query": r#"{"page":1}"#,
+            "path_params": r#"{"id":"abc"}"#,
+        }))
+        .expect("stringified object arguments must decode");
+
+        assert_eq!(decoded["body"], json!({ "name": "My project" }));
+        assert_eq!(
+            decoded["query"],
+            json!({ "page": 1 }),
+            "a stringified query must reach the URL, not be silently dropped"
+        );
+        assert_eq!(decoded["path_params"], json!({ "id": "abc" }));
+        assert_eq!(
+            decoded["operation_id"],
+            json!("Project.create"),
+            "scalar arguments must never be reparsed"
+        );
+
+        // A well-formed call is untouched (no regression), and the typed
+        // deserialization still succeeds afterwards.
+        let well_formed = json!({
+            "operation_id": "Project.create",
+            "body": { "name": "My project" },
+        });
+        assert_eq!(decode_invoke_args(&well_formed).unwrap(), well_formed);
+        let parsed: InvokeArgs =
+            serde_json::from_value(decode_invoke_args(&well_formed).unwrap()).unwrap();
+        assert_eq!(parsed.operation_id, "Project.create");
+    }
+
+    /// A `body` that cannot be an object is refused with feedback the model can
+    /// act on — what it sent, what is required, and a body it can copy — not
+    /// with serde's "invalid type" naming the whole args blob. Asserts the TEXT.
+    /// (TEST-23, INV-5)
+    #[test]
+    fn invoke_args_refusals_tell_the_model_how_to_fix_the_call() {
+        for bad in [json!("not json {"), json!("[1,2]"), json!(7)] {
+            let err = decode_invoke_args(&json!({ "operation_id": "X", "body": bad.clone() }))
+                .expect_err("a non-object body must be refused");
+            let msg = format!("{err}");
+            assert!(msg.contains("body"), "must name the argument: {msg}");
+            assert!(msg.contains("JSON object"), "must say what is expected: {msg}");
+            assert!(
+                msg.contains(INVOKE_BODY_EXAMPLE),
+                "must carry a copyable example: {msg}"
+            );
+        }
+    }
+
+    /// A scalar body is now rejected even when the operation declares NO request
+    /// schema. `validate_body` short-circuited on the schema first, so that case
+    /// skipped validation entirely and a JSON-encoded body was POSTed as a
+    /// string literal — the target route answered 422 and the model was blamed
+    /// by the wrong layer. Arrays stay allowed (a `Json<Vec<T>>` route takes
+    /// one) unless the schema says `object`. (TEST-25, ITEM-10)
+    #[test]
+    fn validate_body_rejects_a_scalar_body_even_without_a_schema() {
+        let c = json!({});
+        let err = validate_body(&Value::Null, &json!("{\"name\":\"x\"}"), &c).unwrap_err();
+        assert!(err.contains("JSON object"), "got: {err}");
+        assert!(err.contains(INVOKE_BODY_EXAMPLE), "must show a body to copy: {err}");
+
+        // No regression: a well-formed object body against a schema-less
+        // operation still passes, and so does an array.
+        assert!(validate_body(&Value::Null, &json!({ "name": "x" }), &c).is_ok());
+        assert!(validate_body(&Value::Null, &json!([1, 2]), &c).is_ok());
+        assert!(validate_body(&Value::Null, &Value::Null, &c).is_ok());
+        // …but an array IS rejected when the schema says object.
+        assert!(validate_body(&schema_obj(), &json!([1, 2]), &c).is_err());
+    }
+
+    /// The shared model-supplied-argument conformance battery, applied to
+    /// `invoke_capability.body` — the site the gap analysis named as the prime
+    /// suspect, whose own `validate_body_*` fixtures are all well-formed
+    /// objects. (TEST-41)
+    #[test]
+    fn invoke_body_passes_the_shared_argument_conformance_battery() {
+        use crate::common::tool_args::conformance::{assert_arg_conformance, ArgSite};
+        use crate::common::tool_args::ArgShape;
+
+        assert_arg_conformance(ArgSite {
+            site: "invoke_capability.body",
+            arg: "body",
+            shape: ArgShape::Object,
+            canonical: json!({ "name": "My project" }),
+            example: INVOKE_BODY_EXAMPLE,
+            absent_yields: None,
+            extract: |args: Value| {
+                decode_invoke_args(&args)
+                    .map(|v| v.get("body").cloned().filter(|b| !b.is_null()))
+                    .map_err(|e| format!("{e}"))
+            },
+        });
+    }
 }

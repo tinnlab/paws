@@ -10,6 +10,11 @@ interface RefInsertMenuProps {
   /** Insert the chosen reference token into the target field. */
   onInsert: (token: string) => void
   testid?: string
+  /** Icon-only trigger. Used where the menu repeats once PER FIELD (the
+   *  schema-generated tool arguments): four stacked "Insert reference" buttons
+   *  are visual noise, and at 390px the label row overflows its card. A single
+   *  labelled trigger (the prompt fields) keeps the text. */
+  compact?: boolean
 }
 
 /**
@@ -23,6 +28,7 @@ export function RefInsertMenu({
   stepId,
   onInsert,
   testid = 'wf-builder-ref-menu',
+  compact = false,
 }: RefInsertMenuProps) {
   const def = store.def
   const index = def.steps.findIndex(s => s.id === stepId)
@@ -55,6 +61,22 @@ export function RefInsertMenu({
         onClick: () => onInsert(ref.token),
       })
     }
+  }
+
+  if (compact) {
+    return (
+      <Dropdown items={items} align="end" data-testid={testid}>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          icon={<Braces />}
+          aria-label="Insert reference"
+          tooltip="Insert reference"
+          data-testid={`${testid}-trigger`}
+        />
+      </Dropdown>
+    )
   }
 
   return (

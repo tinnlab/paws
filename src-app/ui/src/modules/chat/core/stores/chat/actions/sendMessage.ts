@@ -1,6 +1,10 @@
 import { ApiClient } from '@/api-client'
 import { chatExtensionRegistry } from '@/modules/chat/core/extensions'
-import type { MessageWithContent } from '@/api-client/types'
+import type { MessageWithContent, SendMessageRequest } from '@/api-client/types'
+import {
+  assertRequiredRequestFields,
+  RequestFieldCompositionError,
+} from '@/modules/chat/core/extensions/requestFieldFailure'
 
 import type { ChatSet, ChatInitialState, ChatState } from '@/modules/chat/core/stores/chat'
 import type { ExtensionLifecycle } from '@/modules/chat/core/extensions/types'
@@ -9,6 +13,7 @@ import {
   buildSendFailureState,
   isAbortError,
   SEND_FAILED_FALLBACK_MESSAGE,
+  sendErrorMessage,
   type SendMessageOptions,
 } from '@/modules/chat/core/stores/chat/sendFailureState'
 
@@ -82,10 +87,79 @@ export default (set: ChatSet, getRaw: () => ChatInitialState) => {
         // Collect all request fields from extensions. Pass THIS pane's
         // conversation id so per-conversation composer selections (e.g. model)
         // resolve to the sending pane (ITEM-5); null = a new-chat pane.
-        const allRequestFields = await chatExtensionRegistry.composeRequestFields({
-          conversationId: get().conversation?.id ?? null,
-          paneId: get().paneId,
-        })
+        //
+        // FAIL-CLOSED (see `extensions/composeRequestFields.ts`): a contributor
+        // failure REJECTS here rather than yielding a silently-incomplete body.
+        // The throw must still reach the caller — the composers turn it into a
+        // toast, and a loud extension veto uses the same path — but it is also
+        // recorded on `store.error` first. The composer paths and the regenerate
+        // button DO catch and toast (`ChatInput.tsx`, `TextInput.tsx`,
+        // `MessageActions.tsx`), so for them this is a second surface showing the
+        // same sentence — accepted deliberately, because the conversation error
+        // Alert is the one surface EVERY path renders and a duplicated message
+        // beats a missed one on the app's primary action. It also covers the
+        // NewChatPage case, where no conversation Alert is mounted and the toast
+        // is the only signal.
+        let allRequestFields: Awaited<
+          ReturnType<typeof chatExtensionRegistry.composeRequestFields>
+        >
+        try {
+          allRequestFields = await chatExtensionRegistry.composeRequestFields({
+            conversationId: get().conversation?.id ?? null,
+            paneId: get().paneId,
+          })
+          // The server declares `content`, `model_id` and `branch_id` REQUIRED
+          // (`SendMessageRequest` in server/src/modules/chat/core/extension/
+          // request.rs). The first two are extension-contributed — so a
+          // contributor that RESOLVES but returns nothing (rather than throwing)
+          // leaves the body just as invalid, and nothing between here and the
+          // POST used to notice. Check them NOW, before anything with a side
+          // effect: ahead of the conversation auto-create and the optimistic user
+          // bubble. (`branch_id` comes from the conversation, which may not exist
+          // yet at this point, so it is checked on the assembled payload below.)
+          // The field→label table lives with the message it renders, in
+          // `extensions/requestFieldFailure.ts`.
+          assertRequiredRequestFields(allRequestFields, ['content', 'model_id'])
+        } catch (error) {
+          set({ error: sendErrorMessage(error) })
+          // The STRUCTURED detail goes to the log, never to the user-facing
+          // string: which extensions failed, with their raw causes, and which
+          // required fields were absent. This is what makes a support report
+          // actionable without putting a stack in a toast.
+          if (error instanceof RequestFieldCompositionError) {
+            console.error(
+              '[Chat.store] send aborted — request fields could not be composed',
+              {
+                failures: error.failures.map(f => ({
+                  extension: f.extension,
+                  cause: f.cause,
+                })),
+                missingFields: error.missingFields,
+              },
+            )
+          }
+          // The latched branch/edit state is deliberately LEFT ALONE.
+          //
+          // An earlier draft cleared the fork anchor here, reasoning that an
+          // aborted regenerate would otherwise make the user's next message fork
+          // at a stale assistant anchor. That was a mis-fix, and the audit caught
+          // it: BOTH programmatic callers (`startRegenerateMessage`,
+          // `startEditMessage`) trim the transcript AND prefill the composer
+          // before calling us, and neither restores the transcript on failure —
+          // so the user's next Enter IS the intended retry. With the anchor
+          // cleared that retry stops branching and instead APPENDS a duplicate
+          // turn to a server-side branch that still contains the original, which
+          // is a worse and more visible corruption than the speculative one the
+          // clearing was meant to prevent.
+          //
+          // Leaving it latched is also exactly the pre-existing behaviour: the
+          // old swallow-then-422 path never cleared it either, so a failed send
+          // has always left the flow resumable. Restoring the transcript on an
+          // aborted regenerate/edit is a real gap, but it is a PRE-EXISTING one
+          // that belongs to those actions, not something this abort should paper
+          // over by discarding state it does not own.
+          throw error
+        }
 
         // Inject branching fields directly (moved from branching extension)
         const pendingBranchFromMessageId = get().pendingBranchFromMessageId
@@ -177,12 +251,38 @@ export default (set: ChatSet, getRaw: () => ChatInitialState) => {
           // Fire-and-forget: the assistant reply streams over the chat-token
           // stream (applied by `applyStreamFrame` via the `chat:token` router),
           // not this response.
+          // Typed payload. NOTE what this does and does not buy: the declared
+          // `{ id: string } & SendMessageRequest` type is what stops a future edit
+          // from dropping `id`/`branch_id` or renaming a field, but `content` and
+          // `model_id` are still read out of an open `Record<string, unknown>`, so
+          // their assertions are no sounder than the `as any` they replaced. The
+          // "verify before the POST" guarantee is carried by the RUNTIME
+          // `assertRequiredRequestFields` calls, not by the compiler.
+          //
+          // Key ORDER is deliberate and preserves the previous precedence: `id`
+          // and `branch_id` come FIRST so an extension-contributed value still
+          // overrides them, exactly as it did in the old
+          // `{ id, branch_id, ...allRequestFields }` literal. `content` and
+          // `model_id` must be written after the spread for the required-property
+          // types to be statically satisfied — they are read back OUT of
+          // `allRequestFields`, so this cannot change which value is sent.
+          const sendPayload: { id: string } & SendMessageRequest = {
+            id: conversation.id,
+            branch_id: conversation.active_branch_id || '',
+            ...(allRequestFields as Partial<SendMessageRequest>),
+            content: allRequestFields.content as string,
+            model_id: allRequestFields.model_id as string,
+          }
+          // Final gate on the ASSEMBLED body. `branch_id` could not be checked in
+          // the pre-flight block (the conversation may not have existed yet), and
+          // the generated client type makes `Conversation.active_branch_id`
+          // OPTIONAL while the server declares it a `Uuid` — so an absent one used
+          // to POST `branch_id: ""` and come back as exactly the raw 422 this
+          // change exists to remove.
+          assertRequiredRequestFields({ ...sendPayload })
+
           const { user_message_id, assistant_message_id } =
-            await ApiClient.Message.send({
-              id: conversation.id,
-              branch_id: conversation.active_branch_id || '',
-              ...allRequestFields,
-            } as any)
+            await ApiClient.Message.send(sendPayload)
 
           // Remember the assistant message so the stop button can address it.
           set({ streamingMessageId: assistant_message_id })

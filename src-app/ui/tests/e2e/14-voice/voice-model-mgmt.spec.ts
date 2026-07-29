@@ -192,3 +192,195 @@ test.describe('Voice — model management', () => {
     expect(overflow).toBeLessThanOrEqual(1)
   })
 })
+
+/**
+ * voice-model-bad-magic regression specs.
+ *
+ * The owner's screenshot showed `/settings/voice` claiming "No models installed
+ * yet" while simultaneously rendering, under two catalog rows, a bare "0 Bytes"
+ * and "file is not a whisper ggml/GGUF model (bad magic)" — a file-validation
+ * error for models that were never installed.
+ *
+ * See `.lifecycle/voice-model-bad-magic/` (INV-1, INV-2, INV-6).
+ */
+test.describe('Voice — failed install presentation', () => {
+  test('TEST-12: zero installed models → no per-model validation error, no bare "0 Bytes"', async ({
+    page,
+    testInfra,
+  }) => {
+    const { baseURL } = testInfra
+    await installVoiceBrowserMocks(page)
+    // Nothing installed, and any install attempt fails — the exact live state.
+    const state = defaultVoiceState()
+    state.models = []
+    state.catalog = {
+      ...state.catalog,
+      models: state.catalog.models.map(m => ({ ...m, installed: false })),
+    }
+    state.failModelDownloadWith =
+      'the downloaded file is not a whisper model: it starts with `3c 21 44 4f` ("<!DO") instead of a recognised container header. Expected a whisper model file (a `ggml` or `GGUF` container). Check that it points directly at the raw file, then re-download.'
+    await routeVoice(page, state)
+
+    await loginAsAdmin(page, baseURL)
+    await page.goto(`${baseURL}/settings/voice`)
+    await expect(byTestId(page, 'voice-settings-page-title')).toBeVisible({
+      timeout: 30000,
+    })
+    await expect(byTestId(page, 'voice-available-models-card')).toBeVisible()
+
+    const pageText = async () => (await page.locator('body').innerText()) ?? ''
+
+    // Precondition: the page really is in the "nothing installed" state.
+    expect(await pageText()).toMatch(/no models installed/i)
+
+    // INV-1/INV-2: with nothing installed, NO per-model file-validation error
+    // may be on the page — for ANY model, not just the two in the screenshot.
+    const before = await pageText()
+    expect(before).not.toMatch(/bad magic/i)
+    expect(before).not.toMatch(/is not a whisper/i)
+
+    // INV-6: no catalog row may render a bare "0 Bytes" byte count. (The rows
+    // legitimately show their catalog sizes, e.g. "141.1 MB".)
+    const rows = page.locator('[data-testid^="voice-available-model-row-"]')
+    const rowCount = await rows.count()
+    expect(rowCount).toBeGreaterThan(0)
+    for (let i = 0; i < rowCount; i++) {
+      const text = await rows.nth(i).innerText()
+      expect(
+        text,
+        `row ${i} must not render a bare "0 Bytes" next to its catalog size`,
+      ).not.toMatch(/\b0 Bytes\b/)
+    }
+
+    // Now drive a REAL failed install and re-assert the invariant holds: the
+    // failure is presented as a failed ATTEMPT, never as a file error, and still
+    // no bare "0 Bytes" appears even though the task reports 0 bytes received.
+    await byTestId(page, 'voice-available-model-install-base').click()
+    const failure = byTestId(page, 'voice-available-model-failed-base')
+    await expect(failure).toBeVisible({ timeout: 15000 })
+    await expect(failure).toContainText(/install failed/i)
+
+    // Still nothing installed…
+    expect(await pageText()).toMatch(/no models installed/i)
+    // …and the failing row still shows no bare zero byte-count.
+    const failedRow = byTestId(page, 'voice-available-model-row-base')
+    expect(await failedRow.innerText()).not.toMatch(/\b0 Bytes\b/)
+  })
+
+  test('TEST-11: a failed install is labelled and offers Retry (models + versions cards)', async ({
+    page,
+    testInfra,
+  }) => {
+    const { baseURL } = testInfra
+    await installVoiceBrowserMocks(page)
+    const state = defaultVoiceState()
+    state.models = []
+    state.catalog = {
+      ...state.catalog,
+      models: state.catalog.models.map(m => ({ ...m, installed: false })),
+    }
+    state.failModelDownloadWith =
+      'the downloaded file is empty (0 bytes). Expected a whisper model file (a `ggml` or `GGUF` container). The source returned no data — check that the URL points directly at the model file, then try the download again.'
+    await routeVoice(page, state)
+
+    await loginAsAdmin(page, baseURL)
+    await page.goto(`${baseURL}/settings/voice`)
+    await expect(byTestId(page, 'voice-settings-page-title')).toBeVisible({
+      timeout: 30000,
+    })
+
+    await byTestId(page, 'voice-available-model-install-base').click()
+
+    const failure = byTestId(page, 'voice-available-model-failed-base')
+    await expect(failure).toBeVisible({ timeout: 15000 })
+    // Explicitly framed as a failed INSTALL ATTEMPT — not bare metadata.
+    await expect(failure).toContainText(/install failed/i)
+    // The server's actionable reason is surfaced verbatim: what was found,
+    // what was expected, and what to do.
+    await expect(failure).toContainText(/empty \(0 bytes\)/i)
+    await expect(failure).toContainText(/expected a whisper model file/i)
+    await expect(failure).toContainText(/try the download again/i)
+    // It is announced to assistive tech, not just visually styled.
+    await expect(failure).toHaveAttribute('role', 'alert')
+
+    // And the corrective action is reachable in place.
+    const retry = byTestId(page, 'voice-available-model-failed-base-retry')
+    await expect(retry).toBeVisible()
+    await expect(retry).toBeEnabled()
+    const startsBeforeRetry = state.modelDownloadStartCount
+    expect(startsBeforeRetry).toBe(1)
+    await retry.click()
+    // Retrying really RE-ISSUES the install — asserted on the request count, not
+    // on the failure row still being on screen (which it would be either way, so
+    // that assertion could not fail and would not prove the control is wired).
+    await expect
+      .poll(() => state.modelDownloadStartCount, { timeout: 15000 })
+      .toBe(startsBeforeRetry + 1)
+    // …and it fails again, with the same framing.
+    await expect(failure).toBeVisible({ timeout: 15000 })
+    await expect(failure).toContainText(/install failed/i)
+  })
+
+  test('TEST-11b: the runtime-VERSIONS card on the same page presents a failed install identically', async ({
+    page,
+    testInfra,
+  }) => {
+    // INV-2 is a statement about the PAGE. `AvailableVersionsCard` renders
+    // directly above the models card on `/settings/voice` and carried the
+    // byte-identical defect (a bare `<Text type="secondary">{error}</Text>` plus
+    // an unlabelled zero), so the shared `DownloadFailureRow` has to be asserted
+    // on both cards — otherwise the twin silently keeps the incoherence one card
+    // higher. See `.lifecycle/voice-model-bad-magic/` (ITEM-12).
+    const { baseURL } = testInfra
+    await installVoiceBrowserMocks(page)
+    const state = defaultVoiceState()
+    state.failVersionDownloadWith =
+      'the downloaded file is empty (0 bytes). Expected a whisper runtime binary. The source returned no data — check the release URL, then try the download again.'
+    // INV-6 from the CATALOG side on this card too: a release whose asset size
+    // is 0/unknown must not print a naked zero on the row. The models card
+    // suppresses this; the twin did not, until ITEM-12's shared-presentation
+    // rule was applied to the size line as well.
+    state.updateCheck = {
+      ...state.updateCheck,
+      versions: state.updateCheck.versions.map(v =>
+        v.version === 'v1.1.0' ? { ...v, size_bytes: 0 } : v,
+      ),
+    }
+    await routeVoice(page, state)
+
+    await loginAsAdmin(page, baseURL)
+    await page.goto(`${baseURL}/settings/voice`)
+    await expect(byTestId(page, 'voice-settings-page-title')).toBeVisible({
+      timeout: 30000,
+    })
+    await expect(byTestId(page, 'voice-version-row-v1.1.0')).toBeVisible({
+      timeout: 15000,
+    })
+
+    await byTestId(page, 'voice-version-install-v1.1.0').click()
+
+    const failure = byTestId(page, 'voice-version-failed-v1.1.0')
+    await expect(failure).toBeVisible({ timeout: 15000 })
+    await expect(failure).toContainText(/install failed/i)
+    await expect(failure).toContainText(/empty \(0 bytes\)/i)
+    await expect(failure).toHaveAttribute('role', 'alert')
+    await expect(
+      byTestId(page, 'voice-version-failed-v1.1.0-retry'),
+    ).toBeEnabled()
+
+    // INV-6 on this card too, from BOTH directions: the failed transfer renders
+    // no byte count, and the 0-size release renders no catalog size.
+    //
+    // The zero must be matched as this card actually renders it. `AvailableVersionsCard`
+    // has its OWN local `formatBytes` (`0` → `"0 B"`), NOT the shared
+    // `@/utils/downloadUtils` one the models card uses (`0` → `"0 Bytes"`), so an
+    // assertion written only against `/0 Bytes/` here is one the card can never
+    // fail — it passed with the guard removed. See FIX_ROUND-4 F4-3.
+    const row = byTestId(page, 'voice-version-row-v1.1.0')
+    const rowText = await row.innerText()
+    expect(rowText).not.toMatch(/\b0 Bytes\b/)
+    expect(rowText, 'the versions card renders a zero as "0 B"').not.toMatch(
+      /\b0 B\b/,
+    )
+  })
+})
