@@ -2,7 +2,9 @@ import { useState } from 'react'
 import { Button, Card, CardActions, Text } from '@ziee/kit'
 import {
   APPROVAL_DESCRIPTION_COLLAPSED_MAX_PX,
+  APPROVAL_IDENTITY_COLLAPSED_MAX_PX,
   approvalDescriptionViewKey,
+  approvalIdentityViewKey,
 } from '@/modules/mcp/chat-extension/components/approvalDescriptionClamp'
 import { CollapsibleBlock } from '@/modules/chat/components/CollapsibleBlock'
 import { Clock, Check, X, Send } from 'lucide-react'
@@ -321,26 +323,52 @@ export function ToolCallPendingApprovalContent({
         <div className="flex flex-wrap items-center gap-2 min-w-0">
           <Clock className="size-4 shrink-0 text-warning" />
           {/* The tool name and the server label are BOTH chosen by the (possibly
-              hostile) MCP server, and they are the two things the user is being
-              asked to trust. Neither may be ellipsised: measured at 390px, a
-              64-char name rendered 238px of the 534px it needs — i.e. an
-              ellipsised PREFIX, so `..._safe_then_delete_everything` reads as
-              `..._safe…`; and a long server label lost 139 of its 393px off the
-              card's clipped edge with no ellipsis and no cue, hiding the tail of
-              the server's own identity. `title` is not a fix: it is hover-only,
-              and this defect is on touch. So both WRAP (`wrap-anywhere`, which
-              unlike `break-words` participates in min-content sizing and so
-              actually breaks an unbroken token) and the card grows instead —
-              exactly the card's stated contract that nothing it discloses is
-              ever truncated, because poisoning hides in truncation. */}
-          <Text strong className="min-w-0 wrap-anywhere" title={toolCall.tool_name}>
-            {toolCall.tool_name}
-          </Text>
-          {mcpServerParenLabel(toolCall.server) && (
-            <Text type="secondary" className="text-xs min-w-0 wrap-anywhere">
-              {mcpServerParenLabel(toolCall.server)}
+              hostile) MCP server, and they are the two things the user is asked
+              to trust. Two failure modes, and fixing only one reintroduces the
+              other:
+                - ELLIPSISED, they hide their own tail: measured at 390px, a
+                  64-char name rendered 238px of the 534px it needs, so
+                  `..._safe_then_delete_everything` reads as `..._safe…`, and a
+                  long server label lost 139 of 393px off the clipped edge with
+                  no cue. (`title` is not a fix — hover-only, and this defect is
+                  on touch.)
+                - UNBOUNDED, they push the decision row off screen: measured, a
+                  6400-char name grew the card to 5123px with Deny ~2800px below
+                  the fold — the exact "leave Approve as the only action in view"
+                  attack the description clamp below already exists to stop.
+              So: bounded AND complete, the same treatment the description gets —
+              a CSS clamp with a fade and a Show-more toggle, with every
+              character still in the DOM. `wrap-anywhere` (not `break-words`)
+              because only it participates in min-content sizing and so actually
+              breaks an unbroken token. `dir="ltr"` + `unicode-bidi: isolate`
+              because a U+202E in either string otherwise reverses the visual
+              order of everything after it, including the status text. */}
+          <CollapsibleBlock
+            maxHeightPx={APPROVAL_IDENTITY_COLLAPSED_MAX_PX}
+            messageId={approvalIdentityViewKey(toolCall.tool_use_id)}
+            className="min-w-0 flex-1"
+            data-testid="approval-identity-collapsible"
+          >
+            <Text
+              strong
+              dir="ltr"
+              className="block min-w-0 wrap-anywhere [unicode-bidi:isolate]"
+              title={toolCall.tool_name}
+              data-testid="approval-tool-name"
+            >
+              {toolCall.tool_name}
             </Text>
-          )}
+            {mcpServerParenLabel(toolCall.server) && (
+              <Text
+                type="secondary"
+                dir="ltr"
+                className="block text-xs min-w-0 wrap-anywhere [unicode-bidi:isolate]"
+                data-testid="approval-server-label"
+              >
+                {mcpServerParenLabel(toolCall.server)}
+              </Text>
+            )}
+          </CollapsibleBlock>
           <Text type="secondary" className="text-xs whitespace-nowrap">
             — needs approval
           </Text>

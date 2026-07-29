@@ -2582,11 +2582,11 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/mcp/chat-extension/components/ToolCallPendingApprovalContent",
     requiredStates: [],
     signals: [
-      { kind: "branch", condition: "!isControlWrite", line: 297 },
-      { kind: "branch", condition: "mcpServerParenLabel(toolCall.server)", line: 339 },
-      { kind: "branch", condition: "toolCall.dest_host", line: 354 },
-      { kind: "branch", condition: "toolCall.description", line: 383 },
-      { kind: "branch", condition: "toolCall.input !== undefined", line: 391 },
+      { kind: "branch", condition: "!isControlWrite", line: 299 },
+      { kind: "branch", condition: "mcpServerParenLabel(toolCall.server)", line: 361 },
+      { kind: "branch", condition: "toolCall.dest_host", line: 382 },
+      { kind: "branch", condition: "toolCall.description", line: 411 },
+      { kind: "branch", condition: "toolCall.input !== undefined", line: 419 },
     ],
   },
   "modules/mcp/chat-extension/components/elicitationFields": {
