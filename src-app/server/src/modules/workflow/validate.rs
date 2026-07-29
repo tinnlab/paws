@@ -262,6 +262,42 @@ impl StepConfig {
             StepConfig::Agent { .. } => "agent",
         }
     }
+
+    /// The `(prompt, prompt_file)` pair for the kinds that HAVE one, `None` for
+    /// the kinds that do not.
+    ///
+    /// Exhaustive on purpose. Every site that needs this pair used to write its
+    /// own open `if let`/`match` with a silent fallthrough (`_ => None`,
+    /// `_ => (None, None)`), so a NEW step kind carrying a prompt would have been
+    /// quietly skipped by the validator and the runner alike — the same
+    /// two-places-decide-separately shape that produced the validate/run
+    /// disagreement this rule exists to prevent. Adding a kind here is a compile
+    /// error exactly once.
+    pub fn prompt_fields(&self) -> Option<(&Option<String>, &Option<String>)> {
+        match self {
+            StepConfig::Llm {
+                prompt, prompt_file, ..
+            }
+            | StepConfig::LlmMap {
+                prompt, prompt_file, ..
+            }
+            | StepConfig::Agent {
+                prompt, prompt_file, ..
+            } => Some((prompt, prompt_file)),
+            StepConfig::Sandbox { .. } | StepConfig::Elicit { .. } | StepConfig::Tool { .. } => {
+                None
+            }
+        }
+    }
+
+    /// [`prompt_source`] for this step, or `None` for a kind with no prompt.
+    ///
+    /// Preferred over calling `prompt_source(a, b)` directly: the two arguments
+    /// there are adjacent, same-typed and opposite in meaning, so swapping them
+    /// compiles and turns the prompt text into a file path.
+    pub fn prompt_source(&self) -> Option<PromptSource<'_>> {
+        self.prompt_fields().map(|(p, f)| prompt_source(p, f))
+    }
 }
 
 fn default_max_parallel() -> u32 {
@@ -356,13 +392,16 @@ fn default_expose_mode() -> ExposeMode {
 /// **`#[cfg(test)]` on purpose.** Nothing in production reads this list — the
 /// guard derives the emitted set from the source itself, so a `pub` const here
 /// would be public API with no caller (CODING_GUIDELINES §15) whose `pub` also
-/// suppresses the `dead_code` lint. It stays as a hand-curated test fixture
+/// suppresses the `dead_code` lint. It is `pub(crate)` rather than private only
+/// so the workflow module's own tests can compare against it (see `dispatch.rs`'s
+/// PROMPT_CODES guard) — crate-internal, so the no-public-API-without-a-caller
+/// reasoning above is unaffected. It stays as a hand-curated test fixture
 /// because it is the guard's CANARY: the bidirectional `stale` assertion means
 /// any future regression that makes the source scanner see FEWER emit sites
 /// (a new file it forgets, a call shape it mis-lexes) fails loudly instead of
 /// making the humanisation half vacuously pass.
 #[cfg(test)]
-const VALIDATION_CODES: &[&str] = &[
+pub(crate) const VALIDATION_CODES: &[&str] = &[
     // validate.rs — whole-workflow shape
     "WORKFLOW_NO_STEPS",
     "WORKFLOW_TOO_MANY_STEPS",
@@ -534,6 +573,48 @@ pub fn validate_for_install(
     Ok(())
 }
 
+/// `validate_for_install` for an async caller holding a REAL bundle.
+///
+/// `validate_collecting` reads every `prompt_file:` (bounded at
+/// `MAX_PROMPT_FILE_BYTES` each) with blocking `std::fs`, so calling it directly
+/// from an async fn parks a tokio worker for the duration.
+///
+/// EVERY caller holding a real bundle goes through here — `spawn_run` and
+/// `resume_run` (runner), workflow install (hub), the dev import/write handlers,
+/// and `workflow_mcp`'s workspace verbs, which carry the largest such root of all
+/// (the conversation's sandbox workspace). The only callers left on the sync form
+/// are the DRAFT-validation handlers, which pass a bundle root that does not
+/// exist and therefore read nothing at all. Mirrors the same `spawn_blocking` the
+/// runner already uses for the dispatch-side read.
+pub async fn validate_for_install_async(
+    workflow: &WorkflowDef,
+    bundle_root: &Path,
+    is_dev: bool,
+) -> Result<(), AppError> {
+    let wf = workflow.clone();
+    let root = bundle_root.to_path_buf();
+    tokio::task::spawn_blocking(move || validate_for_install(&wf, &root, is_dev))
+        .await
+        .map_err(|e| AppError::internal_error(format!("workflow: validation task failed: {e}")))?
+}
+
+/// `validate_collecting` for an async caller holding a REAL bundle.
+///
+/// Same reasoning as [`validate_for_install_async`]: this reads every
+/// `prompt_file:` with blocking `std::fs`, so an async caller with a real bundle
+/// must not run it inline.
+pub async fn validate_collecting_async(
+    workflow: &WorkflowDef,
+    bundle_root: &Path,
+    is_dev: bool,
+) -> Result<Vec<ValidationError>, AppError> {
+    let wf = workflow.clone();
+    let root = bundle_root.to_path_buf();
+    tokio::task::spawn_blocking(move || validate_collecting(&wf, &root, is_dev))
+        .await
+        .map_err(|e| AppError::internal_error(format!("workflow: validation task failed: {e}")))
+}
+
 /// Same as `validate_for_install` but returns ALL errors. Used by
 /// `/validate` REST endpoint (B6).
 pub fn validate_collecting(
@@ -668,33 +749,27 @@ fn check_steps_shape(workflow: &WorkflowDef) -> Vec<ValidationError> {
         }
         // Prompt vs prompt_file mutual exclusion (defense in depth on
         // top of #[serde(flatten)] which doesn't enforce oneOf).
-        if let StepConfig::Llm {
-            prompt, prompt_file, ..
-        }
-        | StepConfig::LlmMap {
-            prompt, prompt_file, ..
-        }
-        | StepConfig::Agent {
-            prompt, prompt_file, ..
-        } = &s.config
-        {
-            let has_prompt = prompt.as_ref().filter(|s| !s.is_empty()).is_some();
-            let has_file = prompt_file.is_some();
-            if has_prompt && has_file {
-                out.push(ValidationError::at(
+        //
+        // Decided by `prompt_source` — the SAME rule `dispatch.rs::load_raw_prompt`
+        // uses — so a definition this check passes cannot fail the run for a
+        // prompt reason, and one it rejects cannot quietly run (INV-1). The two
+        // codes and their exact messages are unchanged: the builder's
+        // author-facing copy is keyed off them.
+        if let Some(source) = s.config.prompt_source() {
+            match source {
+                PromptSource::Both => out.push(ValidationError::at(
                     "semantic",
                     "WORKFLOW_PROMPT_BOTH",
-                    "step has both prompt: and prompt_file: (mutually exclusive)",
+                    PROMPT_BOTH_MESSAGE,
                     &s.id,
-                ));
-            }
-            if !has_prompt && !has_file {
-                out.push(ValidationError::at(
+                )),
+                PromptSource::Missing => out.push(ValidationError::at(
                     "semantic",
                     "WORKFLOW_PROMPT_MISSING",
-                    "step has neither prompt: nor prompt_file:",
+                    PROMPT_MISSING_MESSAGE,
                     &s.id,
-                ));
+                )),
+                PromptSource::Inline(_) | PromptSource::File(_) => {}
             }
         }
         // E6: the `tools:` field on llm/llm_map is dead (never read — the
@@ -1041,6 +1116,443 @@ fn collect_template_strings(v: &serde_json::Value) -> Vec<&str> {
     out
 }
 
+/// Where a step's wording comes from.
+///
+/// See [`prompt_source`] — this is the vocabulary of the ONE rule that both the
+/// validator and the runner use to answer that question.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptSource<'a> {
+    /// An inline `prompt:`.
+    Inline(&'a str),
+    /// A bundle-relative `prompt_file:`.
+    File(&'a str),
+    /// Neither — the step has no wording at all.
+    Missing,
+    /// Both — `prompt:` and `prompt_file:` are mutually exclusive.
+    Both,
+}
+
+/// The SINGLE source of truth for "where does this step's prompt come from".
+///
+/// `validate.rs` (which turns the answer into `WORKFLOW_PROMPT_BOTH` /
+/// `WORKFLOW_PROMPT_MISSING`) and `dispatch.rs::load_raw_prompt` (which turns it
+/// into the string actually sent to the model) MUST both go through here.
+/// They used not to: the validator normalised an empty `prompt:` to "absent"
+/// while the runner matched `(Option, Option)` raw, so a step carrying
+/// `prompt: ""` beside a `prompt_file:` validated GREEN and then failed the RUN
+/// with `has invalid prompt config` — which the builder's own
+/// `WORKFLOW_PROMPT_BOTH` remedy ("clear the prompt box here to use the file")
+/// told authors to produce. Deriving both from this one function is what makes
+/// that class of disagreement unrepresentable rather than merely fixed.
+///
+/// **An EMPTY string is ABSENT, for both fields.** `prompt: ""` is how the
+/// builder's own `WORKFLOW_PROMPT_BOTH` remedy ("clear the prompt box here to use
+/// the file") used to reach the wire, and an empty `prompt_file:` names the bundle
+/// directory itself, which can never be read. Whitespace is deliberately NOT
+/// trimmed: `prompt: "   "` is a real (if odd) prompt, both sides already agreed
+/// on it, and trimming would be an unforced behaviour change (DEC-3).
+pub fn prompt_source<'a>(
+    prompt: &'a Option<String>,
+    prompt_file: &'a Option<String>,
+) -> PromptSource<'a> {
+    let inline = prompt.as_deref().filter(|s| !s.is_empty());
+    let file = prompt_file_ref(prompt_file);
+    match (inline, file) {
+        (Some(p), None) => PromptSource::Inline(p),
+        (None, Some(f)) => PromptSource::File(f),
+        (Some(_), Some(_)) => PromptSource::Both,
+        (None, None) => PromptSource::Missing,
+    }
+}
+
+/// The text for `WORKFLOW_PROMPT_BOTH`. Shared with `dispatch.rs`, which reports
+/// the same condition at run time when validation was bypassed — two hand-written
+/// copies of one sentence is how the wording drifts.
+pub const PROMPT_BOTH_MESSAGE: &str = "step has both prompt: and prompt_file: (mutually exclusive)";
+/// The text for `WORKFLOW_PROMPT_MISSING`. Shared with `dispatch.rs` — see above.
+pub const PROMPT_MISSING_MESSAGE: &str = "step has neither prompt: nor prompt_file:";
+
+/// The `prompt_file:` half of [`prompt_source`], for the one caller that needs
+/// the PATH regardless of whether the step also carries an inline `prompt:`
+/// (`check_prompt_files`, which reports on the file even in a both-state).
+///
+/// Kept as the single definition of "is there a file here" so the emptiness rule
+/// is not written twice: an empty path is ABSENT, because it resolves to the
+/// bundle directory itself, which is never readable.
+pub fn prompt_file_ref(prompt_file: &Option<String>) -> Option<&str> {
+    prompt_file.as_deref().filter(|s| !s.is_empty())
+}
+
+/// Why a `prompt_file:` cannot be used as a step's wording.
+///
+/// Each variant maps 1:1 onto a validator finding code, and every one of them
+/// also makes [`read_prompt_file`] fail — which is what keeps the validator's
+/// verdict and the runner's outcome in step.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PromptFileError {
+    /// Path SHAPE is unsafe (`..` or absolute). Decidable without a bundle.
+    Unsafe,
+    /// Resolves outside the bundle root (e.g. via a symlink).
+    Escape,
+    /// Cannot be read as text: absent, a directory, not valid UTF-8, or
+    /// unreadable. Carries the underlying reason.
+    Unreadable(String),
+    /// Reads successfully but is EMPTY — a prompt file with no prompt in it.
+    Empty,
+    /// Larger than `MAX_PROMPT_FILE_BYTES`. A prompt is text an author wrote;
+    /// anything of this size is a mistake or an attempt to make the validator do
+    /// unbounded work on every launch.
+    TooLarge(u64),
+}
+
+/// Ceiling on a `prompt_file:`'s size.
+///
+/// The validator reads every `prompt_file:` on every install AND on every
+/// `spawn_run`/`resume_run`, so without a cap an author-controlled file makes
+/// both the validator and the runner do unbounded work and allocate unbounded
+/// memory. 1 MiB is ~250k tokens of prose — far beyond any model's context and
+/// far beyond any prompt anyone writes.
+pub const MAX_PROMPT_FILE_BYTES: u64 = 1024 * 1024;
+
+/// Open `rel` CONFINED beneath `root`, in ONE path resolution.
+///
+/// The confinement must survive an attacker who can rename directories under
+/// `root` while this runs, and for the workspace surfaces that attacker exists:
+/// `run_from_workspace` / `validate_from_workspace` pass the conversation's
+/// code_sandbox workspace as the bundle root, and that directory is bind-mounted
+/// READ-WRITE into the sandbox. A resolve-then-check-then-open sequence loses to
+/// it no matter how the check is written — `canonicalize` + `starts_with` +
+/// `O_NOFOLLOW` guards only the FINAL component, so swapping an INTERMEDIATE
+/// directory for a symlink (`mv prompts prompts.bak; ln -s /etc prompts`) between
+/// the check and the open reads a host file the server uid can see.
+///
+/// On Linux the kernel settles it in a single call: `openat2` with
+/// `RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS` resolves relative to a directory fd
+/// and refuses, atomically and on every component, to leave that directory.
+/// `O_NONBLOCK` additionally makes the open of a FIFO return immediately instead
+/// of parking the thread forever — the type is then rejected by the `fstat` on
+/// the returned fd, which describes the very file that was opened rather than
+/// whatever the path names a moment later.
+///
+/// Elsewhere — every non-Linux host, and Linux without `openat2` — it falls back
+/// to: refuse a non-directory or symlinked ANCHOR, canonicalize, confine, then
+/// open refusing a final-component symlink where the platform can. That closes
+/// the swapped-root attack and the final-component one; it does NOT close a
+/// racing INTERMEDIATE swap, because nothing short of a single confined
+/// resolution can. Stated plainly rather than argued away: the confinement is
+/// performed by the SERVER's kernel, so "the sandbox guest is Linux" does not
+/// make the fallback safe — it is weaker, and the residual window is a race
+/// against a directory rename inside the bundle root.
+#[cfg(target_os = "linux")]
+fn open_confined(root: &Path, rel: &str) -> Result<std::fs::File, PromptFileError> {
+    use std::ffi::CString;
+    use std::os::fd::FromRawFd;
+
+    // The anchor must not be attacker-swappable either. A plain `File::open`
+    // FOLLOWS symlinks, so `RESOLVE_BENEATH` would be enforced beneath whatever
+    // `root` resolves to at that instant — and for the workspace surfaces the
+    // LAST component of `root` is inside the directory bwrap bind-mounts
+    // read-write at `/home/sandboxuser`. A sandbox step doing
+    // `mv flow flowbak && ln -s / flow` therefore re-anchors the whole
+    // resolution at `/` on the next open, and `prompt_file: "etc/passwd"` reads
+    // the host file — no race needed, and it defeats the absolute-path ban too,
+    // since "relative to /" IS absolute. `O_NOFOLLOW` refuses exactly that
+    // swapped final component, and `O_DIRECTORY` refuses anything that is not a
+    // directory.
+    //
+    // SCOPE, precisely: this covers the root's FINAL component only. INTERMEDIATE
+    // components of `root` are resolved by the caller's own path lookup and
+    // cannot be checked from in here, so the CALLER owes an intermediate the
+    // model cannot rename. `resolve_conversation_workspace_dir` is what supplies
+    // it — but note WHERE: it requires the CANONICALIZED root to be the
+    // conversation workspace root or a DIRECT child of it. Its `dir`-STRING
+    // check does NOT establish this and must not be relied on for it, because
+    // `canonicalize` expands symlinks and a one-component string can resolve to
+    // a nested root. The two rules are one mechanism: this refuses a swapped
+    // final component, that makes the final component the only one the model
+    // can swap.
+    let dir = {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_CLOEXEC)
+                .open(root)
+        }
+        #[cfg(not(unix))]
+        {
+            std::fs::File::open(root)
+        }
+    }
+    .map_err(|e| PromptFileError::Unreadable(format!("bundle root: {e}")))?;
+    let c_rel = CString::new(rel.as_bytes()).map_err(|_| PromptFileError::Unsafe)?;
+    // `open_how` is `#[non_exhaustive]` (the kernel may grow it), so it is built
+    // zeroed — which is also what openat2(2) requires of any field this build
+    // does not know about — and then filled in.
+    // SAFETY: `open_how` is a plain repr(C) struct of integers; all-zero is a
+    // valid, and the documented-neutral, value for every field.
+    let mut how: libc::open_how = unsafe { std::mem::zeroed() };
+    // No `O_NOFOLLOW` here: it applies to the FINAL component, so an in-bundle
+    // symlink to a prompt file would fail with ELOOP and be reported as a
+    // security ESCAPE — a false verdict, and precisely the Linux/fallback
+    // divergence this function exists to avoid. `RESOLVE_BENEATH` is the
+    // confinement, and it covers symlink targets.
+    how.flags = (libc::O_RDONLY | libc::O_NONBLOCK | libc::O_CLOEXEC) as u64;
+    // RESOLVE_BENEATH is the confinement, and the kernel enforces it on every
+    // component INCLUDING symlink targets — so a symlink that stays inside the
+    // bundle still resolves, exactly as the non-Linux fallback allows, while one
+    // that leaves it fails with EXDEV. RESOLVE_NO_SYMLINKS is deliberately NOT
+    // set: it would additionally refuse in-bundle symlinks, which are legitimate
+    // and which the fallback accepts, so Linux and non-Linux would disagree about
+    // whether a bundle is valid. RESOLVE_NO_MAGICLINKS stays — /proc magic links
+    // are not a bundle file by any reading.
+    how.resolve = libc::RESOLVE_BENEATH | libc::RESOLVE_NO_MAGICLINKS;
+    // SAFETY: `dir` is an open directory fd we own for the duration of the call,
+    // `c_rel` is a NUL-terminated path, and `how` is a fully-initialised
+    // `open_how` whose size we pass explicitly, per openat2(2).
+    let fd = unsafe {
+        libc::syscall(
+            libc::SYS_openat2,
+            std::os::fd::AsRawFd::as_raw_fd(&dir),
+            c_rel.as_ptr(),
+            &how as *const libc::open_how,
+            std::mem::size_of::<libc::open_how>(),
+        )
+    };
+    if fd < 0 {
+        let err = std::io::Error::last_os_error();
+        return Err(match err.raw_os_error() {
+            // The kernel's own words for "that path left the root". Reported as
+            // an ESCAPE, which is what it is. (ELOOP is included because a
+            // magic-link rejection surfaces as one; an ordinary symlink loop is
+            // also not a readable prompt.)
+            Some(libc::EXDEV) | Some(libc::ELOOP) => PromptFileError::Escape,
+            // openat2 landed in 5.6, and a seccomp filter that does not list it
+            // (Docker's default profile predates it) answers EPERM. Both are
+            // deployment facts, not author errors — refusing every `prompt_file:`
+            // in the deployment with copy that blames the author's file would be
+            // the worst possible answer, so fall back instead.
+            Some(libc::ENOSYS) | Some(libc::EPERM) => {
+                return open_confined_fallback(root, rel);
+            }
+            _ => PromptFileError::Unreadable(err.to_string()),
+        });
+    }
+    // SAFETY: `fd` is a fresh, valid, owned descriptor returned by openat2.
+    Ok(unsafe { std::fs::File::from_raw_fd(fd as std::os::fd::RawFd) })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn open_confined(root: &Path, rel: &str) -> Result<std::fs::File, PromptFileError> {
+    open_confined_fallback(root, rel)
+}
+
+/// Non-Linux (and pre-5.6-kernel) resolution: canonicalize, confine, then open
+/// refusing a final-component symlink. Documented as weaker than `openat2` —
+/// an intermediate directory swapped between the check and the open is not
+/// caught here.
+fn open_confined_fallback(root: &Path, rel: &str) -> Result<std::fs::File, PromptFileError> {
+    // The ANCHOR first, exactly as the Linux path does. Without this the whole
+    // check is circular: if the root itself was replaced by a symlink, `canon`
+    // and `root_canon` both resolve under the attacker's target and
+    // `starts_with` passes. `symlink_metadata` does NOT follow the last
+    // component, so it sees the symlink rather than what it points at.
+    let root_meta = std::fs::symlink_metadata(root)
+        .map_err(|e| PromptFileError::Unreadable(format!("bundle root: {e}")))?;
+    if !root_meta.is_dir() {
+        return Err(PromptFileError::Unreadable(
+            "bundle root is not a directory".to_string(),
+        ));
+    }
+    let canon = root
+        .join(rel)
+        .canonicalize()
+        .map_err(|e| PromptFileError::Unreadable(e.to_string()))?;
+    let root_canon = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    if !canon.starts_with(&root_canon) {
+        return Err(PromptFileError::Escape);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(&canon)
+            .map_err(|e| PromptFileError::Unreadable(e.to_string()))
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::File::open(&canon).map_err(|e| PromptFileError::Unreadable(e.to_string()))
+    }
+}
+
+impl PromptFileError {
+    /// Author-facing detail, given the path as written.
+    ///
+    /// The CODE and LAYER deliberately do NOT live here: `prompt_file_finding`
+    /// assigns them with string LITERALS, because the crate's code-drift guard
+    /// reads those call sites textually. Providing them here as well would be a
+    /// second copy of the same mapping — the very shape this module is being
+    /// fixed to remove — so there is exactly one.
+    pub fn message(&self, rel: &str) -> String {
+        match self {
+            Self::Unsafe => format!(
+                "prompt_file '{rel}' must be a bundle-relative path: no '..', no leading '/', \
+                 no drive letter, and no backslash (a separator on Windows and a legal \
+                 filename character on Unix, so it cannot mean the same file on both)"
+            ),
+            Self::Escape => format!("prompt_file '{rel}' resolves outside bundle"),
+            Self::Unreadable(why) => {
+                format!("prompt_file '{rel}' cannot be read from the bundle: {why}")
+            }
+            Self::Empty => format!("prompt_file '{rel}' is empty"),
+            Self::TooLarge(n) => format!(
+                "prompt_file '{rel}' is {n} bytes, over the {MAX_PROMPT_FILE_BYTES}-byte limit"
+            ),
+        }
+    }
+}
+
+/// The path-SHAPE half of [`read_prompt_file`] — the only part decidable
+/// WITHOUT a materialized bundle, which is why it is separable (the draft
+/// validation surfaces have no bundle; see [`check_prompt_files`]).
+pub fn check_prompt_file_shape(rel: &str) -> Result<(), PromptFileError> {
+    // `..` anywhere, and every ABSOLUTE form. The absolute test is deliberately
+    // not `Path::is_absolute()`: that is platform-dependent, and a bundle
+    // authored on one OS is validated and run on another, so a Windows-absolute
+    // path must be refused on Linux too (and vice versa). Backslash is rejected
+    // outright — it is a separator on Windows and a legal filename character on
+    // Unix, so allowing it would mean the same string names different files on
+    // the two platforms.
+    let windows_absolute = rel
+        .as_bytes()
+        .get(1)
+        .is_some_and(|b| *b == b':' && rel.as_bytes()[0].is_ascii_alphabetic());
+    if rel.contains("..")
+        || rel.starts_with('/')
+        || rel.contains('\\')
+        || windows_absolute
+    {
+        return Err(PromptFileError::Unsafe);
+    }
+    Ok(())
+}
+
+/// The SINGLE source of truth for "can this `prompt_file:` be used, and what
+/// does it say" — shape check, confinement, read, emptiness, in one place.
+///
+/// Both the validator (`check_prompt_files`, which turns an `Err` into a
+/// finding) and the runner (`dispatch.rs::load_raw_prompt`, which uses the `Ok`
+/// string) go through here. That is what makes the file half of INV-1 hold in
+/// BOTH directions:
+///
+/// * the runner cannot succeed where the validator would refuse — previously
+///   `load_raw_prompt` did a bare `bundle_root.join(rel)` with no shape or
+///   confinement check at all, so `prompt_file: "../../etc/passwd"` was
+///   `WORKFLOW_PROMPT_FILE_UNSAFE` to the validator and `Ok(<file contents>)` to
+///   the runner;
+/// * and the validator cannot pass something the runner then fails on — an
+///   existence-only check said yes to a directory, to a non-UTF-8 file and to a
+///   zero-byte file, each of which failed (or degenerated) at run.
+///
+/// Reading the file IS the check: it is the same operation the runner performs,
+/// so no weaker proxy for it can drift from it.
+///
+/// The runner calls this ITSELF rather than trusting that validation ran — the
+/// two statements are not in tension: `spawn_run`/`resume_run` DO re-validate
+/// immediately before dispatch, but `POST /workflows/{id}/test` does not, so the
+/// runner cannot treat a prior validation as a precondition.
+///
+/// Confinement is enforced INSIDE this call by [`open_confined`], not by an
+/// earlier check a caller is trusted to have made, and every subsequent check
+/// interrogates the resulting file DESCRIPTOR rather than the path. The
+/// validate→run gap remains (a different file may legitimately be there by run
+/// time) but it is not a confinement hole: the run re-resolves under the same
+/// kernel constraints and refuses the same things.
+pub fn read_prompt_file(bundle_root: &Path, rel: &str) -> Result<String, PromptFileError> {
+    check_prompt_file_shape(rel)?;
+    // ONE resolution, confined by the kernel where it can be. Everything after
+    // this point interrogates the FILE DESCRIPTOR, never the path again — so no
+    // check can be invalidated by a rename racing between two path lookups.
+    let mut file = open_confined(bundle_root, rel)?;
+    let meta = file
+        .metadata()
+        .map_err(|e| PromptFileError::Unreadable(e.to_string()))?;
+    // `fstat` on the OPENED fd. The open used `O_NONBLOCK`, so a FIFO returned
+    // immediately instead of parking the thread until a writer appears — and it
+    // is rejected here by TYPE, on the very file that was opened, rather than by
+    // a stat of a path that may have changed since. Directories, sockets and
+    // devices go the same way. This matters because for the workspace surfaces
+    // the bundle root is bind-mounted read-write into the sandbox.
+    if !meta.is_file() {
+        return Err(PromptFileError::Unreadable(
+            "not a regular file".to_string(),
+        ));
+    }
+    if meta.len() > MAX_PROMPT_FILE_BYTES {
+        return Err(PromptFileError::TooLarge(meta.len()));
+    }
+    // Bounded even if the file grew between the fstat and the read. The
+    // capacity hint is CLAMPED: `meta.len()` comes from the file, so trusting it
+    // for an allocation would let a (claimed) huge size reserve that much memory
+    // before a single byte is read — the size REJECT above and this clamp guard
+    // different things, which is why both exist.
+    let mut buf = Vec::with_capacity(meta.len().min(MAX_PROMPT_FILE_BYTES) as usize);
+    std::io::Read::read_to_end(
+        &mut std::io::Read::take(&mut file, MAX_PROMPT_FILE_BYTES + 1),
+        &mut buf,
+    )
+        .map_err(|e| PromptFileError::Unreadable(e.to_string()))?;
+    if buf.len() as u64 > MAX_PROMPT_FILE_BYTES {
+        return Err(PromptFileError::TooLarge(buf.len() as u64));
+    }
+    let body = String::from_utf8(buf)
+        .map_err(|e| PromptFileError::Unreadable(format!("not valid UTF-8: {e}")))?;
+    if body.is_empty() {
+        // Symmetry with `prompt: ""`: an empty prompt is not a prompt, whichever
+        // field it arrives in. Without this, the file half quietly shipped the
+        // degenerate empty LLM call the inline half refuses.
+        return Err(PromptFileError::Empty);
+    }
+    Ok(body)
+}
+
+/// Turn a [`PromptFileError`] into its author-facing finding.
+///
+/// Deliberately a `match` with LITERAL layer/code arguments at each
+/// `ValidationError::at` call, rather than `e.layer()`/`e.code()`. The
+/// crate-wide drift guard (`humanisation_contract`) parses these call sites
+/// textually to prove every emitted code is registered AND has author-facing
+/// copy in `validationCopy.ts`; a computed argument is invisible to it, so
+/// passing `e.code()` here silently removed these three codes from BOTH halves
+/// of that guard. The `message()` argument is free-form and not scanned.
+fn prompt_file_finding(e: &PromptFileError, rel: &str, step_id: &str) -> ValidationError {
+    match e {
+        PromptFileError::Unsafe => ValidationError::at(
+            "security",
+            "WORKFLOW_PROMPT_FILE_UNSAFE",
+            e.message(rel),
+            step_id,
+        ),
+        PromptFileError::Escape => ValidationError::at(
+            "security",
+            "WORKFLOW_PROMPT_FILE_ESCAPE",
+            e.message(rel),
+            step_id,
+        ),
+        PromptFileError::Unreadable(_)
+        | PromptFileError::Empty
+        | PromptFileError::TooLarge(_) => ValidationError::at(
+            "semantic",
+            "WORKFLOW_PROMPT_FILE_MISSING",
+            e.message(rel),
+            step_id,
+        ),
+    }
+}
+
 /// `prompt_file:` checks.
 ///
 /// Two DIFFERENT kinds of check live here, and only one of them needs a bundle:
@@ -1070,50 +1582,46 @@ fn collect_template_strings(v: &serde_json::Value) -> Vec<&str> {
 fn check_prompt_files(workflow: &WorkflowDef, bundle_root: &Path) -> Vec<ValidationError> {
     let mut out = Vec::new();
     let bundle_present = bundle_root.is_dir();
+    // One READ per distinct path, not per step. Nothing stops a definition
+    // pointing fifty steps at the same 1 MiB file, and this function runs on
+    // every install AND every launch — without this, ~1 KB of authored YAML buys
+    // fifty megabytes of repeated disk reads each time. The verdict is unchanged
+    // either way, so caching it is purely removing the amplification.
+    let mut seen: std::collections::HashMap<&str, Option<PromptFileError>> =
+        std::collections::HashMap::new();
     for s in &workflow.steps {
-        let pf = match &s.config {
-            StepConfig::Llm { prompt_file, .. } => prompt_file.as_deref(),
-            StepConfig::LlmMap { prompt_file, .. } => prompt_file.as_deref(),
-            StepConfig::Agent { prompt_file, .. } => prompt_file.as_deref(),
-            _ => None,
+        // Filtered through the SAME emptiness rule the XOR check and the runner
+        // use: an empty `prompt_file:` is ABSENT, not a path. Left unfiltered it
+        // resolved to `bundle_root.join("")` — i.e. the bundle directory, which
+        // always exists — so the step validated GREEN and then failed the run
+        // with "Is a directory". Absent here, it is reported by the XOR check as
+        // `WORKFLOW_PROMPT_MISSING`, which is what it actually is.
+        let Some(p) = s.config.prompt_fields().and_then(|(_, f)| prompt_file_ref(f)) else {
+            continue;
         };
-        if let Some(p) = pf {
-            if p.contains("..") || p.starts_with('/') {
-                out.push(ValidationError::at(
-                    "security",
-                    "WORKFLOW_PROMPT_FILE_UNSAFE",
-                    format!("prompt_file '{p}' must be a bundle-relative path without '..'"),
-                    &s.id,
-                ));
-                continue;
+        // Shape is decidable with no bundle, and it is a SECURITY check, so it
+        // always runs.
+        if let Err(e) = check_prompt_file_shape(p) {
+            out.push(prompt_file_finding(&e, p, &s.id));
+            continue;
+        }
+        if !bundle_present {
+            // No bundle to resolve against — see this fn's doc comment.
+            continue;
+        }
+        // Everything else is decided by the SAME call the runner makes, so the
+        // validator cannot pass a file the run then fails on, nor refuse one the
+        // run would have read (INV-1, file half).
+        let verdict = match seen.get(p) {
+            Some(cached) => cached.clone(),
+            None => {
+                let v = read_prompt_file(bundle_root, p).err();
+                seen.insert(p, v.clone());
+                v
             }
-            if !bundle_present {
-                // No bundle to resolve against — see this fn's doc comment.
-                continue;
-            }
-            let resolved = bundle_root.join(p);
-            // Defense: re-canonicalize and verify it's still inside the bundle root.
-            match resolved.canonicalize() {
-                Ok(canon) => {
-                    let root_canon = bundle_root.canonicalize().unwrap_or(bundle_root.to_path_buf());
-                    if !canon.starts_with(&root_canon) {
-                        out.push(ValidationError::at(
-                            "security",
-                            "WORKFLOW_PROMPT_FILE_ESCAPE",
-                            format!("prompt_file '{p}' resolves outside bundle"),
-                            &s.id,
-                        ));
-                    }
-                }
-                Err(_) => {
-                    out.push(ValidationError::at(
-                        "semantic",
-                        "WORKFLOW_PROMPT_FILE_MISSING",
-                        format!("prompt_file '{p}' not found in bundle"),
-                        &s.id,
-                    ));
-                }
-            }
+        };
+        if let Some(e) = verdict {
+            out.push(prompt_file_finding(&e, p, &s.id));
         }
     }
     out
@@ -1698,6 +2206,393 @@ steps:
         let tmp = tempdir().unwrap();
         let errs = validate_collecting(&wf, tmp.path(), false);
         assert!(errs.iter().any(|e| e.code == "WORKFLOW_PROMPT_FILE_UNSAFE"));
+    }
+
+    /// **TEST-2** — the shared rule's normalisation table, asserted directly.
+    ///
+    /// This is the single point both the validator and
+    /// `dispatch.rs::load_raw_prompt` consult, so its boundaries ARE the
+    /// contract; DEC-3's deliberate non-trimming is pinned here so a later
+    /// "tidy-up" to `trim()` shows up as a red test rather than a silent
+    /// behaviour change.
+    #[test]
+    fn prompt_source_treats_empty_as_absent_but_not_whitespace() {
+        let some = |s: &str| Some(s.to_string());
+        let none: Option<String> = None;
+
+        // Empty is ABSENT — on either field.
+        assert_eq!(
+            prompt_source(&some(""), &some("p.md")),
+            PromptSource::File("p.md"),
+            "a cleared prompt box beside a prompt_file: must resolve to the FILE"
+        );
+        assert_eq!(
+            prompt_source(&some(""), &none),
+            PromptSource::Missing,
+            "a cleared prompt box with no prompt_file: is a step with no wording"
+        );
+        assert_eq!(
+            prompt_source(&none, &some("")),
+            PromptSource::Missing,
+            "an empty prompt_file: names the bundle dir, not a prompt"
+        );
+        assert_eq!(prompt_source(&some(""), &some("")), PromptSource::Missing);
+        // A VERDICT THAT MOVED, deliberately: `prompt: "x"` + `prompt_file: ""`
+        // used to be `WORKFLOW_PROMPT_BOTH` (install-blocking) because the old
+        // rule read `has_file = prompt_file.is_some()`. An empty path is not a
+        // second prompt source, so this is now simply an inline prompt — and the
+        // run agrees, which is the point (DEC-5).
+        assert_eq!(prompt_source(&some("x"), &some("")), PromptSource::Inline("x"));
+
+        // Whitespace is NOT trimmed (DEC-3) — it stays a real prompt, and a
+        // whitespace-only PATH stays a path (it is then reported
+        // WORKFLOW_PROMPT_FILE_MISSING, not WORKFLOW_PROMPT_MISSING). Both
+        // directions are pinned: a `trim()` creeping into either half of
+        // `prompt_source` changes which finding the author sees.
+        assert_eq!(prompt_source(&some("   "), &none), PromptSource::Inline("   "));
+        assert_eq!(prompt_source(&some("   "), &some("p.md")), PromptSource::Both);
+        assert_eq!(prompt_source(&none, &some("   ")), PromptSource::File("   "));
+        assert_eq!(prompt_file_ref(&some("   ")), Some("   "));
+
+        // The ordinary cases are unchanged.
+        assert_eq!(prompt_source(&some("hi"), &none), PromptSource::Inline("hi"));
+        assert_eq!(prompt_source(&none, &some("p.md")), PromptSource::File("p.md"));
+        assert_eq!(prompt_source(&some("hi"), &some("p.md")), PromptSource::Both);
+        assert_eq!(prompt_source(&none, &none), PromptSource::Missing);
+    }
+
+    /// **Rust ↔ TypeScript drift guard for the prompt-source rule.**
+    ///
+    /// `prompt_source` (here) and `promptSuppliedByFile`
+    /// (`ui/.../builder/stepForms.ts`) implement the SAME emptiness rule in two
+    /// languages, and nothing else connects them: a TS unit test can only assert
+    /// its own side, so a change here would silently desync the builder's
+    /// required-field marker from the backend's verdict — a client-side rerun of
+    /// exactly the two-places-decide-separately defect this rule exists to
+    /// prevent.
+    ///
+    /// Same shape as this file's existing `validationCopy.ts` guard: read the TS
+    /// at RUNTIME (never `include_str!`, which would freeze a stale snapshot) and
+    /// fail the BACKEND suite on drift.
+    ///
+    /// It is ONE-DIRECTIONAL by construction, and that is worth being explicit
+    /// about: it catches the client drifting from the rule, not the rule drifting
+    /// from the client. The Rust side is pinned separately by TEST-2, which
+    /// asserts the same two boundaries on `prompt_source`/`prompt_file_ref`
+    /// directly — so a change to either half is caught, but by different tests.
+    /// Asserted here:
+    ///
+    /// * the predicate rejects the empty string, and
+    /// * it does NOT trim — because `prompt_source` filters on `is_empty()`, a
+    ///   client that trimmed would report "a prompt is required" where the
+    ///   backend reports `WORKFLOW_PROMPT_FILE_MISSING`.
+    #[test]
+    fn client_prompt_file_predicate_mirrors_prompt_source() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../ui/src/modules/workflow/components/builder/stepForms.ts");
+        let src = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        let start = src
+            .find("export function promptSuppliedByFile")
+            .unwrap_or_else(|| {
+                panic!(
+                    "no `export function promptSuppliedByFile` in {} — the drift guard \
+                     for the prompt-source rule has lost its subject; re-point it",
+                    path.display()
+                )
+            });
+        let body = &src[start..];
+        let end = body.find("\n}").expect("unterminated promptSuppliedByFile");
+        let body = &body[..end];
+
+        assert!(
+            body.contains("length > 0") || body.contains("!== ''") || body.contains("length !== 0"),
+            "promptSuppliedByFile must treat an EMPTY prompt_file as ABSENT, matching \
+             `prompt_source`'s `!s.is_empty()` filter — otherwise the builder lifts the \
+             prompt requirement on a step this validator reports incomplete. Body was:\n{body}"
+        );
+        assert!(
+            !body.contains(".trim()"),
+            "promptSuppliedByFile must NOT trim: `prompt_source` filters on `is_empty()`, \
+             so a whitespace-only prompt_file IS a file to this validator (reported \
+             WORKFLOW_PROMPT_FILE_MISSING, not WORKFLOW_PROMPT_MISSING). Trimming on the \
+             client makes the two surfaces disagree. Body was:\n{body}"
+        );
+    }
+
+    /// **TEST-12** — the resource guards on `read_prompt_file`.
+    ///
+    /// These are the only security controls in this change and nothing pinned
+    /// them: an audit round deleted the type check, both size checks and the
+    /// bounded read at once and the whole suite stayed green.
+    ///
+    /// Honest limit, because it was measured: for a STATIC file the fstat size
+    /// reject and the post-read size reject are mutually redundant — delete
+    /// either alone and the other still refuses, so neither is INDIVIDUALLY
+    /// falsifiable here. They guard different things (a lying/growing size vs the
+    /// bytes actually delivered) and only a file that changes size mid-read would
+    /// separate them, which is not constructible in a unit test. What this test
+    /// does prove is the PROPERTY they exist for: nothing over the cap is ever
+    /// returned, whichever guard fires.
+    #[test]
+    fn read_prompt_file_refuses_what_it_must_not_read() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path();
+
+        // A FIFO. `open(2)` on one blocks until a writer appears; the bundle root
+        // is bind-mounted read-write into the code sandbox for the workspace
+        // surfaces, so a model can create one. The open is O_NONBLOCK and the
+        // type is judged from the resulting fd, so this returns rather than
+        // parking the thread — a test that HANGS here is the regression.
+        #[cfg(unix)]
+        {
+            let fifo = root.join("fifo.md");
+            let c = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+            // SAFETY: a NUL-terminated path in a temp dir we own.
+            let rc = unsafe { libc::mkfifo(c.as_ptr(), 0o644) };
+            assert_eq!(rc, 0, "mkfifo failed: {}", std::io::Error::last_os_error());
+            let err = read_prompt_file(root, "fifo.md")
+                .expect_err("a FIFO must never be read as a prompt");
+            assert!(
+                matches!(err, PromptFileError::Unreadable(ref why) if why.contains("regular")),
+                "expected a not-a-regular-file rejection, got {err:?}"
+            );
+        }
+
+        // A directory, judged the same way.
+        std::fs::create_dir_all(root.join("adir")).unwrap();
+        assert!(
+            matches!(read_prompt_file(root, "adir"), Err(PromptFileError::Unreadable(_))),
+            "a directory is not a prompt"
+        );
+
+        // Over the cap. The validator reads every prompt file on every launch, so
+        // an author-controlled size is author-controlled work and memory.
+        let big = root.join("big.md");
+        std::fs::write(&big, vec![b'x'; (MAX_PROMPT_FILE_BYTES + 1) as usize]).unwrap();
+        match read_prompt_file(root, "big.md") {
+            Err(PromptFileError::TooLarge(n)) => {
+                assert!(n > MAX_PROMPT_FILE_BYTES, "reported size {n}")
+            }
+            other => panic!("an over-cap prompt_file must be refused, got {other:?}"),
+        }
+        // Exactly at the cap is fine — the boundary is inclusive.
+        let atcap = root.join("atcap.md");
+        std::fs::write(&atcap, vec![b'y'; MAX_PROMPT_FILE_BYTES as usize]).unwrap();
+        assert_eq!(
+            read_prompt_file(root, "atcap.md").map(|b| b.len()),
+            Ok(MAX_PROMPT_FILE_BYTES as usize),
+            "a prompt_file exactly at the cap must still be readable"
+        );
+
+        // And a normal file still reads.
+        std::fs::write(root.join("ok.md"), "BODY").unwrap();
+        assert_eq!(read_prompt_file(root, "ok.md").unwrap(), "BODY");
+    }
+
+    /// **TEST-14** — the ANCHOR itself must not be swappable.
+    ///
+    /// The kernel confinement is only as good as the directory it is anchored
+    /// to. For the workspace surfaces the LAST component of the bundle root sits
+    /// inside the directory bwrap bind-mounts read-write into the sandbox, so a
+    /// sandbox step can run `mv flow flowbak && ln -s / flow` and, if the root is
+    /// opened by a symlink-following path lookup, every subsequent resolution is
+    /// anchored at `/` — `prompt_file: "etc/passwd"` then reads the host file
+    /// while still satisfying the "no absolute paths" rule, because relative-to-`/`
+    /// is not spelled absolutely. No race is required.
+    ///
+    /// `#[cfg(unix)]` only because the test needs `symlink` to build the attack.
+    /// BOTH resolution paths are asserted, and deliberately not by relying on
+    /// which one this platform takes: `read_prompt_file` exercises whichever is
+    /// live (on Linux, `openat2`), and `open_confined_fallback` is then CALLED
+    /// BY NAME below — on Linux that is the only way its anchor guard runs at
+    /// all, since `read_prompt_file` never reaches it there. Each leg has a
+    /// positive control on the same tree, so a guard that refuses everything
+    /// cannot pass either. Mutating `symlink_metadata` to `metadata` in the
+    /// fallback, or dropping `O_NOFOLLOW` from the Linux anchor open, each turns
+    /// this test red on Linux.
+    #[cfg(unix)]
+    #[test]
+    fn read_prompt_file_refuses_a_bundle_root_that_became_a_symlink() {
+        let tmp = tempdir().unwrap();
+        let real_root = tmp.path().join("flow");
+        std::fs::create_dir_all(&real_root).unwrap();
+        std::fs::write(real_root.join("task.md"), "REAL PROMPT").unwrap();
+        // Sanity, both legs: an ordinary root reads through the live path AND
+        // through the fallback.
+        assert_eq!(read_prompt_file(&real_root, "task.md").unwrap(), "REAL PROMPT");
+        {
+            use std::io::Read;
+            let mut buf = String::new();
+            open_confined_fallback(&real_root, "task.md")
+                .expect("the fallback must read an ordinary root")
+                .read_to_string(&mut buf)
+                .unwrap();
+            assert_eq!(buf, "REAL PROMPT");
+        }
+
+        // Now the sandbox swaps the root for a symlink to somewhere else. The
+        // target is a real directory holding a real file, so nothing downstream
+        // can notice by type or content — only the anchor open can refuse it.
+        let elsewhere = tmp.path().join("elsewhere");
+        std::fs::create_dir_all(elsewhere.join("etc")).unwrap();
+        std::fs::write(elsewhere.join("etc/passwd"), "HOST SECRET").unwrap();
+        std::fs::rename(&real_root, tmp.path().join("flowbak")).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &real_root).unwrap();
+
+        let err = read_prompt_file(&real_root, "etc/passwd")
+            .expect_err("a bundle root that is now a symlink must not be used as the anchor");
+        assert!(
+            matches!(err, PromptFileError::Unreadable(_)),
+            "expected the anchor open to refuse the swapped root, got {err:?}"
+        );
+        assert!(
+            !err.message("etc/passwd").contains("HOST SECRET"),
+            "the swapped root's contents must never be reached"
+        );
+
+        // The fallback's OWN anchor guard, driven directly. On Linux the call
+        // above took the `openat2` path, so without this the fallback — the
+        // entire non-Linux and pre-5.6 story — is never executed by any test.
+        // A successful open here IS the escape: the returned fd would be
+        // `<elsewhere>/etc/passwd`.
+        match open_confined_fallback(&real_root, "etc/passwd") {
+            Err(PromptFileError::Unreadable(_)) => {}
+            Ok(mut f) => {
+                use std::io::Read;
+                let mut buf = String::new();
+                let _ = f.read_to_string(&mut buf);
+                panic!("the fallback opened a bundle root that is now a symlink; it read {buf:?}");
+            }
+            Err(other) => panic!(
+                "expected the fallback's anchor open to refuse the swapped root, got {other:?}"
+            ),
+        }
+    }
+
+    /// **TEST-13** — the path-SHAPE rejects, including the two that are not
+    /// Unix-shaped. A bundle authored on one OS is validated and run on another,
+    /// so a Windows-absolute path has to be refused on Linux too; nothing pinned
+    /// the backslash and drive-letter clauses.
+    #[test]
+    fn prompt_file_shape_refuses_every_absolute_and_traversing_form() {
+        for bad in [
+            "../secrets.md",
+            "prompts/../../secrets.md",
+            "/etc/passwd",
+            "C:\\Windows\\win.ini",
+            "c:/Windows/win.ini",
+            "prompts\\task.md",
+        ] {
+            assert_eq!(
+                check_prompt_file_shape(bad),
+                Err(PromptFileError::Unsafe),
+                "{bad:?} must be refused by shape alone, on every platform"
+            );
+        }
+        for ok in ["prompts/task.md", "task.md", "a/b/c.md", "weird name.md"] {
+            assert_eq!(
+                check_prompt_file_shape(ok),
+                Ok(()),
+                "{ok:?} is a legitimate bundle-relative path"
+            );
+        }
+    }
+
+    /// **TEST-3** — the validator's verdicts on the states that used to validate
+    /// GREEN and then fail the run, plus a guard that the pre-existing verdicts
+    /// did not move.
+    #[test]
+    fn validator_verdicts_on_the_empty_and_directory_prompt_states() {
+        let tmp = tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("prompts")).unwrap();
+        std::fs::write(tmp.path().join("prompts/real.md"), "body").unwrap();
+        std::fs::create_dir_all(tmp.path().join("prompts/adir")).unwrap();
+        std::fs::write(tmp.path().join("prompts/empty.md"), "").unwrap();
+        std::fs::write(tmp.path().join("prompts/binary.bin"), [0xff_u8, 0xfe, 0x00]).unwrap();
+
+        let codes = |yaml: &str| -> Vec<&'static str> {
+            let wf = parse_workflow_yaml(yaml).unwrap();
+            validate_collecting(&wf, tmp.path(), false)
+                .into_iter()
+                .map(|e| e.code)
+                .collect()
+        };
+
+        // A cleared prompt box beside a real prompt_file: is a COMPLETE step.
+        let c = codes(
+            "steps:\n  - id: g\n    kind: llm\n    prompt: \"\"\n    prompt_file: \"prompts/real.md\"\n",
+        );
+        assert!(
+            !c.contains(&"WORKFLOW_PROMPT_BOTH") && !c.contains(&"WORKFLOW_PROMPT_MISSING"),
+            "an empty prompt beside a prompt_file: is neither 'both' nor 'missing': {c:?}"
+        );
+        assert!(!c.contains(&"WORKFLOW_PROMPT_FILE_MISSING"), "{c:?}");
+
+        // An empty prompt_file: is no prompt source at all.
+        let c = codes("steps:\n  - id: g\n    kind: llm\n    prompt_file: \"\"\n");
+        assert!(
+            c.contains(&"WORKFLOW_PROMPT_MISSING"),
+            "an empty prompt_file: must be reported as a missing prompt, not accepted: {c:?}"
+        );
+
+        // A prompt_file: naming a DIRECTORY cannot be read at run time.
+        let c = codes("steps:\n  - id: g\n    kind: llm\n    prompt_file: \"prompts/adir\"\n");
+        assert!(
+            c.contains(&"WORKFLOW_PROMPT_FILE_MISSING"),
+            "a prompt_file: naming a directory must be rejected: {c:?}"
+        );
+
+        // A prompt_file: that exists and is readable but holds NOTHING is not a
+        // prompt — symmetric with `prompt: ""`, and it stops the file half
+        // shipping the degenerate empty LLM call the inline half refuses.
+        let c = codes("steps:\n  - id: g\n    kind: llm\n    prompt_file: \"prompts/empty.md\"\n");
+        assert!(
+            c.contains(&"WORKFLOW_PROMPT_FILE_MISSING"),
+            "a zero-byte prompt_file must be rejected: {c:?}"
+        );
+
+        // A prompt_file: that is a real file but not TEXT passes an
+        // existence/is-file check and then fails the run on `read_to_string`.
+        let c = codes("steps:\n  - id: g\n    kind: llm\n    prompt_file: \"prompts/binary.bin\"\n");
+        assert!(
+            c.contains(&"WORKFLOW_PROMPT_FILE_MISSING"),
+            "a non-UTF-8 prompt_file must be rejected at validate, not at run: {c:?}"
+        );
+
+        // Over the cap reaches the VALIDATOR's verdict too, not only
+        // `read_prompt_file`'s error — the mapping to a finding is its own step.
+        let big = tmp.path().join("prompts/big.md");
+        std::fs::write(&big, vec![b'x'; (MAX_PROMPT_FILE_BYTES + 1) as usize]).unwrap();
+        let c = codes("steps:\n  - id: g\n    kind: llm\n    prompt_file: \"prompts/big.md\"\n");
+        assert!(
+            c.contains(&"WORKFLOW_PROMPT_FILE_MISSING"),
+            "an over-cap prompt_file must reach an author-facing verdict: {c:?}"
+        );
+
+        // A VERDICT THAT MOVED, deliberately (DEC-5): `prompt:` + an EMPTY
+        // `prompt_file:` used to be WORKFLOW_PROMPT_BOTH because the old rule
+        // read `has_file = prompt_file.is_some()`. An empty path is not a second
+        // prompt source, and the run agrees — so it is now simply valid.
+        let c = codes(
+            "steps:\n  - id: g\n    kind: llm\n    prompt: \"inline\"\n    prompt_file: \"\"\n",
+        );
+        assert!(
+            !c.contains(&"WORKFLOW_PROMPT_BOTH") && !c.contains(&"WORKFLOW_PROMPT_MISSING"),
+            "an inline prompt beside an EMPTY prompt_file is just an inline prompt: {c:?}"
+        );
+
+        // Pre-existing verdicts unmoved.
+        let c = codes(
+            "steps:\n  - id: g\n    kind: llm\n    prompt: \"inline\"\n    prompt_file: \"prompts/real.md\"\n",
+        );
+        assert!(c.contains(&"WORKFLOW_PROMPT_BOTH"), "{c:?}");
+        let c = codes("steps:\n  - id: g\n    kind: llm\n");
+        assert!(c.contains(&"WORKFLOW_PROMPT_MISSING"), "{c:?}");
+        let c = codes("steps:\n  - id: g\n    kind: llm\n    prompt_file: \"prompts/nope.md\"\n");
+        assert!(c.contains(&"WORKFLOW_PROMPT_FILE_MISSING"), "{c:?}");
+        let c = codes("steps:\n  - id: g\n    kind: llm\n    prompt_file: \"../../etc/passwd\"\n");
+        assert!(c.contains(&"WORKFLOW_PROMPT_FILE_UNSAFE"), "{c:?}");
     }
 
     #[test]

@@ -1,0 +1,152 @@
+{
+  "_comment": "Angles ACTUALLY reviewed per file group across the blind-audit rounds. Each list is the union of the angles the blind agents were assigned and reported on for that group (their `angle` values in ledger-*.jsonl are exactly these names). gen-coverage.mjs expands this mapping across the real diff hunks; it does not invent coverage. Longest prefix wins. NOTE (round 7): `workflow/workspace.rs` did not exist in the diff at phase 6 — it first changed in the round-6 fix commit — so its entry was attributing phase-6 coverage that had not happened. It is now the union of the angles that genuinely reported on that file, all in round 7 (ledger-round7-{a,b}.jsonl).",
+  "src-app/server/src/modules/workflow/validate.rs": [
+    "correctness",
+    "error-handling",
+    "concurrency",
+    "security",
+    "perms-authz",
+    "api-contract",
+    "tests-quality",
+    "dead-code",
+    "coverage-gaps",
+    "modularity",
+    "extensibility",
+    "maintainability",
+    "api-friendliness",
+    "design-conformance",
+    "acceptance-hollowness",
+    "wired-and-behaving"
+  ],
+  "src-app/server/src/modules/workflow/dispatch.rs": [
+    "correctness",
+    "error-handling",
+    "concurrency",
+    "security",
+    "perms-authz",
+    "api-contract",
+    "tests-quality",
+    "dead-code",
+    "coverage-gaps",
+    "modularity",
+    "extensibility",
+    "maintainability",
+    "api-friendliness",
+    "design-conformance",
+    "acceptance-hollowness",
+    "wired-and-behaving"
+  ],
+  "src-app/server/tests": [
+    "tests-quality",
+    "coverage-gaps",
+    "correctness",
+    "error-handling",
+    "api-contract",
+    "security",
+    "maintainability",
+    "design-conformance",
+    "acceptance-hollowness"
+  ],
+  "src-app/ui/src": [
+    "correctness",
+    "tests-quality",
+    "coverage-gaps",
+    "dead-code",
+    "api-contract",
+    "modularity",
+    "extensibility",
+    "maintainability",
+    "api-friendliness",
+    "design-conformance"
+  ],
+  "src-app/ui/tests/e2e/visual": [
+    "tests-quality",
+    "coverage-gaps",
+    "design-conformance",
+    "acceptance-hollowness",
+    "responsive-fidelity",
+    "a11y",
+    "correctness"
+  ],
+  "src-app/ui/tests/e2e/workflows": [
+    "tests-quality",
+    "coverage-gaps",
+    "design-conformance",
+    "responsive-fidelity",
+    "correctness"
+  ],
+  "sdk": [
+    "design-conformance",
+    "responsive-fidelity",
+    "a11y",
+    "correctness",
+    "maintainability",
+    "modularity",
+    "extensibility",
+    "tests-quality"
+  ],
+  "src-app/ui/gallery.config.json": [
+    "design-conformance",
+    "wired-and-behaving",
+    "tests-quality",
+    "maintainability",
+    "correctness"
+  ],
+  ".github/workflows/visual-tests.yml": [
+    "design-conformance",
+    "wired-and-behaving",
+    "tests-quality",
+    "maintainability",
+    "correctness"
+  ],
+  "src-app/server/src/modules/hub/handlers.rs": [
+    "security",
+    "correctness",
+    "concurrency",
+    "error-handling",
+    "maintainability",
+    "patterns-conformance",
+    "design-conformance"
+  ],
+  "src-app/server/src/modules/workflow/handlers/dev.rs": [
+    "security",
+    "correctness",
+    "concurrency",
+    "error-handling",
+    "maintainability",
+    "patterns-conformance",
+    "design-conformance"
+  ],
+  "src-app/server/src/modules/workflow/runner.rs": [
+    "security",
+    "correctness",
+    "concurrency",
+    "error-handling",
+    "maintainability",
+    "patterns-conformance",
+    "design-conformance"
+  ],
+  "src-app/server/src/modules/workflow_mcp/tools.rs": [
+    "security",
+    "correctness",
+    "concurrency",
+    "error-handling",
+    "maintainability",
+    "patterns-conformance",
+    "design-conformance"
+  ],
+  ".github/workflows/visual-snapshots.yml": [
+    "design-conformance",
+    "wired-and-behaving",
+    "tests-quality",
+    "maintainability",
+    "correctness"
+  ],
+  "src-app/server/src/modules/workflow/workspace.rs": [
+    "security",
+    "correctness",
+    "api-contract",
+    "tests-quality",
+    "maintainability"
+  ]
+}

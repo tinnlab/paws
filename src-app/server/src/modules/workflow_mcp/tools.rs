@@ -23,8 +23,9 @@ use crate::modules::workflow::registry;
 use crate::modules::workflow::repository;
 use crate::modules::workflow::runner;
 use crate::modules::workflow::validate::{
-    ExposeMode, OutputDef, Severity, WorkflowDef, parse_workflow_yaml, validate_collecting,
-    validate_for_install,
+    ExposeMode, OutputDef, Severity, WorkflowDef, parse_workflow_yaml,
+    validate_collecting_async,
+    validate_for_install_async,
 };
 use crate::modules::workflow::{compiled, cost};
 
@@ -235,8 +236,12 @@ pub async fn tool_list(pool: &sqlx::PgPool, user_id: Uuid) -> Result<Value, AppE
 fn workspace_verb_tools() -> Vec<Value> {
     let dir_prop = json!({
         "type": "string",
-        "description": "The workspace subdir (relative to /home/sandboxuser) \
-            holding workflow.yaml + any scripts/ you wrote with the code_sandbox tools.",
+        "description": "The workspace subdir holding workflow.yaml + any scripts/ you wrote \
+            with the code_sandbox tools. A SINGLE directory name directly inside \
+            /home/sandboxuser — e.g. 'my-flow', giving /home/sandboxuser/my-flow/. A nested \
+            path ('a/b'), '.' (/home/sandboxuser itself), and a name that reaches either of \
+            those through a symlink are all refused, so create the directory and write the \
+            files into it rather than at the top level.",
     });
     vec![
         json!({
@@ -536,7 +541,10 @@ async fn load_and_validate_workspace(root: &Path) -> Result<WorkflowDef, AppErro
         )
     })?;
     let def = parse_workflow_yaml(&content)?;
-    validate_for_install(&def, root, false)?;
+    // `_async`: a REAL bundle root, so this reads every `prompt_file:` from
+    // disk — and here the root is the conversation's sandbox workspace, i.e. the
+    // largest such read there is. Must not run on the request's tokio worker.
+    validate_for_install_async(&def, root, false).await?;
     Ok(def)
 }
 
@@ -680,7 +688,9 @@ async fn validate_from_workspace(
         Err(e) => return Ok(error_tool_result("WORKFLOW_INVALID_YAML", e.to_string())),
     };
     // Real gate: is_dev=false so mocks would be flagged.
-    let findings = validate_collecting(&def, &root, false);
+    // `_async`: a REAL workspace root written by the model, so this reads every
+    // `prompt_file:` from disk and must not block the request's tokio worker.
+    let findings = validate_collecting_async(&def, &root, false).await?;
     let mut errors: Vec<Value> = Vec::new();
     let mut warnings: Vec<Value> = Vec::new();
     for f in findings {

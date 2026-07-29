@@ -436,15 +436,15 @@ const builderFiveStepDef: BuilderDef = {
  * complete). Each divergence from `builderFiveStepDef` is the precondition of
  * one finding below:
  *
- *  - `agent_1.prompt` is EMPTY          → `WORKFLOW_PROMPT_MISSING` (validate.rs:684)
+ *  - `agent_1.prompt` is EMPTY          → `WORKFLOW_PROMPT_MISSING` (validate.rs, the prompt XOR check)
  *  - `agent_1.output_format` is `json`  → its output type is Unknown, so a field
  *    access on it DEGRADES TO A WARNING instead of erroring (type_infer.rs:114 +
  *    ref_check.rs:361)
  *  - `summarize.prompt` reads `{{ agent_1.output.title }}` → the access the
  *    `WORKFLOW_REF_FIELD_UNRESOLVED` warning names actually EXISTS in the def
- *  - `tool_1.tool` is EMPTY             → `WORKFLOW_TOOL_NO_TOOL` (validate.rs:729)
+ *  - `tool_1.tool` is EMPTY             → `WORKFLOW_TOOL_NO_TOOL` (validate.rs, check_steps_shape)
  *  - there is a `sandbox` step and no top-level sandbox flavor (`BuilderDef`
- *    carries none) → `WORKFLOW_SANDBOX_FLAVOR_REQUIRED` (validate.rs:1106)
+ *    carries none) → `WORKFLOW_SANDBOX_FLAVOR_REQUIRED` (validate.rs, check_security)
  */
 const builderBrokenDef: BuilderDef = {
   inputs: builderFiveStepDef.inputs,
@@ -493,21 +493,21 @@ const cleanValidation: ValidateDefResponse = {
 const errorValidation: ValidateDefResponse = {
   errors: [
     {
-      // validate.rs:684 — `agent_1` has an empty prompt and no prompt_file.
+      // The prompt XOR check — `agent_1` has an empty prompt and no prompt_file.
       code: 'WORKFLOW_PROMPT_MISSING',
       layer: 'semantic',
       location: 'agent_1',
       message: 'step has neither prompt: nor prompt_file:',
     },
     {
-      // validate.rs:729 — `tool_1` has an empty tool:.
+      // check_steps_shape — `tool_1` has an empty tool:.
       code: 'WORKFLOW_TOOL_NO_TOOL',
       layer: 'semantic',
       location: 'tool_1',
       message: 'tool step has empty tool:',
     },
     {
-      // validate.rs:1107 — emitted via `ValidationError::err`, so it carries NO
+      // check_security — emitted via `ValidationError::err`, so it carries NO
       // location: it resolves to no step and renders as "Whole workflow".
       code: 'WORKFLOW_SANDBOX_FLAVOR_REQUIRED',
       layer: 'semantic',

@@ -17,7 +17,8 @@
     "form-label-starvation.spec.ts",
     "states.spec.ts",
     "overlays.spec.ts",
-    "chat-collapse-borders.spec.ts"
+    "chat-collapse-borders.spec.ts",
+    "input-group-overflow.spec.ts"
   ],
   "visualSnapshotSpecs": ["gallery.spec.ts"]
 }

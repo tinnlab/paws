@@ -265,7 +265,8 @@ pub(crate) async fn install_workflow_from_bytes(
         }
     };
     if let Err(e) =
-        validate::validate_for_install(&workflow_def, &extraction.extracted_path, true)
+        validate::validate_for_install_async(&workflow_def, &extraction.extracted_path, true)
+            .await
     {
         let _ = tokio::fs::remove_dir_all(&extraction.extracted_path).await;
         return Err(e.into());
@@ -561,7 +562,7 @@ pub async fn update_user_workflow_definition(
         // filesystem op happens before validation succeeds. On error the live bundle
         // AND the DB row are left untouched. is_dev=true so a builder-authored def
         // parses under the same relaxed rules as import.
-        if let Err(e) = validate::validate_for_install(&def, &bundle_root, true) {
+        if let Err(e) = validate::validate_for_install_async(&def, &bundle_root, true).await {
             return Err::<_, (StatusCode, AppError)>(e.into());
         }
 
