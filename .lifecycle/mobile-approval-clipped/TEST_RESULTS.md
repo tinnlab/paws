@@ -34,7 +34,16 @@ TEST-9/INV-2) is among the passes above.
   hooks + logical-direction + tooltip-placement + kit-manifest + testid-registry +
   design-spec + gallery-coverage + gallery-crawl + fixtures + state-matrix +
   overlay/override/seed registries + store-actions.
-- `gate:ui (ui): PASS` — see the run below.
+- `gate:ui (ui): PENDING` — a final run is in flight. What has been OBSERVED so
+  far (`denyclip-gateui2.log`), on the same tree modulo the round-2 refinements:
+  `tsc PASS`, `lint PASS`, `runtime-health PASS — 158/158 surfaces clean, 0
+  gating HIGH findings` (the approval surfaces themselves show only 2 LOW
+  `spacing-grid` findings each), and `visual FAIL` on TWO cases of the
+  PRE-EXISTING `chat-collapse-borders.spec.ts`. That last one was NOT accepted on
+  faith: I ran that spec against the UNTOUCHED base (7 passed) and against this
+  branch (7 passed) in isolation — it fails only inside the parallel visual layer,
+  i.e. it is flaky under load rather than a regression from this change. This line
+  will not be written as PASS until a run is observed passing.
 
 `src-app/desktop/ui/**` is not touched by this diff (it consumes the same
 `@ziee/kit` and `../../ui/src` via its Vite/`@source` config, verified by a
