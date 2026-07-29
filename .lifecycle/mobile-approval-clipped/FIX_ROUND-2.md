@@ -86,10 +86,29 @@ my own measurement before being accepted.
 
 ## Round-3 verification
 
-A third fresh blind reviewer audited the post-round-2 diff, with the same
-diff-only context and an explicit instruction to MEASURE any CSS claim rather
-than trust a comment (round 2 having shown that comments in this diff had been
-wrong twice). Result recorded below once observed — this number is not written
-ahead of the run.
+A third fresh blind reviewer was dispatched over the post-round-2 diff, with the
+same diff-only context and an explicit instruction to MEASURE any CSS claim
+rather than trust a comment (round 2 having shown that comments in this diff had
+been wrong twice). **It did not return findings before this branch was handed
+off** — so the round-3 result is NOT claimed here, and the count below records
+only what was observed: every round-2 finding was fixed and re-verified, and no
+further confirmed finding was produced by any completed audit.
+
+What WAS independently re-verified by me, by measurement rather than by review,
+after the round-2 fixes:
+
+- the unbroken-token case now wraps (`236/236`, height 50px) where `break-words`
+  left it overflowing (`236/312`, height 32px), and reverting the utility turns
+  the new assertion red;
+- the full enumerated spec passes 20/20, three consecutive times;
+- the pre-fix mutation turns 13 of those 20 red, naming Deny;
+- the two `gate:ui` failures are reproduced as environmental against the
+  untouched base (see TEST_RESULTS.md).
+
+**Caveat for the orchestrator:** a third blind round is the one piece of the
+convergence loop that did not complete. Given rounds 1 and 2 each found real
+defects — round 2 found a hole in the round-1 fix — a further round should be
+assumed to have a non-zero yield, and the reviewer of this branch should not read
+"2 rounds" as "converged".
 
 **New confirmed findings:** 0
