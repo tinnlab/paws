@@ -310,17 +310,17 @@ export function ToolCallPendingApprovalContent({
       >
         {/* Header row — status icon + tool name + server label, mirroring the
             elicitation Card's header. */}
-        {/* `flex-wrap` is load-bearing, same failure mode as the footer row: the
-            two secondary labels are `whitespace-nowrap` and together need 205px
-            of a 238px row at a 390px viewport, so on ONE line they starved the
-            TOOL NAME — the single thing the user is being asked to consent to —
-            down to a rendered width of 0 (measured: name w=0, scrollWidth=98).
-            Wrapping lets the name keep its width and pushes the secondary labels
-            to the next line instead. `min-w-0` keeps `truncate` meaningful for a
-            name that is long enough to fill a line on its own. */}
+        {/* `flex-wrap` is load-bearing, same failure mode as the footer row:
+            the two secondary labels are `whitespace-nowrap` and together need
+            205px of a 238px row at a 390px viewport, so on ONE line they starved
+            the TOOL NAME — the single thing the user is being asked to consent
+            to — down to a rendered width of 0 (measured: name w=0,
+            scrollWidth=98). A `truncate` element sets `overflow:hidden`, which
+            already gives a flex item an automatic minimum size of ZERO, so it is
+            always the sibling that loses; only wrapping saves it. */}
         <div className="flex flex-wrap items-center gap-2 min-w-0">
           <Clock className="size-4 shrink-0 text-warning" />
-          <Text strong className="truncate min-w-0">{toolCall.tool_name}</Text>
+          <Text strong className="truncate">{toolCall.tool_name}</Text>
           {mcpServerParenLabel(toolCall.server) && (
             <Text type="secondary" className="text-xs whitespace-nowrap">
               {mcpServerParenLabel(toolCall.server)}

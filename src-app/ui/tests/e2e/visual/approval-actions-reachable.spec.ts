@@ -30,8 +30,6 @@ import { LONG_TOOL_DESCRIPTION } from '../../../src/dev/gallery/fixtures/longToo
 
 const SURFACE =
   '/gallery.html?surface=deep-chat-tool-approval-long-desc&theme=light'
-const RENDER_TIMEOUT = 25_000
-
 async function openApprovalCard(page: Page) {
   const card = page.getByTestId('mcp-tool-approval-card').first()
   // Same bounded re-navigation as `openSurface` below, for the same
@@ -63,22 +61,46 @@ async function openApprovalCard(page: Page) {
  * change under test; measured per-load failure rate ~2 in 15.
  *
  * A retry is the right response because the failure is in FETCHING the app, not
- * in what the app renders: each attempt is a fresh, full navigation, and if the
- * surface genuinely never renders every attempt fails and so does the test.
+ * in what the app renders. Two deliberate constraints keep it from turning into
+ * a blanket flake-suppressor:
+ *
+ *  - it retries ONLY when the app itself failed to arrive — either the loader
+ *    console signature was seen, or the message fell back to the content
+ *    dispatcher's "Unknown content type" placeholder (what a missing `mcp`
+ *    module actually renders). A surface that loads fine but fails to show the
+ *    target — i.e. a genuine PRODUCT regression — is rethrown on the FIRST
+ *    attempt, so this cannot launder a real flake into a pass;
+ *  - each attempt gets a generous window, so ordinary slowness on a loaded box
+ *    never reaches the retry path at all, and the whole budget stays inside the
+ *    per-test timeout raised below — meaning the saved error is genuinely
+ *    rethrown instead of the test dying opaquely on a timeout first.
  */
+const LOADER_FAILURE = /failed to load module|Failed to fetch dynamically imported module|EMFILE/i
+
 async function gotoUntilVisible(page: Page, url: string, target: Locator) {
-  const attempts = 4
+  const attempts = 3
   let last: unknown
   for (let attempt = 0; attempt < attempts; attempt++) {
+    let loaderFailed = false
+    const onConsole = (m: { text(): string }) => {
+      if (LOADER_FAILURE.test(m.text())) loaderFailed = true
+    }
+    page.on('console', onConsole)
     try {
       await page.goto(url)
-      await target.waitFor({
-        state: 'visible',
-        timeout: attempt === attempts - 1 ? RENDER_TIMEOUT : 12_000,
-      })
+      await target.waitFor({ state: 'visible', timeout: 20_000 })
       return
     } catch (e) {
       last = e
+      // A missing module leaves the content dispatcher with nothing to render.
+      const unregistered =
+        loaderFailed ||
+        (await page.getByText('Unknown content type').count().catch(() => 0)) > 0
+      // The app arrived but the target did not → a real render problem. Surface
+      // it immediately rather than retrying it away.
+      if (!unregistered) throw e
+    } finally {
+      page.off('console', onConsole)
     }
   }
   throw last
@@ -111,9 +133,17 @@ async function gotoUntilVisible(page: Page, url: string, target: Locator) {
  * These tests therefore assert REACHABILITY, never DOM presence — every control
  * was in the DOM and `toBeVisible()` the entire time the bug shipped. Reachable
  * means: the control's box survives the intersection of its non-scrolling
- * clipping ancestors (taxonomy A11), its centre hit-tests back to itself, and
- * Playwright can actually click it.
+ * clipping ancestors (taxonomy A11), and Playwright's actionability check —
+ * scroll into view, wait for a stable box, hit-test the action point — lets it
+ * be clicked.
  * ──────────────────────────────────────────────────────────────────────────── */
+
+// These specs drive the heaviest gallery deep-states (a full ConversationPage
+// through the real chat path) and may re-navigate up to 3x when the dev server
+// fails to serve a module (see `gotoUntilVisible`). The default 60s leaves no
+// room for that, and a budget overrun would mask the real error behind an opaque
+// timeout.
+test.describe.configure({ timeout: 150_000 })
 
 const MOBILE = { width: 390, height: 844 }
 const THEMES = ['light', 'dark'] as const
@@ -124,6 +154,7 @@ type Reach = {
   height: number
   visibleHeight: number
   top: number
+  left: number
 }
 
 /**
@@ -156,63 +187,79 @@ async function expectPressable(scope: Locator, testId: string, why: string) {
  * "Reachable" is deliberately defined as *a user could get to it and press it*,
  * so the measurement must distinguish the two kinds of overflow:
  *
- *  - an ancestor that can SCROLL on an axis (`overflow: auto/scroll`, or
- *    `hidden` with content that genuinely overflows, i.e. a programmatic
- *    scroller) does NOT hide anything — the content is one gesture away. The
- *    approval card lives inside exactly such a list (`overflow-y: auto`), so
- *    counting it as a clip would flag every below-the-fold control as a defect.
- *  - an ancestor that clips on an axis with NOTHING to scroll to
- *    (`overflow: hidden/clip` and `scrollExtent <= clientExtent`) hides content
- *    permanently. That is the taxonomy A11 predicate, and it is precisely the
- *    condition the live rig reported: "cut to 0 by a non-scrollable overflow
- *    ancestor", "no horizontal scroll to reveal it".
+ *  - an ancestor the USER can scroll (`overflow: auto` or `scroll`) does NOT
+ *    hide anything — the content is one gesture away. The approval card lives
+ *    inside exactly such a list (`overflow-y: auto`), so counting it as a clip
+ *    would flag every below-the-fold control as a defect.
+ *  - an ancestor with `overflow: hidden` or `clip` ALWAYS clips, whether or not
+ *    its content overflows. `overflow: hidden` is not user-scrollable — no
+ *    scrollbar, no wheel, no touch pan — even though it is programmatically
+ *    scrollable, which is why `scrollWidth > clientWidth` must NOT be read as
+ *    "reachable". Getting this wrong would let the mirror image of the very
+ *    defect under test (an END-edge overflow of the same row) measure green,
+ *    since both `scrollIntoViewIfNeeded` and Playwright's actionability scroll
+ *    happily scroll a hidden box that no user can. This is the taxonomy A11
+ *    predicate and matches what the live rig reported: "cut to 0 by a
+ *    non-scrollable overflow ancestor", "no horizontal scroll to reveal it".
  *
  * The geometry is taken AFTER `scrollIntoViewIfNeeded()`, so being merely
  * scrolled-out-of-view is never counted as unreachable; only content that no
  * scroll can reveal fails. Coverage by an overlay is checked separately, by
  * `expectPressable`.
  */
-async function measureReach(scope: Locator, testId: string): Promise<Reach> {
-  const control = scope.getByTestId(testId).first()
-  // A user can scroll. Do so first, so the measurement is of true reachability
-  // rather than of the list's current scroll offset. This also settles the
-  // message list's mount-time auto-scroll before anything is sampled.
-  await control.scrollIntoViewIfNeeded()
-  return control.evaluate(el => {
-    const r = el.getBoundingClientRect()
-    let clip = { l: 0, t: 0, r: window.innerWidth, b: window.innerHeight }
-    for (let p = el.parentElement; p; p = p.parentElement) {
-      const cs = getComputedStyle(p)
-      const pr = p.getBoundingClientRect()
-      const clipsX =
-        (cs.overflowX === 'hidden' || cs.overflowX === 'clip') &&
-        p.scrollWidth <= p.clientWidth + 1
-      const clipsY =
-        (cs.overflowY === 'hidden' || cs.overflowY === 'clip') &&
-        p.scrollHeight <= p.clientHeight + 1
-      if (clipsX) {
-        clip.l = Math.max(clip.l, pr.left)
-        clip.r = Math.min(clip.r, pr.right)
+async function measureRow(
+  scope: Locator,
+  testIds: readonly string[],
+): Promise<Record<string, Reach>> {
+  // A user can scroll. Do so ONCE, for the whole row, so every rect below is
+  // read at the SAME scroll offset and the values are mutually comparable. This
+  // also settles the message list's mount-time auto-scroll before sampling.
+  await scope.scrollIntoViewIfNeeded()
+  return scope.evaluate((root, ids) => {
+    const measure = (el: Element) => {
+      const r = el.getBoundingClientRect()
+      const clip = { l: 0, t: 0, r: window.innerWidth, b: window.innerHeight }
+      for (let p = el.parentElement; p; p = p.parentElement) {
+        const cs = getComputedStyle(p)
+        const pr = p.getBoundingClientRect()
+        if (cs.overflowX === 'hidden' || cs.overflowX === 'clip') {
+          clip.l = Math.max(clip.l, pr.left)
+          clip.r = Math.min(clip.r, pr.right)
+        }
+        if (cs.overflowY === 'hidden' || cs.overflowY === 'clip') {
+          clip.t = Math.max(clip.t, pr.top)
+          clip.b = Math.min(clip.b, pr.bottom)
+        }
       }
-      if (clipsY) {
-        clip.t = Math.max(clip.t, pr.top)
-        clip.b = Math.min(clip.b, pr.bottom)
+      return {
+        width: Math.round(r.width),
+        height: Math.round(r.height),
+        visibleWidth: Math.round(
+          Math.max(0, Math.min(r.right, clip.r) - Math.max(r.left, clip.l)),
+        ),
+        visibleHeight: Math.round(
+          Math.max(0, Math.min(r.bottom, clip.b) - Math.max(r.top, clip.t)),
+        ),
+        top: Math.round(r.top),
+        left: Math.round(r.left),
       }
     }
-    return {
-      width: Math.round(r.width),
-      height: Math.round(r.height),
-      visibleWidth: Math.round(
-        Math.max(0, Math.min(r.right, clip.r) - Math.max(r.left, clip.l)),
-      ),
-      visibleHeight: Math.round(
-        Math.max(0, Math.min(r.bottom, clip.b) - Math.max(r.top, clip.t)),
-      ),
-      top: Math.round(r.top),
+    const out: Record<string, ReturnType<typeof measure>> = {}
+    for (const id of ids) {
+      const el = root.querySelector(`[data-testid="${id}"]`)
+      if (el) out[id] = measure(el)
     }
-  })
+    return out
+  }, testIds as string[])
 }
 
+/** Single-control convenience over {@link measureRow}. Never use two of these to
+ *  compare positions BETWEEN controls — use one `measureRow` call. */
+async function measureReach(scope: Locator, testId: string): Promise<Reach> {
+  const m = (await measureRow(scope, [testId]))[testId]
+  if (!m) throw new Error(`${testId} not found under the scoped element`)
+  return m
+}
 /** Open a gallery deep-state and wait for its approval card's action row. */
 async function openSurface(page: Page, surface: string, theme: string) {
   await gotoUntilVisible(
@@ -253,8 +300,10 @@ for (const theme of THEMES) {
       await openSurface(page, 'deep-chat-tool-approval', theme)
       const card = page.getByTestId('mcp-tool-approval-card').first()
 
+      const rects = await measureRow(card, APPROVAL_CONTROLS)
       for (const id of APPROVAL_CONTROLS) {
-        const m = await measureReach(card, id)
+        const m = rects[id]
+        expect(m, `${id} must be present to be measured`).toBeTruthy()
         expect(
           m.visibleWidth,
           `${id}: ${m.width - m.visibleWidth}px of its ${m.width}px width is cut off by a non-scrolling clipping ancestor (taxonomy A11)`,
@@ -282,10 +331,11 @@ for (const theme of THEMES) {
       // It actually DID wrap here — three controls do not fit a 390px card, so
       // if they are all on one line something is overflowing rather than
       // wrapping. (Guards a "fix" that only widened the container.)
-      const tops = new Set<number>()
-      for (const id of APPROVAL_CONTROLS) {
-        tops.add((await measureReach(card, id)).top)
-      }
+      // ONE measurement pass at ONE scroll offset — comparing `top` across
+      // separate scroll-then-measure calls would let scroll drift masquerade as
+      // a wrap (or hide one).
+      const rects = await measureRow(card, APPROVAL_CONTROLS)
+      const tops = new Set(APPROVAL_CONTROLS.map(id => rects[id].top))
       expect(
         tops.size,
         'at 390px the three decision controls cannot share one line; they must wrap onto more than one',
@@ -313,10 +363,12 @@ test('TEST-4: at desktop width the approval action row is unchanged — one righ
   await openSurface(page, 'deep-chat-tool-approval', 'light')
   const card = page.getByTestId('mcp-tool-approval-card').first()
 
-  const measured = []
-  for (const id of APPROVAL_CONTROLS) {
-    measured.push({ id, ...(await measureReach(card, id)) })
-  }
+  const rects = await measureRow(card, APPROVAL_CONTROLS)
+  const measured = APPROVAL_CONTROLS.map(id => ({ id, ...rects[id] }))
+  expect(
+    measured.length,
+    'all three decision controls must be present at desktop width',
+  ).toBe(3)
   // One line: the wrap rule is inert when the content fits, so a wide card
   // renders exactly as it did before this fix.
   expect(
@@ -330,15 +382,15 @@ test('TEST-4: at desktop width the approval action row is unchanged — one righ
     await expectPressable(card, m.id, 'approval card at 1280px')
   }
   // Reading order preserved: Deny leads, and visual order matches DOM order, so
-  // tab order and reading order do not diverge.
-  const lefts = await card.evaluate(el =>
-    [...el.querySelectorAll('[data-slot="card-actions"] > button')].map(b =>
-      Math.round(b.getBoundingClientRect().left),
-    ),
-  )
-  expect(lefts, 'controls must render in DOM order, left to right').toEqual(
-    [...lefts].sort((a, b) => a - b),
-  )
+  // tab order and reading order do not diverge. Asserted on the INLINE axis via
+  // the document's direction rather than on raw `left`, so the invariant is not
+  // secretly LTR-only (the house rule is direction-agnostic UI).
+  const rtl = await card.evaluate(() => getComputedStyle(document.documentElement).direction === 'rtl')
+  const inlineStarts = measured.map(m => (rtl ? -m.left : m.left))
+  expect(
+    inlineStarts,
+    'controls must render in DOM order along the inline axis',
+  ).toEqual([...inlineStarts].sort((a, b) => a - b))
 })
 
 for (const theme of THEMES) {
@@ -358,9 +410,39 @@ for (const theme of THEMES) {
       expect(m.visibleWidth, `${id} must not be clipped at 390px`).toBe(m.width)
       await expectPressable(card, id, 'elicitation card at 390px')
     }
+
+    // The assertions above are necessary but, on their own, PAPER coverage for
+    // this surface: Decline + Submit are ~146px of a ~238px row, so they fit on
+    // one line and pass identically on the broken pre-fix markup. What actually
+    // has to hold is that this footer CANNOT clip when it stops fitting — the
+    // sibling's real risk (its no-fields variant pairs Decline with the much
+    // longer "Accept without values", and that variant has no gallery cell that
+    // renders it). So stress it: lengthen a label in the DOM until the row must
+    // overflow, then assert it wraps and stays reachable instead of clipping.
+    // This exercises the CSS contract on the real surface rather than restating
+    // the class list.
+    const submit = card.getByTestId('elicitation-submit').first()
+    await submit.evaluate(el => {
+      el.textContent = 'Accept without values and continue this conversation'
+    })
+    const stressed = await measureRow(card, [
+      'elicitation-decline',
+      'elicitation-submit',
+    ])
+    for (const [id, m] of Object.entries(stressed)) {
+      expect(
+        m.visibleWidth,
+        `under an over-wide label, ${id} is clipped (${m.visibleWidth}px visible of ${m.width}px)`,
+      ).toBe(m.width)
+    }
+    expect(
+      stressed['elicitation-decline'].top,
+      'an over-wide action must WRAP onto its own line, not push its sibling out of the row',
+    ).toBeLessThan(stressed['elicitation-submit'].top)
+    await expectPressable(card, 'elicitation-decline', 'elicitation card, over-wide label')
   })
 
-  test(`TEST-6: the ask-user wizard's split footer stays reachable and its nested group wraps (${theme})`, async ({
+  test(`TEST-6: the ask-user wizard's split footer keeps every action a PROTECTED direct child (${theme})`, async ({
     page,
   }) => {
     await page.setViewportSize(MOBILE)
@@ -368,35 +450,72 @@ for (const theme of THEMES) {
     const card = page.getByTestId('mcp-elicitation-pending-card').first()
     const row = card.locator('[data-slot="card-actions"]').first()
 
-    // The split layout survives adopting the primitive: Decline on the
-    // inline-start side, navigation on the inline-end side.
-    expect(await row.evaluate(el => getComputedStyle(el).justifyContent)).toBe(
-      'space-between',
-    )
-
-    // The NESTED navigation group is its own flex container, so the primitive's
-    // wrap rule does not reach its buttons — it must wrap on its own.
-    const nested = row.locator('> div').first()
-    expect(
-      await nested.evaluate(el => getComputedStyle(el).flexWrap),
-      'the nested navigation group must wrap too',
-    ).toBe('wrap')
-
-    // Whichever controls this step renders must all be pressable.
-    let checked = 0
-    for (const id of [
-      'elicitation-decline',
-      'elicitation-back',
-      'elicitation-next',
-      'elicitation-submit',
-    ]) {
-      if ((await card.getByTestId(id).count()) === 0) continue
-      const m = await measureReach(card, id)
-      expect(m.visibleWidth, `${id} must not be clipped at 390px`).toBe(m.width)
-      await expectPressable(card, id, 'ask-user wizard at 390px')
-      checked++
+    // Every action must be a DIRECT child of the row. `CardActions`' protections
+    // (`max-w-full`, wrapping labels) apply to direct children only, so grouping
+    // the navigation buttons in a nested wrapper — the obvious way to build a
+    // split row — would leave them with the kit Button's `shrink-0
+    // whitespace-nowrap` and reproduce the original overflow-out-the-start-edge
+    // defect inside the fix. This asserts the structure that makes the
+    // protection reach them, which no reachability assertion can imply while the
+    // current short labels happen to fit.
+    const present = []
+    for (const id of ['elicitation-decline', 'elicitation-back', 'elicitation-next', 'elicitation-submit']) {
+      if ((await card.getByTestId(id).count()) > 0) present.push(id)
     }
-    expect(checked, 'the wizard footer must render controls to check').toBeGreaterThan(1)
+    expect(present.length, 'the wizard footer must render controls to check').toBeGreaterThan(1)
+    for (const id of present) {
+      expect(
+        await row.evaluate(
+          (el, testId) => !!el.querySelector(`:scope > [data-testid="${testId}"]`),
+          id,
+        ),
+        `${id} must be a DIRECT child of the action row, or the row's overflow protections do not reach it`,
+      ).toBe(true)
+    }
+
+    // The split is expressed as `me-auto` on Decline inside the ordinary
+    // `justify-end` row, NOT as `justify-between` on the row: `space-between`
+    // puts a lone item on a wrapped line at main-START, so once the row wraps the
+    // navigation group would jump to the inline-start edge while the sibling
+    // approval cards stay inline-end aligned.
+    expect(
+      await row.evaluate(el => getComputedStyle(el).justifyContent),
+      'the row must stay a justify-end row (the split comes from me-auto on Decline)',
+    ).toBe('flex-end')
+    // …and it genuinely splits: Decline sits at the inline-start of the row while
+    // the navigation sits at the inline-end.
+    const rects = await measureRow(card, present)
+    const nav = present.filter(id => id !== 'elicitation-decline')
+    for (const id of nav) {
+      if (rects[id].top !== rects['elicitation-decline'].top) continue
+      expect(
+        rects[id].left,
+        `${id} must sit after Decline on the shared line (the split layout)`,
+      ).toBeGreaterThan(rects['elicitation-decline'].left)
+    }
+
+    for (const id of present) {
+      expect(rects[id].visibleWidth, `${id} must not be clipped at 390px`).toBe(rects[id].width)
+      await expectPressable(card, id, 'ask-user wizard at 390px')
+    }
+
+    // Stress the case the short default labels never reach: an over-wide action
+    // must wrap and stay reachable, not protrude out of the unreachable edge.
+    const stressTarget = nav[nav.length - 1]
+    await card
+      .getByTestId(stressTarget)
+      .first()
+      .evaluate(el => {
+        el.textContent = 'Continue to the next question in this request'
+      })
+    const stressed = await measureRow(card, present)
+    for (const id of present) {
+      expect(
+        stressed[id].visibleWidth,
+        `under an over-wide nav label, ${id} is clipped (${stressed[id].visibleWidth}px of ${stressed[id].width}px)`,
+      ).toBe(stressed[id].width)
+    }
+    await expectPressable(card, 'elicitation-decline', 'ask-user wizard, over-wide nav label')
   })
 }
 
@@ -427,12 +546,54 @@ for (const theme of THEMES) {
       m.w,
       `the tool name is rendered ${m.w}px wide (it needs ${m.scrollW}px) — the user cannot see which tool they are approving`,
     ).toBeGreaterThan(0)
-    // Not merely non-zero: the name must be legible, not a sliver. Allow an
-    // ellipsis for a genuinely long name, but require most of it to show.
-    expect(m.w).toBeGreaterThanOrEqual(Math.min(m.scrollW, 60))
+    // Not merely non-zero, and no magic legibility floor: the name must be
+    // rendered in FULL. A partial name is not a weaker disclosure but a
+    // MISLEADING one on a consent surface — `get_forecast…` reads identically
+    // for `get_forecast_daily` and `get_forecast_hourly`, and the tool name is
+    // a string the (possibly hostile) MCP server chooses.
+    expect(
+      m.w,
+      `the tool name is truncated (${m.w}px rendered of ${m.scrollW}px needed) — a partial name cannot identify which tool is being approved`,
+    ).toBeGreaterThanOrEqual(m.scrollW - 1)
     await expect(name).toBeVisible()
   })
 }
+
+test('TEST-9: a NARROW CONTAINER at a WIDE viewport is protected too (the case a `sm:` breakpoint would miss)', async ({
+  page,
+}) => {
+  // This is the case the primitive's design rationale rests on: a card's action
+  // row lives in containers whose width is independent of the viewport (a split
+  // pane, a side panel, an indented virtualized row). A viewport breakpoint
+  // would report "wide" here and leave the row unwrapped — reintroducing the
+  // defect — which is why the rule is content-driven. Every other test drives
+  // the viewport, so without this one the motivating case is untested.
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await openSurface(page, 'deep-chat-tool-approval', 'light')
+  const card = page.getByTestId('mcp-tool-approval-card').first()
+
+  // Squeeze the CARD, not the window.
+  await card.evaluate(el => {
+    ;(el as HTMLElement).style.width = '260px'
+    ;(el as HTMLElement).style.maxWidth = '260px'
+  })
+
+  const rects = await measureRow(card, APPROVAL_CONTROLS)
+  for (const id of APPROVAL_CONTROLS) {
+    const m = rects[id]
+    expect(
+      m.visibleWidth,
+      `${id} is clipped in a 260px-wide card at a 1280px viewport (${m.visibleWidth}px of ${m.width}px) — a viewport-driven rule would have missed this`,
+    ).toBe(m.width)
+  }
+  expect(
+    new Set(APPROVAL_CONTROLS.map(id => rects[id].top)).size,
+    'the row must wrap on CONTAINER width, not viewport width',
+  ).toBeGreaterThan(1)
+  for (const id of APPROVAL_CONTROLS) {
+    await expectPressable(card, id, 'narrow container at a wide viewport')
+  }
+})
 
 test('TEST-7: the desktop-vertical assertion and the narrow-width assertions measure DIFFERENT things', async ({
   page,

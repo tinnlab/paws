@@ -204,13 +204,14 @@ export function ElicitationFormContent({
   // Shared card header — a status icon + server name + short state label, matching
   // the tool-call Card's header row (both are chat "status cards").
   const cardHeader = (icon: ReactNode, label: string) => (
-    // `flex-wrap` + `min-w-0`: the trailing label is `whitespace-nowrap`, so on
-    // one line it starves the server name to a rendered width of 0 in a narrow
-    // card (the measured failure on the sibling approval card). Same class as
-    // the footer row — wrap instead of clip.
+    // `flex-wrap`: the trailing label is `whitespace-nowrap`, so on one line it
+    // starves the `truncate` server name to a rendered width of 0 in a narrow card
+    // (the measured failure on the sibling approval card — a `truncate` element is
+    // `overflow:hidden` and so has an automatic minimum size of zero, so it always
+    // loses to a nowrap sibling). Same class as the footer row: wrap, don't clip.
     <div className="flex flex-wrap items-center gap-2 min-w-0">
       {icon}
-      <Text strong className="truncate min-w-0">{elicitation.server}</Text>
+      <Text strong className="truncate">{elicitation.server}</Text>
       <Text type="secondary" className="text-xs whitespace-nowrap">{label}</Text>
     </div>
   )

@@ -403,72 +403,76 @@ export function AskUserWizardContent({
       className="mb-2"
       data-testid="mcp-elicitation-pending-card"
       footer={
-        // `CardActions` with the justification overridden: this footer is a SPLIT
-        // row (Decline pinned to the inline-start side, navigation to the
-        // inline-end side), not a right-aligned cluster. `cn()` is twMerge-backed
-        // and `className` merges last, so `justify-between` displaces the
-        // primitive's `justify-end` while its wrap + child-width rules still
-        // apply — which is what keeps a control from being pushed out of reach in
-        // a narrow card.
-        <CardActions className="items-center justify-between">
+        // A SPLIT row: Decline pinned to the inline-start side, navigation to the
+        // inline-end side. Expressed as `me-auto` on Decline inside the ordinary
+        // `justify-end` row rather than as `justify-between` on the row, for two
+        // reasons that both bite exactly when the row wraps — the case this
+        // component exists to survive:
+        //   1. `justify-content: space-between` puts a line holding ONE item at
+        //      main-START, so once the row wraps the navigation group (carrying
+        //      the primary action) would jump to the left edge while the sibling
+        //      approval cards stay right-aligned.
+        //   2. Grouping Back/Next in a nested `<div>` puts them out of reach of
+        //      `CardActions`' child rules, which apply to DIRECT children only —
+        //      so a single over-wide nav label would still protrude out of the
+        //      unreachable inline-start edge, reproducing the original defect
+        //      inside the fix. Flat children are protected children.
+        <CardActions>
           <Button
             type="button"
             variant="ghost"
             onClick={handleDecline}
             loading={isSubmitting}
             size="default"
+            className="me-auto"
             data-testid="elicitation-decline"
           >
             Decline
           </Button>
-          {/* The nested navigation group is a flex container in its own right, so
-              the primitive's wrap rule does not reach its buttons — it needs its
-              own `flex-wrap` or Back/Next could still overflow together. */}
-          <div className="flex flex-wrap justify-end gap-2">
-            {step > 0 && (
-              <Button
-                type="button"
-                variant="outline"
-                onClick={handleBack}
-                disabled={isSubmitting}
-                size="default"
-                data-testid="elicitation-back"
-              >
-                Back
-              </Button>
-            )}
-            {isLast ? (
-              <Button
-                type="button"
-                loading={isSubmitting}
-                size="default"
-                onClick={handleSubmit}
-                data-testid="elicitation-submit"
-              >
-                Submit
-              </Button>
-            ) : (
-              <Button
-                type="button"
-                size="default"
-                onClick={handleNext}
-                disabled={isSubmitting}
-                data-testid="elicitation-next"
-              >
-                Next
-              </Button>
-            )}
-          </div>
+          {step > 0 && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleBack}
+              disabled={isSubmitting}
+              size="default"
+              data-testid="elicitation-back"
+            >
+              Back
+            </Button>
+          )}
+          {isLast ? (
+            <Button
+              type="button"
+              loading={isSubmitting}
+              size="default"
+              onClick={handleSubmit}
+              data-testid="elicitation-submit"
+            >
+              Submit
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              size="default"
+              onClick={handleNext}
+              disabled={isSubmitting}
+              data-testid="elicitation-next"
+            >
+              Next
+            </Button>
+          )}
         </CardActions>
       }
     >
-      {/* `flex-wrap` + `min-w-0`: the trailing labels are `whitespace-nowrap`,
-          so on one line they starve the server name to a rendered width of 0 in
-          a narrow card (the measured failure on the sibling approval card).
-          Same class as the footer row — wrap instead of clip. */}
+      {/* `flex-wrap`: the trailing labels are `whitespace-nowrap`, so on one
+          line they starve the `truncate` server name to a rendered width of 0 in a
+          narrow card (the measured failure on the sibling approval card — a
+          `truncate` element is `overflow:hidden` and so has an automatic minimum
+          size of zero, so it always loses). Wrap, don't clip. */}
       <div className="flex flex-wrap items-center gap-2 min-w-0" data-testid="elicitation-wizard">
         <SquarePen className="size-4 shrink-0 text-primary" />
-        <Text strong className="truncate min-w-0">{server}</Text>
+        <Text strong className="truncate">{server}</Text>
         <Text type="secondary" className="text-xs whitespace-nowrap">
           is requesting input
         </Text>

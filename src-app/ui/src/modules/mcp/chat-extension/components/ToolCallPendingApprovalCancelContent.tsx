@@ -28,7 +28,10 @@ export function ToolCallPendingApprovalCancelContent({
         data-testid="mcp-tool-approval-cancel-alert"
         icon={<CancelIcon className={TOOL_STATUS.cancelled.color} />}
         title={
-          <div className="flex items-center gap-2 min-w-0">
+          // Same wrap fix as the pending card's header: the nowrap server label
+          // would otherwise starve this `truncate` title to a rendered width of 0
+          // in a narrow card. This is the TERMINAL state of that very card.
+          <div className="flex flex-wrap items-center gap-2 min-w-0">
             <Text strong className="truncate">Tool Call Cancelled: {toolCall.tool_name}</Text>
             {serverLabel && (
               <Text type="secondary" className="text-xs whitespace-nowrap">
