@@ -98,4 +98,9 @@ Finding profile so far — **12, 9, 7, ?** — is decaying but has not reached z
 and every round to date has found something real. Do not read this branch as
 converged until the profile actually bottoms out.
 
-**New confirmed findings:** PENDING
+Round 5 returned **9 confirmed findings, 6 HIGH** — including that this round's
+clamp re-broke the property round 3 fixed, for ORDINARY tool names, and that the
+"Show more" it introduced re-opened the unbounded hole at 13,343px. See
+`FIX_ROUND-5.md`.
+
+**New confirmed findings:** 9

@@ -2,9 +2,7 @@ import { useState } from 'react'
 import { Button, Card, CardActions, Text } from '@ziee/kit'
 import {
   APPROVAL_DESCRIPTION_COLLAPSED_MAX_PX,
-  APPROVAL_IDENTITY_COLLAPSED_MAX_PX,
   approvalDescriptionViewKey,
-  approvalIdentityViewKey,
 } from '@/modules/mcp/chat-extension/components/approvalDescriptionClamp'
 import { CollapsibleBlock } from '@/modules/chat/components/CollapsibleBlock'
 import { Clock, Check, X, Send } from 'lucide-react'
@@ -320,56 +318,68 @@ export function ToolCallPendingApprovalContent({
             scrollWidth=98). A `truncate` element sets `overflow:hidden`, which
             already gives a flex item an automatic minimum size of ZERO, so it is
             always the sibling that loses; only wrapping saves it. */}
-        <div className="flex flex-wrap items-center gap-2 min-w-0">
-          <Clock className="size-4 shrink-0 text-warning" />
           {/* The tool name and the server label are BOTH chosen by the (possibly
-              hostile) MCP server, and they are the two things the user is asked
-              to trust. Two failure modes, and fixing only one reintroduces the
-              other:
-                - ELLIPSISED, they hide their own tail: measured at 390px, a
-                  64-char name rendered 238px of the 534px it needs, so
-                  `..._safe_then_delete_everything` reads as `..._safe…`, and a
-                  long server label lost 139 of 393px off the clipped edge with
-                  no cue. (`title` is not a fix — hover-only, and this defect is
-                  on touch.)
-                - UNBOUNDED, they push the decision row off screen: measured, a
-                  6400-char name grew the card to 5123px with Deny ~2800px below
-                  the fold — the exact "leave Approve as the only action in view"
-                  attack the description clamp below already exists to stop.
-              So: bounded AND complete, the same treatment the description gets —
-              a CSS clamp with a fade and a Show-more toggle, with every
-              character still in the DOM. `wrap-anywhere` (not `break-words`)
-              because only it participates in min-content sizing and so actually
-              breaks an unbroken token. `dir="ltr"` + `unicode-bidi: isolate`
-              because a U+202E in either string otherwise reverses the visual
-              order of everything after it, including the status text. */}
-          <CollapsibleBlock
-            maxHeightPx={APPROVAL_IDENTITY_COLLAPSED_MAX_PX}
-            messageId={approvalIdentityViewKey(toolCall.tool_use_id)}
-            className="min-w-0 flex-1"
-            data-testid="approval-identity-collapsible"
-          >
-            <Text
-              strong
-              dir="ltr"
-              className="block min-w-0 wrap-anywhere [unicode-bidi:isolate]"
-              title={toolCall.tool_name}
-              data-testid="approval-tool-name"
+            hostile) MCP server, and they are the two things the user is asked to
+            trust. Three failure modes, and fixing any one in isolation
+            reintroduces another — each of these was MEASURED on this card:
+              1. ELLIPSISED they hide their own tail: a 64-char name rendered
+                 238px of the 534px it needs, so `..._safe_then_delete_everything`
+                 reads as `..._safe…`.
+              2. UNBOUNDED they push the decision row off screen: a 6400-char
+                 name grew the card to 5123px with Deny ~2800px below the fold.
+              3. CLAMPED-WITH-A-TOGGLE is the worst of both: the identity column
+                 was only 98px wide at 390px, so ORDINARY names clamped by
+                 default (`github__create_or_update_file_contents_v2` showed 34
+                 of 41 chars, the server label 0 of 14) — and the Show-more the
+                 user must click to read them re-opened the unbounded hole, at
+                 13343px of card. The disclosure affordance WAS the exploit.
+
+            So: a bounded, SCROLLABLE region — the same `max-h-* overflow-auto`
+            pattern the Arguments block below already uses, which is bounded and
+            fully readable with no expansion escape hatch. The card's height
+            cannot be driven by a server string, every character stays in the DOM
+            and is reachable, and there is no toggle to trick anyone into.
+
+            Layout: the identity gets its OWN row rather than competing with the
+            status text. `flex-1` alone was the bug in (3) — flex-basis:0 never
+            overflows its line, so the `whitespace-nowrap` status sibling silently
+            took two thirds of the row and the identity never wrapped.
+
+            `wrap-anywhere` (not `break-words`) because only it participates in
+            min-content sizing and so actually breaks an unbroken token.
+            `dir="ltr"` + `unicode-bidi: isolate` keeps a U+202E inside either
+            string from reordering the card's own status text around it (it does
+            NOT neutralise reordering WITHIN the attacker's own string, which
+            costs the attacker nothing they did not already have). */}
+        <div className="min-w-0">
+          <div className="flex items-start gap-2 min-w-0">
+            <Clock className="size-4 shrink-0 text-warning mt-0.5" />
+            <div
+              className="min-w-0 flex-1 max-h-14 overflow-y-auto overscroll-contain"
+              data-testid="approval-identity"
             >
-              {toolCall.tool_name}
-            </Text>
-            {mcpServerParenLabel(toolCall.server) && (
               <Text
-                type="secondary"
+                strong
                 dir="ltr"
-                className="block text-xs min-w-0 wrap-anywhere [unicode-bidi:isolate]"
-                data-testid="approval-server-label"
+                className="block min-w-0 wrap-anywhere [unicode-bidi:isolate]"
+                title={toolCall.tool_name}
+                data-testid="approval-tool-name"
               >
-                {mcpServerParenLabel(toolCall.server)}
+                {toolCall.tool_name}
               </Text>
-            )}
-          </CollapsibleBlock>
-          <Text type="secondary" className="text-xs whitespace-nowrap">
+              {mcpServerParenLabel(toolCall.server) && (
+                <Text
+                  type="secondary"
+                  dir="ltr"
+                  className="block text-xs min-w-0 wrap-anywhere [unicode-bidi:isolate]"
+                  data-testid="approval-server-label"
+                >
+                  {mcpServerParenLabel(toolCall.server)}
+                </Text>
+              )}
+            </div>
+          </div>
+          <Text type="secondary" className="mt-1 block text-xs">
             — needs approval
           </Text>
         </div>

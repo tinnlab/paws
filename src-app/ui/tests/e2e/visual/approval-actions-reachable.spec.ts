@@ -145,11 +145,6 @@ async function gotoUntilVisible(page: Page, url: string, target: Locator) {
 // timeout.
 test.describe.configure({ timeout: 150_000 })
 
-// Mirrors APPROVAL_IDENTITY_COLLAPSED_MAX_PX in the component's clamp module.
-// Hard-coded rather than imported so the test states the bound it is defending
-// independently of the value the component happens to use.
-const APPROVAL_IDENTITY_MAX_PX = 56
-
 const MOBILE = { width: 390, height: 844 }
 const THEMES = ['light', 'dark'] as const
 
@@ -558,195 +553,146 @@ for (const theme of THEMES) {
   })
 }
 
-for (const theme of THEMES) {
-  test(`TEST-8: at 390px the approval card still shows WHICH tool is being approved (${theme})`, async ({
-    page,
-  }) => {
-    await page.setViewportSize(MOBILE)
-    await openSurface(page, 'deep-chat-tool-approval', theme)
-    const card = page.getByTestId('mcp-tool-approval-card').first()
-
-    // Same failure class as the footer, different row: the header's two
-    // secondary labels are `whitespace-nowrap` and together need 205px of a
-    // 238px row, so on ONE line they starved the tool NAME to a rendered width
-    // of 0 while its text stayed in the DOM. The card then read
-    // "(Acme Weather) — needs approval" with no indication of WHICH tool.
-    //
-    // Note what this does NOT assert: `toContainText('get_forecast')` — the
-    // pre-existing TEST-11 does that, and it passed throughout the defect,
-    // because the string was present and merely unrenderable. Consent requires
-    // the name be SEEN, so the assertion is on rendered width.
-    const name = card.getByTestId('approval-tool-name').first()
-    await expect(name).toHaveText('get_forecast')
-    const m = await name.evaluate(el => {
+/**
+ * Measure the identity region the way a USER experiences it: what is actually
+ * visible inside the bounded box, not the intrinsic size of the span inside it.
+ *
+ * This distinction is the whole lesson of rounds 3-5. The bound deliberately
+ * leaves its child at full intrinsic size (that is what keeps the complete
+ * string in the DOM), so any assertion that measures the CHILD is blind to
+ * exactly what the bound hides — and two successive versions of this test
+ * passed while the tool name showed 34 of 41 characters and the server label 0
+ * of 14.
+ *
+ * `expect.poll` rather than a bare read: the stress cases below write
+ * `textContent` outside React, and layout settles asynchronously, so an
+ * un-awaited read is a coin flip. A previous version of this test failed ~50% of
+ * runs for exactly that reason.
+ */
+async function identityMetrics(card: Locator) {
+  return card.evaluate(root => {
+    const region = root.querySelector('[data-testid="approval-identity"]') as HTMLElement
+    const name = root.querySelector('[data-testid="approval-tool-name"]') as HTMLElement
+    const label = root.querySelector('[data-testid="approval-server-label"]') as HTMLElement | null
+    const deny = root.querySelector('[data-testid="tool-approval-deny"]')!.getBoundingClientRect()
+    const rr = region.getBoundingClientRect()
+    // How much of an element is inside the region's VISIBLE box (the region
+    // scrolls, so anything outside it is hidden until the user scrolls).
+    const visibleFrac = (el: HTMLElement | null) => {
+      if (!el) return null
       const r = el.getBoundingClientRect()
-      return { w: Math.round(r.width), h: Math.round(r.height), scrollW: el.scrollWidth }
-    })
-    expect(
-      m.w,
-      `the tool name is rendered ${m.w}px wide (it needs ${m.scrollW}px) — the user cannot see which tool they are approving`,
-    ).toBeGreaterThan(0)
-    // Not merely non-zero, and no magic legibility floor: the name must be
-    // rendered in FULL. A partial name is not a weaker disclosure but a
-    // MISLEADING one on a consent surface — `get_forecast…` reads identically
-    // for `get_forecast_daily` and `get_forecast_hourly`, and the tool name is
-    // a string the (possibly hostile) MCP server chooses.
-    expect(
-      m.w,
-      `the tool name is truncated (${m.w}px rendered of ${m.scrollW}px needed) — a partial name cannot identify which tool is being approved`,
-    ).toBeGreaterThanOrEqual(m.scrollW - 1)
-    await expect(name).toBeVisible()
-
-    // The fixture name is 12 characters and fits trivially, so the assertions
-    // above cannot fail for the case this test EXISTS for: the name is chosen by
-    // the MCP server, and the dangerous shape is a long one that ellipsises to a
-    // benign-looking prefix. Measured before this was fixed: a 64-char name
-    // rendered 238px of the 534px it needed. Drive that case for real.
-    const HOSTILE =
-      'get_weather_forecast_readonly_public_safe_then_delete_everything'
-    // Take a HANDLE first: `name` is a by-text locator, so rewriting the text
-    // would make it stop matching and the next call would hang on it.
-    const nameEl = await name.elementHandle()
-    expect(nameEl, 'the tool-name element must be resolvable').not.toBeNull()
-    await nameEl!.evaluate((el, text) => {
-      el.textContent = text
-    }, HOSTILE)
-    const hostile = await nameEl!.evaluate(el => {
-      const r = el.getBoundingClientRect()
-      const cs = getComputedStyle(el)
-      return {
-        w: Math.round(r.width),
-        h: Math.round(r.height),
-        scrollW: el.scrollWidth,
-        clientW: el.clientWidth,
-        text: (el.textContent || '').length,
-        ellipsis: cs.textOverflow,
-      }
-    })
-    expect(hostile.text, 'the hostile name must actually be rendered').toBe(HOSTILE.length)
-    // It must WRAP (grow taller) rather than ellipsise: no part of an
-    // attacker-chosen tool name may be hidden on a consent surface.
-    expect(
-      hostile.scrollW,
-      `the tool name overflows its box (${hostile.scrollW}px of ${hostile.clientW}px) — a long attacker-chosen name is being hidden, so the user cannot tell which tool they are approving`,
-    ).toBeLessThanOrEqual(hostile.clientW + 1)
-    expect(
-      hostile.h,
-      'a name too long for one line must wrap onto more lines, not be cut',
-    ).toBeGreaterThan(m.h ?? 0)
-
-    // ─── and the CEILING, which is the half that matters most ───────────────
-    // Showing the name in full is only half the property. The first attempt at
-    // this fix removed the truncation by removing the BOUND, which let a hostile
-    // name grow the card without limit — measured, 6400 characters produced a
-    // 5123px card with Deny ~2800px below the fold. That is the same
-    // "leave Approve as the only action in view" attack, one row up. Note the
-    // two assertions above are both SATISFIED by unbounded growth (a wrapping
-    // box never has horizontal overflow, and one of them literally requires the
-    // box to get taller), which is exactly why they cannot stand alone.
-    const EXTREME = 'a'.repeat(6400)
-    await nameEl!.evaluate((el, text) => {
-      el.textContent = text
-    }, EXTREME)
-    const bounded = await card.evaluate(root => {
-      const vh = window.innerHeight
-      // Measure the CLAMPED region, not the text node inside it: the clamp is a
-      // max-height + overflow:hidden box, so the inner element keeps its full
-      // intrinsic height by design (that is what keeps the complete string in
-      // the DOM). Measuring the inner node would report the text's height and
-      // miss the fact that the card is bounded.
-      const region = root.querySelector('[data-testid="approval-identity-collapsible"]')!.getBoundingClientRect()
-      const deny = root.querySelector('[data-testid="tool-approval-deny"]')!.getBoundingClientRect()
-      const r = root.getBoundingClientRect()
-      return {
-        cardH: Math.round(r.height),
-        viewportH: vh,
-        // the span the user must see at once to read WHAT they are approving
-        // and press Deny
-        spanTopToDeny: Math.round(deny.bottom - region.top),
-        regionH: Math.round(region.height),
-      }
-    })
-    // The clamp + its Show-more toggle. Generous on the toggle, strict on the
-    // clamp: what matters is that a 6400-char name cannot make this unbounded.
-    expect(
-      bounded.regionH,
-      `a ${EXTREME.length}-char tool name produced a ${bounded.regionH}px identity region — it is not clamped, so a hostile server controls the card's height`,
-    ).toBeLessThanOrEqual(APPROVAL_IDENTITY_MAX_PX + 48)
-    expect(
-      bounded.cardH,
-      `the card grew to ${bounded.cardH}px on a ${EXTREME.length}-char name — unbounded growth is how a hostile server pushes the refuse control out of view`,
-    ).toBeLessThanOrEqual(bounded.viewportH)
-    // The property TEST-10b asserts at desktop, asserted here at MOBILE: the
-    // thing being approved and the control that refuses it must fit on screen
-    // TOGETHER. Without a bound this measured 1109px against an 844px viewport.
-    expect(
-      bounded.spanTopToDeny,
-      `the tool name and Deny span ${bounded.spanTopToDeny}px in a ${bounded.viewportH}px viewport — the user cannot see WHAT they are approving and the refuse control at the same time`,
-    ).toBeLessThanOrEqual(bounded.viewportH)
-    // …and the full string is still in the DOM: bounded, never truncated.
-    expect(
-      await nameEl!.evaluate(el => (el.textContent || '').length),
-      'the clamp must be visual only — every character stays in the DOM',
-    ).toBe(EXTREME.length)
+      const h = Math.max(0, Math.min(r.bottom, rr.bottom) - Math.max(r.top, rr.top))
+      return r.height === 0 ? 0 : h / r.height
+    }
+    return {
+      regionH: Math.round(rr.height),
+      regionScrollH: region.scrollHeight,
+      regionClientH: region.clientHeight,
+      scrollable: getComputedStyle(region).overflowY,
+      nameVisibleFrac: visibleFrac(name),
+      labelVisibleFrac: visibleFrac(label),
+      nameDomLen: (name.textContent || '').length,
+      cardH: Math.round(root.getBoundingClientRect().height),
+      spanToDeny: Math.round(deny.bottom - rr.top),
+      viewportH: window.innerHeight,
+      hasToggle: !!region.querySelector('[data-testid="collapsible-toggle"]'),
+    }
   })
 }
 
+/** Realistic MCP tool names — not adversarial, just long. These are the shapes
+ *  that a previous version of this fix silently clamped by default. */
+const REAL_TOOL_NAMES = [
+  'github__create_or_update_file_contents_v2',
+  'mcp__filesystem__read_text_file',
+]
+
 for (const theme of THEMES) {
-  test(`TEST-10: the attacker-controlled SERVER LABEL is disclosed in full and cannot push the decision row off screen (${theme})`, async ({
+  test(`TEST-8: at 390px an ORDINARY tool name and its server label are FULLY visible (${theme})`, async ({
     page,
   }) => {
     await page.setViewportSize(MOBILE)
     await openSurface(page, 'deep-chat-tool-approval', theme)
     const card = page.getByTestId('mcp-tool-approval-card').first()
-    const label = card.getByTestId('approval-server-label').first()
-    await expect(label).toBeVisible()
+    const nameEl = await card.getByTestId('approval-tool-name').elementHandle()
 
-    // The server label is the card's TRUST ANCHOR and is entirely server-chosen
-    // (`mcpServerParenLabel` imposes no cap). It previously clipped its own tail
-    // with no ellipsis and no cue — 254px of a 393px box survived the card's
-    // `overflow-hidden` — letting a server conceal part of its own identity on
-    // the surface that asks the user to trust it. This leg exists because the
-    // fix for that shipped with ZERO coverage: reverting it left every other
-    // test green.
-    const base = await label.evaluate(el => ({
-      w: Math.round(el.getBoundingClientRect().width),
-      scrollW: el.scrollWidth,
-      clientW: el.clientWidth,
-    }))
-    expect(base.scrollW, 'the server label must not clip horizontally').toBeLessThanOrEqual(base.clientW + 1)
+    for (const realName of REAL_TOOL_NAMES) {
+      await nameEl!.evaluate((el, t) => {
+        el.textContent = t
+      }, realName)
+      // Poll for the write to LAND and layout to settle (an out-of-React
+      // textContent write settles asynchronously), then assert the real
+      // properties — so a failure reports what is wrong, not just "poll timed
+      // out". Polling on the assertion itself would hide the diagnosis.
+      await expect
+        .poll(async () => (await identityMetrics(card)).nameDomLen, { timeout: 5_000 })
+        .toBe(realName.length)
+      const m = await identityMetrics(card)
+      expect(
+        m.nameVisibleFrac,
+        `"${realName}" (${realName.length} chars) is only ${Math.round((m.nameVisibleFrac ?? 0) * 100)}% visible — an ordinary tool name is cut on a consent surface`,
+      ).toBeGreaterThan(0.99)
+      // Nothing hidden behind the bound for an ordinary name — the region must
+      // not even need to scroll.
+      expect(
+        m.regionScrollH,
+        `"${realName}" (${realName.length} chars) does not fit the identity region (${m.regionScrollH}px of ${m.regionClientH}px) — an ordinary tool name is being cut on a consent surface`,
+      ).toBeLessThanOrEqual(m.regionClientH + 1)
+      // …and the server label, the card's trust anchor, is visible too. A prior
+      // version scored 0 of 14 characters here while every assertion passed.
+      expect(
+        m.labelVisibleFrac,
+        `the server label is only ${Math.round((m.labelVisibleFrac ?? 0) * 100)}% visible beside "${realName}" — the card's trust anchor is hidden`,
+      ).toBeGreaterThan(0.99)
+    }
+  })
 
-    const labelEl = await label.elementHandle()
-    await labelEl!.evaluate(el => {
-      el.textContent = `(${'Trustworthy-Corp-Verified-Official-'.repeat(26)})`
-    })
-    const stressed = await card.evaluate(root => {
-      const el = root.querySelector('[data-testid="approval-server-label"]') as HTMLElement
-      // As in TEST-8: measure the CLAMPED region, not the text node inside it.
-      const region = root.querySelector('[data-testid="approval-identity-collapsible"]')!.getBoundingClientRect()
-      const deny = root.querySelector('[data-testid="tool-approval-deny"]')!.getBoundingClientRect()
-      return {
-        regionH: Math.round(region.height),
-        spanTopToDeny: Math.round(deny.bottom - region.top),
-        viewportH: window.innerHeight,
-        cardH: Math.round(root.getBoundingClientRect().height),
-        scrollW: el.scrollWidth,
-        clientW: el.clientWidth,
-      }
-    })
+  test(`TEST-10: an EXTREME server-chosen string is bounded, reachable, and has no expansion escape hatch (${theme})`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(MOBILE)
+    await openSurface(page, 'deep-chat-tool-approval', theme)
+    const card = page.getByTestId('mcp-tool-approval-card').first()
+    const nameEl = await card.getByTestId('approval-tool-name').elementHandle()
+
+    const EXTREME = 'a'.repeat(6400)
+    await nameEl!.evaluate((el, t) => {
+      el.textContent = t
+    }, EXTREME)
+    await expect
+      .poll(async () => (await identityMetrics(card)).nameDomLen, { timeout: 5_000 })
+      .toBe(EXTREME.length)
+    const m = await identityMetrics(card)
+
+    // 1. BOUNDED — a server string cannot drive the card's height.
     expect(
-      stressed.scrollW,
-      `the server label overflows its box (${stressed.scrollW}px of ${stressed.clientW}px) — a hostile server is hiding the tail of its own identity`,
-    ).toBeLessThanOrEqual(stressed.clientW + 1)
+      m.cardH,
+      `a ${EXTREME.length}-char name grew the card to ${m.cardH}px in a ${m.viewportH}px viewport`,
+    ).toBeLessThanOrEqual(m.viewportH)
     expect(
-      stressed.spanTopToDeny,
-      `the server label and Deny span ${stressed.spanTopToDeny}px in a ${stressed.viewportH}px viewport — an unbounded label is pushing the refuse control off screen`,
-    ).toBeLessThanOrEqual(stressed.viewportH)
+      m.spanToDeny,
+      `the identity and Deny span ${m.spanToDeny}px in a ${m.viewportH}px viewport — the user cannot see WHAT they are approving and the refuse control together`,
+    ).toBeLessThanOrEqual(m.viewportH)
+
+    // 2. COMPLETE and REACHABLE — the bound is visual only, and the overflow is
+    //    scrollable rather than hidden, so nothing needs a toggle to be read.
+    expect(m.nameDomLen, 'every character must stay in the DOM').toBe(EXTREME.length)
     expect(
-      stressed.cardH,
-      `the card grew to ${stressed.cardH}px on a hostile server label — the label must be bounded like the name`,
-    ).toBeLessThanOrEqual(stressed.viewportH)
-    await expectPressable(card, 'tool-approval-deny', 'hostile server label')
+      m.scrollable,
+      'the bounded region must be SCROLLABLE, or the excess is unreachable',
+    ).toMatch(/auto|scroll/)
+    expect(
+      m.regionScrollH,
+      'the extreme case must actually overflow the bound (otherwise this proves nothing)',
+    ).toBeGreaterThan(m.regionClientH)
+
+    // 3. NO EXPANSION ESCAPE HATCH — the previous design offered a "Show more"
+    //    that, clicked once, produced a 13343px card with Deny at y=13539. The
+    //    affordance the user needed in order to read the name WAS the exploit.
+    expect(
+      m.hasToggle,
+      'the identity region must not offer an expand toggle — expanding re-opens the unbounded-growth hole',
+    ).toBe(false)
   })
 }
 

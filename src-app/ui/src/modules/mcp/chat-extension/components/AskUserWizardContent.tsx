@@ -489,7 +489,19 @@ export function AskUserWizardContent({
       </div>
 
       <div className="mt-2">
-        <Text className="text-sm">{message}</Text>
+        {/* The ask_user message is a raw MCP-server string with no length cap,
+              on a card whose actions are Decline/Submit — i.e. a consent surface.
+              Rendered unbounded it measured an 8282px card with Decline at
+              y=8369 in an 844px viewport: the same "push the refuse control out
+              of view" attack the approval card is bounded against. Bounded and
+              scrollable (the Arguments-block pattern): the card's height cannot
+              be driven by a server string, and every character stays readable. */}
+        <div
+          className="max-h-40 overflow-y-auto overscroll-contain"
+          data-testid="elicitation-message"
+        >
+          <Text className="text-sm wrap-anywhere block">{message}</Text>
+        </div>
         <Form
           form={form}
           layout="vertical"
