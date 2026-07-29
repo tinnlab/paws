@@ -9,10 +9,9 @@ Full logs: `/data/pbya/ziee/tmp/lifecycle-logs/denyclip-*.log`.
 ## Enumerated tests
 
 Run: `cd src-app/ui && CHOKIDAR_USEPOLLING=1 npx playwright test -c playwright.visual.config.ts approval-actions-reachable --workers=1`
-→ **22 passed, 0 failed** (`round4-final2.log`, the run after the round-4 fixes).
-The 22 executions are the 10 enumerated TEST-IDs (most parameterized over
-light+dark) plus the pre-existing TEST-10*/TEST-11 cases in the same file, which
-continue to pass unchanged. The 20 executions are the 9
+→ **22 passed, 0 failed**, twice consecutively (`final-stab-1.log`,
+`final-stab-2.log`) after the phase-7 abort + re-scope. Run repeatedly on purpose:
+round 5 proved a ~50% flake had been hiding behind a single green run. The 20 executions are the 9
 enumerated TEST-IDs (several parameterized over light+dark) plus the 5
 pre-existing TEST-10*/TEST-11 cases in the same file, which continue to pass
 unchanged.
@@ -33,7 +32,7 @@ TEST-9/INV-2, TEST-10/INV-4) is among the passes above.
 
 ## Frontend gates
 
-- `npm run check (ui): PASS` — exit 0 (`npm-check7.log`, after the round-4 fixes). Chains tsc +
+- `npm run check (ui): PASS` — exit 0 (`npm-check9.log`, after the re-scope). Chains tsc +
   biome guardrails + lint:colors + settings-field + adjacent-inline + icon-action +
   hooks + logical-direction + tooltip-placement + kit-manifest + testid-registry +
   design-spec + gallery-coverage + gallery-crawl + fixtures + state-matrix +
@@ -73,74 +72,38 @@ reviewer), so no `desktop/ui` gate line is claimed.
 
 ## Negative control — the red-first requirement
 
-A regression test that has never been seen red proves nothing, so each acceptance
-claim was run against the pre-fix behavior with the spec retained. Restoring the
-pre-fix CSS is a STRICTER control than stashing the diff: the surrounding
-structure and the spec's selectors stay intact, so the tests fail on their
-ASSERTIONS rather than on a missing element.
+Each acceptance claim was run against the pre-fix behaviour with the spec
+retained. Restoring the pre-fix CSS is a STRICTER control than stashing the diff:
+the structure and selectors stay intact, so the tests fail on their ASSERTIONS.
 
 **Control A — `CardActions` reverted to the hand-rolled `flex w-full justify-end
-gap-2`, and the approval header's `flex-wrap` removed** (`denyclip-NEGCTRL-final.log`):
-
-```
-13 failed
-7 passed
-```
-
-Failing: TEST-1, TEST-2, TEST-3 (both themes), TEST-5 (both), TEST-6 (both),
-TEST-8 (both), TEST-9. Observed messages, verbatim:
+gap-2`** (`denyclip-NEGCTRL-final.log`): **13 failed / 7 passed**, e.g.
 
 ```
 Error: tool-approval-deny: 81px of its 81px width is cut off by a non-scrolling clipping ancestor (taxonomy A11)
 Error: the action row must be allowed to wrap
-Error: the tool name is rendered 0px wide (it needs 98px) — the user cannot see which tool they are approving
 Error: tool-approval-deny is clipped in a 260px-wide card at a 1280px viewport (0px of 81px) — a viewport-driven rule would have missed this
 Error: under an over-wide label, elicitation-decline is clipped (0px visible of 74px)
-Error: under an over-wide nav label, elicitation-decline is clipped (0px of 74px)
   - element is outside of the viewport          (TEST-1's trial click on Deny)
 ```
 
-TEST-4 (the desktop no-regression control) and the pre-existing TEST-10*/TEST-11
-correctly stayed GREEN under the mutation — the defect is narrow-width only, so a
-control that went red there would have indicated an over-broad test.
-
-**Control D — the identity clamp neutered to `maxHeightPx={999999}`** (i.e. the
-unbounded behaviour round 3 shipped):
-
-```
-4 failed
-Error: a 6400-char tool name produced a 12816px identity region — it is not clamped, so a hostile server controls the card's height
-Error: the server label and Deny span 1693px in a 844px viewport — an unbounded label is pushing the refuse control off screen
-```
-
-This is the round-4 finding: round 3 fixed the truncation by removing the BOUND,
-which handed a hostile server unbounded control of the consent card's height. The
-clamp restores it — the same 6400-char name now yields a 60px region and a 583px
-card.
-
-**Control C — the two attacker-controlled header labels reverted to
-`truncate` / `whitespace-nowrap`** (round-3 fix):
-
-```
-2 failed
-Error: the tool name overflows its box (534px of 238px) — a long attacker-chosen name is being hidden, so the user cannot tell which tool they are approving
-```
-
-534/238 is the round-3 reviewer's own independently measured number for a
-64-character tool name, so the guard now fails on exactly the case it exists for
-— which the previous, fixture-bound TEST-8 could never have reached.
+TEST-4 (the desktop no-regression control) correctly stayed GREEN — the defect is
+narrow-width only.
 
 **Control B — `wrap-anywhere` reverted to `break-words`** (`negctrl-wrapanywhere.log`):
+2 failed, `an unbounded token must WRAP inside the control`. `break-words` is
+excluded from min-content sizing; measured on a real button, 236/312 vs 236/236.
 
-```
-2 failed
-Error: an unbroken token must WRAP inside the control, not overflow it (whitespace-normal alone cannot do this)
-```
+**Control C — the header row reverted to non-wrapping** (the ITEM-6 defect):
+TEST-8 and TEST-10 both red —
+`"get_forecast" is rendered 0px wide of the 98px it needs — a sibling starved it
+out of the row`.
 
-This is the round-2 finding: `break-words` is excluded from min-content sizing and
-does not break an unbroken token. Independently measured on a real button in this
-row — `break-words`: clientWidth 236 / scrollWidth 312, height 32px (label spills
-out of the card's `overflow-hidden` edge); `wrap-anywhere`: 236 / 236, height 50px.
+Note on TEST-10: its FIRST version asserted only "the server label renders", which
+passed on the broken markup too (there the label wins the competition and the NAME
+is starved). That is the vacuous-guard shape this spec keeps catching, so it was
+rewritten to assert the JOINT property across all three identity labels, and
+re-controlled.
 
 ## Before / after — measured at 390x844, BOTH themes
 
