@@ -92,10 +92,14 @@ export default (set: ChatSet, getRaw: () => ChatInitialState) => {
         // failure REJECTS here rather than yielding a silently-incomplete body.
         // The throw must still reach the caller — the composers turn it into a
         // toast, and a loud extension veto uses the same path — but it is also
-        // recorded on `store.error` first, because the PROGRAMMATIC callers
-        // (`startRegenerateMessage`, the tool-approval transmit) have no local
-        // catch that shows anything, and the conversation error Alert is the one
-        // surface every path renders.
+        // recorded on `store.error` first. The composer paths and the regenerate
+        // button DO catch and toast (`ChatInput.tsx`, `TextInput.tsx`,
+        // `MessageActions.tsx`), so for them this is a second surface showing the
+        // same sentence — accepted deliberately, because the conversation error
+        // Alert is the one surface EVERY path renders and a duplicated message
+        // beats a missed one on the app's primary action. It also covers the
+        // NewChatPage case, where no conversation Alert is mounted and the toast
+        // is the only signal.
         let allRequestFields: Awaited<
           ReturnType<typeof chatExtensionRegistry.composeRequestFields>
         >
@@ -134,31 +138,26 @@ export default (set: ChatSet, getRaw: () => ChatInitialState) => {
               },
             )
           }
-          // A pre-flight abort must not leave a latched branch fork behind —
-          // but ONLY for the regenerate flow, and ONLY by clearing the two fork
-          // fields directly.
+          // The latched branch/edit state is deliberately LEFT ALONE.
           //
-          // `startRegenerateMessage` latches `pendingBranchFromMessageId` +
-          // `fork_level: 'assistant'` and trims the transcript BEFORE calling us
-          // and has no catch of its own, while `clearPendingBranch()` runs only on
-          // the success path — so without this the user's NEXT composer message
-          // silently forks at the stale assistant anchor (the branching fields
-          // below are injected unconditionally).
+          // An earlier draft cleared the fork anchor here, reasoning that an
+          // aborted regenerate would otherwise make the user's next message fork
+          // at a stale assistant anchor. That was a mis-fix, and the audit caught
+          // it: BOTH programmatic callers (`startRegenerateMessage`,
+          // `startEditMessage`) trim the transcript AND prefill the composer
+          // before calling us, and neither restores the transcript on failure —
+          // so the user's next Enter IS the intended retry. With the anchor
+          // cleared that retry stops branching and instead APPENDS a duplicate
+          // turn to a server-side branch that still contains the original, which
+          // is a worse and more visible corruption than the speculative one the
+          // clearing was meant to prevent.
           //
-          // The EDIT flow is deliberately excluded: `startEditMessage` latches the
-          // same fork fields but ALSO sets `editingMessage`, and the user stays in
-          // edit mode after a failed send — the anchor is exactly what makes their
-          // retry branch correctly, so dropping it would silently turn the retry
-          // into an appended turn.
-          //
-          // Written with `set` rather than `clearPendingBranch()` for two reasons:
-          // that action ALSO clears `editingMessage` (too broad), and it is a LAZY
-          // action — dispatching it in the stale-build case this abort exists for
-          // would itself fail, so the "guarantee" would not hold in the one
-          // scenario it was written for.
-          if (!get().editingMessage) {
-            set({ pendingBranchFromMessageId: null, pendingBranchForkLevel: null })
-          }
+          // Leaving it latched is also exactly the pre-existing behaviour: the
+          // old swallow-then-422 path never cleared it either, so a failed send
+          // has always left the flow resumable. Restoring the transcript on an
+          // aborted regenerate/edit is a real gap, but it is a PRE-EXISTING one
+          // that belongs to those actions, not something this abort should paper
+          // over by discarding state it does not own.
           throw error
         }
 

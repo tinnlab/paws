@@ -45,6 +45,9 @@ export const RECOVERY_HINT = 'Reload the page and try again.'
 export const STALE_BUILD_HINT =
   'The app may have been updated since this tab was opened.'
 
+/** The non-reload next step, for a failure a reload cannot fix. */
+export const REOPEN_HINT = 'Reopen the conversation and try again.'
+
 /**
  * A cause message longer than this is truncated before it reaches the UI.
  *
@@ -149,7 +152,10 @@ export function buildMissingFieldMessage(
   stale: boolean = isStaleBuild(),
 ): string {
   const head = `Couldn't send your message: it is missing ${missing.join(' and ')}.`
-  return stale ? `${head} ${STALE_BUILD_HINT} ${RECOVERY_HINT}` : head
+  if (stale) return `${head} ${STALE_BUILD_HINT} ${RECOVERY_HINT}`
+  // Not a load failure, so a reload is the wrong advice — but the user must
+  // still be given a next step rather than a dead end.
+  return `${head} ${REOPEN_HINT}`
 }
 
 /**
@@ -163,7 +169,12 @@ export function buildMissingFieldMessage(
  */
 export class RequestFieldCompositionError extends Error {
   readonly failures: RequestFieldFailure[]
-  /** Field names the server requires that the composed body did not carry. */
+  /**
+   * The WIRE field names the composed body did not carry (`model_id`,
+   * `branch_id`, …) — not the user-facing labels. This is the half that goes to
+   * the log, so a support report says `model_id`, which is greppable, rather
+   * than "a model selection", which is not.
+   */
   readonly missingFields: string[]
 
   constructor(
@@ -191,7 +202,7 @@ export class RequestFieldCompositionError extends Error {
 const REQUIRED_SEND_FIELDS: ReadonlyArray<{ key: string; label: string }> = [
   { key: 'content', label: 'the message text' },
   { key: 'model_id', label: 'a model selection' },
-  { key: 'branch_id', label: 'a conversation branch' },
+  { key: 'branch_id', label: 'an active conversation branch' },
 ]
 
 /**
@@ -212,11 +223,12 @@ export function assertRequiredRequestFields(
     const value = body[key]
     if (typeof value !== 'string') return true
     return key === 'content' ? false : !value.trim()
-  }).map(({ label }) => label)
+  })
 
   if (missing.length > 0) {
-    throw new RequestFieldCompositionError(buildMissingFieldMessage(missing), {
-      missingFields: missing,
-    })
+    throw new RequestFieldCompositionError(
+      buildMissingFieldMessage(missing.map(f => f.label)),
+      { missingFields: missing.map(f => f.key) },
+    )
   }
 }

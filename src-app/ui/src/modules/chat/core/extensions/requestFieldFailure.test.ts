@@ -7,6 +7,7 @@ import {
   isLoadFailureCause,
   MAX_CAUSE_CHARS,
   RECOVERY_HINT,
+  REOPEN_HINT,
   RequestFieldCompositionError,
   STALE_BUILD_HINT,
   UNKNOWN_CAUSE,
@@ -160,6 +161,8 @@ test('TEST-5b: the missing-required-field message is stale-gated too', () => {
     !msg.includes(RECOVERY_HINT),
     `a non-stale missing-field message must not prescribe a reload: ${msg}`,
   )
+  // …but it must not be a dead end either.
+  assert.ok(msg.includes(REOPEN_HINT), `expected a next step in: ${msg}`)
 
   const stale = buildMissingFieldMessage(['a model selection'], true)
   assert.ok(stale.includes(STALE_BUILD_HINT))
@@ -192,11 +195,11 @@ test('TEST-10d: it rejects each missing/blank required field, naming it', () => 
     [{ model_id: 'm-1', branch_id: 'b-1' }, /the message text/],
     [{ content: 'hi', branch_id: 'b-1' }, /a model selection/],
     [{ content: 'hi', model_id: '  ', branch_id: 'b-1' }, /a model selection/],
-    [{ content: 'hi', model_id: 'm-1' }, /a conversation branch/],
+    [{ content: 'hi', model_id: 'm-1' }, /conversation branch/],
     // `branch_id: ''` is exactly what `conversation.active_branch_id || ''`
     // produced: the generated client type makes it optional while the server
     // declares it a Uuid, so this used to POST and come back a raw 422.
-    [{ content: 'hi', model_id: 'm-1', branch_id: '' }, /a conversation branch/],
+    [{ content: 'hi', model_id: 'm-1', branch_id: '' }, /conversation branch/],
   ]
   for (const [body, expected] of cases) {
     assert.throws(
@@ -204,6 +207,11 @@ test('TEST-10d: it rejects each missing/blank required field, naming it', () => 
       (err: unknown) => {
         assert.ok(err instanceof RequestFieldCompositionError)
         assert.match((err as Error).message, expected)
+        // The LOG half carries wire keys, not the user-facing labels: a support
+        // report must say `model_id`, which is greppable.
+        for (const k of (err as RequestFieldCompositionError).missingFields) {
+          assert.match(k, /^(content|model_id|branch_id)$/, `missingFields must be wire keys, got "${k}"`)
+        }
         return true
       },
       `expected a rejection for ${JSON.stringify(body)}`,

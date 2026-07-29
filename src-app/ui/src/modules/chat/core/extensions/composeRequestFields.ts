@@ -1,4 +1,5 @@
 import type { ExtensionRequestFields } from '@/modules/chat/core/extensions/types'
+import { isStaleBuild } from '@ziee/framework/chunk-recovery'
 import {
   buildCompositionFailureMessage,
   RequestFieldCompositionError,
@@ -65,6 +66,13 @@ export async function composeRequestFieldsFrom(
 ): Promise<ExtensionRequestFields> {
   let fields: ExtensionRequestFields = {}
   const failures: RequestFieldFailure[] = []
+  // Captured AT THE MOMENT OF FAILURE, not re-read when the message is built.
+  // The stale-build mark is a single process-wide flag that a SUCCESSFUL import
+  // clears, and contributors run sequentially — so a later contributor resolving
+  // its own lazy action would clear the mark set by an earlier one's chunk 404,
+  // and the message would lose "the app may have been updated" in exactly the
+  // deploy-while-a-tab-is-open case the hint exists to describe.
+  let staleAtFailure = false
 
   for (const contributor of contributors) {
     try {
@@ -79,12 +87,13 @@ export async function composeRequestFieldsFrom(
         error,
       )
       failures.push({ extension: contributor.name, cause: error })
+      staleAtFailure = staleAtFailure || isStaleBuild()
     }
   }
 
   if (failures.length > 0) {
     throw new RequestFieldCompositionError(
-      buildCompositionFailureMessage(failures),
+      buildCompositionFailureMessage(failures, staleAtFailure),
       { failures },
     )
   }

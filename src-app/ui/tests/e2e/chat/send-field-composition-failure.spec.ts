@@ -161,10 +161,17 @@ test.describe('Chat — a failed request-field composition never reaches the wir
     const errorText = ((await errorSurface.textContent()) || '').toLowerCase()
 
     // The message must name the failing capability AND prescribe the action that
-    // actually fixes THIS cause (a chunk load failure -> reload). Asserted as two
-    // separate requirements rather than one loose OR, so a generic message that
-    // merely contains the word "model" cannot satisfy it.
-    expect(errorText, 'the message must name the failing extension').toContain('model')
+    // actually fixes THIS cause (a chunk load failure -> reload). Asserted as
+    // separate requirements rather than one loose OR.
+    //
+    // `chat extension` — not `model` — is the discriminating fragment: the raw
+    // cause string already contains the chunk name `getModelId`, so a lowercased
+    // `toContain('model')` would stay green even if the head naming the failing
+    // extension were dropped entirely.
+    expect(errorText, 'the message must attribute the failure to an extension').toContain(
+      'chat extension',
+    )
+    expect(errorText, 'and it must name which one').toContain('"model"')
     expect(errorText, 'a chunk-load failure must prescribe a reload').toMatch(/reload/)
     expect(
       errorText,
