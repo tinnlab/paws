@@ -320,7 +320,9 @@ export function ToolCallPendingApprovalContent({
             always the sibling that loses; only wrapping saves it. */}
         <div className="flex flex-wrap items-center gap-2 min-w-0">
           <Clock className="size-4 shrink-0 text-warning" />
-          <Text strong className="truncate">{toolCall.tool_name}</Text>
+          <Text strong className="truncate" title={toolCall.tool_name}>
+            {toolCall.tool_name}
+          </Text>
           {mcpServerParenLabel(toolCall.server) && (
             <Text type="secondary" className="text-xs whitespace-nowrap">
               {mcpServerParenLabel(toolCall.server)}

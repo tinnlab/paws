@@ -218,7 +218,13 @@ async function measureRow(
   return scope.evaluate((root, ids) => {
     const measure = (el: Element) => {
       const r = el.getBoundingClientRect()
-      const clip = { l: 0, t: 0, r: window.innerWidth, b: window.innerHeight }
+      // Deliberately NOT seeded with the viewport rect. The viewport is not a
+      // permanent clip — a scrollable ancestor brings content into it — so
+      // including it would report every below-the-fold control as "cut off by a
+      // non-scrolling ancestor", which is both a wrong diagnosis and a latent
+      // false failure. Reachability INTO the viewport is proved separately, and
+      // properly, by `expectPressable` (Playwright scrolls, then hit-tests).
+      const clip = { l: -Infinity, t: -Infinity, r: Infinity, b: Infinity }
       for (let p = el.parentElement; p; p = p.parentElement) {
         const cs = getComputedStyle(p)
         const pr = p.getBoundingClientRect()
@@ -364,11 +370,14 @@ test('TEST-4: at desktop width the approval action row is unchanged — one righ
   const card = page.getByTestId('mcp-tool-approval-card').first()
 
   const rects = await measureRow(card, APPROVAL_CONTROLS)
+  // Assert PRESENCE on the measurements, not on the length of the id list we
+  // just mapped over: a missing control yields `undefined`, and spreading that
+  // would leave every geometry assertion below comparing `undefined` to
+  // `undefined` — passing vacuously.
+  for (const id of APPROVAL_CONTROLS) {
+    expect(rects[id], `${id} must be present at desktop width to be measured`).toBeTruthy()
+  }
   const measured = APPROVAL_CONTROLS.map(id => ({ id, ...rects[id] }))
-  expect(
-    measured.length,
-    'all three decision controls must be present at desktop width',
-  ).toBe(3)
   // One line: the wrap rule is inert when the content fits, so a wide card
   // renders exactly as it did before this fix.
   expect(
@@ -415,10 +424,15 @@ for (const theme of THEMES) {
     // this surface: Decline + Submit are ~146px of a ~238px row, so they fit on
     // one line and pass identically on the broken pre-fix markup. What actually
     // has to hold is that this footer CANNOT clip when it stops fitting — the
-    // sibling's real risk (its no-fields variant pairs Decline with the much
-    // longer "Accept without values", and that variant has no gallery cell that
-    // renders it). So stress it: lengthen a label in the DOM until the row must
-    // overflow, then assert it wraps and stays reachable instead of clipping.
+    // sibling's real risk: its no-fields variant pairs Decline with the much
+    // longer "Accept without values". A `deep-chat-elicitation-no-fields` gallery
+    // slug EXISTS, but it does not render that variant — measured at 390px it
+    // yields `mcp-elicitation-no-fields-card` = 0 and `elicitation-accept-no-values`
+    // = 0, because both elicitation slugs share one conversation id and the
+    // message block's own content wins over the seeded composer entry. That is a
+    // pre-existing gallery-fixture gap, not something to assert around. So stress
+    // the real card instead: lengthen a label until the row must overflow, then
+    // assert it wraps and stays reachable instead of clipping.
     // This exercises the CSS contract on the real surface rather than restating
     // the class list.
     const submit = card.getByTestId('elicitation-submit').first()
@@ -440,6 +454,26 @@ for (const theme of THEMES) {
       'an over-wide action must WRAP onto its own line, not push its sibling out of the row',
     ).toBeLessThan(stressed['elicitation-submit'].top)
     await expectPressable(card, 'elicitation-decline', 'elicitation card, over-wide label')
+
+    // …and the harder case the space-separated label above cannot reach: a single
+    // UNBROKEN token (an ordinary German compound, or anything an MCP server
+    // chooses). `whitespace-normal` only breaks at spaces, so this is what
+    // separates a row that keeps its promise from one that silently spills its
+    // label back out of the card's `overflow-hidden` edge.
+    await submit.evaluate(el => {
+      el.textContent = 'Akzeptierenohnewertefortsetzengenehmigungsanfrage'
+    })
+    const unbroken = await measureRow(card, ['elicitation-decline', 'elicitation-submit'])
+    for (const [id, m] of Object.entries(unbroken)) {
+      expect(
+        m.visibleWidth,
+        `under an unbroken over-long token, ${id} is clipped (${m.visibleWidth}px of ${m.width}px)`,
+      ).toBe(m.width)
+    }
+    expect(
+      await submit.evaluate(el => el.scrollWidth <= el.clientWidth + 1),
+      'an unbroken token must WRAP inside the control, not overflow it (whitespace-normal alone cannot do this)',
+    ).toBe(true)
   })
 
   test(`TEST-6: the ask-user wizard's split footer keeps every action a PROTECTED direct child (${theme})`, async ({
@@ -595,7 +629,7 @@ test('TEST-9: a NARROW CONTAINER at a WIDE viewport is protected too (the case a
   }
 })
 
-test('TEST-7: the desktop-vertical assertion and the narrow-width assertions measure DIFFERENT things', async ({
+test('TEST-7 (fixture precondition): the narrow surface really is too narrow for the controls, so the wrap path is genuinely exercised', async ({
   page,
 }) => {
   // The regression this whole block exists for is that a green reachability
