@@ -9,7 +9,8 @@ Full logs: `/data/pbya/ziee/tmp/lifecycle-logs/denyclip-*.log`.
 ## Enumerated tests
 
 Run: `cd src-app/ui && CHOKIDAR_USEPOLLING=1 npx playwright test -c playwright.visual.config.ts approval-actions-reachable --workers=1`
-→ **20 passed, 0 failed** (`denyclip-round2-run.log`). The 20 executions are the 9
+→ **20 passed, 0 failed** (`round3-final.log`, the run after the round-3 fixes;
+also 20/20 three consecutive times before them). The 20 executions are the 9
 enumerated TEST-IDs (several parameterized over light+dark) plus the 5
 pre-existing TEST-10*/TEST-11 cases in the same file, which continue to pass
 unchanged.
@@ -29,7 +30,7 @@ TEST-9/INV-2) is among the passes above.
 
 ## Frontend gates
 
-- `npm run check (ui): PASS` — exit 0 (`denyclip-npm-check4.log`). Chains tsc +
+- `npm run check (ui): PASS` — exit 0 (`npm-check5.log`, after the round-3 fixes). Chains tsc +
   biome guardrails + lint:colors + settings-field + adjacent-inline + icon-action +
   hooks + logical-direction + tooltip-placement + kit-manifest + testid-registry +
   design-spec + gallery-coverage + gallery-crawl + fixtures + state-matrix +
@@ -113,6 +114,18 @@ Error: under an over-wide nav label, elicitation-decline is clipped (0px of 74px
 TEST-4 (the desktop no-regression control) and the pre-existing TEST-10*/TEST-11
 correctly stayed GREEN under the mutation — the defect is narrow-width only, so a
 control that went red there would have indicated an over-broad test.
+
+**Control C — the two attacker-controlled header labels reverted to
+`truncate` / `whitespace-nowrap`** (round-3 fix):
+
+```
+2 failed
+Error: the tool name overflows its box (534px of 238px) — a long attacker-chosen name is being hidden, so the user cannot tell which tool they are approving
+```
+
+534/238 is the round-3 reviewer's own independently measured number for a
+64-character tool name, so the guard now fails on exactly the case it exists for
+— which the previous, fixture-bound TEST-8 could never have reached.
 
 **Control B — `wrap-anywhere` reverted to `break-words`** (`negctrl-wrapanywhere.log`):
 
