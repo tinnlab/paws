@@ -554,12 +554,13 @@ test('TEST-18: an aborted REGENERATE keeps its fork anchor so the retry still br
   // of forking. The latched state is the caller's, and the abort must not
   // discard it. (Leaving it latched is also the pre-existing behaviour: the old
   // swallow-then-422 path never cleared it either.)
+  let clearCalls = 0
   stubRegistry({ composeRequestFields: async () => ({ content: 'hello' }) })
   const { set, get, state } = makeStore({
     pendingBranchFromMessageId: 'msg-42',
     pendingBranchForkLevel: 'assistant',
     clearPendingBranch: async () => {
-      throw new Error('clearPendingBranch must not be dispatched on a pre-flight abort')
+      clearCalls += 1
     },
   })
   const sendMessage = makeSendMessage(set as never, get as never)
@@ -569,6 +570,15 @@ test('TEST-18: an aborted REGENERATE keeps its fork anchor so the retry still br
       await sendMessage().catch(() => {})
     })
     expect(calls.n).toBe(0)
+    // Asserted by RECORDING the call, not by a throwing stub: a stub that throws
+    // is a silent tripwire, because the throw both prevents the state change the
+    // other assertions look at AND is swallowed by the `.catch(() => {})` around
+    // the send. Mutation-checked — with a `clearPendingBranch()` call reinstated
+    // in the abort path, this expectation is what goes red.
+    expect(
+      clearCalls,
+      'the abort must not dispatch clearPendingBranch (it is lazy, and it also clears editingMessage)',
+    ).toBe(0)
     expect(state.pendingBranchFromMessageId, 'the fork anchor must survive').toBe('msg-42')
     expect(state.pendingBranchForkLevel).toBe('assistant')
 
@@ -637,13 +647,14 @@ test('TEST-21: an aborted EDIT likewise keeps edit mode and its fork anchor', as
   // anchor is what makes their retry branch from the edited message rather than
   // append. Asserted separately because an earlier draft cleared BOTH here (via
   // the lazy `clearPendingBranch` action, which also nulls `editingMessage`).
+  let clearCalls = 0
   stubRegistry({ composeRequestFields: async () => ({ content: 'edited' }) })
   const { set, get, state } = makeStore({
     editingMessage: { id: 'msg-7', model_id: 'm-1' },
     pendingBranchFromMessageId: 'msg-7',
     pendingBranchForkLevel: 'user',
     clearPendingBranch: async () => {
-      throw new Error('clearPendingBranch must NOT be called on an edit abort')
+      clearCalls += 1
     },
   })
   const sendMessage = makeSendMessage(set as never, get as never)
@@ -653,6 +664,10 @@ test('TEST-21: an aborted EDIT likewise keeps edit mode and its fork anchor', as
       await sendMessage().catch(() => {})
     })
     expect(calls.n).toBe(0)
+    expect(
+      clearCalls,
+      'the abort must not dispatch clearPendingBranch — it would also null editingMessage',
+    ).toBe(0)
     expect(state.editingMessage, 'the user must stay in edit mode').not.toBeNull()
     expect(state.pendingBranchFromMessageId).toBe('msg-7')
     expect(state.pendingBranchForkLevel).toBe('user')
