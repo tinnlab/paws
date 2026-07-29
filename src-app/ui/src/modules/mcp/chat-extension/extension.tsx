@@ -51,7 +51,7 @@ function McpToolCallUI({ toolCall }: { toolCall: McpToolCall }) {
       className={cn('mb-2', !isExpanded && 'py-2.5')}
       data-testid={`mcp-toolcall-card-${toolCall.tool_use_id}`}
     >
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex items-center justify-between">
         {/* `flex-wrap`: the nowrap server label would otherwise starve this
             `truncate` tool name to a rendered width of 0 in a narrow card — the
             same measured failure fixed on the approval card's header. */}
@@ -187,7 +187,7 @@ function McpToolUseRenderer({ content: data }: ContentRendererProps) {
   // Historical view for tool calls loaded from DB (store is empty after reload)
   return (
     <Card size="sm" className={cn('mb-2', !isExpanded && 'py-2.5')} data-testid={`mcp-tooluse-card-${toolUseData.id}`}>
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex items-center justify-between">
         {/* `flex-wrap`: the nowrap server label would otherwise starve this
             `truncate` tool name to a rendered width of 0 in a narrow card — the
             same measured failure fixed on the approval card's header. */}
@@ -338,7 +338,7 @@ function McpToolGroupCard({
 
   return (
     <Card size="sm" className={cn('mb-2', !isExpanded && 'py-2.5')} data-testid="mcp-toolgroup-card">
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex items-center justify-between">
         {/* `flex-wrap`: the nowrap server label would otherwise starve this
             `truncate` tool name to a rendered width of 0 in a narrow card — the
             same measured failure fixed on the approval card's header. */}

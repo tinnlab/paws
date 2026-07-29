@@ -2840,10 +2840,10 @@ Required states: _(branch-only — proven via dynamic coverage)_
 | kind | condition | line |
 |---|---|---|
 | branch | `!isControlWrite` | 297 |
-| branch | `mcpServerParenLabel(toolCall.server)` | 326 |
-| branch | `toolCall.dest_host` | 341 |
-| branch | `toolCall.description` | 370 |
-| branch | `toolCall.input !== undefined` | 378 |
+| branch | `mcpServerParenLabel(toolCall.server)` | 339 |
+| branch | `toolCall.dest_host` | 354 |
+| branch | `toolCall.description` | 383 |
+| branch | `toolCall.input !== undefined` | 391 |
 
 ### `modules/mcp/chat-extension/components/elicitationFields`
 

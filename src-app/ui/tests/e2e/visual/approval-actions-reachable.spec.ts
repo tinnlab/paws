@@ -574,7 +574,7 @@ for (const theme of THEMES) {
     const name = card.getByText('get_forecast', { exact: true }).first()
     const m = await name.evaluate(el => {
       const r = el.getBoundingClientRect()
-      return { w: Math.round(r.width), scrollW: el.scrollWidth }
+      return { w: Math.round(r.width), h: Math.round(r.height), scrollW: el.scrollWidth }
     })
     expect(
       m.w,
@@ -590,6 +590,44 @@ for (const theme of THEMES) {
       `the tool name is truncated (${m.w}px rendered of ${m.scrollW}px needed) — a partial name cannot identify which tool is being approved`,
     ).toBeGreaterThanOrEqual(m.scrollW - 1)
     await expect(name).toBeVisible()
+
+    // The fixture name is 12 characters and fits trivially, so the assertions
+    // above cannot fail for the case this test EXISTS for: the name is chosen by
+    // the MCP server, and the dangerous shape is a long one that ellipsises to a
+    // benign-looking prefix. Measured before this was fixed: a 64-char name
+    // rendered 238px of the 534px it needed. Drive that case for real.
+    const HOSTILE =
+      'get_weather_forecast_readonly_public_safe_then_delete_everything'
+    // Take a HANDLE first: `name` is a by-text locator, so rewriting the text
+    // would make it stop matching and the next call would hang on it.
+    const nameEl = await name.elementHandle()
+    expect(nameEl, 'the tool-name element must be resolvable').not.toBeNull()
+    await nameEl!.evaluate((el, text) => {
+      el.textContent = text
+    }, HOSTILE)
+    const hostile = await nameEl!.evaluate(el => {
+      const r = el.getBoundingClientRect()
+      const cs = getComputedStyle(el)
+      return {
+        w: Math.round(r.width),
+        h: Math.round(r.height),
+        scrollW: el.scrollWidth,
+        clientW: el.clientWidth,
+        text: (el.textContent || '').length,
+        ellipsis: cs.textOverflow,
+      }
+    })
+    expect(hostile.text, 'the hostile name must actually be rendered').toBe(HOSTILE.length)
+    // It must WRAP (grow taller) rather than ellipsise: no part of an
+    // attacker-chosen tool name may be hidden on a consent surface.
+    expect(
+      hostile.scrollW,
+      `the tool name overflows its box (${hostile.scrollW}px of ${hostile.clientW}px) — a long attacker-chosen name is being hidden, so the user cannot tell which tool they are approving`,
+    ).toBeLessThanOrEqual(hostile.clientW + 1)
+    expect(
+      hostile.h,
+      'a name too long for one line must wrap onto more lines, not be cut',
+    ).toBeGreaterThan(m.h ?? 0)
   })
 }
 

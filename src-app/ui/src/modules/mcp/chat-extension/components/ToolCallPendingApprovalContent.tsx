@@ -320,11 +320,24 @@ export function ToolCallPendingApprovalContent({
             always the sibling that loses; only wrapping saves it. */}
         <div className="flex flex-wrap items-center gap-2 min-w-0">
           <Clock className="size-4 shrink-0 text-warning" />
-          <Text strong className="truncate" title={toolCall.tool_name}>
+          {/* The tool name and the server label are BOTH chosen by the (possibly
+              hostile) MCP server, and they are the two things the user is being
+              asked to trust. Neither may be ellipsised: measured at 390px, a
+              64-char name rendered 238px of the 534px it needs — i.e. an
+              ellipsised PREFIX, so `..._safe_then_delete_everything` reads as
+              `..._safe…`; and a long server label lost 139 of its 393px off the
+              card's clipped edge with no ellipsis and no cue, hiding the tail of
+              the server's own identity. `title` is not a fix: it is hover-only,
+              and this defect is on touch. So both WRAP (`wrap-anywhere`, which
+              unlike `break-words` participates in min-content sizing and so
+              actually breaks an unbroken token) and the card grows instead —
+              exactly the card's stated contract that nothing it discloses is
+              ever truncated, because poisoning hides in truncation. */}
+          <Text strong className="min-w-0 wrap-anywhere" title={toolCall.tool_name}>
             {toolCall.tool_name}
           </Text>
           {mcpServerParenLabel(toolCall.server) && (
-            <Text type="secondary" className="text-xs whitespace-nowrap">
+            <Text type="secondary" className="text-xs min-w-0 wrap-anywhere">
               {mcpServerParenLabel(toolCall.server)}
             </Text>
           )}
