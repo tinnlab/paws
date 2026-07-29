@@ -30,6 +30,29 @@ heaviest, thumb-closest control on a consent card.
   action once it wraps, dropping it at narrow widths (it is already hidden for
   control-server writes), or giving Deny equal visual weight.
 
+## Severity call, since the orchestrator asked
+
+My judgement on whether any deferred item should BLOCK this merge:
+
+- **Prominence inversion — does NOT block.** It is a real design question, but the
+  state it replaces is strictly worse on the same axis (Deny was unreachable while
+  the broadest approval was the only pressable control). Merging improves the
+  safety posture even if the owner later wants the weighting changed; holding the
+  branch would leave the worse state in place. Worth a follow-up, not a block.
+- **32px tap targets — does NOT block.** Pre-existing on this surface and every
+  other kit action row; this branch neither introduced nor worsened it, and fixing
+  it properly is an app-wide density change that should not ride a layout fix.
+- **Empty `deep-chat-elicitation-no-fields` cell — does NOT block, but it is the
+  one I would fix soonest.** It is a gallery FIXTURE bug (the slug exists and
+  renders the wrong card), so it silently removes coverage from any future change
+  to that footer — exactly the "test that certifies nothing" shape this branch
+  kept tripping over. It costs a seeded cell, not a redesign.
+
+Nothing in the deferred set is severe enough to block. The thing I would actually
+gate on is the finding profile: rounds 1-4 found 12, 9, 7 and 7 confirmed
+findings respectively, including a HIGH regression that one round's own fix
+introduced — see the round-5 note in `FIX_ROUND-4.md`.
+
 Also carried to the owner, from the same audits: the decision buttons are 32px
 tall, under the taxonomy `G5` 44px mobile tap-target floor (pre-existing, DEC-8),
 and the remaining non-consent `Card` footers still hand-roll the non-wrapping row
