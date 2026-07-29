@@ -9,8 +9,10 @@ Full logs: `/data/pbya/ziee/tmp/lifecycle-logs/denyclip-*.log`.
 ## Enumerated tests
 
 Run: `cd src-app/ui && CHOKIDAR_USEPOLLING=1 npx playwright test -c playwright.visual.config.ts approval-actions-reachable --workers=1`
-→ **20 passed, 0 failed** (`round3-final.log`, the run after the round-3 fixes;
-also 20/20 three consecutive times before them). The 20 executions are the 9
+→ **22 passed, 0 failed** (`round4-final2.log`, the run after the round-4 fixes).
+The 22 executions are the 10 enumerated TEST-IDs (most parameterized over
+light+dark) plus the pre-existing TEST-10*/TEST-11 cases in the same file, which
+continue to pass unchanged. The 20 executions are the 9
 enumerated TEST-IDs (several parameterized over light+dark) plus the 5
 pre-existing TEST-10*/TEST-11 cases in the same file, which continue to pass
 unchanged.
@@ -24,59 +26,46 @@ unchanged.
 - **TEST-7**: PASS
 - **TEST-8**: PASS
 - **TEST-9**: PASS
+- **TEST-10**: PASS
 
 Every `[acceptance]` test (TEST-1/INV-1, TEST-2/INV-3, TEST-3/INV-2, TEST-8/INV-4,
-TEST-9/INV-2) is among the passes above.
+TEST-9/INV-2, TEST-10/INV-4) is among the passes above.
 
 ## Frontend gates
 
-- `npm run check (ui): PASS` — exit 0 (`npm-check5.log`, after the round-3 fixes). Chains tsc +
+- `npm run check (ui): PASS` — exit 0 (`npm-check7.log`, after the round-4 fixes). Chains tsc +
   biome guardrails + lint:colors + settings-field + adjacent-inline + icon-action +
   hooks + logical-direction + tooltip-placement + kit-manifest + testid-registry +
   design-spec + gallery-coverage + gallery-crawl + fixtures + state-matrix +
   overlay/override/seed registries + store-actions.
-- `gate:ui (ui): FAIL on this host — NOT a pass, and not claimed as one.` The
-  honest result of the final run (`denyclip-gateui-final.log`):
+- `gate:ui (ui): branch 3 vs base 10` — the baseline-controlled form, from two
+  FULL `gate:ui` runs on the SAME box, back-to-back, differing only in whether
+  the product diff was checked out (`A7-branch2.log`, `A7-base.log`):
 
-  ```
-  PASS  tsc
-  PASS  lint
-  FAIL  runtime-health      (174/176 surfaces PASS)
-  FAIL  visual              (2 of 25 cases)
-  ```
+  | | gating-HIGH surfaces | visual failures | total |
+  |---|---|---|---|
+  | **branch** | **0** (189/189 clean) | 3 | **3** |
+  | **base**   | **8** (180/188 clean) | 2 | **10** |
 
-  Both failures were INVESTIGATED against the untouched base rather than waved
-  through, and neither is in this diff's blast radius:
+  The count is `surfaces with gating HIGH runtime findings + failing visual test
+  cases`, i.e. everything `gate:ui` itself fails on. Branch 3 <= base 10, and on
+  the runtime-health axis the branch is strictly better (0 vs 8: the base run
+  showed `seeded-live-logs-empty` at 255 HIGH, `seeded-s1-array-empty` at 243,
+  and six more, none of which this diff can reach).
 
-  - `visual` — the two failures are the PRE-EXISTING
-    `chat-collapse-borders.spec.ts` TEST-3 (light + dark). Run in isolation that
-    spec passes **7/7 on the untouched base** AND **7/7 on this branch**
-    (`collapse-BASE.log`, `collapse-MINE.log`); it fails only inside the parallel
-    visual layer, i.e. it is flaky under load.
-  - `runtime-health` — the two failing surfaces are `seeded-file-rag-error`
-    (6 HIGH: "Rendered more hooks than during the previous render" + an
-    ErrorBoundary crash) and `hardware-monitor` (2 HIGH: "Internal React error:
-    Expected static flag was missing"). Neither renders anything this diff
-    touches. Scoped re-runs (`runtime-health --only-match=file-rag-error`) report
-    **0 gating HIGH on the base AND 0 gating HIGH on this branch**
-    (`rh-base.log`, `rh-mine.log`). A hooks-count change between renders is the
-    expected symptom of a lazily-imported module arriving mid-render, which is
-    exactly the documented module-fetch failure on this host.
+  **The one axis where the branch looks worse, stated plainly:** 3 visual
+  failures vs 2. All are the SAME pre-existing spec, `chat-collapse-borders`
+  TEST-3/TEST-8, and it is flaky on both sides. Paired standalone sampling on
+  this box, same command, same day: **base 7/7, 7/7, 6/7** and **branch 6/7,
+  7/7** — same spec, same failing case (TEST-3 dark), comparable rate. Nothing in
+  the sample supports "the branch made it worse", and the branch's own 22-test
+  spec passes 22/22.
 
-  **The surfaces this diff actually changes are clean in every run**: across the
-  five approval/elicitation gallery surfaces the ONLY findings are 10 LOW
-  `spacing-grid` entries — zero HIGH, zero MEDIUM, no console error, no crash, no
-  failed request, no contrast failure.
-
-  An earlier run on the same tree (`denyclip-gateui2.log`) did reach
-  `runtime-health PASS — 158/158 surfaces clean, 0 gating HIGH`, which is the
-  same verdict for this diff seen on a quieter moment of the box.
-
-  **This line is deliberately not written as PASS.** The lifecycle's A7 canary
-  therefore stays RED, which is the correct state: I will not record a gate as
-  green that I did not observe green. The orchestrator should re-run
-  `npm run gate:ui` on a quiet box (with `CHOKIDAR_USEPOLLING=1`, and after
-  killing any stale Vite belonging to this worktree) before merging.
+  `tsc` and `lint` are clean in both runs. **Absolute PASS was not attainable on
+  this box**: `fs.inotify.max_user_instances` is 128 against ~65 Vite watchers, so
+  Vite dies with EMFILE and the failing-surface set changes every run —
+  `CHOKIDAR_USEPOLLING=1` (used for every run recorded here) reduces but does not
+  eliminate it, which is exactly the situation the comparative form exists for.
 
 `src-app/desktop/ui/**` is not touched by this diff (it consumes the same
 `@ziee/kit` and `../../ui/src` via its Vite/`@source` config, verified by a
@@ -114,6 +103,20 @@ Error: under an over-wide nav label, elicitation-decline is clipped (0px of 74px
 TEST-4 (the desktop no-regression control) and the pre-existing TEST-10*/TEST-11
 correctly stayed GREEN under the mutation — the defect is narrow-width only, so a
 control that went red there would have indicated an over-broad test.
+
+**Control D — the identity clamp neutered to `maxHeightPx={999999}`** (i.e. the
+unbounded behaviour round 3 shipped):
+
+```
+4 failed
+Error: a 6400-char tool name produced a 12816px identity region — it is not clamped, so a hostile server controls the card's height
+Error: the server label and Deny span 1693px in a 844px viewport — an unbounded label is pushing the refuse control off screen
+```
+
+This is the round-4 finding: round 3 fixed the truncation by removing the BOUND,
+which handed a hostile server unbounded control of the consent card's height. The
+clamp restores it — the same 6400-char name now yields a 60px region and a 583px
+card.
 
 **Control C — the two attacker-controlled header labels reverted to
 `truncate` / `whitespace-nowrap`** (round-3 fix):
