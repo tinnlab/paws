@@ -141,5 +141,14 @@
     "tests-quality",
     "maintainability",
     "correctness"
+  ],
+  "src-app/server/src/modules/workflow/workspace.rs": [
+    "security",
+    "correctness",
+    "concurrency",
+    "tests-quality",
+    "maintainability",
+    "design-conformance",
+    "wired-and-behaving"
   ]
 }
