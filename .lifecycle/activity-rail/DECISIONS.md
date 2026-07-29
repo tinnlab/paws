@@ -98,3 +98,40 @@ the turn and is a *message*, not a step; `ChatMessage.tsx:106-111` already force
 **Resolution:** No. Activity spans are computed only for assistant turns.
 **Basis:** codebase — user messages carry only `text` and attachment blocks, and attachments are
 already lifted out of the bubble (`ChatMessage.tsx:117-133`).
+
+### DEC-13: Round 19 ABORTed with "re-scope, do not iterate". What is the re-scope?
+**Resolution:** Make the defect class **unrepresentable** instead of adding a twentieth source
+predicate, by separating the elicitation card's BEHAVIOURAL state from its PRESENTATIONAL state:
+
+1. `ElicitationBlockedReason` drops `'not-registered'` (verified to have **no** behavioural
+   effect — see FIX_ROUND-20 §1 for the three-part evidence), so it is `'no-transport' |
+   'resolve-failed'`. `entryExists` stops being a classifier signal.
+2. The removed condition becomes `elicitationNotice()`, a pure function returning
+   `{ text, tone, status }`. `not-registered` survives only as a **case label** inside it and
+   never leaves as a value an action can be selected with.
+3. `resolveElicitationVia` takes `ElicitationDecision = Exclude<ElicitationAction, 'cancel'>`
+   rather than `ElicitationAction`.
+
+**Basis:** measurement, not preference. Round 19's FR19-10 mutation
+(`resolveElicitationVia(id, blocked === 'not-registered' ? 'cancel' : action)` — the user clicks
+Approve and the call is CANCELLED) was re-measured at the branch tip before this change: **tsc
+exit 0, and all 962 UI unit tests unchanged.** Rounds 13-19 established that the space of
+spellings is unbounded; the space of VALUES was not, so the value is what was removed.
+
+**(3) is deliberately broader than the finding.** Removing the value alone kills the one spelling;
+narrowing the action type kills every substitution of `'cancel'` for the user's answer under ANY
+condition (measured on four conditions, three of which remain perfectly writable). Nothing in-tree
+ever asked this consumer helper to cancel — cancellation is the provider's own store operation —
+so the narrowing costs no capability.
+
+**Rejected alternative:** keep `elicitationIsError` and have the notice return only text. It
+collapses to `reason !== null` once the union is two-valued, i.e. a predicate that no longer
+discriminates, plus a ~35-line source guard pinning its call site. Folding tone into the notice
+makes FIX_ROUND-9's copy/tone divergence unwritable (one function, one branch per state, both
+fields per case) rather than merely guarded.
+
+**Accepted consequence — a precedence change:** `resolve-failed` now outranks the not-registered
+sentence, where `not-registered` used to outrank it. The cell differs only when a transport is
+installed, holds no entry, AND a resolve failed — which `resolveDidFail` reports only when nothing
+was carried at all, i.e. the provider threw. "That didn't go through" is the accurate sentence for
+a failure the user just caused. Asserted in `transport.test.ts`.

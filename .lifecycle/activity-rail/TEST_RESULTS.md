@@ -272,3 +272,90 @@ The six `accepted-open` entries are all **pre-existing** and all closed BY CONST
 the component-level harness named in `FIX_ROUND-18.md` §8. Adding a twentieth predicate is
 the treadmill rounds 13-17 already ran. **This branch should not be pushed as converged
 until that harness lands, or an owner accepts the recorded gaps explicitly.**
+
+---
+
+## Round 20 (the re-scope) — re-verification after `ba0abb80f`
+
+Every row observed; logs under `/data/pbya/ziee/tmp/`. Nothing below is transcribed from an
+earlier round.
+
+### The baseline defect, reproduced BEFORE the change
+
+Round 19's FR19-10 mutation applied verbatim to the pre-refactor component
+(`resolveElicitationVia(data.elicitation_id, blocked === 'not-registered' ? 'cancel' : action)`):
+
+| what | observed | log |
+|---|---|---|
+| `npx tsc --noEmit` (ui) | **`TSC_EXIT=0`** — the mutation type-checks | — |
+| the 2 guard/seam specs | **21 tests, 21 pass, 0 fail** | — |
+| full UI unit suite | **962 tests, 947 pass, 15 fail** — the SAME 15 files as a clean run | `rr20-baseline-mutation-fullunit.log` |
+
+So the defect was invisible to the entire suite. That is the baseline this round re-scopes against.
+
+### After the change
+
+| suite | command | observed | log |
+|---|---|---|---|
+| the auditor's mutation, re-applied verbatim | `npx tsc --noEmit` | **`TSC_EXIT=2` — TS2367 + TS2345** (see FIX_ROUND-20 §2) | — |
+| the 8 defects round 20's OWN audit proved GREEN | `rr20/controls2.py` | **8/8 now RED**, `CONTROLS2_EXIT=0` | `rr20-controls2.log` |
+| the decoy-region attack (FR20-7) | serial | **RED** — "must render exactly ONE `data-testid={statusId}` region, found 2" | — |
+| refactor-tolerance (rename the handler; rename its decision param) | serial | **2/2 GREEN** | — |
+| e2e — the card's matrix, FINAL committed content | `playwright … run-js-inner-approval --workers=1` | **3 passed (1.3m)**, `E2E2_EXIT=0`; prints 72/175/238, matching `grep -n '^  test('` | `rr20-e2e2.log` |
+| mutation CLASS (4 conditions substituting `'cancel'`) | `npx tsc --noEmit` ×4 | **4/4 TS2345** — including 3 conditions that remain writable | — |
+| guard + seam specs | `node --test railIsolation.test.ts transport.test.ts` | **21 tests, 21 pass, 0 fail**, `UNIT_EXIT=0` | — |
+| mutation controls (8) | `rr20-controls.py` | **7 defects RED, 1 refactor GREEN**, `CONTROLS_EXIT=0` | `rr20-controls.log` |
+| full UI unit suite | `npm run test:unit` | **962 tests, 947 pass, 15 fail** — identical failing-file set to the pre-change run, i.e. **zero new failures** | `rr20-fullunit.log` |
+| `npm run check` (ui) | — | **`CHECK_UI_EXIT=0`** | `rr20-check-ui.log` |
+| `npm run check` (desktop/ui) | — | **`CHECK_DESKTOP_EXIT=0`** | `rr20-check-desktop.log` |
+| e2e — the card's own specs | `playwright … run-js-inner-approval + run-js-tool-scripting + ask-user-elicitation --workers=1` | **6 passed, 1 failed (2.9m)**, `E2E_EXIT=1`. All **3/3** `run-js-inner-approval` matrix tests PASS. | `rr20-e2e.log` |
+
+All of the above was re-run **serially** after the fix round (round 20's two audit angles ran in
+parallel in one worktree, so one angle's in-flight mutation was briefly visible to the other —
+see FIX_ROUND-20 §7). The full UI unit suite after the fixes: **962 tests, 947 pass, 15 fail**,
+failing-file set **identical** to the pre-change run (`rr20-fullunit2.log`).
+
+npm run check (ui): PASS
+npm run check (desktop/ui): PASS
+gate:ui (ui): branch 1 vs base 1 gating-HIGH surface — PASS (branch <= base)
+gate:ui (desktop/ui): PASS
+
+### The two non-green rows are PRE-EXISTING — attributed by measurement, not asserted
+
+Both were re-measured at the branch tip with this round's change **stashed**, i.e. the state of
+the branch before `ba0abb80f`. Both reproduce identically, so neither is attributable here.
+
+| symptom | with the change | at the tip WITHOUT it | log |
+|---|---|---|---|
+| `gate:ui` runtime-health | 187/188 PASS; HIGH on `seeded-s5-project-form-loading` (`Internal React error: Expected static flag was missing`, dark theme) | **187/188 PASS, same surface, same finding** | `rr20-gateui.log` / `rr20-gateui-BASE.log` |
+| e2e `run-js-tool-scripting` "renders ONE run_js card" | FAIL — `mcp-toolcall-card-tu-runjs-1` not found | **FAIL, byte-identical assertion** (and it fails twice in a row with the change, so it is not flake) | `rr20-e2e.log`, `rr20-e2e-retry.log` / `rr20-e2e-BASE.log` |
+
+The `gate:ui (ui)` line above is therefore recorded in the **baseline-controlled** form the A7 rule
+permits: the branch introduces no new gating HIGH surface. The committed
+`RUNTIME_FINDINGS.md` is refreshed by this round's run, so the artifact now reports the branch's
+real HIGH=1 instead of the stale HIGH=0 it carried; the attribution above is why that is not a
+regression from this change.
+
+### BLOCKING, and outside this round's scope: the branch does not compile
+
+`cargo build --bin ziee` fails at the branch tip:
+
+```
+error: this file contains an unclosed delimiter
+    --> server/src/modules/mcp/chat_extension/helpers.rs:2036:3
+```
+
+Measured, not guessed: a delimiter scan that skips strings/comments shows the file ends at
+**brace-depth 1** — exactly ONE `}` is missing. The first item that starts at the wrong depth is
+line **1782**, so `fn approval_is_always_reprompt_matches_the_gate()` (opened at line 1696) never
+closes and swallows the six `#[test]` fns after it. Substituting the BASE version of that one file
+makes the parse error disappear (leaving only ordinary `E0425 cannot find function` errors from the
+branch's other files), which proves the breakage was **introduced on this branch** — the file is
+untouched by round 20, and `git log` shows the merge commit `610c04c8c` as the last to touch it.
+
+This falsifies the earlier "`cargo check --workspace` exit 0" row recorded in this file for an
+earlier state of the branch. It is a merge-resolution defect, not a round-20 regression; round 20's
+diff is UI-only. **It must be fixed before this branch is merged.** It is not fixed here because
+the placement of the missing brace determines whether the six trailing test bodies are siblings or
+nested, and a wrong guess silently merges two tests — that is an owner call, with the exact line
+named above.
