@@ -98,12 +98,21 @@ test.describe('run_js inner-tool approval', () => {
     const approve = page.locator(`[data-testid="run-js-approval-approve-${eid}"]`)
     const deny = page.locator(`[data-testid="run-js-approval-deny-${eid}"]`)
 
-    // FIX_ROUND-7: pin the ACCESSIBLE NAMES. This property flip-flopped across two
-    // fix rounds with nothing guarding it: FIX_ROUND-5 added a `tooltip` to the
-    // disabled state, and kit Button derives `aria-label` from a string tooltip
-    // when no explicit `aria-label` is given — and these controls give none — so
-    // both controls announced identically and became indistinguishable to a
-    // screen reader (WCAG 2.5.3 / 4.1.2). Re-adding it turns this red.
+    // FIX_ROUND-7: pin the ACCESSIBLE NAMES. kit Button derives `aria-label` from
+    // a string tooltip when no explicit `aria-label` is given — and these controls
+    // give none — so a tooltip makes both controls announce identically and become
+    // indistinguishable to a screen reader (WCAG 2.5.3 / 4.1.2).
+    //
+    // MEASURED LIMIT (FIX_ROUND-19). This assertion does NOT catch the regression
+    // it was written for. FIX_ROUND-5's tooltip was CONDITIONAL on the degraded
+    // state — `tooltip={blocked ? '…' : undefined}` — and this test runs at
+    // `blocked === null`, where it evaluates to `undefined`. Re-adding it in its
+    // historical spelling leaves this whole file GREEN (3 passed); the same
+    // mutation is RED under `railIsolation.test.ts`'s FIX_ROUND-8 guard. So the
+    // property is held by that SOURCE guard, not by this line. What this line does
+    // pin is an UNCONDITIONAL tooltip, and the distinct names in the healthy state.
+    // (`FIX_ROUND-8.md` §0 is the round where exactly this confusion — a control
+    // that went red for a mutation that was not the regression — was first caught.)
     await expect(approve).toHaveAccessibleName(/approve/i)
     await expect(deny).toHaveAccessibleName(/deny/i)
     // Healthy transport -> both actionable, and no description pointing at an
@@ -198,9 +207,15 @@ test.describe('run_js inner-tool approval', () => {
     await approve.click()
     await expect.poll(() => actions.length, { timeout: 10000 }).toBe(1)
 
-    // The card must report the failure AND remain answerable — both controls
-    // still rendered, still enabled, still reachable (no `hidden`, no
-    // `pointer-events-none`, no un-render).
+    // The card must report the failure AND remain answerable.
+    //
+    // Attribution, stated precisely (FIX_ROUND-19): `toBeVisible()` reads box +
+    // visibility and `toBeEnabled()` reads the native `disabled` property — so
+    // between them they catch an un-render and a `disabled` latch, but NEITHER can
+    // observe `pointer-events-none`, which is what actually inerts a loading kit
+    // Button (its `<button>` branch deliberately excludes `loading` from
+    // `disabled`). What proves reachability is the `approve.click()` below, whose
+    // actionability check times out on an inert control.
     await expect(status).toHaveAttribute('data-status', 'resolve-failed', { timeout: 10000 })
     await expect(approve).toBeVisible()
     await expect(deny).toBeVisible()

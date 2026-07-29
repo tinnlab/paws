@@ -60,7 +60,7 @@ Log: `/data/pbya/ziee/tmp/lifecycle-logs/rail18-mutations.log`.
 | A | delete the single `setSubmitting(true)` | **GREEN — NOT CAUGHT** |
 | B | `if (resolveFailed) { focus(); return }` latch | RED |
 | C | `const carried = blocked === null ? await resolveElicitationVia(…) : false` | RED |
-| D | `disabled={blocked !== null}` (the FIX_ROUND-7 latch verbatim) | RED |
+| D | `disabled={blocked !== null}` (the **FIX_ROUND-4** latch — disabled on any blocked reason) | RED |
 | E | swap the controls' visible text, test ids left on their handlers | RED |
 | F | `className={blocked ? 'mt-3 hidden' : 'mt-3'}` | RED |
 | G | invert the failure judgement (`!resolveDidFail(…)`) | RED |
@@ -81,9 +81,10 @@ spec now says so in place.
 ## 4. The deletion, and why it was reverted
 
 On the strength of B-H the round deleted `FIX_ROUND-14` in full plus
-`FIX_ROUND-9`'s `loading`/action/label/render-gate/CSS checks (433 lines,
-commit `867a78b9e`). **Two auditors independently proved that was wrong, and the
-finding was reproduced in this session's own harness before being accepted.**
+`FIX_ROUND-9`'s `loading`/action/label/render-gate/CSS checks — **431 deleted
+lines** on the guard file (`+170 / −431`, net −261), in the now-superseded commit
+`867a78b9e`. **Two auditors independently proved that was wrong, and the finding
+was reproduced in this session's own harness before being accepted.**
 
 ### The mechanism, stated once
 
@@ -92,8 +93,13 @@ defect these guards cover there is a spelling **keyed on an unreachable value**
 that the matrix cannot see. B-H were RED only because each mutation's condition
 happened to discriminate a *reachable* state.
 
-Five holes were opened, each verified **GREEN under the reduced guards AND the
-matrix, RED under the restored guards**:
+Five holes were opened. **RED under the restored guards** is measured here
+(`rail18-restore-controls.log`); **GREEN under the reduced guards** was measured by
+the auditor and re-measured here for hole 2 (post-diff 10 pass/0 fail vs pre-diff
+9 pass/1 fail); **GREEN under the matrix** was measured by the auditor, which
+bundled all five into one component and ran the matrix (`3 passed`), and is
+re-measured here in `rail18-holes-vs-matrix.log` — it is also true by construction,
+since all five key on `not-registered`:
 
 | # | mutation (keyed on `not-registered`) | harm |
 |---|---|---|
@@ -170,13 +176,23 @@ is corrected in the shipped comments and above.
    and lint rows had no log behind them. On a branch where `FIX_ROUND-8` §0 and
    `-9` §0 are both *"the prose claimed a RED control that was GREEN"*, that is the
    exact claim class that has already failed twice here. **Every row in §9 now
-   names a log file**, and each was re-run.
-6. **The quoted e2e result was not produced by the committed spec** — the run
-   predates comment edits inside the M1 region (Playwright reported the tests at
-   lines 36/119/176; the commit has them at 57/148/205). The spec was **re-run
-   after the final edit** and §9 quotes that run.
+   names a log file and carries an explicit exit marker.** Not every row was
+   re-run after the final edit, and §9 says which: the 8 matrix-mutation controls
+   (`rail18-mutations.log`) predate it. That row is still sound — it mutates the
+   COMPONENT and the assertions it exercises are unchanged since — but it is
+   labelled, not silently folded into a blanket "each was re-run".
+6. **The quoted e2e result was not produced by the committed spec** — the earlier
+   run reported the tests at lines 36/119/176, while the commit current when that
+   claim was written (`867a78b9e`) had them at 57/148/205, because 21 lines were
+   added in the FILE HEADER (not, as first written, "inside the M1 region"). The
+   fix is a procedure, not a number: **the spec is re-run after every edit to it,
+   and the check is that the line numbers Playwright prints match
+   `grep -n '^  test(' ` on the committed file.** `rail18-e2e-final.log` satisfies
+   that check for the shipped commit. (Round 19 edited the spec again and the
+   numbers moved again — which is why this is stated as a check rather than as
+   three digits that go stale on the next comment.)
 7. **`FIX_ROUND-18.md` was untracked** while four shipped comments cited it as the
-   rationale for a 433-line deletion — a dangling citation for anyone checking out
+   rationale for a 431-line deletion — a dangling citation for anyone checking out
    the branch (coding-guidelines §17). It is committed alongside the comments that
    cite it.
 8. **Closure mis-attributed** — the old §5 credited the matrix for FR17-1/-2/-3 and
@@ -203,21 +219,37 @@ browser session can construct it*. The structural answer is a **component-level
 harness** that mounts the card against a stubbed transport, constructs all four
 `blocked` values directly, and clicks. `FIX_ROUND-14` records that auditors already
 drove this component under React 19 + jsdom in private worktrees, so it is
-demonstrably feasible; this repo has no such harness committed (zero `.test.tsx`
-files). That is the recommendation, and it is deliberately **not** attempted in
-this round — this round's lesson is that removing cover before the replacement is
+demonstrably feasible.
+
+**No such harness exists in this repo.** Precisely: `git ls-files '*.test.tsx'`
+returns exactly one file — `src-app/desktop/ui/src/modules/desktop-base/seam-parity.test.tsx`
+— which mounts nothing (it calls `resolveOverride()` and asserts the result is a
+function); there is no `@testing-library/*` dependency anywhere; and
+`src-app/ui/vitest.config.ts` scopes `include` to `src/**/*.store.test.ts`, so a
+`.tsx` spec added there would not even run. Standing one up is therefore a real
+piece of work, not a file drop.
+
+That is the recommendation, and it is deliberately **not** attempted in this round — this round's lesson is that removing cover before the replacement is
 proven is how a guard family loses its subject.
 
 ## 9. Observed results — every row names its log
 
 All logs under `/data/pbya/ziee/tmp/lifecycle-logs/`.
 
-| suite | observed | log |
-|---|---|---|
-| `railIsolation.test.ts` (restored) | **10 tests, 10 pass, 0 fail** | `rail18-unit-final.log` |
-| restore regression controls (the 5 holes) | **5/5 RED** | `rail18-restore-controls.log` |
-| e2e — the state matrix, committed content | **3 passed, 0 failed (1.2m)**, exit 0 | `rail18-e2e-final.log` |
-| matrix mutation controls (8, `-g`-scoped) | **7 RED, 1 GREEN (A)** | `rail18-mutations.log` |
-| mutation A vs **all three** tests | **3 passed, exit 0 — still GREEN**; the negative result holds file-wide, not just for M1 | `rail18-mutA-allthree.log` |
-| `tsc --noEmit` (ui) | **exit 0** | `rail18-tsc-final.log` |
-| biome lint (touched files) | **exit 0** | `rail18-biome-final.log` |
+| suite | observed | log | re-run after the final edit? |
+|---|---|---|---|
+| `railIsolation.test.ts` (restored) | **10 tests, 10 pass, 0 fail** | `rail18-unit-final.log` | yes |
+| restored-guard mutation controls (16) | **12 defects RED, 4 refactors GREEN** | `rail18-unit-mutations.log` | yes |
+| restore regression controls (the 5 holes) | **5/5 RED** | `rail18-restore-controls.log` | yes |
+| the 5 holes vs the **matrix** (bundled) | **3 passed, `HOLES_VS_MATRIX_EXIT=0`** — all five live at once, matrix fully green | `rail18-holes-vs-matrix.log` | yes |
+| e2e — the state matrix, committed content | **3 passed, 0 failed**, `FINAL_SPEC_EXIT=0`; the test line numbers it prints match `grep -n '^  test(' ` on the committed spec | `rail18-e2e-final.log` | yes |
+| matrix mutation controls (8, `-g`-scoped) | **7 RED, 1 GREEN (A)** | `rail18-mutations.log` | **no** — predates the final comment edit. It mutates the COMPONENT and the assertions it exercises are unchanged since, so it stands; flagged rather than folded into a blanket claim |
+| mutation A vs **all three** tests | **3 passed, `MUT_A_ALLTHREE_EXIT=0` — still GREEN**; the negative result holds file-wide, not just M1 | `rail18-mutA-allthree.log` | yes |
+| `tsc --noEmit` (ui) | **`TSC_EXIT=0`** | `rail18-tsc-final.log` | yes |
+| biome lint (touched files) | **`BIOME_EXIT=0`** | `rail18-biome-final.log` | yes |
+
+The mutation-control row for the in-flight raise is the one the commit message
+leans on ("deleting `setSubmitting(true)` leaves the guards RED but the whole spec
+GREEN"): its RED half is `U7` in `rail18-unit-mutations.log`, its GREEN half is
+`rail18-mutA-allthree.log`. The first draft resolved that gap by deleting the row;
+it is logged instead.

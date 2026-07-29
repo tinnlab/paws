@@ -396,7 +396,18 @@ test('FIX_ROUND-5: ChatMessage re-resolves rail steps THROUGH withSegmentationSh
  * `FIX_ROUND-18.md` §3, mutation A). It is a COMPLEMENT to this file, not a
  * replacement. The structural answer that would actually retire these guards is a
  * COMPONENT-level harness able to construct all four `blocked` values directly;
- * that does not exist in this repo yet, and `FIX_ROUND-18.md` §6 names it.
+ * that does not exist in this repo yet, and `FIX_ROUND-18.md` §8 names it.
+ *
+ * Round 19's blind audit then found FIVE MORE holes in these restored guards,
+ * none of them introduced by round 18 — they are pre-existing and are recorded
+ * `accepted-open` in `LEDGER.jsonl` round 19 rather than patched, because adding
+ * five more predicates is the treadmill this round exists to stop. The sharpest,
+ * because it is worse than anything the deletion opened: the send's ARGUMENTS are
+ * unguarded, so `resolveElicitationVia(id, blocked === 'not-registered' ? 'cancel'
+ * : action)` is tsc-clean, GREEN here, invisible to the matrix — and silently
+ * sends a DIFFERENT answer than the one the user gave. A component harness closes
+ * it by construction (construct `not-registered`, click Approve, assert the POST
+ * carries `accept`); a sixth predicate would not close the seventh spelling.
  *
  * FIX_ROUND-9 closed three proven evasions of the first cut — boolean-shorthand
  * `disabled`, a spread carrying it, and a `>` inside an earlier quoted attribute
