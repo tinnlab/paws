@@ -671,11 +671,11 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!state` | 141 |
-| branch | `this.initialized` | 432 |
-| empty | `extensions.length === 0` | 610 |
-| empty | `extensions.length === 0` | 643 |
-| empty | `!registered \|\| registered.length === 0` | 932 |
+| branch | `!state` | 142 |
+| branch | `this.initialized` | 433 |
+| empty | `extensions.length === 0` | 611 |
+| empty | `extensions.length === 0` | 644 |
+| empty | `!registered \|\| registered.length === 0` | 933 |
 
 ### `modules/chat/core/extensions/utils`
 
