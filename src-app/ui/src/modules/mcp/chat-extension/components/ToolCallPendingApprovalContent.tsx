@@ -318,68 +318,39 @@ export function ToolCallPendingApprovalContent({
             scrollWidth=98). A `truncate` element sets `overflow:hidden`, which
             already gives a flex item an automatic minimum size of ZERO, so it is
             always the sibling that loses; only wrapping saves it. */}
-          {/* The tool name and the server label are BOTH chosen by the (possibly
-            hostile) MCP server, and they are the two things the user is asked to
-            trust. Three failure modes, and fixing any one in isolation
-            reintroduces another — each of these was MEASURED on this card:
-              1. ELLIPSISED they hide their own tail: a 64-char name rendered
-                 238px of the 534px it needs, so `..._safe_then_delete_everything`
-                 reads as `..._safe…`.
-              2. UNBOUNDED they push the decision row off screen: a 6400-char
-                 name grew the card to 5123px with Deny ~2800px below the fold.
-              3. CLAMPED-WITH-A-TOGGLE is the worst of both: the identity column
-                 was only 98px wide at 390px, so ORDINARY names clamped by
-                 default (`github__create_or_update_file_contents_v2` showed 34
-                 of 41 chars, the server label 0 of 14) — and the Show-more the
-                 user must click to read them re-opened the unbounded hole, at
-                 13343px of card. The disclosure affordance WAS the exploit.
+          {/* `flex-wrap` is load-bearing, same failure mode as the footer row:
+            the two secondary labels are `whitespace-nowrap` and together need
+            205px of a 238px row at a 390px viewport, so on ONE line they starved
+            the TOOL NAME — the single thing the user is being asked to consent
+            to — down to a rendered width of 0 (measured: name w=0,
+            scrollWidth=98). A `truncate` element sets `overflow:hidden`, which
+            already gives a flex item an automatic minimum size of ZERO, so it is
+            always the sibling that loses; only wrapping saves it.
 
-            So: a bounded, SCROLLABLE region — the same `max-h-* overflow-auto`
-            pattern the Arguments block below already uses, which is bounded and
-            fully readable with no expansion escape hatch. The card's height
-            cannot be driven by a server string, every character stays in the DOM
-            and is reachable, and there is no toggle to trick anyone into.
-
-            Layout: the identity gets its OWN row rather than competing with the
-            status text. `flex-1` alone was the bug in (3) — flex-basis:0 never
-            overflows its line, so the `whitespace-nowrap` status sibling silently
-            took two thirds of the row and the identity never wrapped.
-
-            `wrap-anywhere` (not `break-words`) because only it participates in
-            min-content sizing and so actually breaks an unbroken token.
-            `dir="ltr"` + `unicode-bidi: isolate` keeps a U+202E inside either
-            string from reordering the card's own status text around it (it does
-            NOT neutralise reordering WITHIN the attacker's own string, which
-            costs the attacker nothing they did not already have). */}
-        <div className="min-w-0">
-          <div className="flex items-start gap-2 min-w-0">
-            <Clock className="size-4 shrink-0 text-warning mt-0.5" />
-            <div
-              className="min-w-0 flex-1 max-h-14 overflow-y-auto overscroll-contain"
-              data-testid="approval-identity"
-            >
-              <Text
-                strong
-                dir="ltr"
-                className="block min-w-0 wrap-anywhere [unicode-bidi:isolate]"
-                title={toolCall.tool_name}
-                data-testid="approval-tool-name"
-              >
-                {toolCall.tool_name}
-              </Text>
-              {mcpServerParenLabel(toolCall.server) && (
-                <Text
-                  type="secondary"
-                  dir="ltr"
-                  className="block text-xs min-w-0 wrap-anywhere [unicode-bidi:isolate]"
-                  data-testid="approval-server-label"
-                >
-                  {mcpServerParenLabel(toolCall.server)}
-                </Text>
-              )}
-            </div>
-          </div>
-          <Text type="secondary" className="mt-1 block text-xs">
+            NOT ADDRESSED HERE, deliberately: a name or label LONGER than the
+            wrapped line still ellipsises, so a hostile server can present a
+            benign-looking prefix. That is a real defect, it is pre-existing, and
+            three attempts to fix it inside this branch each introduced a worse
+            one (unbounded growth that pushed Deny 2800px below the fold; then a
+            clamp that cut ORDINARY names to 34 of 41 characters and offered a
+            "Show more" whose single click produced a 13,343px card). The
+            fix-loop stopped converging on it, so it is split out with its
+            measurements rather than guessed at again — see
+            `.lifecycle/mobile-approval-clipped/FIX_ROUND-5.md` and the
+            follow-up note in DECISIONS.md (DEC-10). `title` is kept as the
+            cheap, non-regressing half: it costs nothing and helps a pointer
+            user, while not pretending to solve the touch case. */}
+        <div className="flex flex-wrap items-center gap-2 min-w-0">
+          <Clock className="size-4 shrink-0 text-warning" />
+          <Text strong className="truncate" title={toolCall.tool_name}>
+            {toolCall.tool_name}
+          </Text>
+          {mcpServerParenLabel(toolCall.server) && (
+            <Text type="secondary" className="text-xs whitespace-nowrap">
+              {mcpServerParenLabel(toolCall.server)}
+            </Text>
+          )}
+          <Text type="secondary" className="text-xs whitespace-nowrap">
             — needs approval
           </Text>
         </div>

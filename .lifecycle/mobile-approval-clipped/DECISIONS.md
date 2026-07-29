@@ -100,3 +100,20 @@ is within this branch's thesis rather than an expansion of it. Contrast DEC-8
 is therefore correctly deferred. The deciding question is not "did the rig report
 it" but "does this branch's claim — the mobile approval card works — hold
 without it"; here it does not.
+
+### DEC-10: The disclosure fix stopped converging. Keep iterating, or split it out?
+**Resolution:** SPLIT IT OUT. Revert the round-3/4/5 disclosure escalation, keep
+the converged reachability + anti-starvation work, and hand the disclosure
+problem over with its measurements for its own lifecycle.
+- DESCOPED: ITEM-6-disclosure — a name/label LONGER than the wrapped line still
+  ellipsises. Three attempts inside this branch each shipped a worse defect and
+  the audit profile went flat (12, 9, 7, 9, 9), so the phase-7 validator required
+  an abort rather than another round. [approved: phase-7 convergence gate,
+  2026-07-28 — "fix loop is NOT CONVERGING and must be ABORTED, not continued …
+  Re-scope instead"]
+**Basis:** convention — the gate's own rule, and the ledger supports it: rounds
+1-2 (reachability) decayed 35 → 15 → 9 and went quiet, while rounds 3-5
+concentrated 2 → 3 → 6 findings in the one file carrying the disclosure work,
+with two of them being regressions introduced by the previous round's fix. The
+reverted state is strictly better than base on every axis, so splitting costs
+nothing that was already working.

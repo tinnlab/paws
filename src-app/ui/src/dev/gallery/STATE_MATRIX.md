@@ -2767,10 +2767,10 @@ Required states: `error`
 | branch | `step > 0` | 432 |
 | branch | `isLast` | 444 |
 | branch | `total > 1` | 479 |
-| branch | `current && isChoice && currentSchema.title` | 515 |
-| branch | `current && isChoice && currentSchema.description` | 520 |
-| branch | `current` | 525 |
-| branch | `isChoice` | 526 |
+| branch | `current && isChoice && currentSchema.title` | 503 |
+| branch | `current && isChoice && currentSchema.description` | 508 |
+| branch | `current` | 513 |
+| branch | `isChoice` | 514 |
 
 ### `modules/mcp/chat-extension/components/ElicitationFormContent`
 
@@ -2840,10 +2840,10 @@ Required states: _(branch-only — proven via dynamic coverage)_
 | kind | condition | line |
 |---|---|---|
 | branch | `!isControlWrite` | 297 |
-| branch | `mcpServerParenLabel(toolCall.server)` | 370 |
-| branch | `toolCall.dest_host` | 392 |
-| branch | `toolCall.description` | 421 |
-| branch | `toolCall.input !== undefined` | 429 |
+| branch | `mcpServerParenLabel(toolCall.server)` | 348 |
+| branch | `toolCall.dest_host` | 363 |
+| branch | `toolCall.description` | 392 |
+| branch | `toolCall.input !== undefined` | 400 |
 
 ### `modules/mcp/chat-extension/components/elicitationFields`
 

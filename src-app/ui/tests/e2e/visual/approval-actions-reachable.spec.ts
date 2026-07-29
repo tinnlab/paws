@@ -553,146 +553,90 @@ for (const theme of THEMES) {
   })
 }
 
-/**
- * Measure the identity region the way a USER experiences it: what is actually
- * visible inside the bounded box, not the intrinsic size of the span inside it.
+/* ── TEST-8 / TEST-10 — the DISCLOSURE half, scoped to what converged ────────
  *
- * This distinction is the whole lesson of rounds 3-5. The bound deliberately
- * leaves its child at full intrinsic size (that is what keeps the complete
- * string in the DOM), so any assertion that measures the CHILD is blind to
- * exactly what the bound hides — and two successive versions of this test
- * passed while the tool name showed 34 of 41 characters and the server label 0
- * of 14.
+ * These guard the defect this branch actually fixed on the header: at 390px the
+ * two `whitespace-nowrap` secondary labels took 205px of a 238px row and starved
+ * the tool NAME to a RENDERED WIDTH OF 0, so the card read
+ * "(Acme Weather) — needs approval" with no indication of WHICH tool. Wrapping
+ * the row fixed it.
  *
- * `expect.poll` rather than a bare read: the stress cases below write
- * `textContent` outside React, and layout settles asynchronously, so an
- * un-awaited read is a coin flip. A previous version of this test failed ~50% of
- * runs for exactly that reason.
+ * What these deliberately do NOT assert: that a LONG name is fully disclosed. A
+ * name longer than the wrapped line still ellipsises. Three successive attempts
+ * to fix that inside this branch each shipped a worse defect (unbounded growth;
+ * then a clamp that cut ordinary names and whose "Show more" produced a 13,343px
+ * card), and the audit profile stopped decaying — so that property is split out
+ * rather than guarded by an assertion I could not make converge. Writing a test
+ * for a property the code does not have is how the earlier versions of these two
+ * tests came to pass on both fixed and broken code.
  */
-async function identityMetrics(card: Locator) {
-  return card.evaluate(root => {
-    const region = root.querySelector('[data-testid="approval-identity"]') as HTMLElement
-    const name = root.querySelector('[data-testid="approval-tool-name"]') as HTMLElement
-    const label = root.querySelector('[data-testid="approval-server-label"]') as HTMLElement | null
-    const deny = root.querySelector('[data-testid="tool-approval-deny"]')!.getBoundingClientRect()
-    const rr = region.getBoundingClientRect()
-    // How much of an element is inside the region's VISIBLE box (the region
-    // scrolls, so anything outside it is hidden until the user scrolls).
-    const visibleFrac = (el: HTMLElement | null) => {
-      if (!el) return null
-      const r = el.getBoundingClientRect()
-      const h = Math.max(0, Math.min(r.bottom, rr.bottom) - Math.max(r.top, rr.top))
-      return r.height === 0 ? 0 : h / r.height
-    }
-    return {
-      regionH: Math.round(rr.height),
-      regionScrollH: region.scrollHeight,
-      regionClientH: region.clientHeight,
-      scrollable: getComputedStyle(region).overflowY,
-      nameVisibleFrac: visibleFrac(name),
-      labelVisibleFrac: visibleFrac(label),
-      nameDomLen: (name.textContent || '').length,
-      cardH: Math.round(root.getBoundingClientRect().height),
-      spanToDeny: Math.round(deny.bottom - rr.top),
-      viewportH: window.innerHeight,
-      hasToggle: !!region.querySelector('[data-testid="collapsible-toggle"]'),
-    }
-  })
-}
-
-/** Realistic MCP tool names — not adversarial, just long. These are the shapes
- *  that a previous version of this fix silently clamped by default. */
-const REAL_TOOL_NAMES = [
-  'github__create_or_update_file_contents_v2',
-  'mcp__filesystem__read_text_file',
-]
-
 for (const theme of THEMES) {
-  test(`TEST-8: at 390px an ORDINARY tool name and its server label are FULLY visible (${theme})`, async ({
+  test(`TEST-8: at 390px the approval card still shows WHICH tool is being approved (${theme})`, async ({
     page,
   }) => {
     await page.setViewportSize(MOBILE)
     await openSurface(page, 'deep-chat-tool-approval', theme)
     const card = page.getByTestId('mcp-tool-approval-card').first()
-    const nameEl = await card.getByTestId('approval-tool-name').elementHandle()
 
-    for (const realName of REAL_TOOL_NAMES) {
-      await nameEl!.evaluate((el, t) => {
-        el.textContent = t
-      }, realName)
-      // Poll for the write to LAND and layout to settle (an out-of-React
-      // textContent write settles asynchronously), then assert the real
-      // properties — so a failure reports what is wrong, not just "poll timed
-      // out". Polling on the assertion itself would hide the diagnosis.
-      await expect
-        .poll(async () => (await identityMetrics(card)).nameDomLen, { timeout: 5_000 })
-        .toBe(realName.length)
-      const m = await identityMetrics(card)
-      expect(
-        m.nameVisibleFrac,
-        `"${realName}" (${realName.length} chars) is only ${Math.round((m.nameVisibleFrac ?? 0) * 100)}% visible — an ordinary tool name is cut on a consent surface`,
-      ).toBeGreaterThan(0.99)
-      // Nothing hidden behind the bound for an ordinary name — the region must
-      // not even need to scroll.
-      expect(
-        m.regionScrollH,
-        `"${realName}" (${realName.length} chars) does not fit the identity region (${m.regionScrollH}px of ${m.regionClientH}px) — an ordinary tool name is being cut on a consent surface`,
-      ).toBeLessThanOrEqual(m.regionClientH + 1)
-      // …and the server label, the card's trust anchor, is visible too. A prior
-      // version scored 0 of 14 characters here while every assertion passed.
-      expect(
-        m.labelVisibleFrac,
-        `the server label is only ${Math.round((m.labelVisibleFrac ?? 0) * 100)}% visible beside "${realName}" — the card's trust anchor is hidden`,
-      ).toBeGreaterThan(0.99)
-    }
+    const name = card.getByText('get_forecast', { exact: true }).first()
+    const m = await name.evaluate(el => {
+      const r = el.getBoundingClientRect()
+      return { w: Math.round(r.width), scrollW: el.scrollWidth, title: el.getAttribute('title') }
+    })
+    // Asserted on RENDERED WIDTH, not text presence: the pre-existing TEST-11
+    // asserts `toContainText('get_forecast')` and passed for the entire life of
+    // the defect, because the string was there and simply unrenderable. That is
+    // exactly how a consent surface shipped unable to say what it was asking
+    // consent for.
+    expect(
+      m.w,
+      `the tool name is rendered ${m.w}px wide (it needs ${m.scrollW}px) — the user cannot see which tool they are approving`,
+    ).toBeGreaterThan(0)
+    expect(
+      m.w,
+      `the tool name is cut (${m.w}px rendered of ${m.scrollW}px) at a width where it fits`,
+    ).toBeGreaterThanOrEqual(m.scrollW - 1)
+    await expect(name).toBeVisible()
+    // The full name is at least available to a pointer user. Not a fix for the
+    // touch case, and not claimed as one.
+    expect(m.title, 'the full tool name must be available as a title').toBe('get_forecast')
   })
 
-  test(`TEST-10: an EXTREME server-chosen string is bounded, reachable, and has no expansion escape hatch (${theme})`, async ({
+  test(`TEST-10: at 390px NO element of the identity row is starved by its siblings (${theme})`, async ({
     page,
   }) => {
     await page.setViewportSize(MOBILE)
     await openSurface(page, 'deep-chat-tool-approval', theme)
     const card = page.getByTestId('mcp-tool-approval-card').first()
-    const nameEl = await card.getByTestId('approval-tool-name').elementHandle()
 
-    const EXTREME = 'a'.repeat(6400)
-    await nameEl!.evaluate((el, t) => {
-      el.textContent = t
-    }, EXTREME)
-    await expect
-      .poll(async () => (await identityMetrics(card)).nameDomLen, { timeout: 5_000 })
-      .toBe(EXTREME.length)
-    const m = await identityMetrics(card)
-
-    // 1. BOUNDED — a server string cannot drive the card's height.
-    expect(
-      m.cardH,
-      `a ${EXTREME.length}-char name grew the card to ${m.cardH}px in a ${m.viewportH}px viewport`,
-    ).toBeLessThanOrEqual(m.viewportH)
-    expect(
-      m.spanToDeny,
-      `the identity and Deny span ${m.spanToDeny}px in a ${m.viewportH}px viewport — the user cannot see WHAT they are approving and the refuse control together`,
-    ).toBeLessThanOrEqual(m.viewportH)
-
-    // 2. COMPLETE and REACHABLE — the bound is visual only, and the overflow is
-    //    scrollable rather than hidden, so nothing needs a toggle to be read.
-    expect(m.nameDomLen, 'every character must stay in the DOM').toBe(EXTREME.length)
-    expect(
-      m.scrollable,
-      'the bounded region must be SCROLLABLE, or the excess is unreachable',
-    ).toMatch(/auto|scroll/)
-    expect(
-      m.regionScrollH,
-      'the extreme case must actually overflow the bound (otherwise this proves nothing)',
-    ).toBeGreaterThan(m.regionClientH)
-
-    // 3. NO EXPANSION ESCAPE HATCH — the previous design offered a "Show more"
-    //    that, clicked once, produced a 13343px card with Deny at y=13539. The
-    //    affordance the user needed in order to read the name WAS the exploit.
-    expect(
-      m.hasToggle,
-      'the identity region must not offer an expand toggle — expanding re-opens the unbounded-growth hole',
-    ).toBe(false)
+    // The defect was a COMPETITION, not a property of any one element: three
+    // labels shared a 238px row, two of them `whitespace-nowrap`, and whichever
+    // lost rendered at zero width. Asserting only "the server label renders"
+    // would pass on the broken markup too (there, the label wins and the NAME is
+    // the one starved) — that is the vacuous-guard shape this spec keeps
+    // catching. So assert the JOINT property: every element of the identity row
+    // renders at its full intrinsic width, at the same time.
+    const measured = await card.evaluate(root => {
+      const texts = ['get_forecast', '(Acme Weather)', '— needs approval']
+      const spans = [...root.querySelectorAll('span')]
+      return texts.map(t => {
+        const el = spans.find(sp => (sp.textContent || '').trim() === t)
+        if (!el) return { text: t, found: false, w: 0, scrollW: 0 }
+        return {
+          text: t,
+          found: true,
+          w: Math.round(el.getBoundingClientRect().width),
+          scrollW: el.scrollWidth,
+        }
+      })
+    })
+    for (const m of measured) {
+      expect(m.found, `"${m.text}" must be present in the identity row`).toBe(true)
+      expect(
+        m.w,
+        `"${m.text}" is rendered ${m.w}px wide of the ${m.scrollW}px it needs — a sibling starved it out of the row`,
+      ).toBeGreaterThanOrEqual(m.scrollW - 1)
+    }
   })
 }
 
