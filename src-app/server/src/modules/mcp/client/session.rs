@@ -8,7 +8,7 @@ use super::http::HttpMcpClient;
 use crate::common::AppError;
 use crate::modules::mcp::models::{McpServer, TransportType};
 use crate::modules::mcp::sampling::SamplingHandler;
-use crate::modules::mcp::tool_calls::models::McpCallContext;
+use crate::modules::mcp::tool_calls::models::{McpCallContext, ToolCallTiming};
 
 /// Error returned when a server is configured with the deprecated SSE
 /// transport (removed in MCP 2025-03-26 in favour of Streamable HTTP).
@@ -33,6 +33,12 @@ pub struct McpSession {
     /// (`user_id: None`) for pooled non-tool-call sessions, in which case
     /// `call_tool` records nothing. See `tool_calls/`.
     call_ctx: McpCallContext,
+    /// ITEM-14: the timing of the MOST RECENT `call_tool` on this session — the
+    /// SAME `started_at`/`elapsed_ms` pair handed to `record_call`. Read back by
+    /// the chat paths (`helpers::execute_tool`, `agent_tool_call::call_mcp_tool`)
+    /// so the `mcpToolComplete` SSE frame reports the recorder's clock rather than
+    /// starting a second one. `None` until the first call.
+    last_call_timing: Option<ToolCallTiming>,
 }
 
 impl McpSession {
@@ -72,6 +78,7 @@ impl McpSession {
             created_at: Instant::now(),
             last_used: Instant::now(),
             call_ctx: McpCallContext::default(),
+            last_call_timing: None,
         })
     }
 
@@ -102,6 +109,7 @@ impl McpSession {
             created_at: Instant::now(),
             last_used: Instant::now(),
             call_ctx: McpCallContext::default(),
+            last_call_timing: None,
         })
     }
 
@@ -229,10 +237,25 @@ impl McpSession {
             .call_tool(name, arguments.clone(), message_id, sse_tx, elicit_notify_tx)
             .await;
         let elapsed_ms = t0.elapsed().as_millis() as i64;
+        // ITEM-14: publish the ONE clock reading before recording, so the SSE
+        // frame (`send_tool_complete_event`) and the persisted row report the same
+        // `started_at`/`duration_ms`. Set on BOTH outcomes — a failed or timed-out
+        // call is recorded with a duration, so its rail step must show one too.
+        self.last_call_timing = Some(ToolCallTiming {
+            started_at,
+            elapsed_ms,
+        });
         // Record every invocation (chat / rest / always / sampling / approval,
         // incl. built-ins). Fire-and-forget; cannot affect the call's result.
         self.record_call(name, &arguments, &result, started_at, elapsed_ms);
         result
+    }
+
+    /// ITEM-14: the timing of the most recent [`Self::call_tool`] on this session
+    /// (`None` before the first). The chat paths read this immediately after the
+    /// call and pass it to the `mcpToolComplete` frame.
+    pub fn last_call_timing(&self) -> Option<ToolCallTiming> {
+        self.last_call_timing
     }
 
     pub async fn list_resources(&mut self) -> Result<Vec<Resource>, AppError> {

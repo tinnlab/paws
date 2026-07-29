@@ -261,6 +261,7 @@ export const ApiEndpoints = {
   'McpServerToolApprovals.set': 'PUT /api/mcp/servers/{id}/tool-approvals/{tool}',
   'McpToolCall.get': 'GET /api/mcp/tool-calls/{id}',
   'McpToolCall.list': 'GET /api/mcp/tool-calls',
+  'McpToolCall.reveal': 'GET /api/mcp/tool-calls/{id}/reveal',
   'McpUserPolicy.get': 'GET /api/mcp/user-policy',
   'McpUserPolicy.update': 'PUT /api/mcp/user-policy',
   'Memory.create': 'POST /api/memories',

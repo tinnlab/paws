@@ -295,6 +295,7 @@ impl ToolProvider for McpToolProvider {
             classification,
             Some(idem),
             crate::modules::mcp::tool_calls::models::McpToolCallSource::Workflow,
+            None, // timing_out — the workflow surface has no live tool-lifecycle SSE
         )
         .await
         {

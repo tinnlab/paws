@@ -1,3 +1,7 @@
+// TEST-34 (ITEM-28 / DEC-10): the committed `tools/list` fixture from the live
+// sidecar probe. Offline + DB-free — the bio tool names are not knowable in-tree.
+mod tool_names_fixture_test;
+
 use serde_json::json;
 
 fn jsonrpc_body() -> serde_json::Value {

@@ -1,0 +1,86 @@
+{
+  "src-app/server": [
+    "security-authz",
+    "security-secrets",
+    "api-contract",
+    "correctness-logic",
+    "concurrency-lifecycle",
+    "error-handling",
+    "data-integrity-db",
+    "dead-code",
+    "test-quality",
+    "modularity-coupling",
+    "performance",
+    "cross-platform"
+  ],
+  "src-app/ui/src/modules/chat": [
+    "correctness-logic",
+    "concurrency-lifecycle",
+    "error-handling",
+    "frontend-state",
+    "ux-accessibility",
+    "design-fidelity",
+    "security-secrets",
+    "api-contract",
+    "dead-code",
+    "test-quality",
+    "modularity-coupling",
+    "performance",
+    "cross-platform"
+  ],
+  "src-app/ui/src/modules/mcp": [
+    "security-authz",
+    "security-secrets",
+    "api-contract",
+    "frontend-state",
+    "design-fidelity",
+    "dead-code",
+    "test-quality",
+    "modularity-coupling",
+    "correctness-logic"
+  ],
+  "src-app/ui/src/modules": [
+    "design-fidelity",
+    "frontend-state",
+    "dead-code",
+    "test-quality",
+    "modularity-coupling",
+    "correctness-logic"
+  ],
+  "src-app/ui/src/dev/gallery": [
+    "dead-code",
+    "test-quality",
+    "ux-accessibility"
+  ],
+  "src-app/ui/tests/e2e": [
+    "test-quality",
+    "ux-accessibility",
+    "design-fidelity"
+  ],
+  "src-app/ui/openapi": [
+    "api-contract",
+    "cross-platform",
+    "dead-code"
+  ],
+  "src-app/desktop": [
+    "cross-platform",
+    "api-contract",
+    "dead-code"
+  ],
+  "src-app/ui/src/api-client": [
+    "api-contract",
+    "cross-platform",
+    "dead-code",
+    "test-quality"
+  ],
+  "agent-kit": [
+    "dead-code",
+    "test-quality",
+    "modularity-coupling"
+  ],
+  "sdk": [
+    "dead-code",
+    "test-quality",
+    "modularity-coupling"
+  ]
+}

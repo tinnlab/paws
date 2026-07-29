@@ -8,4 +8,6 @@ export type Actions = {
   setFileCollapsed: typeof import('./actions/setFileCollapsed')['default']
   setFileHeight: typeof import('./actions/setFileHeight')['default']
   setMessageCollapsed: typeof import('./actions/setMessageCollapsed')['default']
+  setRailOpen: typeof import('./actions/setRailOpen')['default']
+  setStepOpen: typeof import('./actions/setStepOpen')['default']
 }

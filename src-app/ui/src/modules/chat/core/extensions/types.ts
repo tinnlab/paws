@@ -170,26 +170,23 @@ export interface ExtensionRequestFields {
 export interface ContentRendererProps {
   content: MessageContent
   isUser: boolean
-  /**
-   * The message's full ordered block list + this block's index in it. Passed
-   * only when rendered inline in a message (the `ChatMessage` run-loop), so a
-   * renderer can group consecutive blocks. A renderer that claims `content` MAY
-   * expose a static `contentSpan(blocks, index) => number` to tell the loop how
-   * many blocks it consumed (default 1); it should then render those blocks
-   * itself (e.g. a "3 tools called" group). Absent when rendered standalone
-   * (attachments, or a group rendering its own members) — in which case
-   * `contentSpan` is not consulted, so grouping doesn't recurse.
-   */
-  blocks?: MessageContent[]
-  index?: number
 }
 
-/** A content renderer that can also group consecutive blocks (see `blocks`). */
-export type GroupingContentRenderer = React.ComponentType<ContentRendererProps> & {
+/**
+ * A content renderer that claims only SOME blocks of a registered content type.
+ *
+ * Renderers used to be able to GROUP too, via a static
+ * `contentSpan(blocks, index) => number` that told the message run-loop how many
+ * following blocks the renderer had swallowed. That mechanism is gone (ITEM-5):
+ * it held together only while two independent code paths — the render branch and
+ * `contentSpan` — kept agreeing about the size of a run, and a disagreement
+ * silently double-rendered or dropped blocks. Grouping is now the ACTIVITY
+ * RAIL's job, and the rail computes each span exactly once and renders from that
+ * one value, so the two can no longer diverge.
+ */
+export type ClaimingContentRenderer = React.ComponentType<ContentRendererProps> & {
   /** Claim only certain blocks of the registered content type (default: catch-all). */
   contentMatch?: (content: MessageContent) => boolean
-  /** How many blocks (starting at `index`) this renderer consumes. Default 1. */
-  contentSpan?: (blocks: MessageContent[], index: number) => number
 }
 
 /**
@@ -764,6 +761,36 @@ export interface ChatExtension {
    * ```
    */
   contentTypes?: Record<string, React.ComponentType<ContentRendererProps>>
+
+  /**
+   * ACTIVITY-RAIL contributions (ITEM-1).
+   *
+   * Each entry declares the content types it can describe, a `describeActivity`
+   * that turns a block into a rail step, and OPTIONALLY a `renderDetail` body.
+   * Omitting `renderDetail` — the normal case — makes the rail delegate to this
+   * extension's already-registered content renderer, so a contribution is
+   * usually ~20 lines of domain language and re-uses the card it already ships.
+   *
+   * This is the inversion the activity rail exists to establish: core owns the
+   * registry and the row primitive, each extension owns the MEANING of its own
+   * steps. Its predecessor did the opposite —
+   * `workflow/components/run/activityDescriptors.ts` held nine other modules'
+   * tool names in one central map — and that map is deleted by this feature.
+   *
+   * @example
+   * ```typescript
+   * railContributions: [{
+   *   contentTypes: ['tool_use'],
+   *   describeActivity: ctx => {
+   *     const base = railToolStepBase(ctx)
+   *     if (base?.label !== 'web_search') return null
+   *     const sc = structuredOf(ctx)
+   *     return { ...base, label: 'Searching the web', detail: ... }
+   *   },
+   * }]
+   * ```
+   */
+  railContributions?: import('@/modules/chat/components/rail/railTypes').RailContribution[]
 
   /**
    * Slot components registry

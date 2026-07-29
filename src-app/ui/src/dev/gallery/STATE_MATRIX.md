@@ -7,20 +7,20 @@
 
 ## Summary
 
-- **340** surfaces carry at least one renderable-state signal.
-- **2094** signals total: 1644 branch, 138 empty, 119 error, 93 loading, 96 overlay, 4 panel.
-- **4** right-panel renderers registered (each a right-panel-open state).
+- **349** surfaces carry at least one renderable-state signal.
+- **2135** signals total: 1678 branch, 140 empty, 122 error, 94 loading, 96 overlay, 5 panel.
+- **5** right-panel renderers registered (each a right-panel-open state).
 - **35** slot registrations (sidebar / settings / chat mount points).
 
 ### Surfaces demanding each gallery state
 
 | state | surfaces |
 |---|---|
-| `delayed` | 83 |
-| `empty` | 112 |
-| `error` | 93 |
+| `delayed` | 84 |
+| `empty` | 114 |
+| `error` | 95 |
 | `open` | 82 |
-| `panel-open` | 4 |
+| `panel-open` | 5 |
 
 ## Right-panel renderers (`registerPanelRenderer`)
 
@@ -30,10 +30,11 @@ conversation page.
 
 | panel type | registered in |
 |---|---|
-| `background` | `modules/background/chat-extension/extension`:31 |
-| `file` | `modules/file/chat-extension/extension`:156 |
-| `kb_source` | `modules/knowledge-base/chat-extension/extension`:52 |
-| `literature` | `modules/literature/chat-extension/extension`:27 |
+| `background` | `modules/background/chat-extension/extension`:32 |
+| `file` | `modules/file/chat-extension/extension`:157 |
+| `kb_source` | `modules/knowledge-base/chat-extension/extension`:53 |
+| `literature` | `modules/literature/chat-extension/extension`:31 |
+| `tool_call` | `modules/chat/extensions/tool-call/extension`:36 |
 
 ## Slot registrations
 
@@ -316,7 +317,7 @@ Required states: `panel-open`
 
 | kind | condition | line |
 |---|---|---|
-| panel | `registerPanelRenderer('background')` | 31 |
+| panel | `registerPanelRenderer('background')` | 32 |
 
 ### `modules/background/components/BackgroundRunCard`
 
@@ -413,13 +414,14 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `isStreaming \|\| wasStreamingRef.current \|\| isActiveMatch` | 60 |
-| empty | `contents.length === 0 && !showEmptyCompletionNotice` | 88 |
-| branch | `attachmentBlocks.length > 0` | 189 |
-| branch | `bubbleBlocks.length > 0` | 218 |
-| branch | `offerCollapse` | 244 |
-| branch | `showEmptyCompletionNotice` | 264 |
-| branch | `renderAsUser` | 283 |
+| branch | `isStreaming \|\| wasStreamingRef.current \|\| isActiveMatch` | 66 |
+| empty | `contents.length === 0 && !showEmptyCompletionNotice` | 94 |
+| branch | `!resolved` | 186 |
+| branch | `attachmentBlocks.length > 0` | 274 |
+| branch | `bubbleBlocks.length > 0` | 303 |
+| branch | `offerCollapse` | 329 |
+| branch | `showEmptyCompletionNotice` | 349 |
+| branch | `renderAsUser` | 368 |
 
 ### `modules/chat/components/CollapsibleBlock`
 
@@ -650,6 +652,63 @@ Required states: `empty`
 |---|---|---|
 | empty | `items.length === 0` | 49 |
 
+### `modules/chat/components/rail/ActivityRail`
+
+Required states: `empty`
+
+| kind | condition | line |
+|---|---|---|
+| empty | `steps.length === 0` | 77 |
+| branch | `quiet` | 84 |
+| branch | `toggleable` | 120 |
+| branch | `open` | 155 |
+
+### `modules/chat/components/rail/RailStep`
+
+Required states: _(branch-only — proven via dynamic coverage)_
+
+| kind | condition | line |
+|---|---|---|
+| branch | `!running \|\| !step.startedAt \|\| step.durationMs != null` | 67 |
+| branch | `!step.toolUseId` | 81 |
+| branch | `showSpine` | 100 |
+| branch | `hasDetail` | 121 |
+| branch | `step.detail` | 152 |
+| branch | `timing` | 163 |
+| branch | `step.toolUseId` | 173 |
+| branch | `shown.length > 0` | 188 |
+| branch | `overflow > 0` | 209 |
+| branch | `open && hasDetail` | 225 |
+
+### `modules/chat/components/rail/RailStepDetail`
+
+Required states: `error`
+
+| kind | condition | line |
+|---|---|---|
+| branch | `!hasInput && !result` | 42 |
+| branch | `hasInput` | 52 |
+| error | `result && !isError` | 66 |
+| error | `result && isError` | 80 |
+
+### `modules/chat/components/toolCallPanel/ToolCallPanel`
+
+Required states: `delayed`, `error`
+
+| kind | condition | line |
+|---|---|---|
+| branch | `truncated` | 77 |
+| branch | `!active` | 122 |
+| branch | `!active` | 126 |
+| branch | `!call \|\| revealing` | 141 |
+| loading | `loading` | 156 |
+| error | `error` | 158 |
+| branch | `!call` | 169 |
+| branch | `call.error_message` | 215 |
+| branch | `revealError` | 248 |
+| branch | `raw !== undefined` | 256 |
+| branch | `call.result_json !== undefined && call.result_json !== null` | 266 |
+
 ### `modules/chat/core/components/ChatRightPanel`
 
 Required states: `empty`, `open`
@@ -672,11 +731,11 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!state` | 142 |
-| branch | `this.initialized` | 433 |
-| empty | `extensions.length === 0` | 611 |
-| empty | `extensions.length === 0` | 644 |
-| empty | `!registered \|\| registered.length === 0` | 933 |
+| branch | `!state` | 170 |
+| branch | `this.initialized` | 496 |
+| empty | `extensions.length === 0` | 674 |
+| empty | `extensions.length === 0` | 707 |
+| empty | `!registered \|\| registered.length === 0` | 1083 |
 
 ### `modules/chat/core/extensions/utils`
 
@@ -888,6 +947,14 @@ Required states: _(branch-only — proven via dynamic coverage)_
 | kind | condition | line |
 |---|---|---|
 | branch | `!currentConversation` | 26 |
+
+### `modules/chat/extensions/tool-call/extension`
+
+Required states: `panel-open`
+
+| kind | condition | line |
+|---|---|---|
+| panel | `registerPanelRenderer('tool_call')` | 36 |
 
 ### `modules/chat/extensions/voice/components/MicButton`
 
@@ -1311,14 +1378,23 @@ Required states: `empty`, `panel-open`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!data.file_id` | 40 |
-| branch | `data.source?.type !== 'file'` | 61 |
-| branch | `!fileData?.file_id \|\| !fileData?.filename` | 115 |
-| panel | `registerPanelRenderer('file')` | 156 |
-| branch | `!file` | 161 |
-| branch | `!fileStore` | 193 |
-| empty | `stubs.length === 0` | 300 |
-| branch | `!fileStore` | 303 |
+| branch | `!data.file_id` | 41 |
+| branch | `data.source?.type !== 'file'` | 62 |
+| branch | `!fileData?.file_id \|\| !fileData?.filename` | 116 |
+| panel | `registerPanelRenderer('file')` | 157 |
+| branch | `!file` | 162 |
+| branch | `!fileStore` | 194 |
+| empty | `stubs.length === 0` | 301 |
+| branch | `!fileStore` | 304 |
+
+### `modules/file/chat-extension/railContribution`
+
+Required states: `empty`
+
+| kind | condition | line |
+|---|---|---|
+| branch | `!result` | 39 |
+| empty | `links.length === 0` | 44 |
 
 ### `modules/file/components/CanvasSelectionPopover`
 
@@ -2084,6 +2160,22 @@ Required states: `delayed`, `empty`
 | empty | `filtered.length === 0` | 91 |
 | branch | `searchTerm \|\| selectedTags.length > 0` | 92 |
 
+### `modules/js-tool/chat-extension/components/JsToolApprovalContent`
+
+Required states: _(branch-only — proven via dynamic coverage)_
+
+| kind | condition | line |
+|---|---|---|
+| branch | `!hasTransport \|\| resolved !== null` | 162 |
+| branch | `elicitationExists(data.elicitation_id)` | 163 |
+| branch | `spent >= HEAL_BUDGET` | 174 |
+| branch | `submitting \|\| resolved !== null \|\| elicitationIsUnactionable(blocked)` | 221 |
+| branch | `resolved === 'approved'` | 246 |
+| branch | `resolved === 'denied'` | 246 |
+| branch | `serverParenLabel(data.server)` | 257 |
+| branch | `data.input !== undefined` | 269 |
+| branch | `resolved === null` | 306 |
+
 ### `modules/js-tool/components/JsToolSettingsSection`
 
 Required states: `delayed`, `error`
@@ -2130,13 +2222,13 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!isSearchKnowledgeResult(content)` | 32 |
-| branch | `!sc` | 35 |
-| branch | `expanded` | 68 |
-| branch | `incomplete` | 83 |
-| branch | `!(!expanded)` | 90 |
-| empty | `sc.hits.length === 0` | 90 |
-| branch | `expanded` | 126 |
+| branch | `!isSearchKnowledgeResult(content)` | 39 |
+| branch | `!sc` | 42 |
+| branch | `expanded` | 75 |
+| branch | `incomplete` | 90 |
+| branch | `!(!expanded)` | 97 |
+| empty | `sc.hits.length === 0` | 97 |
+| branch | `expanded` | 133 |
 
 ### `modules/knowledge-base/chat-extension/extension`
 
@@ -2144,7 +2236,15 @@ Required states: `panel-open`
 
 | kind | condition | line |
 |---|---|---|
-| panel | `registerPanelRenderer('kb_source')` | 52 |
+| panel | `registerPanelRenderer('kb_source')` | 53 |
+
+### `modules/knowledge-base/chat-extension/railContribution`
+
+Required states: _(branch-only — proven via dynamic coverage)_
+
+| kind | condition | line |
+|---|---|---|
+| branch | `!result` | 39 |
 
 ### `modules/knowledge-base/components/KnowledgeBaseCard`
 
@@ -2284,7 +2384,15 @@ Required states: `panel-open`
 
 | kind | condition | line |
 |---|---|---|
-| panel | `registerPanelRenderer('literature')` | 27 |
+| panel | `registerPanelRenderer('literature')` | 31 |
+
+### `modules/literature/chat-extension/railContribution`
+
+Required states: _(branch-only — proven via dynamic coverage)_
+
+| kind | condition | line |
+|---|---|---|
+| branch | `!result` | 33 |
 
 ### `modules/literature/components/LiteratureScreeningPanel`
 
@@ -2306,11 +2414,11 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `content.content_type !== 'tool_result'` | 25 |
-| branch | `block.name !== 'literature_search'` | 27 |
-| branch | `!sc \|\| !Array.isArray(sc.records)` | 29 |
-| branch | `sc.degraded_sources && sc.degraded_sources.length > 0` | 62 |
-| empty | `sc.records.length === 0` | 70 |
+| branch | `content.content_type !== 'tool_result'` | 14 |
+| branch | `block.name !== LITERATURE_SEARCH` | 16 |
+| branch | `!sc` | 42 |
+| branch | `sc.degraded_sources && sc.degraded_sources.length > 0` | 76 |
+| empty | `sc.records.length === 0` | 84 |
 
 ### `modules/literature/components/settings/LitSearchConnectorsSection`
 
@@ -2789,19 +2897,6 @@ Required states: _(branch-only — proven via dynamic coverage)_
 | branch | `elicitation.message` | 356 |
 | branch | `isRichAskUser` | 376 |
 
-### `modules/mcp/chat-extension/components/JsToolApprovalContent`
-
-Required states: _(branch-only — proven via dynamic coverage)_
-
-| kind | condition | line |
-|---|---|---|
-| branch | `submitting \|\| resolved !== null` | 39 |
-| branch | `resolved === 'approved'` | 51 |
-| branch | `resolved === 'denied'` | 51 |
-| branch | `mcpServerParenLabel(data.server)` | 62 |
-| branch | `data.input !== undefined` | 74 |
-| branch | `resolved === null` | 84 |
-
 ### `modules/mcp/chat-extension/components/McpConfigModalMount`
 
 Required states: _(branch-only — proven via dynamic coverage)_
@@ -2840,11 +2935,11 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!isControlWrite` | 297 |
-| branch | `mcpServerParenLabel(toolCall.server)` | 348 |
-| branch | `toolCall.dest_host` | 363 |
-| branch | `toolCall.description` | 392 |
-| branch | `toolCall.input !== undefined` | 400 |
+| branch | `!isControlWrite` | 290 |
+| branch | `serverParenLabel(toolCall.server)` | 341 |
+| branch | `toolCall.dest_host` | 356 |
+| branch | `toolCall.description` | 385 |
+| branch | `toolCall.input !== undefined` | 393 |
 
 ### `modules/mcp/chat-extension/components/elicitationFields`
 
@@ -2864,31 +2959,30 @@ Required states: `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `toolCall.status === 'pending_approval'` | 42 |
-| branch | `serverLabel` | 61 |
-| error | `(toolCall.status === 'completed' \|\| toolCall.status === 'error')` | 69 |
-| branch | `toolCall.status === 'started' && toolCall.progress` | 87 |
-| branch | `toolCall.progress.message` | 89 |
-| branch | `isExpanded` | 112 |
-| branch | `toolCall.input !== undefined` | 114 |
-| branch | `toolCall.result !== undefined` | 123 |
-| error | `toolCall.error` | 132 |
-| branch | `!toolUseData.id` | 163 |
-| branch | `toolCall` | 170 |
-| branch | `mcpServerParenLabel(server?.display_name)` | 199 |
-| branch | `toolResultData` | 204 |
-| branch | `hasDetails` | 212 |
-| branch | `isExpanded` | 223 |
-| branch | `!!toolUseData.input` | 225 |
-| branch | `toolResultData` | 233 |
-| branch | `toolResultData.is_error` | 236 |
-| branch | `singleUse` | 347 |
-| branch | `singleServerLabel` | 352 |
-| branch | `isExpanded` | 371 |
-| branch | `!run \|\| !shouldWrapRun(run)` | 404 |
-| branch | `!mcpStore` | 445 |
-| branch | `!streamingMessage` | 899 |
-| branch | `!toolUseId` | 911 |
+| branch | `toolCall.status === 'pending_approval'` | 37 |
+| branch | `serverLabel` | 56 |
+| error | `(toolCall.status === 'completed' \|\| toolCall.status === 'error')` | 64 |
+| branch | `toolCall.status === 'started' && toolCall.progress` | 82 |
+| branch | `toolCall.progress.message` | 84 |
+| branch | `isExpanded` | 107 |
+| branch | `toolCall.input !== undefined` | 109 |
+| branch | `toolCall.result !== undefined` | 125 |
+| error | `toolCall.error` | 134 |
+| branch | `!toolUseData.id` | 165 |
+| branch | `toolCall` | 172 |
+| branch | `serverParenLabel(server?.display_name)` | 201 |
+| branch | `toolResultData` | 206 |
+| branch | `hasDetails` | 214 |
+| branch | `isExpanded` | 225 |
+| branch | `!!toolUseData.input` | 227 |
+| branch | `toolResultData` | 236 |
+| branch | `toolResultData.is_error` | 239 |
+| branch | `!call` | 279 |
+| branch | `next === last` | 298 |
+| branch | `next === last` | 343 |
+| branch | `!mcpStore` | 361 |
+| branch | `!streamingMessage` | 738 |
+| branch | `!toolUseId` | 750 |
 
 ### `modules/mcp/components/McpConfigModal`
 
@@ -2926,21 +3020,22 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!isEditable && server.is_system` | 151 |
-| branch | `server.supports_sampling` | 166 |
-| branch | `server.usage_mode === 'always'` | 171 |
-| branch | `status === 'unhealthy'` | 183 |
-| branch | `status === 'healthy'` | 206 |
-| branch | `isEditable` | 230 |
-| branch | `canEdit` | 232 |
-| branch | `canTest` | 245 |
-| branch | `canEdit` | 261 |
-| branch | `canDelete && !server.is_built_in` | 273 |
-| branch | `server.last_health_check_status === 'unhealthy'` | 317 |
-| branch | `server.url` | 340 |
-| branch | `server.command` | 357 |
-| branch | `Array.isArray(server.args) && server.args.length > 0` | 361 |
-| branch | `bordered` | 377 |
+| branch | `!isEditable && server.is_system` | 171 |
+| branch | `server.supports_sampling` | 186 |
+| branch | `server.usage_mode === 'always'` | 191 |
+| branch | `status === 'unhealthy'` | 203 |
+| branch | `status === 'healthy'` | 226 |
+| branch | `canViewHistory` | 254 |
+| branch | `isEditable` | 270 |
+| branch | `canEdit` | 272 |
+| branch | `canTest` | 285 |
+| branch | `canEdit` | 301 |
+| branch | `canDelete && !server.is_built_in` | 313 |
+| branch | `server.last_health_check_status === 'unhealthy'` | 357 |
+| branch | `server.url` | 380 |
+| branch | `server.command` | 397 |
+| branch | `Array.isArray(server.args) && server.args.length > 0` | 401 |
+| branch | `bordered` | 417 |
 
 ### `modules/mcp/components/common/McpServerDrawer`
 
@@ -2948,37 +3043,38 @@ Required states: `error`, `open`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `cancelled` | 185 |
-| branch | `!Array.isArray(parsed)` | 359 |
-| error | `hasError` | 471 |
-| branch | `args === null` | 474 |
-| branch | `clientId && !clientSecret && !hasExistingOAuth` | 602 |
-| branch | `!saved` | 633 |
-| branch | `!saved` | 698 |
-| branch | `!open` | 841 |
-| branch | `mode === 'create' \|\| mode === 'create-system'` | 883 |
-| branch | `v === false` | 884 |
-| branch | `missingRequired` | 899 |
-| branch | `!editingServer` | 956 |
-| branch | `v === false` | 960 |
-| branch | `!saved` | 985 |
-| branch | `(mode === 'edit' \|\| mode === 'edit-system') && editingServer?.last_health_check_status === 'unhealthy'` | 1055 |
-| branch | `(mode === 'create' \|\| mode === 'create-system')` | 1080 |
-| branch | `(!!editingServer \|\| mode === 'create' \|\| mode === 'create-system')` | 1103 |
-| branch | `prefillTransportSwapped` | 1135 |
-| branch | `transportType === 'stdio'` | 1170 |
-| branch | `(transportType === 'http' \|\| transportType === 'sse')` | 1216 |
-| branch | `transportType === 'http' && isUserMode` | 1242 |
-| branch | `oauthEnabled` | 1262 |
-| branch | `supportsSampling` | 1320 |
-| branch | `transportType === 'stdio' && (mode === 'create-system' \|\| mode === 'edit-system')` | 1351 |
-| branch | `runInSandbox` | 1372 |
-| branch | `isUserMode && transportType === 'stdio'` | 1386 |
-| overlay | `<Drawer open>` | 1414 |
-| branch | `canManage && !!transportType` | 1422 |
-| branch | `canManage` | 1438 |
-| branch | `isEditMode && editingServer` | 1452 |
-| branch | `isSystemMode` | 1466 |
+| branch | `cancelled` | 194 |
+| branch | `!Array.isArray(parsed)` | 368 |
+| error | `hasError` | 480 |
+| branch | `args === null` | 483 |
+| branch | `clientId && !clientSecret && !hasExistingOAuth` | 611 |
+| branch | `!saved` | 642 |
+| branch | `!saved` | 707 |
+| branch | `!open` | 854 |
+| branch | `mode === 'create' \|\| mode === 'create-system'` | 896 |
+| branch | `v === false` | 897 |
+| branch | `missingRequired` | 912 |
+| branch | `!editingServer` | 969 |
+| branch | `v === false` | 973 |
+| branch | `!saved` | 998 |
+| branch | `(mode === 'edit' \|\| mode === 'edit-system') && editingServer?.last_health_check_status === 'unhealthy'` | 1068 |
+| branch | `(mode === 'create' \|\| mode === 'create-system')` | 1093 |
+| branch | `(!!editingServer \|\| mode === 'create' \|\| mode === 'create-system')` | 1116 |
+| branch | `prefillTransportSwapped` | 1148 |
+| branch | `transportType === 'stdio'` | 1183 |
+| branch | `(transportType === 'http' \|\| transportType === 'sse')` | 1229 |
+| branch | `transportType === 'http' && isUserMode` | 1255 |
+| branch | `oauthEnabled` | 1275 |
+| branch | `supportsSampling` | 1333 |
+| branch | `transportType === 'stdio' && (mode === 'create-system' \|\| mode === 'edit-system')` | 1364 |
+| branch | `runInSandbox` | 1385 |
+| branch | `isUserMode && transportType === 'stdio'` | 1399 |
+| overlay | `<Drawer open>` | 1429 |
+| branch | `canManage && !!transportType` | 1437 |
+| branch | `canManage` | 1453 |
+| branch | `isHistoryMode && editingServer` | 1467 |
+| branch | `isEditMode && editingServer` | 1471 |
+| branch | `isSystemMode` | 1485 |
 
 ### `modules/mcp/components/common/McpToolApprovalsTab`
 
@@ -4174,12 +4270,21 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `content.content_type !== 'tool_result'` | 18 |
-| branch | `!dir \|\| !conversationId` | 54 |
-| branch | `!dir \|\| !conversationId` | 68 |
-| branch | `canGraduate` | 99 |
-| branch | `canSave` | 101 |
-| branch | `canDownload` | 114 |
+| branch | `content.content_type !== 'tool_result'` | 17 |
+| branch | `!dir \|\| !conversationId` | 58 |
+| branch | `!dir \|\| !conversationId` | 72 |
+| branch | `canGraduate` | 102 |
+| branch | `canSave` | 104 |
+| branch | `canDownload` | 117 |
+
+### `modules/workflow/chat-extension/railContribution`
+
+Required states: _(branch-only — proven via dynamic coverage)_
+
+| kind | condition | line |
+|---|---|---|
+| branch | `!result` | 24 |
+| branch | `data?.is_error === true \|\| !sc?.workspace_dir` | 31 |
 
 ### `modules/workflow/components/DryRunPreviewDialog`
 
@@ -4533,13 +4638,13 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `hasDetails` | 80 |
-| branch | `tool` | 97 |
-| branch | `detail` | 102 |
-| branch | `elicitation && onSubmitElicitation` | 162 |
-| branch | `overflow > 0 && !showAll` | 177 |
-| branch | `isGateAnchor` | 199 |
-| branch | `showGateForm && !gateRendered` | 204 |
+| branch | `hasDetails` | 95 |
+| branch | `tool` | 112 |
+| branch | `detail` | 117 |
+| branch | `elicitation && onSubmitElicitation` | 177 |
+| branch | `overflow > 0 && !showAll` | 192 |
+| branch | `isGateAnchor` | 214 |
+| branch | `showGateForm && !gateRendered` | 219 |
 
 ### `modules/workflow/widgets/GroupSystemWorkflowsAssignmentDrawer`
 

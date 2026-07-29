@@ -1,5 +1,9 @@
-import { createExtension, type ChatExtension } from '@/modules/chat/core/extensions'
+import {
+  type ChatExtension,
+  createExtension,
+} from '@/modules/chat/core/extensions'
 import { MemoryStatusPill } from '@/modules/memory/chat-extension/components/MemoryStatusPill'
+import { memoryRailContributions } from '@/modules/memory/chat-extension/describeActivity'
 
 // Memory Extension (frontend chat-extension shim).
 //
@@ -24,6 +28,12 @@ const memoryExtension: ChatExtension = createExtension({
   slots: {
     toolbar_status: { component: MemoryStatusPill, order: 30 },
   },
+
+  // Rail step descriptors for the remember/recall/forget tool family (ITEM-19).
+  // Registered HERE rather than in a second extension: one module owns one
+  // chat-extension, and the auto-discovery glob would otherwise pick up two
+  // files claiming the name `memory`.
+  railContributions: memoryRailContributions,
 
   // NO `afterStreamComplete` hook — deliberately.
   //

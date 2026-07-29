@@ -238,6 +238,15 @@ pub(crate) async fn call_mcp_tool(
     // (`Workflow` for the workflow tool step + agent host; `Chat` for the chat
     // agent host, so its rows read `chat` like today's chat tool calls).
     source: crate::modules::mcp::tool_calls::models::McpToolCallSource,
+    // ITEM-14: filled with the timing of the underlying `McpSession::call_tool` —
+    // the SAME `started_at`/`elapsed_ms` pair persisted to `mcp_tool_calls` — so
+    // the caller can put it on the `mcpToolComplete` SSE frame without starting a
+    // second clock. An OUT-PARAM rather than a return value because the FAILED
+    // path needs it too (a failed call is recorded with a duration, so its rail
+    // step must show one), and `McpToolCallError` carries no payload beyond its
+    // message. Left untouched on a pre-dispatch refusal (no call, no timing).
+    // Workflow callers pass `None`.
+    timing_out: Option<&mut Option<crate::modules::mcp::tool_calls::models::ToolCallTiming>>,
 ) -> Result<(Uuid, crate::modules::mcp::client::traits::ToolResult), McpToolCallError> {
     // The namespaced prefix is either a server NAME (workflow's `McpToolProvider`
     // list) or a server ID uuid (chat's MCP extension namespaces tools as
@@ -446,6 +455,9 @@ pub(crate) async fn call_mcp_tool(
             }
         };
 
+    // ITEM-14: the call block reports (outcome, timing); the timing is read off the
+    // session INSIDE the write guard, so a pooled session shared with another
+    // caller can't hand us its reading.
     let call = async {
         let mut guard = session.write().await;
         // E4: link the recorded `mcp_tool_calls` row to this run — WORKFLOW only.
@@ -467,12 +479,19 @@ pub(crate) async fn call_mcp_tool(
         }
         // ITEM-12: carry the reviewer classification onto the journal row.
         guard.set_review_classification(review_classification);
-        guard.call_tool(tool_name, args, None, None, None).await
+        let outcome = guard.call_tool(tool_name, args, None, None, None).await;
+        let timing = guard.last_call_timing();
+        (outcome, timing)
     };
-    let result = tokio::select! {
+    let (result, timing) = tokio::select! {
         r = call => r,
+        // Cancelled mid-flight: the call never completed, so there is no recorded
+        // timing to report.
         _ = cancel.cancelled() => return Err(McpToolCallError::Cancelled),
     };
+    if let Some(slot) = timing_out {
+        *slot = timing;
+    }
     match result {
         Ok(r) => Ok((server_id, r)),
         Err(e) => Err(McpToolCallError::Failed(format!("tool '{tool_name}': {e}"))),

@@ -1,0 +1,65 @@
+# TESTS — Activity Rail
+
+Every ITEM is covered by ≥1 TEST. Every `INV-N` is pinned by ≥1 `[acceptance]` test.
+No cosmetic tests: mock only the external boundary; a live "Running…" step is **not seedable**
+(SSE-only), so streaming states are proven with a real-LLM/stub-engine e2e, never a fixture.
+
+## Acceptance tests — the design-invariant proofs
+
+- **TEST-1** (tier: unit) [acceptance] [invariant: INV-1] [covers: ITEM-1, ITEM-3] file: `src-app/ui/src/modules/chat/components/rail/railIsolation.test.ts` — asserts: every module under `chat/components/rail/` imports ONLY from chat core and the kit — zero imports from `@/modules/<other>` — by walking the real import graph of the shipped files, so the rail cannot silently learn about an extension.
+- **TEST-2** (tier: e2e) [acceptance] [invariant: INV-2] [covers: ITEM-11, ITEM-12, ITEM-13] file: `src-app/ui/tests/e2e/chat/activity-rail-detail.spec.ts` — asserts: for a seeded tool step, the user reaches the owning extension's body inline AND opens a panel showing full arguments, full result, status, source and duration — the duration being data that is unreachable from a message today.
+- **TEST-3** (tier: e2e) [acceptance] [invariant: INV-3] [covers: ITEM-10] file: `src-app/ui/tests/e2e/chat/activity-rail-breakout.spec.ts` — asserts: a pending tool approval renders OUTSIDE the rail at full width and offers no control that collapses or hides it, even while the rail itself is collapsed.
+- **TEST-4** (tier: e2e) [acceptance] [invariant: INV-4] [covers: ITEM-7] file: `src-app/ui/tests/e2e/chat/activity-rail-lifecycle.spec.ts` — asserts: against a live model, the rail is EXPANDED while the turn streams and COLLAPSES to a one-line summary once the answer arrives.
+- **TEST-5** (tier: e2e) [acceptance] [invariant: INV-5] [covers: ITEM-9] file: `src-app/ui/tests/e2e/chat/activity-rail-failure.spec.ts` — asserts: a turn containing a failed tool leaves the rail expanded with the failed step visible, and a timed-out step does the same — a failure is never reachable only by clicking.
+- **TEST-6** (tier: e2e) [acceptance] [invariant: INV-6] [covers: ITEM-2] file: `src-app/ui/tests/e2e/chat/activity-rail-content-preserved.spec.ts` — asserts: an answer containing a code block, a markdown table and a GFM alert renders all three OUTSIDE the rail, unchanged, while the machinery collapses.
+- **TEST-7** (tier: e2e) [acceptance] [invariant: INV-7] [covers: ITEM-8] file: `src-app/ui/tests/e2e/chat/activity-rail-state.spec.ts` — asserts: an expanded rail (and an expanded step) survives scrolling far enough to unmount the message and scrolling back — the virtualiser must not reset it.
+- **TEST-8** (tier: e2e) [acceptance] [invariant: INV-8] [covers: ITEM-26] file: `src-app/ui/tests/e2e/chat/activity-rail-responsive.spec.ts` — asserts: at 390px every step label is single-line and truncated (scrollWidth > clientWidth, one line box) and the page body never scrolls horizontally.
+- **TEST-9** (tier: unit) [acceptance] [invariant: INV-9] [covers: ITEM-4] file: `src-app/ui/src/modules/chat/components/rail/railStatus.test.ts` — asserts: every status the rail can render is a member of the existing `ToolStatusKey` union, and the rail source declares no status string literal of its own.
+
+## Core rail
+
+- **TEST-10** (tier: unit) [covers: ITEM-1] file: `src-app/ui/src/modules/chat/core/extensions/railRegistry.test.ts` — asserts: a contribution registers and resolves by content type; an unregistered type yields no contribution; registration is additive and leaves `contentTypeRegistry` resolution unchanged.
+- **TEST-11** (tier: unit) [covers: ITEM-2] file: `src-app/ui/src/modules/chat/components/rail/railSegmentation.test.ts` — asserts: blocks segment into activity spans vs prose from CONTRIBUTIONS (not a hardcoded type list); `observation`, user `file_attachment`/`image` and markdown-bearing `text` are never absorbed into a span.
+- **TEST-12** (tier: unit) [covers: ITEM-5] file: `src-app/ui/src/modules/chat/components/rail/railSegmentation.test.ts` — asserts: the number of blocks a span reports consumed always equals the number it renders, across the fixtures that previously desynced `contentSpan` from `shouldWrapRun`.
+- **TEST-13** (tier: unit) [covers: ITEM-6] file: `src-app/ui/src/modules/chat/components/rail/describeActivity.test.ts` — asserts: a block with absent, dropped or malformed `structured_content` still yields a name-only row rather than throwing or rendering an empty step.
+- **TEST-14** (tier: unit) [covers: ITEM-3] file: `src-app/ui/src/modules/chat/components/rail/railView.test.ts` — asserts: the row renders label, detail, status dot and timing; the label truncates rather than wraps; the row exposes an accessible name.
+
+## Detail visibility
+
+- **TEST-15** (tier: unit) [covers: ITEM-12] file: `src-app/ui/src/modules/chat/components/toolCallPanel/toolCallPanel.test.ts` — asserts: the panel tab id is derived deterministically from `tool_use_id`, so re-opening focuses the existing tab instead of stacking duplicates; the tab payload is serializable (no component reference).
+- **TEST-16** (tier: integration) [covers: ITEM-13] file: `src-app/server/tests/mcp/tool_call_lookup_test.rs` — asserts: `GET /api/mcp/tool-calls?tool_use_id=…` and `?message_id=…` return the matching row, are owner-scoped (another user's id → empty/404), and reject an over-large `per_page`.
+- **TEST-17** (tier: unit) [covers: ITEM-13] file: `src-app/server/src/modules/mcp/tool_calls/repository.rs` — asserts: the new filters compose into the existing owner-scoped query without dropping the `user_id` predicate (the cross-user guard).
+- **TEST-18** (tier: integration) [covers: ITEM-14] file: `src-app/server/tests/chat/stream_tool_timing_test.rs` — asserts: the `mcpToolComplete` frame carries `started_at` and `duration_ms`, and the values bracket the real call duration.
+- **TEST-19** (tier: unit) [covers: ITEM-14] file: `src-app/server/src/openapi/emit_ts.rs` — asserts: `types_ts_parity` stays green after the frame change, for BOTH binaries.
+- **TEST-20** (tier: e2e) [covers: ITEM-15] file: `src-app/ui/tests/e2e/chat/activity-rail-detail.spec.ts` — asserts: a step offers copy of its arguments and result, and produces a `#message-<id>` deep link that navigates back to the same message.
+- **TEST-21** (tier: e2e) [negative-perm] [covers: ITEM-16] file: `src-app/ui/tests/e2e/07-mcp/builtin-call-history-access.spec.ts` — asserts: a NON-admin user holding `mcp_servers::read` can open the Calls history for a BUILT-IN server, sees only their own calls, and still sees NO edit affordance on that system server; a user lacking `mcp_servers::read` sees no history surface at all.
+- **TEST-22** (tier: unit) [covers: ITEM-17] file: `src-app/server/src/modules/mcp/tool_calls/record.rs` — asserts: `is_secret_key` redacts `cookie`, `credentials`, `x_auth_token`, `openai_api_key` and `Bearer-Token` — every gap confirmed open today — and remains case-insensitive.
+- **TEST-23** (tier: integration) [covers: ITEM-17] file: `src-app/server/tests/mcp/tool_call_redaction_test.rs` — asserts: a tool invoked with a secret-bearing argument stores `[redacted]`, and the default detail response never returns the raw value.
+- **TEST-41** (tier: e2e) [negative-perm] [covers: ITEM-17] file: `src-app/ui/tests/e2e/chat/activity-rail-reveal.spec.ts` — asserts: a user LACKING `mcp_servers_admin::edit` (see DEC-2's phase-7 amendment) sees NO reveal affordance anywhere in the step-detail panel (no button, no menu item, no keyboard path) and the redacted value is all they can obtain; an admin sees it and can reveal.
+- **TEST-42** (tier: integration) [covers: ITEM-17] file: `src-app/server/tests/mcp/tool_call_reveal_test.rs` — asserts: the reveal endpoint returns 401 unauthenticated, 403 without `mcp_servers_admin::edit`, the raw value with it, is owner-scoped (another user's call → 404), and records the reveal for audit.
+
+## Contributions
+
+- **TEST-24** (tier: unit) [covers: ITEM-18] file: `src-app/ui/src/modules/chat/components/rail/describeActivity.test.ts` — asserts: mcp, file, knowledge-base, literature and workflow each register a contribution whose `describeActivity` returns a non-empty label for their own blocks and `null` for another module's.
+- **TEST-25** (tier: unit) [covers: ITEM-19] file: `src-app/ui/src/modules/web-search/chat-extension/describeActivity.test.ts` — asserts: `web_search` and `fetch_url` produce labelled steps with result counts/titles read from `structuredContent`, never parsed from free text.
+- **TEST-26** (tier: unit) [covers: ITEM-19] file: `src-app/ui/src/modules/code-sandbox/chat-extension/describeActivity.test.ts` — asserts: `execute_command` reports exit code and duration, and `timed_out: true` maps to the `timeout` status rather than `failed`.
+- **TEST-27** (tier: unit) [covers: ITEM-19] file: `src-app/ui/src/modules/citations/chat-extension/describeActivity.test.ts` — asserts: the six citation tools each yield a step; verification outcomes surface in the detail suffix.
+- **TEST-28** (tier: unit) [covers: ITEM-19] file: `src-app/ui/src/modules/literature/chat-extension/describeActivity.test.ts` — asserts: all SIX `lit_search` tools are covered (CLAUDE.md documents only two), including `dedup_records`, `select_included` and `verify_quote`.
+- **TEST-29** (tier: unit) [covers: ITEM-19] file: `src-app/ui/src/modules/memory/chat-extension/describeActivity.test.ts` — asserts: `remember`/`recall`/`forget` yield steps from structured output despite the module's stringified text channel.
+- **TEST-30** (tier: unit) [covers: ITEM-19] file: `src-app/ui/src/modules/file/chat-extension/describeActivity.test.ts` — asserts: `semantic_search`/`grep_files` report hit counts and the retrieval mode; `read_file` on an image or binary (which emits NO `structuredContent`) degrades to name-only.
+- **TEST-31** (tier: unit) [covers: ITEM-20] file: `src-app/ui/src/modules/chat/components/rail/describeActivity.test.ts` — asserts: background, control, skill, js_tool and tool_result contributions each produce a labelled step for their tool names.
+- **TEST-32** (tier: unit) [covers: ITEM-21] file: `src-app/ui/src/modules/agent/chat-extension/describeActivity.test.ts` — asserts: the six agent meta-tools yield steps; `delegate`/`schedule_next` (which return no structured content) degrade to name-only; and a `task_update` accompanied by a `taskListChanged` frame produces exactly ONE step, not two.
+- **TEST-33** (tier: unit) [covers: ITEM-22] file: `src-app/ui/src/modules/scheduler/chat-extension/describeActivity.test.ts` — asserts: `unattended_denied` and `admin_disabled` markers render as `cancelled` (neutral), never `failed`.
+- **TEST-34** (tier: integration) [covers: ITEM-28] file: `src-app/server/tests/bio_mcp/tool_names_fixture_test.rs` — asserts: the contribution maps every tool name in the captured sidecar fixture to a step, and any name absent from the fixture degrades to name-only — so the contribution is testable offline even though the probe needs a live sidecar.
+
+## Anti-pattern removal
+
+- **TEST-35** (tier: unit) [covers: ITEM-23] file: `src-app/ui/src/modules/workflow/components/run/activityDescriptors.test.ts` — asserts: no central tool-name map remains — the module names zero other modules' tools — and `AgentActivityTimeline` resolves labels through the registry.
+- **TEST-36** (tier: unit) [covers: ITEM-24, ITEM-25] file: `src-app/ui/src/modules/chat/components/rail/railIsolation.test.ts` — asserts: literature/knowledge-base/workflow no longer import `file`'s `MessageFilesView`, `mcp` contains no `control_mcp` UUID literal and no `run_js` tool-name literal.
+
+## Seed + surfaces
+
+- **TEST-37** (tier: integration) [covers: ITEM-27] file: `src-app/server/tests/chat/showcase_seed_rail_test.rs` — asserts: the new seed turns load idempotently on a re-run, every seeded `tool_use` has a paired `mcp_tool_calls` row, and conversation `11111111-…` (the gallery's guarded fixture) is still present.
+- **TEST-38** (tier: e2e) [covers: ITEM-27] file: `src-app/ui/tests/e2e/chat/activity-rail-seeded.spec.ts` — asserts: the seeded multi-tool, artifact, failure, approval and knowledge-base turns each render the expected rail shape.
+- **TEST-39** (tier: e2e) [covers: ITEM-11] file: `src-app/ui/tests/e2e/chat/activity-rail-detail.spec.ts` — asserts: expanding a knowledge-base step renders the knowledge-base card body and expanding a file step renders the file preview — proving delegation, not re-implementation.
+- **TEST-40** (tier: unit) [covers: ITEM-10] file: `src-app/ui/src/modules/chat/components/rail/railSegmentation.test.ts` — asserts: blocking types (`elicitation_request`, `run_js_approval`, pending approval, `ask_user`) are emitted as breakout siblings and are never candidates for a collapsible span.

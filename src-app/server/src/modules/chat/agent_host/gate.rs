@@ -555,6 +555,52 @@ impl HumanGate for ChatHumanGate {
             )
             .await?;
 
+        // ITEM-25/AP-3: declare, server-side, whether this call re-prompts on every
+        // turn regardless of the user's choice — so the client never has to
+        // hardcode another module's built-in id to decide whether to offer
+        // "Approve for this conversation". The admin per-(server, tool) override is
+        // re-read for just this server (the same batch getter `decide_pure` uses,
+        // with a one-element id list); a failed read degrades to "no override",
+        // which yields the control/background classification — the same fallback
+        // the rest of this frame's best-effort disclosure fields use, and never
+        // loosens the GATE itself (that decision was already made).
+        let admin_override_map = match server_id {
+            Some(id) => match crate::core::Repos
+                .mcp
+                .get_tool_approval_overrides_for_servers(&[id])
+                .await
+            {
+                Ok(m) => m,
+                Err(e) => {
+                    // Degrading here is deliberate — the GATE decision was already
+                    // made above and is not affected — but it must be LOUD.
+                    // Silently defaulting picks the answer that shows the user
+                    // "Approve for this conversation" on a tool that will re-prompt
+                    // anyway, i.e. it reintroduces the exact misleading affordance
+                    // ITEM-25/AP-3 removes, through a transient DB error instead of
+                    // a hardcoded UUID. Coding guidelines §6: never swallow.
+                    tracing::error!(
+                        error = %e,
+                        server_id = ?id,
+                        "mcp: failed to read tool-approval overrides for the \
+                         approval frame; always_reprompt falls back to the \
+                         classification-only answer"
+                    );
+                    Default::default()
+                }
+            },
+            None => Default::default(),
+        };
+        let always_reprompt =
+            crate::modules::mcp::chat_extension::helpers::approval_is_always_reprompt(
+                server_id,
+                &tool_name,
+                &ask.call.input,
+                server_id
+                    .and_then(|id| admin_override_map.get(&id))
+                    .and_then(|m| m.get(&tool_name)),
+            );
+
         // Emit the client signal (fatal on a closed channel — the user has no
         // other way to act on the pending approval).
         send_approval_required_event(
@@ -566,6 +612,7 @@ impl HumanGate for ChatHumanGate {
             &ask.call.input,
             dest_host,
             description,
+            always_reprompt,
         )
         .await?;
 

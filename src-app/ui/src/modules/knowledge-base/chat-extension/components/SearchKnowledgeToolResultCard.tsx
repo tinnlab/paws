@@ -4,11 +4,11 @@ import { Button, Card, Tag, Text } from '@ziee/kit'
 import type { MessageContentDataToolResult } from '@/api-client/types'
 import { useChatPaneOrNull } from '@/modules/chat/core/pane/ChatPaneContext'
 import type { ContentRendererProps } from '@/modules/chat/core/extensions'
-import { MessageFilesView } from '@/modules/file/chat-extension/components/MessageFilesView'
 import {
   type KbHit,
   hitToPanelData,
   isIndexingIncomplete,
+  isRenderableSearchKnowledgeResult,
   isSearchKnowledgeResult,
   parseSearchKnowledge,
 } from '../searchKnowledge'
@@ -20,19 +20,26 @@ import { Chat } from '@/modules/chat/core/stores/chatBridge'
  * warning, and each retrieved passage (source file · page · score) with a jump
  * to the source document.
  *
- * The content-type registry is FIRST-WINS (registry.tsx `renderContent`): the
- * file extension also claims `tool_result`, so this registers at a lower
- * `priority` and DELEGATES every non-`search_knowledge` block back to
- * MessageFilesView — mirrors LiteratureToolResultCard.
+ * The registry's `contentMatch` seam (registry.tsx `renderContent`) scopes this
+ * renderer to WELL-FORMED `search_knowledge` results only, so every other
+ * `tool_result` — including a malformed `search_knowledge` payload — falls
+ * through to the next registered renderer on its own. That is what removed the
+ * hand-rolled `MessageFilesView` delegation this file used to carry (ITEM-24):
+ * a module no longer reaches into `file`'s internals to cover the registry's
+ * first-wins early exit.
  */
 export function SearchKnowledgeToolResultCard(props: ContentRendererProps) {
   // Open into THIS pane's right panel (ITEM-36), not the focused pane's.
   const chat = (useChatPaneOrNull()?.store ?? Chat) as typeof Chat
   const { content } = props
-  if (!isSearchKnowledgeResult(content)) return <MessageFilesView {...props} />
+  // Defensive only — `contentMatch` already scopes this renderer to well-formed
+  // `search_knowledge` results, so neither guard is reachable through the
+  // registry. Rendering nothing (rather than another module's view) keeps the
+  // fall-through decision where it belongs: in `contentMatch`.
+  if (!isSearchKnowledgeResult(content)) return null
   const block = content.content as MessageContentDataToolResult
   const sc = parseSearchKnowledge(block)
-  if (!sc) return <MessageFilesView {...props} />
+  if (!sc) return null
 
   const incomplete = isIndexingIncomplete(sc)
   // Default collapsed — the transparency detail is on-demand, not always in the
@@ -134,11 +141,12 @@ export function SearchKnowledgeToolResultCard(props: ContentRendererProps) {
 }
 
 /**
- * Claim ONLY `search_knowledge` tool results — the registry's co-ownership seam
- * (registry.tsx `renderContent`). With this, the card never intercepts other
- * extensions' `tool_result` blocks, so literature/file catch-alls still run for
- * their own; the internal `name` guard above is a defensive fallback.
+ * Claim ONLY well-formed `search_knowledge` tool results — the registry's
+ * co-ownership seam (registry.tsx `renderContent`). With this, the card never
+ * intercepts another extension's `tool_result`, and a `search_knowledge` block
+ * whose payload it cannot render is left for the next renderer instead of being
+ * hand-delegated to `file`'s MessageFilesView (ITEM-24).
  */
 SearchKnowledgeToolResultCard.contentMatch = (
   c: ContentRendererProps['content'],
-): boolean => isSearchKnowledgeResult(c)
+): boolean => isRenderableSearchKnowledgeResult(c)

@@ -10,6 +10,7 @@ import { FileAttachMenuItem } from '@/modules/file/chat-extension/components/Fil
 import { AttachedFileCard } from '@/modules/file/chat-extension/components/AttachedFileCard'
 import { MessageFilesView } from '@/modules/file/chat-extension/components/MessageFilesView'
 import { ImageContent } from '@/modules/file/chat-extension/components/ImageContent'
+import { fileRailContributions } from '@/modules/file/chat-extension/railContribution'
 // Raw zustand hook for the `useSendBlocker` reactive subscription —
 // going through FileStore would fire the Stores-proxy's internal
 // useEffect+useStore on property access, corrupting the outer hook
@@ -414,6 +415,9 @@ const fileExtension: ChatExtension = createExtension({
     // wins (the registry returns the first renderer for a content type).
     tool_result: MessageFilesView,
   },
+
+  // Each extension contributes its own step descriptor + detail body (INV-1).
+  railContributions: fileRailContributions,
 
   // Register slot components
   slots: {

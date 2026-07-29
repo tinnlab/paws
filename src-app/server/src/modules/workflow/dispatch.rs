@@ -1140,7 +1140,8 @@ impl StepDispatcher for ToolDispatcher {
         };
         let (server_id, tool_result) =
             match call_mcp_tool(&scope, &server_name, &tool_name, args, true, cancel.as_ref(), None /*chat_ctx*/, None, None,
-                crate::modules::mcp::tool_calls::models::McpToolCallSource::Workflow)
+                crate::modules::mcp::tool_calls::models::McpToolCallSource::Workflow,
+                None /* timing_out — no live tool-lifecycle SSE on the workflow surface */)
                 .await
             {
                 Ok(v) => v,

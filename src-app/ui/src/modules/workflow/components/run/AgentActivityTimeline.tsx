@@ -6,8 +6,23 @@ import type {
 } from '@/api-client/types'
 import { ToolStatusIcon } from '@/modules/chat/core/ToolStatusIcon'
 import type { ToolStatusKey } from '@/modules/chat/core/tool-status'
+import { chatExtensionRegistry } from '@/modules/chat/core/extensions'
 import { WorkflowElicitForm } from '../WorkflowElicitForm'
-import { type AgentActivityEntry, describeActivity } from './activityDescriptors'
+import {
+  type AgentActivityEntry,
+  type RailStepResolver,
+  describeActivity,
+} from './activityDescriptors'
+
+/**
+ * The timeline's label source: the ACTIVITY-RAIL contribution registry, where
+ * each module describes its OWN tools (ITEM-23). This replaced a central map in
+ * `activityDescriptors.ts` that hardcoded nine other modules' tool names — the
+ * exact anti-pattern the activity rail exists to delete. A tool no extension
+ * claims still falls back to a title-cased id inside `describeActivity`.
+ */
+const resolveRailStep: RailStepResolver = ctx =>
+  chatExtensionRegistry.resolveRailStep(ctx)?.step ?? null
 
 /** How many of the most-recent rows to render before collapsing the head of a
  *  long run behind a "Show all" affordance (keeps the DOM bounded). */
@@ -44,7 +59,7 @@ function ActivityRow({
 }) {
   const [open, setOpen] = useState(false)
   const view = statusView(entry.status)
-  const line = describeActivity(entry)
+  const line = describeActivity(entry, resolveRailStep)
   const detail = (entry.detail ?? '').trim()
   const tool = (entry.tool ?? '').trim()
   const hasDetails = detail.length > 0 || tool.length > 0

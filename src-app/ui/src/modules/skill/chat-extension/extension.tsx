@@ -3,6 +3,7 @@ import {
   createExtension,
 } from '@/modules/chat/core/extensions'
 import { SkillMenuItem, SkillConversationDrawerHost } from './SkillMenuItem'
+import { skillRailContributions } from './railContribution'
 
 /**
  * Skill chat bridge. Auto-discovered by chat's extension glob over
@@ -17,6 +18,12 @@ const skillExtension: ChatExtension = createExtension({
   name: 'skill',
   description: 'Per-conversation skills opt-out entry in the chat composer',
   priority: 55,
+
+  // ACTIVITY-RAIL contributions (ITEM-20). Skills are delivered server-side via
+  // `skill_mcp`, so this module owns the meaning of `load_skill` /
+  // `read_skill_file` steps even though it ships no renderer for them.
+  railContributions: skillRailContributions,
+
   slots: {
     toolbar_plus_items: { component: SkillMenuItem, order: 25 },
     // The Dialog host lives in an always-mounted composer slot (NOT the "+"

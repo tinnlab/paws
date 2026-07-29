@@ -29,6 +29,9 @@ mod conversation_sort_test;
 mod messages_test;
 mod branches_test;
 mod streaming_test;
+// ITEM-14 (activity rail): the mcpToolStart/mcpToolComplete frames carry the
+// recorder's timing, so a live rail step can show a duration.
+mod stream_tool_timing_test;
 // Tier-2 ai-providers consumer-wiring tests on the request-capturing,
 // scriptable in-process OpenAI stub (`common::stub_chat`).
 mod stub_chat_tier2_test;
@@ -59,3 +62,7 @@ mod test_single_assistant_message_architecture;
 mod assistant_block_grouping_test;
 mod append_content_ordering_test;
 mod user_providers_test;
+// TEST-37 (ITEM-27): the showcase seed's activity-rail turns — a re-run stays a
+// no-op, every seeded tool_use has a paired mcp_tool_calls row, and the
+// gallery's guarded conversation 11111111-… survives.
+mod showcase_seed_rail_test;

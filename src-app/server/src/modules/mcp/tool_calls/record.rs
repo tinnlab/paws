@@ -37,10 +37,25 @@ const BINARY_BLOCK_TYPES: &[&str] = &["image", "audio", "resource", "file"];
 /// against a tool whose PAYLOAD carries a credential landing in the
 /// long-retention history. (Request headers / the injected internal JWT are
 /// never part of args/results, so this only guards tool-payload secrets.)
+///
+/// **EXACT match, deliberately** (ITEM-17 / DEC-1): a substring rule would redact
+/// `token_count` and `password_policy`, which are legitimate, user-meaningful
+/// tool arguments — and INV-2 says every user-meaningful detail must stay
+/// reachable. The cost of exactness is that each spelling must be listed, which
+/// is why the hyphen AND underscore variants appear side by side.
+///
+/// MIRRORED, key-for-key, by the surface-side redactor
+/// `src-app/ui/src/modules/mcp/chat-extension/redactArgs.ts`. The two lists must
+/// stay in step — this module's `#[cfg(test)]` pins this one, `redactArgs.test.ts`
+/// pins the other.
 const SECRET_KEYS: &[&str] = &[
     "authorization",
     "auth",
     "bearer",
+    // `Bearer-Token` / `bearer_token`: the bare `bearer` key above does NOT match
+    // these under the exact rule (confirmed open before ITEM-17).
+    "bearer-token",
+    "bearer_token",
     "password",
     "passwd",
     "secret",
@@ -51,8 +66,13 @@ const SECRET_KEYS: &[&str] = &[
     "apikey",
     "api-key",
     "x-api-key",
+    "x_auth_token",
+    "x-auth-token",
     "client_secret",
     "private_key",
+    "cookie",
+    "credentials",
+    "openai_api_key",
 ];
 
 fn is_secret_key(key: &str) -> bool {
@@ -464,6 +484,87 @@ mod tests {
             json!("OK"),
             "data outside a binary content block is NOT stripped"
         );
+    }
+
+    /// TEST-22 (ITEM-17): every denylist gap confirmed OPEN before this feature
+    /// now redacts, and matching stays case-insensitive. Each key is asserted
+    /// individually so a future edit that drops one names the key it dropped.
+    #[test]
+    fn is_secret_key_covers_the_closed_gaps_case_insensitively() {
+        // The five gaps DEC-1 names, plus the hyphen/underscore spellings the
+        // exact-match rule requires us to list explicitly.
+        for key in [
+            "cookie",
+            "credentials",
+            "x_auth_token",
+            "x-auth-token",
+            "openai_api_key",
+            "bearer-token",
+            "bearer_token",
+        ] {
+            assert!(is_secret_key(key), "`{key}` must be treated as a secret key");
+            // Case-insensitive: the wire spelling is often `Cookie` / `Bearer-Token`.
+            assert!(
+                is_secret_key(&key.to_ascii_uppercase()),
+                "`{key}` must match case-insensitively (uppercase)"
+            );
+        }
+        // `Bearer-Token` verbatim — the exact spelling named in ITEM-17 as missing
+        // because only the bare `bearer` key was listed.
+        assert!(is_secret_key("Bearer-Token"));
+
+        // Pre-existing keys still match (no regression from the list edit).
+        for key in ["authorization", "Authorization", "API_KEY", "private_key"] {
+            assert!(is_secret_key(key), "`{key}` must still be a secret key");
+        }
+
+        // EXACT, not substring: these are legitimate user-meaningful arguments and
+        // must survive (redacting them would violate INV-2).
+        for key in [
+            "token_count",
+            "password_policy",
+            "cookie_jar_path",
+            "credentials_required",
+            "max_tokens",
+            "authorized_users",
+        ] {
+            assert!(
+                !is_secret_key(key),
+                "`{key}` is a legitimate argument and must NOT be redacted"
+            );
+        }
+    }
+
+    /// The closed gaps redact through the real storage path (`cap_arguments`),
+    /// nested and at the top level — not just through `is_secret_key`.
+    #[test]
+    fn cap_arguments_redacts_newly_covered_secret_keys() {
+        let args = json!({
+            "cookie": "session=abc",
+            "nested": {
+                "credentials": { "user": "u", "pass": "p" },
+                "X-Auth-Token": "t",
+                "openai_api_key": "sk-live-123",
+            },
+            "headers": [{ "Bearer-Token": "abc123" }],
+            "token_count": 42,
+        });
+        let out = cap_arguments(&args);
+        assert_eq!(out["cookie"], json!("[redacted]"));
+        assert_eq!(out["nested"]["credentials"], json!("[redacted]"));
+        assert_eq!(out["nested"]["X-Auth-Token"], json!("[redacted]"));
+        assert_eq!(out["nested"]["openai_api_key"], json!("[redacted]"));
+        assert_eq!(out["headers"][0]["Bearer-Token"], json!("[redacted]"));
+        assert_eq!(
+            out["token_count"],
+            json!(42),
+            "exact-match rule keeps `token_count` intact"
+        );
+        // No fragment of any secret survives anywhere in the serialized form.
+        let serialized = serde_json::to_string(&out).unwrap();
+        for leaked in ["session=abc", "sk-live-123", "abc123", "\"pass\""] {
+            assert!(!serialized.contains(leaked), "leaked {leaked} in {serialized}");
+        }
     }
 
     #[test]

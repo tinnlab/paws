@@ -1,32 +1,46 @@
 import { FileSearch } from 'lucide-react'
 import { Button, Card, Text } from '@ziee/kit'
-import type { MessageContentDataToolResult } from '@/api-client/types'
+import type { MessageContent, MessageContentDataToolResult } from '@/api-client/types'
 import { useChatPaneOrNull } from '@/modules/chat/core/pane/ChatPaneContext'
 import type { ContentRendererProps } from '@/modules/chat/core/extensions'
-import { MessageFilesView } from '@/modules/file/chat-extension/components/MessageFilesView'
 import type { LiteratureResult, LiteratureScreeningData } from '../types'
 import { Chat } from '@/modules/chat/core/stores/chatBridge'
+
+/** The tool name whose results this card renders. */
+const LITERATURE_SEARCH = 'literature_search'
+
+/** The typed `structured_content` of a renderable `literature_search` result. */
+function literatureResultOf(content: MessageContent): LiteratureResult | null {
+  if (content.content_type !== 'tool_result') return null
+  const block = content.content as MessageContentDataToolResult
+  if (block.name !== LITERATURE_SEARCH) return null
+  const sc = block.structured_content as LiteratureResult | null | undefined
+  return sc && Array.isArray(sc.records) ? sc : null
+}
 
 /**
  * Inline renderer for a `literature_search` tool result.
  *
- * The content-type registry early-exits on the FIRST registered renderer for a
- * content type (registry.tsx `renderContent`), it does NOT stack. The file
- * extension also registers `tool_result` (MessageFilesView). This extension
- * registers at a lower `priority` number so it wins `tool_result`, then
- * DELEGATES every non-literature block back to MessageFilesView — otherwise the
- * early-exit would suppress all resource-link / file previews. Reads the typed
- * `structured_content`; "Open in screening" hands the records to the right-panel.
+ * The content-type registry early-exits on the FIRST registered renderer that
+ * CLAIMS a block (registry.tsx `renderContent`), and a renderer claims via its
+ * static `contentMatch`. This card claims only well-formed `literature_search`
+ * results, so every other `tool_result` reaches the next registered renderer on
+ * its own — which is what removed the hand-rolled `MessageFilesView` delegation
+ * this file used to carry (ITEM-24): a module no longer reaches into `file`'s
+ * internals to work around a first-wins early exit.
+ *
+ * Reads the typed `structured_content`; "Open in screening" hands the records to
+ * the right panel.
  */
 export function LiteratureToolResultCard(props: ContentRendererProps) {
   // Open into THIS pane's right panel (ITEM-36), not the focused pane's.
   const chat = (useChatPaneOrNull()?.store ?? Chat) as typeof Chat
   const { content } = props
-  if (content.content_type !== 'tool_result') return null
+  const sc = literatureResultOf(content)
+  // Defensive only — `contentMatch` already scopes this renderer, so rendering
+  // nothing here can never suppress another module's view.
+  if (!sc) return null
   const block = content.content as MessageContentDataToolResult
-  if (block.name !== 'literature_search') return <MessageFilesView {...props} />
-  const sc = block.structured_content as LiteratureResult | null | undefined
-  if (!sc || !Array.isArray(sc.records)) return <MessageFilesView {...props} />
 
   const total = Object.values(sc.identified ?? {}).reduce((a, b) => a + b, 0)
 
@@ -95,3 +109,13 @@ export function LiteratureToolResultCard(props: ContentRendererProps) {
     </Card>
   )
 }
+
+/**
+ * Claim ONLY well-formed `literature_search` tool results — the registry's
+ * co-ownership seam. Without it this renderer was the real catch-all for
+ * `tool_result` and had to hand every foreign block back to `file`'s
+ * MessageFilesView by importing it (ITEM-24, AP-2).
+ */
+LiteratureToolResultCard.contentMatch = (
+  c: ContentRendererProps['content'],
+): boolean => literatureResultOf(c) !== null

@@ -1,0 +1,31 @@
+# DESIGN_FIDELITY — Activity Rail
+
+Does `PLAN.md` actually realize `DESIGN.md`'s non-negotiables, or quietly reframe them?
+One verdict per invariant. Each is pinned to an executable `[acceptance]` test in phase 3.
+
+- **INV-1** — fidelity: UPHELD — The plan inverts control rather than centralizing it: ITEM-1 puts a contribution registry in core, ITEM-2 decides span membership **from the contributions themselves rather than a hardcoded content-type list**, and ITEM-11 delegates each step body back through `renderContent({content})` so the rail never learns what any extension renders. Crucially the plan does not merely avoid *new* coupling — ITEM-23/24/25 **delete the four couplings that already exist** (the central nine-module tool map, three cross-module `MessageFilesView` imports, a hardcoded `control_mcp` UUID, and `mcp` owning `js_tool`'s approval UI). An implementation that satisfied the rail but left those in place would be reframing this invariant into "no new coupling", which is not what it says.
+
+- **INV-2** — fidelity: UPHELD — (was AT-RISK at phase 2; re-examined at phase 5 and again after the blind audit — see the reasoning below) The plan expands reachable detail in four directions (ITEM-11 inline, ITEM-12 panel, ITEM-13 the `mcp_tool_calls` join that surfaces duration/timeout/`source`/size for the first time, ITEM-16 unblocking non-admins). The phase-2 verdict was AT-RISK because ITEM-17 canonicalized the detail view on the REDACTED source, which — with no counterweight — would have made secret-keyed argument values strictly *less* reachable than the unredacted chat card renders them today. That is a genuine reduction, and it was right not to wave it through.
+
+  **What changed: DEC-1 did not exist when that verdict was written.** The owner subsequently chose "redact + admin reveal" over redact-everywhere (2026-07-27), which supplies exactly the missing counterweight. As implemented, the redacted value is what every surface renders by default, and the raw arguments remain retrievable through a permission-gated endpoint (DEC-2). So **no detail becomes unreachable** — the literal claim the invariant makes. What changes is who must ask, and how deliberately: a credential is no longer *printed into the transcript* as a side effect of rendering a tool call, which is what INV-2 protects against being lost, not what it protects. The invariant is upheld, not narrowly violated.
+
+  Three qualifications, recorded so the phase-6 audit re-examines the trade rather than inheriting this judgement:
+  1. **The gate is a surface gate, not a wire gate.** The raw `tool_use.input` is still present in the conversation-messages payload the owner already receives, so a determined owner can read it from the API without the permission. The reveal endpoint is the AUTHORITATIVE, audited path; it is not a containment boundary against the resource owner. This is documented on the handler and is not overstated anywhere in the code.
+  2. **A non-admin owner genuinely loses default sight of their own secret-keyed argument values.** That is the residual cost, and it is the right side of the trade: an argument the model was handed with the key `authorization` is a credential, and rendering it forever into a shared transcript is the defect ITEM-17 exists to fix.
+  3. **The redaction is honest rather than partial** — the five confirmed gaps (`cookie`, `credentials`, `x_auth_token`, `openai_api_key`, `Bearer-Token`) are closed on BOTH the backend recorder and the new client-side surface mirror, and matching stays EXACT so `token_count` / `password_policy` — legitimate, user-meaningful arguments — keep rendering. A substring rule would have broken INV-2 far more widely than the case it was meant to fix.
+
+  Pinned by TEST-2 (the reachability half), TEST-41 (the negative-permission half) and TEST-42 (the endpoint's own gate). DEC-2's named permission did not exist in the tree; see DRIFT-1.
+
+- **INV-3** — fidelity: UPHELD — ITEM-10 breaks `elicitation_request`, `run_js_approval`, pending tool approvals and `ask_user` out of the rail as full-width, **non-collapsible** surfaces. The existing force-open invariant (`deriveGroupOpen`, `toolRun.ts:76-81`) is explicitly called out as something that must survive the group card's retirement — PLAN_AUDIT flags it CONCERN precisely because losing it silently would violate this invariant while every structural gate stayed green.
+
+- **INV-4** — fidelity: UPHELD — ITEM-7 states the lifecycle exactly as the design does: open while working, collapsed to one summary line once the answer exists, user-toggleable thereafter.
+
+- **INV-5** — fidelity: UPHELD — ITEM-9 forces the rail open on a failed or timed-out step. Note the plan is stronger than a naive reading: it covers `timeout` as distinct from `failed`, which the chat stream cannot currently express at all (its vocabulary is `started|pending_approval|completed|error`), so this invariant also drives ITEM-13's join.
+
+- **INV-6** — fidelity: UPHELD — ITEM-2 segments blocks into activity spans **versus prose**, and the design's "Explicitly out of the rail" list (text, standalone thinking, `observation`, attachments, images, summary marker, composer chrome) is carried into the plan verbatim. Markdown content boxes — code blocks, tables, GFM alerts — are never candidates for a span, so the rail cannot swallow the answer.
+
+- **INV-7** — fidelity: UPHELD — ITEM-8 puts rail expansion state in `MessageViewState` keyed by message, joining the mechanism `CollapsibleBlock` and `InlineFilePreview` already use. This invariant exists because the current `ThinkingContent` gets this wrong (component-local state + a virtualised list = silent re-collapse mid-read), so the plan fixes the precedent rather than copying it.
+
+- **INV-8** — fidelity: UPHELD — ITEM-26 specifies 390/768/1280 with the label truncating first and never wrapping, timing dropping below 360px; the UI checklist additionally requires the gallery to cover the **populated** 390px state, not the empty one.
+
+- **INV-9** — fidelity: UPHELD — ITEM-4 reuses `ToolStatusKey` + `ToolStatusIcon` verbatim. The plan adds no status strings of its own; ITEM-22's scheduler markers are mapped onto the existing `cancelled` rather than inventing a "skipped".

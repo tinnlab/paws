@@ -1,84 +1,21 @@
 import type {
   MessageContent,
   MessageContentDataToolUse,
-  MessageContentDataToolResult,
 } from '@/api-client/types'
 import type { McpToolCall } from '@/modules/mcp/stores/mcpComposer'
 
 /**
- * Pure helpers for the "N tools called" group card (`McpToolGroupCard`).
- * Extracted so the auto-open policy + artifact detection + artifact
- * attribution are unit-testable without React.
- */
-
-/** The `tool_use` ids present in a run (the producing tool calls). */
-export function runToolUseIds(run: MessageContent[]): string[] {
-  const ids: string[] = []
-  for (const b of run) {
-    if (b.content_type !== 'tool_use') continue
-    const id = (b.content as MessageContentDataToolUse | undefined)?.id
-    if (id) ids.push(id)
-  }
-  return ids
-}
-
-/**
- * True if any `tool_result` in the run carries ≥1 `resource_link` — i.e. the
- * run produced a file artifact that should be visible without a click.
- */
-export function hasArtifactInRun(run: MessageContent[]): boolean {
-  return run.some(
-    b =>
-      b.content_type === 'tool_result' &&
-      ((b.content as MessageContentDataToolResult | undefined)?.resource_links
-        ?.length ?? 0) > 0,
-  )
-}
-
-/**
- * Whether a tool run is folded into the collapsible `McpToolGroupCard` wrapper.
- * - A run of ≥2 tool calls always wraps (the original "N tools called" group).
- * - A SINGLE tool call wraps too WHEN it produced an artifact, so its file(s) sit
- *   in the same collapsible box (visually consistent with the multi-tool group)
- *   instead of rendering as a bare card with the files loose below it.
- * - A single tool call with NO artifact does NOT wrap (stays the plain card).
+ * Pure helpers for the mcp chat extension.
  *
- * This is the SINGLE source of truth shared by `McpToolUseGroup` (the render
- * branch) and its `contentSpan` (how many blocks the run-loop consumes). They MUST
- * agree — a group that renders N blocks but reports a different `consumed` corrupts
- * subsequent block rendering — so both call this on the same `run`.
+ * This module used to also hold the "N tools called" GROUP CARD's policy —
+ * `runToolUseIds` / `hasArtifactInRun` / `shouldWrapRun` / `shouldAutoOpen` /
+ * `deriveGroupOpen`. The group card is retired (DEC-4, hard cutover): grouping,
+ * auto-open and the force-open-on-approval rule are the ACTIVITY RAIL's, and the
+ * rail expresses them without the fragile dual-call invariant `shouldWrapRun`
+ * existed to hold together (ITEM-5). What remains is artifact attribution, which
+ * is genuinely mcp's: only mcp knows which of ITS in-flight calls an
+ * `artifactCreated` frame belongs to.
  */
-export function shouldWrapRun(run: MessageContent[]): boolean {
-  const toolUseCount = runToolUseIds(run).length
-  return toolUseCount >= 2 || (toolUseCount >= 1 && hasArtifactInRun(run))
-}
-
-/**
- * The default-open (latch) condition: a group opens on its own when a tool is
- * running or it has produced an artifact. This is the initial `userOpen` value
- * AND the effect trigger — once true it latches `userOpen` open; the user may
- * still collapse it afterward (it does not force-open continuously).
- */
-export function shouldAutoOpen(args: {
-  hasRunning: boolean
-  hasArtifact: boolean
-}): boolean {
-  return args.hasRunning || args.hasArtifact
-}
-
-/**
- * The final render decision for a group card.
- * - A `pending_approval` tool FORCES the group open (a collapsed group would
- *   hide the approval prompt and strand the user), overriding a user collapse.
- * - Otherwise the group follows `userOpen` (which starts at `shouldAutoOpen`,
- *   latches open on running/artifact, and is toggled by the user).
- */
-export function deriveGroupOpen(args: {
-  hasPendingApproval: boolean
-  userOpen: boolean
-}): boolean {
-  return args.hasPendingApproval || args.userOpen
-}
 
 /**
  * Resolve which `tool_use` an incoming artifact belongs to, robust under

@@ -12,16 +12,16 @@ export const ContentRenderer = memo(function ContentRenderer({
   content,
   isUser,
 }: ContentRendererProps) {
-  // Try extension rendering first. Standalone single-block render (no `blocks`),
-  // so `consumed` is always 1 and grouping renderers fall back to their single
-  // form — used for attachments and as the run-loop's fallback.
+  // Try extension rendering first. A renderer always renders exactly this one
+  // block — used for attachments, for a rail step's inline detail body, and as
+  // the message run-loop's fallback.
   const extensionRenderer = chatExtensionRegistry.renderContent({
     content,
     isUser,
   })
 
   if (extensionRenderer !== null) {
-    return <>{extensionRenderer.node}</>
+    return <>{extensionRenderer}</>
   }
 
   // Fall back to built-in renderers
