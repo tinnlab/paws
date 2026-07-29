@@ -544,3 +544,91 @@ test('TEST-12: the in-flight latch is released after a composition abort', async
     restore()
   }
 })
+
+test('TEST-18: a pre-flight abort CLEARS the latched branch fork (no silent re-fork)', async () => {
+  // `startRegenerateMessage` latches `pendingBranchFromMessageId` +
+  // fork_level:'assistant' and trims the transcript BEFORE calling sendMessage,
+  // and has no catch of its own; `clearPendingBranch()` otherwise runs only on
+  // the SUCCESS path. Without clearing on abort, the user's next composer
+  // message silently forks at the stale assistant anchor — the branching fields
+  // are injected unconditionally further down.
+  let cleared = 0
+  stubRegistry({ composeRequestFields: async () => ({ content: 'hello' }) })
+  const { set, get, state } = makeStore({
+    pendingBranchFromMessageId: 'msg-42',
+    pendingBranchForkLevel: 'assistant',
+    clearPendingBranch: async () => {
+      cleared++
+      ;(state as Record<string, unknown>).pendingBranchFromMessageId = null
+      ;(state as Record<string, unknown>).pendingBranchForkLevel = null
+    },
+  })
+  const sendMessage = makeSendMessage(set as never, get as never)
+  const { calls, restore } = stubSend()
+  try {
+    await captureConsoleError(async () => {
+      await sendMessage().catch(() => {})
+    })
+    expect(calls.n).toBe(0)
+    expect(cleared, 'the abort must clear the pending branch').toBe(1)
+    expect(state.pendingBranchFromMessageId).toBeNull()
+
+    // The proof that matters: the NEXT (healthy) send must not carry the stale
+    // fork anchor.
+    stubRegistry({
+      composeRequestFields: async () => ({ content: 'next turn', model_id: 'm-1' }),
+    })
+    await sendMessage()
+    expect(calls.n).toBe(1)
+    expect(calls.bodies[0].create_branch_from_message_id).toBeUndefined()
+    expect(calls.bodies[0].fork_level).toBeUndefined()
+  } finally {
+    restore()
+  }
+})
+
+test('TEST-19: an EMPTY branch_id is never POSTed either', async () => {
+  // `conversation.active_branch_id || ''` — the generated client type makes
+  // active_branch_id OPTIONAL while the server declares it a Uuid, so this used
+  // to POST `branch_id: ""` and come back as exactly the raw 422 this change
+  // removes.
+  stubRegistry({
+    composeRequestFields: async () => ({ content: 'hello', model_id: 'm-1' }),
+  })
+  const { set, get, state } = makeStore({
+    conversation: { id: 'conv-1' }, // no active_branch_id
+  })
+  const sendMessage = makeSendMessage(set as never, get as never)
+  const { calls, restore } = stubSend()
+  try {
+    await captureConsoleError(async () => {
+      await sendMessage().catch(() => {})
+    })
+    expect(calls.n, 'a body with an empty branch_id must not be POSTed').toBe(0)
+    expect(String(state.error ?? '')).toMatch(/branch/i)
+  } finally {
+    restore()
+  }
+})
+
+test('TEST-20: an extension-contributed branch_id still WINS (precedence preserved)', async () => {
+  // The old literal was `{ id, branch_id, ...allRequestFields }` — a contributor
+  // could override them. The typed payload must not silently invert that.
+  stubRegistry({
+    composeRequestFields: async () => ({
+      content: 'hello',
+      model_id: 'm-1',
+      branch_id: 'from-extension',
+    }),
+  })
+  const { set, get } = makeStore()
+  const sendMessage = makeSendMessage(set as never, get as never)
+  const { calls, restore } = stubSend()
+  try {
+    await sendMessage()
+    expect(calls.n).toBe(1)
+    expect(calls.bodies[0].branch_id).toBe('from-extension')
+  } finally {
+    restore()
+  }
+})

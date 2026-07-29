@@ -68,146 +68,228 @@ async function seedConversation(
   return (await created.json()) as { id: string; active_branch_id: string }
 }
 
+/**
+ * Shared arrange step: real provider+model, real login, real conversation, and
+ * the fault injection armed. Returns handles the individual tests assert on.
+ *
+ * Each `test` below arranges its own stack (Playwright gives every test its own
+ * backend + database here) so a failure in one CANNOT hide the others — the
+ * whole point of splitting them.
+ */
+async function arrange(
+  page: import('@playwright/test').Page,
+  testInfra: { baseURL: string; apiURL: string },
+  title: string,
+) {
+  const { baseURL, apiURL } = testInfra
+
+  const pageErrors: string[] = []
+  page.on('pageerror', e => pageErrors.push(e.message))
+
+  // Every import ATTEMPT the dispatcher makes raises `vite:preloadError`, and
+  // the framework's listener logs one line per event — a direct, in-page
+  // observation of "did the dispatcher try again?".
+  const importAttempts: string[] = []
+  page.on('console', m => {
+    if (m.text().includes('[chunk-recovery]')) importAttempts.push(m.text())
+  })
+
+  let sendRequests = 0
+  const sendBodies: string[] = []
+  page.on('request', r => {
+    if (r.method() === 'POST' && SEND_ROUTE.test(r.url())) {
+      sendRequests++
+      sendBodies.push(r.postData() ?? '')
+    }
+  })
+
+  const token = await seedProviderAndModel(apiURL)
+  await loginAsAdmin(page, baseURL)
+  const conv = await seedConversation(page, apiURL, token, title)
+
+  const state = { blocked: true, blockedUrls: [] as string[] }
+  await page.route(MODEL_ACTION_MODULE, async route => {
+    if (!state.blocked) return route.fallback()
+    const url = route.request().url()
+    // Guardrail: this spec must never intercept an API route (R2-5).
+    expect(new URL(url).pathname.startsWith('/api/')).toBe(false)
+    state.blockedUrls.push(url)
+    return route.abort('failed')
+  })
+
+  await page.goto(`${baseURL}/chat/${conv.id}`)
+  const textarea = byTestId(page, 'chat-message-textarea')
+  await expect(textarea).toBeVisible({ timeout: 30000 })
+
+  return {
+    state,
+    textarea,
+    pageErrors,
+    importAttempts,
+    counts: {
+      get sends() {
+        return sendRequests
+      },
+      bodies: sendBodies,
+    },
+  }
+}
+
 test.describe('Chat — a failed request-field composition never reaches the wire', () => {
-  test('TEST-13/14/15: a blocked lazy action aborts the send, surfaces an actionable error, keeps retrying, and recovers', async ({
+  test('TEST-13: a blocked lazy action aborts the send and surfaces an ACTIONABLE error', async ({
     page,
     testInfra,
   }) => {
-    const { baseURL, apiURL } = testInfra
+    const a = await arrange(page, testInfra, 'compose-failure-abort')
 
-    const pageErrors: string[] = []
-    page.on('pageerror', e => pageErrors.push(e.message))
+    await a.textarea.click()
+    await a.textarea.fill('this send must not leave the browser')
+    await a.textarea.press('Enter')
 
-    // Every import ATTEMPT the dispatcher makes raises `vite:preloadError`, and
-    // the framework's listener logs one line per event — so this counter is a
-    // direct, in-page observation of "did the dispatcher try again?", which is
-    // TEST-14's property.
-    const importAttempts: string[] = []
-    page.on('console', m => {
-      if (m.text().includes('[chunk-recovery]')) importAttempts.push(m.text())
-    })
-
-    const token = await seedProviderAndModel(apiURL)
-    await loginAsAdmin(page, baseURL)
-    const conv = await seedConversation(page, apiURL, token, 'compose-failure')
-
-    // ── Fault injection: fail the model extension's lazy action modules ──────
-    // `blocked` is flipped off later in the test, which is what TEST-14 needs.
-    let blocked = true
-    const blockedUrls: string[] = []
-    await page.route(MODEL_ACTION_MODULE, async route => {
-      if (!blocked) return route.fallback()
-      const url = route.request().url()
-      // Guardrail: this spec must never intercept an API route (R2-5).
-      expect(new URL(url).pathname.startsWith('/api/')).toBe(false)
-      blockedUrls.push(url)
-      return route.abort('failed')
-    })
-
-    let sendRequests = 0
-    page.on('request', r => {
-      if (r.method() === 'POST' && SEND_ROUTE.test(r.url())) sendRequests++
-    })
-
-    await page.goto(`${baseURL}/chat/${conv.id}`)
-    const textarea = byTestId(page, 'chat-message-textarea')
-    await expect(textarea).toBeVisible({ timeout: 30000 })
-
-    await textarea.click()
-    await textarea.fill('this send must not leave the browser')
-    await textarea.press('Enter')
-
-    // ── TEST-13: the send is ABORTED, not sent with an invalid body ──────────
-    // A visible, actionable error surface appears (the conversation error Alert
-    // and/or the composer's toast) …
     const errorSurface = page
-      .locator(
-        '[data-testid="chat-conversation-error-alert"], [data-sonner-toast]',
-      )
+      .locator('[data-testid="chat-conversation-error-alert"], [data-sonner-toast]')
       .first()
     await expect(errorSurface).toBeVisible({ timeout: 30000 })
     const errorText = ((await errorSurface.textContent()) || '').toLowerCase()
 
-    // … and it tells the user something they can act on, rather than echoing the
-    // server's validation string.
-    expect(errorText).toMatch(/reload|updated|model/)
+    // The message must name the failing capability AND prescribe the action that
+    // actually fixes THIS cause (a chunk load failure -> reload). Asserted as two
+    // separate requirements rather than one loose OR, so a generic message that
+    // merely contains the word "model" cannot satisfy it.
+    expect(errorText, 'the message must name the failing extension').toContain('model')
+    expect(errorText, 'a chunk-load failure must prescribe a reload').toMatch(/reload/)
     expect(
       errorText,
       'the user must never be shown the raw 422 validation string',
     ).not.toContain('missing field')
 
-    // The core assertion: NOTHING structurally invalid left the browser.
     expect(
-      blockedUrls.length,
+      a.state.blockedUrls.length,
       'the fault injection must have actually fired (otherwise this test proves nothing)',
     ).toBeGreaterThan(0)
     expect(
-      sendRequests,
+      a.counts.sends,
       'a failed field composition must not produce a send request',
     ).toBe(0)
+  })
 
-    // ── TEST-15: the composer is not wedged and the draft survives ───────────
-    await expect(textarea).toBeEnabled()
-    await expect(textarea).toHaveValue('this send must not leave the browser')
-    await expect(byTestId(page, 'chat-input-send-btn')).toBeEnabled({
-      timeout: 30000,
-    })
+  test('TEST-15: the composer is not wedged and the draft survives the abort', async ({
+    page,
+    testInfra,
+  }) => {
+    const a = await arrange(page, testInfra, 'compose-failure-composer')
 
-    // ── TEST-14: the dispatcher keeps RE-ATTEMPTING; it never memoizes ──────
+    await a.textarea.click()
+    await a.textarea.fill('draft that must survive')
+    await a.textarea.press('Enter')
+
+    await expect(
+      page
+        .locator('[data-testid="chat-conversation-error-alert"], [data-sonner-toast]')
+        .first(),
+    ).toBeVisible({ timeout: 30000 })
+
+    await expect(a.textarea).toBeEnabled()
+    await expect(a.textarea).toHaveValue('draft that must survive')
+    await expect(byTestId(page, 'chat-input-send-btn')).toBeEnabled({ timeout: 30000 })
+  })
+
+  test('TEST-14: the dispatcher keeps re-attempting, and the prescribed recovery works', async ({
+    page,
+    testInfra,
+  }) => {
+    const a = await arrange(page, testInfra, 'compose-failure-recovery')
+
+    await a.textarea.click()
+    await a.textarea.fill('first attempt')
+    await a.textarea.press('Enter')
+
+    await expect
+      .poll(() => a.importAttempts.length, { timeout: 30000 })
+      .toBeGreaterThan(0)
+    const afterFirstSend = a.importAttempts.length
+
     // The shipped dispatcher memoized the rejection permanently: attempt 1 was
     // retried once, and from the SECOND failure on it stopped importing at all —
     // every later send failed instantly without touching the chunk. So the
-    // discriminating observation is whether a THIRD send attempt still produces
-    // fresh import attempts.
-    const afterFirstSend = importAttempts.length
-    expect(afterFirstSend).toBeGreaterThan(0)
-
-    await textarea.press('Enter')
+    // discriminating observation is whether a THIRD send still produces fresh
+    // import attempts.
+    await a.textarea.press('Enter')
     await expect
-      .poll(() => importAttempts.length, { timeout: 15000 })
+      .poll(() => a.importAttempts.length, { timeout: 15000 })
       .toBeGreaterThan(afterFirstSend)
-    const afterSecondSend = importAttempts.length
+    const afterSecondSend = a.importAttempts.length
 
-    await textarea.press('Enter')
+    await a.textarea.press('Enter')
     await expect
-      .poll(() => importAttempts.length, {
+      .poll(() => a.importAttempts.length, {
         message:
           'a THIRD send must still re-attempt the import — under the shipped memoize-after-one-retry policy the dispatcher had already latched and would attempt nothing',
         timeout: 15000,
       })
       .toBeGreaterThan(afterSecondSend)
 
-    // Still nothing invalid on the wire, three attempts in.
-    expect(sendRequests, 'no failed attempt may produce a send request').toBe(0)
+    expect(a.counts.sends, 'no failed attempt may produce a send request').toBe(0)
 
-    // ── TEST-14 (b): the recovery the message PROMISES actually works ────────
-    // The message tells the user to reload, and that is the only complete
-    // recovery available in a browser: once a module URL's fetch has failed, the
-    // HTML module map records the failure for that URL and `import()` of the SAME
-    // specifier will not re-request it (visible in this very run — the retries
-    // above raise a fresh preloadError each time but stop hitting the network).
-    // A bundler-rewritten static specifier cannot be cache-busted from here, and
-    // auto-reloading would destroy the composer draft (DEC-3). So the dispatcher
-    // guarantees it never ADDS its own permanent memo on top of the browser's,
-    // and the user is told the one thing that does work — which this asserts is
-    // true, rather than asserting a self-heal that a browser cannot deliver.
-    blocked = false
+    // The recovery the message PROMISES must actually work. A reload is the only
+    // complete recovery available in a browser: once a module URL's fetch has
+    // failed, the HTML module map records the failure for that URL and `import()`
+    // of the SAME specifier will not re-request it (visible in this very run —
+    // the retries above raise a fresh preloadError each time but stop hitting the
+    // network). A bundler-rewritten static specifier cannot be cache-busted from
+    // the dispatcher, and auto-reloading would destroy the composer draft
+    // (DEC-3). So the dispatcher guarantees it never ADDS its own permanent memo,
+    // and the user is told the one thing that does work — asserted here rather
+    // than asserting a self-heal a browser cannot deliver.
+    a.state.blocked = false
     await page.reload()
-    const textareaAfterReload = byTestId(page, 'chat-message-textarea')
-    await expect(textareaAfterReload).toBeVisible({ timeout: 30000 })
-    await textareaAfterReload.click()
-    await textareaAfterReload.fill('this one should go through')
-    await textareaAfterReload.press('Enter')
+    const textarea = byTestId(page, 'chat-message-textarea')
+    await expect(textarea).toBeVisible({ timeout: 30000 })
+    await textarea.click()
+    await textarea.fill('this one should go through')
+    await textarea.press('Enter')
 
     await expect
-      .poll(() => sendRequests, {
+      .poll(() => a.counts.sends, {
         message:
           'after reloading (the recovery the error message tells the user to perform) the send must go through',
         timeout: 30000,
       })
       .toBe(1)
 
-    // No uncaught exception at any point.
-    expect(pageErrors, 'no uncaught exception on the abort path').toEqual([])
+    // …and it carried the field whose absence was the original defect.
+    const body = JSON.parse(a.counts.bodies[0] || '{}')
+    expect(
+      typeof body.model_id === 'string' && body.model_id.length > 0,
+      `the recovered send must carry a model_id (body was ${a.counts.bodies[0]})`,
+    ).toBe(true)
+  })
+
+  test('TEST-17: a blocked chunk raises NO uncaught page error anywhere', async ({
+    page,
+    testInfra,
+  }) => {
+    // Distinct property, distinct assertion: the boot-time lazy-action PREFETCH
+    // warms every chunk fire-and-forget, so a blocked chunk used to produce
+    // unhandled rejections from `autoWarmLazyActions` alone — its try/catch only
+    // ever caught a SYNCHRONOUS throw while `preload()` returns a promise.
+    const a = await arrange(page, testInfra, 'compose-failure-no-page-errors')
+
+    await a.textarea.click()
+    await a.textarea.fill('trigger the whole failure path')
+    await a.textarea.press('Enter')
+    await expect(
+      page
+        .locator('[data-testid="chat-conversation-error-alert"], [data-sonner-toast]')
+        .first(),
+    ).toBeVisible({ timeout: 30000 })
+
+    // Give the idle prefetch a chance to run and fail against blocked chunks.
+    await page.waitForTimeout(2000)
+
+    expect(
+      a.pageErrors,
+      'a handled chunk failure must never surface as an uncaught page error',
+    ).toEqual([])
   })
 })

@@ -2,7 +2,7 @@ import { ApiClient } from '@/api-client'
 import { chatExtensionRegistry } from '@/modules/chat/core/extensions'
 import type { MessageWithContent, SendMessageRequest } from '@/api-client/types'
 import {
-  buildMissingFieldMessage,
+  assertRequiredRequestFields,
   RequestFieldCompositionError,
 } from '@/modules/chat/core/extensions/requestFieldFailure'
 
@@ -13,6 +13,7 @@ import {
   buildSendFailureState,
   isAbortError,
   SEND_FAILED_FALLBACK_MESSAGE,
+  sendErrorMessage,
   type SendMessageOptions,
 } from '@/modules/chat/core/stores/chat/sendFailureState'
 
@@ -103,41 +104,52 @@ export default (set: ChatSet, getRaw: () => ChatInitialState) => {
             conversationId: get().conversation?.id ?? null,
             paneId: get().paneId,
           })
-          // The server declares `content` and `model_id` REQUIRED
+          // The server declares `content`, `model_id` and `branch_id` REQUIRED
           // (`SendMessageRequest` in server/src/modules/chat/core/extension/
-          // request.rs), and both are extension-contributed — so a contributor
-          // that resolves but returns nothing (rather than throwing) leaves the
-          // body just as invalid, and nothing between here and the POST used to
-          // notice. Validate ONCE, here, before anything with a side effect:
-          // this runs before the conversation is auto-created and before the
-          // optimistic user bubble, so a rejected turn leaves no debris.
-          //
-          // PRESENCE + type only — an empty `content` is legitimate at this
-          // layer (an attachment-only turn); "the composer is empty" is
-          // `beforeSendMessage`'s veto, not this guard's.
-          const missing: string[] = []
-          if (typeof allRequestFields.content !== 'string') {
-            missing.push('the message text')
-          }
-          if (
-            typeof allRequestFields.model_id !== 'string' ||
-            !allRequestFields.model_id.trim()
-          ) {
-            missing.push('a model selection')
-          }
-          if (missing.length > 0) {
-            throw new RequestFieldCompositionError(
-              buildMissingFieldMessage(missing),
-              { missingFields: missing },
+          // request.rs). The first two are extension-contributed — so a
+          // contributor that RESOLVES but returns nothing (rather than throwing)
+          // leaves the body just as invalid, and nothing between here and the
+          // POST used to notice. Check them NOW, before anything with a side
+          // effect: ahead of the conversation auto-create and the optimistic user
+          // bubble. (`branch_id` comes from the conversation, which may not exist
+          // yet at this point, so it is checked on the assembled payload below.)
+          // The field→label table lives with the message it renders, in
+          // `extensions/requestFieldFailure.ts`.
+          assertRequiredRequestFields(allRequestFields, ['content', 'model_id'])
+        } catch (error) {
+          set({ error: sendErrorMessage(error) })
+          // The STRUCTURED detail goes to the log, never to the user-facing
+          // string: which extensions failed, with their raw causes, and which
+          // required fields were absent. This is what makes a support report
+          // actionable without putting a stack in a toast.
+          if (error instanceof RequestFieldCompositionError) {
+            console.error(
+              '[Chat.store] send aborted — request fields could not be composed',
+              {
+                failures: error.failures.map(f => ({
+                  extension: f.extension,
+                  cause: f.cause,
+                })),
+                missingFields: error.missingFields,
+              },
             )
           }
-        } catch (error) {
-          set({
-            error:
-              error instanceof Error && error.message.trim()
-                ? error.message
-                : SEND_FAILED_FALLBACK_MESSAGE,
-          })
+          // A pre-flight abort must not leave a latched branch fork behind.
+          // `startRegenerateMessage` sets `pendingBranchFromMessageId` +
+          // `fork_level: 'assistant'` and trims the transcript BEFORE calling us,
+          // and has no catch of its own; `clearPendingBranch()` otherwise runs
+          // only on the success path. Without this, the user's NEXT composer
+          // message would silently fork at the stale assistant anchor (the
+          // branching fields below are injected unconditionally). Best-effort:
+          // the abort itself must still propagate.
+          try {
+            await get().clearPendingBranch()
+          } catch (clearError) {
+            console.error(
+              '[Chat.store] failed to clear the pending branch after a pre-flight abort',
+              clearError,
+            )
+          }
           throw error
         }
 
@@ -232,17 +244,31 @@ export default (set: ChatSet, getRaw: () => ChatInitialState) => {
           // stream (applied by `applyStreamFrame` via the `chat:token` router),
           // not this response.
           // Typed payload — the `as any` this replaced erased the compiler's
-          // knowledge that `content`/`model_id` are required, which is how a
-          // body missing `model_id` reached the wire and came back a raw 422.
-          // The extension-contributed record is narrowed once, and the three
-          // fields the server requires are supplied explicitly and checked.
+          // knowledge that `content`/`model_id` are required, which is how a body
+          // missing `model_id` reached the wire and came back a raw 422.
+          //
+          // Key ORDER is deliberate and preserves the previous precedence: `id`
+          // and `branch_id` come FIRST so an extension-contributed value still
+          // overrides them, exactly as it did in the old
+          // `{ id, branch_id, ...allRequestFields }` literal. `content` and
+          // `model_id` must be written after the spread for the required-property
+          // types to be statically satisfied — they are read back OUT of
+          // `allRequestFields`, so this cannot change which value is sent.
           const sendPayload: { id: string } & SendMessageRequest = {
-            ...(allRequestFields as Partial<SendMessageRequest>),
             id: conversation.id,
             branch_id: conversation.active_branch_id || '',
+            ...(allRequestFields as Partial<SendMessageRequest>),
             content: allRequestFields.content as string,
             model_id: allRequestFields.model_id as string,
           }
+          // Final gate on the ASSEMBLED body. `branch_id` could not be checked in
+          // the pre-flight block (the conversation may not have existed yet), and
+          // the generated client type makes `Conversation.active_branch_id`
+          // OPTIONAL while the server declares it a `Uuid` — so an absent one used
+          // to POST `branch_id: ""` and come back as exactly the raw 422 this
+          // change exists to remove.
+          assertRequiredRequestFields({ ...sendPayload })
+
           const { user_message_id, assistant_message_id } =
             await ApiClient.Message.send(sendPayload)
 

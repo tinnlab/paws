@@ -32,6 +32,24 @@ export function isAbortError(error: unknown): boolean {
 }
 
 /**
+ * The ONE thrown-value → user-facing-text extraction.
+ *
+ * Exported so the pre-flight failure path (which resets nothing, because nothing
+ * has been set yet, and therefore cannot use `buildSendFailureState`) shares this
+ * vocabulary instead of hand-rolling a second, subtly-different one — the
+ * failure mode this module's header warns about.
+ */
+export function sendErrorMessage(error: unknown): string {
+  const raw =
+    error instanceof Error
+      ? error.message
+      : typeof (error as { message?: unknown })?.message === 'string'
+        ? (error as { message: string }).message
+        : ''
+  return raw.trim() || SEND_FAILED_FALLBACK_MESSAGE
+}
+
+/**
  * Build the reset.
  *
  * @param error    the thrown value (any shape — this is a catch block).
@@ -42,14 +60,8 @@ export function isAbortError(error: unknown): boolean {
  */
 export function buildSendFailureState(error: unknown): SendFailureState {
   const aborted = isAbortError(error)
-  const raw =
-    error instanceof Error
-      ? error.message
-      : typeof (error as { message?: unknown })?.message === 'string'
-        ? (error as { message: string }).message
-        : ''
   return {
-    error: aborted ? null : raw.trim() || SEND_FAILED_FALLBACK_MESSAGE,
+    error: aborted ? null : sendErrorMessage(error),
     sending: false,
     isStreaming: false,
     streamingMessage: null,

@@ -6,12 +6,15 @@ import { installChunkLoadRecovery } from '@ziee/framework/chunk-recovery'
 import '@/index.css'
 
 // Code-split chunk failure recovery. A deploy while this tab is open invalidates
-// every hashed chunk URL the loaded page still holds, so a lazy surface 404s;
-// without this the failure surfaces only as an unhandled page-level error, with
-// nothing shown to the user. Installs a `vite:preloadError` listener that logs +
-// preventDefaults + marks the build stale (which makes the send path's error
-// message tell the user to reload). Never auto-reloads — that would destroy an
-// unsent composer draft and tear down an in-flight stream.
+// every hashed chunk URL the loaded page still holds, so a lazy surface 404s.
+// Installs a `vite:preloadError` OBSERVER that logs the failure once and marks
+// the page as running against a stale build — which is what lets a user-facing
+// error say "the app may have been updated, reload".
+//
+// It deliberately does NOT `preventDefault()` the event and does NOT reload the
+// page; see the header of `@ziee/framework/chunk-recovery` for why each of those
+// would be actively harmful (preventDefault makes the failed import RESOLVE with
+// `undefined`; auto-reload destroys an unsent composer draft).
 installChunkLoadRecovery()
 
 ReactDOM.createRoot(document.getElementById('root')!).render(

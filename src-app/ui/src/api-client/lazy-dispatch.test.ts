@@ -1,9 +1,24 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createLazyDispatcher } from '../../../../sdk/packages/framework/src/lazy-dispatch.ts'
+import {
+  __resetStaleBuildForTests,
+  isStaleBuild,
+} from '../../../../sdk/packages/framework/src/chunk-recovery.ts'
+
+/** Inject-away the retry backoff: the constants are deliberately tuned, and
+ *  without this every failure-path case below would pay them in real wall clock
+ *  while asserting nothing about the timing. */
+const noSleep = async () => {}
 
 /**
- * TEST-4 (ITEM-4) — store-kit's lazy action dispatcher.
+ * TEST-4 (ITEM-4, prior lifecycle) + TEST-6 / TEST-7 / TEST-8 (chat-send-resilience)
+ * — store-kit's lazy action dispatcher.
+ *
+ * These live in the APP tree, importing the SDK source relatively, because that
+ * is the only place a runner reaches: `src-app/ui`'s `test:unit` globs
+ * `src/**\/*.test.ts` relative to this workspace, and no sdk package has a test
+ * script. A spec authored under `sdk/packages/framework/src/` would never run.
  *
  * NOTE ON THE SIGNATURE: the dispatcher takes the module IMPORT and the impl
  * BUILD as two separate stages, because their failures need opposite policies (a
@@ -52,7 +67,7 @@ function makeGuardedAction() {
   }
 }
 
-test('TEST-4: the CHUNK is fetched once no matter how many callers race it', async () => {
+test('TEST-8: the CHUNK is fetched once no matter how many callers race it', async () => {
   const action = makeGuardedAction()
   let releaseChunk!: () => void
   const chunk = new Promise<void>(res => {
@@ -147,20 +162,23 @@ test('TEST-4: two identical cold-window MUTATION dispatches both run', async () 
   assert.equal(creates, 2)
 })
 
-test('TEST-4: a TRANSIENT chunk failure is retried — it does not brick the action', async () => {
+test('TEST-6 [acceptance, INV-2]: a TRANSIENT import failure never bricks the action for the session', async () => {
   // Widened after a live-UI audit: this used to fail EXACTLY ONCE, which is the
   // only case the old one-retry policy survived. A real blip (or any deploy
   // while the tab is open) fails repeatedly, and the rejection was then memoized
   // for the whole session — every later dispatch failed without re-importing.
-  // The property is "no number of transient failures bricks the action", so the
-  // spec now fails through a whole dispatch's retry budget and beyond.
+  // The property is "no number of transient failures makes the dispatcher give
+  // up permanently", so the spec fails through TWO whole retry budgets and then
+  // requires recovery. (What the dispatcher CANNOT undo is the browser's own
+  // module-map caching of a failed specifier — see the module header; that half
+  // is handled by telling the user to reload, asserted by the e2e.)
   let attempts = 0
   const dispatch = createLazyDispatcher(async () => {
     attempts++
     // Fails through TWO whole dispatch retry budgets (3 attempts each).
     if (attempts <= 6) throw new Error('chunk 404')
     return async () => 'ok'
-  }, impl => impl)
+  }, impl => impl, { sleep: noSleep })
   await assert.rejects(dispatch(), /chunk 404/)
   const attemptsAfterFirstDispatch = attempts
   assert.ok(
@@ -171,7 +189,56 @@ test('TEST-4: a TRANSIENT chunk failure is retried — it does not brick the act
   assert.equal(await dispatch(), 'ok', 'a transient chunk failure must not brick the action')
 })
 
-test('TEST-4: a DETERMINISTIC resolve failure is memoized — no unbounded retry loop', async () => {
+test('TEST-6b: the import rejection is NEVER memoized, however many times it fails', async () => {
+  let attempts = 0
+  const dispatch = createLazyDispatcher(async () => {
+    attempts++
+    throw new Error('chunk gone')
+  }, impl => impl, { sleep: noSleep })
+
+  for (let i = 0; i < 3; i++) await assert.rejects(dispatch(), /chunk gone/)
+  // 3 dispatches x 3 attempts. Under the shipped memoize-after-one-retry policy
+  // this stopped at 2 and every later dispatch imported nothing at all.
+  assert.equal(attempts, 9)
+})
+
+test('TEST-6c: a NULLISH module namespace is a failed IMPORT, not a factory bug', async () => {
+  // Vite's `__vitePreload` RESOLVES with `undefined` when a `vite:preloadError`
+  // listener calls preventDefault(). Naively that reaches the build stage, dies
+  // with "Cannot read properties of undefined", and inherits the DETERMINISTIC
+  // memoize-forever policy — the exact silent, session-fatal failure this change
+  // removes. It must be classified as a retryable, never-memoized import failure.
+  let attempts = 0
+  const dispatch = createLazyDispatcher(
+    async () => (++attempts <= 3 ? (undefined as any) : { default: () => 'ok' }),
+    (m: any) => m.default,
+    { sleep: noSleep },
+  )
+  await assert.rejects(dispatch(), /resolved with no module/)
+  assert.equal(attempts, 3, 'a nullish namespace must be retried like any import failure')
+  assert.equal(await dispatch(), 'ok', '…and must not be memoized')
+})
+
+test('TEST-6d: a definitive give-up marks the build stale (so the user can be told why)', async () => {
+  __resetStaleBuildForTests()
+  assert.equal(isStaleBuild(), false)
+  const dispatch = createLazyDispatcher(
+    async () => {
+      throw new Error('Failed to fetch dynamically imported module')
+    },
+    (impl: any) => impl,
+    { sleep: noSleep },
+  )
+  await assert.rejects(dispatch(), /dynamically imported/)
+  assert.equal(
+    isStaleBuild(),
+    true,
+    'the give-up path must record the stale build itself — vite:preloadError only fires for __vitePreload in a production build, so dev / plain import() would otherwise leave the user-facing message with no explanation',
+  )
+  __resetStaleBuildForTests()
+})
+
+test('TEST-7: a DETERMINISTIC resolve failure is memoized — no unbounded retry loop', async () => {
   // A throw from the action FACTORY is an authoring bug, not a blip. Retrying it
   // forever would turn one bug into an unbounded loop for a component that
   // dispatches from a render/effect, so after the single retry it fails fast.
@@ -192,7 +259,7 @@ test('TEST-4: a DETERMINISTIC resolve failure is memoized — no unbounded retry
   assert.equal(builds, 2, 'one retry, then the rejection is memoized')
 })
 
-test('TEST-4: preload warms the chunk without invoking the body', async () => {
+test('TEST-8: preload warms the chunk without invoking the body', async () => {
   const action = makeGuardedAction()
   action.releaseWork()
   let loaderCalls = 0

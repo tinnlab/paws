@@ -1,5 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { composeRequestFieldsFrom } from './composeRequestFields.ts'
 
 /**
@@ -139,4 +142,75 @@ test('TEST-3b: a synchronous (non-promise) contributor is supported', async () =
 
 test('TEST-3c: no contributors → an empty object, no throw', async () => {
   assert.deepEqual(await composeRequestFieldsFrom([]), {})
+})
+
+test('TEST-2c: an OPTIONAL contributor\'s failure BLOCKS the send (the accepted cost)', async () => {
+  // Fail-closed is uniform, so a contributor that would have contributed NOTHING
+  // still blocks. This is DEC-1's deliberate tradeoff and it is asserted here so
+  // it can never become accidental: the alternative for `mcp` (catch and return
+  // {}) would silently drop a user's tool approval and let the turn proceed as
+  // if it had never been given.
+  const outcome = await quiet(() =>
+    composeRequestFieldsFrom([
+      { name: 'text', compose: async () => ({ content: 'hi' }) },
+      { name: 'model', compose: async () => ({ model_id: 'm-1' }) },
+      {
+        name: 'mcp',
+        compose: async () => {
+          // What the real contributor does first: `await import('…/mcpComposer')`.
+          throw new Error('Failed to fetch dynamically imported module')
+        },
+      },
+    ]).then(
+      () => 'resolved',
+      () => 'rejected',
+    ),
+  )
+  assert.equal(outcome, 'rejected')
+})
+
+test('TEST-2d: the REAL model contributor\'s "No model selected" flows through unchanged', async () => {
+  // The one production contributor that throws in normal operation. Its message
+  // must reach the user verbatim — and, per TEST-5, WITHOUT reload advice.
+  //
+  // The extension itself is a `.tsx` module and cannot be imported by this
+  // runner, so the COUPLING is asserted against its source: if that throw is
+  // renamed or removed, the synthetic case below stops representing anything and
+  // this fails loudly instead of silently going hollow. The end-to-end proof
+  // that the real extension reaches this code path is the e2e (TEST-13).
+  const source = readFileSync(
+    resolve(
+      dirname(fileURLToPath(import.meta.url)),
+      '../../../user-llm-providers/chat-extension/extension.tsx',
+    ),
+    'utf8',
+  )
+  assert.match(
+    source,
+    /composeRequestFields[\s\S]*throw new Error\('No model selected'\)/,
+    "the model extension must still throw 'No model selected' from composeRequestFields — otherwise the case below represents nothing",
+  )
+
+  const error = await quiet(() =>
+    composeRequestFieldsFrom([
+      {
+        name: 'model',
+        // The picker is empty and there is no default: exactly what a fresh
+        // install (or an admin unassigning the provider group) produces.
+        compose: async () => {
+          throw new Error('No model selected')
+        },
+      },
+    ]).then(
+      () => null,
+      e => e as Error,
+    ),
+  )
+  assert.ok(error)
+  assert.match(error!.message, /No model selected/)
+  assert.doesNotMatch(
+    error!.message,
+    /Reload the page/,
+    'reloading cannot fix an unconfigured model — the advice must not send the user into a loop',
+  )
 })

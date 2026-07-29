@@ -39,10 +39,16 @@ for (const entry of ENTRIES) {
       /import\s*\{[^}]*\binstallChunkLoadRecovery\b[^}]*\}\s*from\s*['"]@ziee\/framework\/chunk-recovery['"]/,
       `${entry.path} must import installChunkLoadRecovery from @ziee/framework/chunk-recovery`,
     )
-    assert.match(
-      source,
-      /^\s*installChunkLoadRecovery\(\)/m,
-      `${entry.path} must CALL installChunkLoadRecovery() at module scope — importing it is not installing it`,
+    // Deliberately permissive about the CALL FORM (a leading `void`/`await`, any
+    // indentation) so a legal refactor does not false-fail; the point is only
+    // that a call exists outside the import line. Importing is not installing.
+    const callSites = source
+      .split('\n')
+      .filter(l => !/^\s*import\b/.test(l))
+      .filter(l => /(^|[^.\w])installChunkLoadRecovery\s*\(/.test(l))
+    assert.ok(
+      callSites.length > 0,
+      `${entry.path} must CALL installChunkLoadRecovery() — importing it is not installing it`,
     )
   })
 }

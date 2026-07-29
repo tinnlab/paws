@@ -23,8 +23,9 @@ installDecorumTitlebarFix()
 // Code-split chunk failure recovery — the desktop entry is hand-written and does
 // NOT fall back to the core UI's `main.tsx`, so it must install this itself or
 // the desktop webview keeps the old behaviour (a chunk 404 surfacing only as an
-// unhandled page error). Same contract as the web entry: log + preventDefault +
-// mark the build stale; never auto-reload.
+// unhandled page error). Same contract as the web entry: OBSERVE the
+// `vite:preloadError`, log it, mark the build stale — never `preventDefault()`,
+// never auto-reload (see the chunk-recovery module header).
 installChunkLoadRecovery()
 
 /**

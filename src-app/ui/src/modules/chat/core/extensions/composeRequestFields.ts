@@ -30,6 +30,20 @@ import {
  * its own failure catches it inside its own `composeRequestFields`, where the
  * choice is explicit, local and reviewable.
  *
+ * ── The cost this buys, stated plainly ─────────────────────────────────────
+ * Fail-closed makes a NOMINALLY-OPTIONAL contributor able to block a send. The
+ * sharpest case is `mcp`, whose `composeRequestFields` opens with a dynamic
+ * `import()` — exactly the chunk failure this module exists for — so a stale
+ * build there blocks even a plain text send from a user with zero MCP servers
+ * selected, where its contribution would have been `{}`.
+ *
+ * That is accepted, not overlooked. The same contributor also carries
+ * `tool_approvals`: catching its own failure and returning `{}` would silently
+ * drop a user's tool approval/denial and let the turn proceed as if it had never
+ * been given — a materially worse outcome than an abort the user can act on and
+ * retry. The tradeoff is pinned by a test (`an OPTIONAL contributor's failure
+ * blocks the send`) so it can never become accidental.
+ *
  * Every contributor still RUNS even after one fails — a first failure must not
  * hide a second, and must not skip a healthy contributor either.
  */
