@@ -40,6 +40,21 @@ export type ElicitationStatus = 'pending' | 'accepted' | 'declined' | 'cancelled
 export type ElicitationAction = 'accept' | 'decline' | 'cancel'
 
 /**
+ * The answers a USER can give an approval card.
+ *
+ * Deliberately narrower than `ElicitationAction` (FIX_ROUND-20). `cancel` is the
+ * PROVIDER's business — it owns its entries and cancels them when a conversation
+ * closes — and is never something a card may substitute for the answer the user
+ * actually gave. Narrowing the consumer-facing `resolveElicitationVia` to this
+ * type makes `resolveElicitationVia(id, <anything> ? 'cancel' : action)` a type
+ * error for EVERY condition, not just the one spelling a guard happens to know:
+ * a blind auditor proved that shape (clicking **Approve** silently CANCELS the
+ * tool call) was tsc-clean, green under every source guard, and invisible to the
+ * behavioural matrix. Nothing in-tree ever asked this helper to cancel.
+ */
+export type ElicitationDecision = Exclude<ElicitationAction, 'cancel'>
+
+/**
  * The minimum a consumer must supply to open a request. Deliberately NOT the
  * `SSEChatStreamMcpElicitationRequiredData` wire type: a consumer registering a
  * request should not have to fabricate (or cast through) another module's SSE
@@ -217,13 +232,17 @@ export function registerElicitation(init: ElicitationRequestInit): boolean {
 }
 
 /**
- * Resolve a request. Resolves to `false` when there is no transport to carry it
- * (so a caller can surface "not resolvable" rather than silently claiming
- * success), `true` once the provider's resolve settles.
+ * Carry a USER'S DECISION to the provider. Resolves to `false` when there is no
+ * transport to carry it (so a caller can surface "not resolvable" rather than
+ * silently claiming success), `true` once the provider's resolve settles.
+ *
+ * `action` is `ElicitationDecision`, not `ElicitationAction` — see that type for
+ * why. A provider that needs to CANCEL an entry does so through its own store;
+ * it does not route a cancellation through the consumer seam.
  */
 export async function resolveElicitationVia(
   elicitationId: string,
-  action: ElicitationAction,
+  action: ElicitationDecision,
   content?: Record<string, unknown>,
 ): Promise<boolean> {
   if (!transport) {
@@ -276,39 +295,65 @@ export function __resetElicitationTransportForTests(): void {
   listeners.clear()
 }
 
-/** Why a card's approve/deny is not in its ordinary state, or `null` when it is. */
-export type ElicitationBlockedReason = 'no-transport' | 'not-registered' | 'resolve-failed'
+/**
+ * Why a card's approve/deny is not in its ordinary state, or `null` when it is.
+ *
+ * **BEHAVIOURAL states only** (FIX_ROUND-20). Every value here changes what the
+ * card DOES — whether a click can reach the server, and whether the situation
+ * genuinely stops the user. This is the ONLY elicitation state an action path may
+ * read, which is the whole reason it is this short.
+ *
+ * ## Why `not-registered` is no longer a member
+ *
+ * "A transport exists but holds no local entry for this id" used to be a third
+ * value here, and it is the root cause of nineteen non-converging fix rounds. It
+ * has no behavioural effect whatsoever: it does not disable (the provider POSTs
+ * unconditionally, so a click still reaches `/respond` and still resumes the
+ * suspended script — FIX_ROUND-8), and it is not an error (it is transient,
+ * self-healing and explicitly answerable — FIX_ROUND-9). It changed exactly one
+ * thing: WHICH SENTENCE is shown during the sub-second window before the
+ * self-heal lands.
+ *
+ * A presentational fact living in a behavioural union is a fact every action path
+ * can branch on. A blind auditor proved
+ * `resolveElicitationVia(id, blocked === 'not-registered' ? 'cancel' : action)`
+ * — the user clicks **Approve** and the tool call is CANCELLED — was tsc-clean,
+ * green under every source-scanning guard, and unreachable by any behavioural
+ * test, because the state self-heals in milliseconds and cannot be held still
+ * long enough to click in. Nineteen rounds of adding one more source predicate
+ * per discovered spelling never converged, because the space of spellings is
+ * unbounded while the space of VALUES was not.
+ *
+ * So the value moved to `elicitationNotice` below, which returns prose and a
+ * tone — nothing an action argument can be selected with. The mutation above is
+ * now a compile error rather than a passing test.
+ */
+export type ElicitationBlockedReason = 'no-transport' | 'resolve-failed'
 
 /**
- * Classify a card's actionability. Three distinct states — and, after three
- * rounds of getting this wrong, exactly ONE of them disables anything.
+ * Classify a card's actionability. Two states — and, after three rounds of
+ * getting this wrong, exactly ONE of them disables anything.
  *
  *  - **`no-transport`** — there is literally nothing to POST through. DISABLE:
  *    a click cannot leave the browser. LIVE — it clears itself when an extension
  *    installs a transport, because the caller re-derives on every seam bump.
- *  - **`not-registered`** — a transport exists but holds no local entry for this
- *    id. **Do NOT disable** (FIX_ROUND-8): the provider's `resolve` POSTs
- *    unconditionally, so a click still reaches `/respond` and still resumes the
- *    suspended script. FIX_ROUND-7 disabled here and thereby removed a recovery
- *    path that WORKED — and, because a failed `register` bumps nothing, the
- *    effect that would clear the state never re-ran, so the card latched
- *    disabled and unanswerable. Surface it, do not block on it.
- *  - **`resolve-failed`** — a resolve genuinely failed. Also enabled: retrying is
+ *  - **`resolve-failed`** — a resolve genuinely failed. NOT disabled: retrying is
  *    the point. FIX_ROUND-4 folded this into the disable predicate, which gated
  *    its own reset and disabled the card for the life of the mount.
  *
- * The through-line of those three regressions: every time this file has DISABLED
- * a control on a state the user could still act through, the result was a card
- * that could not be answered at all. The rule now is that only the impossible
+ * The through-line of the regressions this file has shipped: every time it
+ * DISABLED a control on a state the user could still act through, the result was
+ * a card that could not be answered at all. The rule is that only the impossible
  * case disables.
+ *
+ * `entryExists` is deliberately NOT a signal here (FIX_ROUND-20): it decided
+ * nothing this function's callers act on. It feeds `elicitationNotice` instead.
  */
 export function elicitationBlockedReason(args: {
   hasTransport: boolean
-  entryExists: boolean
   resolveFailed: boolean
 }): ElicitationBlockedReason | null {
   if (!args.hasTransport) return 'no-transport'
-  if (!args.entryExists) return 'not-registered'
   if (args.resolveFailed) return 'resolve-failed'
   return null
 }
@@ -319,16 +364,86 @@ export function elicitationIsUnactionable(reason: ElicitationBlockedReason | nul
 }
 
 /**
- * Does this state STOP the user, or is it progress they can act through?
- *
- * Drives the status tone. `not-registered` is transient, self-healing and
- * explicitly answerable, so painting it in the destructive red DESIGN_SYSTEM.md
- * reserves for errors contradicted its own copy (FIX_ROUND-9). Extracted
- * (FIX_ROUND-10) because reverting that fix left every test green — this
- * workspace's runner cannot mount JSX, so the DECISION is the testable part.
+ * Everything the card's status region shows: the sentence, its tone, and the
+ * probe token. PRESENTATIONAL — there is nothing here an action can be selected
+ * with, and no consumer may feed any of it back into a decision.
  */
-export function elicitationIsError(reason: ElicitationBlockedReason | null): boolean {
-  return reason === 'no-transport' || reason === 'resolve-failed'
+export interface ElicitationNotice {
+  /** The sentence to show, or `''` when there is nothing to say. */
+  text: string
+  /**
+   * The kit `Text` tone. `danger` ONLY for states that genuinely stop the user:
+   * painting a transient, answerable state in the destructive red
+   * DESIGN_SYSTEM.md reserves for errors contradicts its own copy (FIX_ROUND-9).
+   */
+  tone: 'danger' | 'secondary'
+  /** Stable token for `data-status` — the e2e/gallery probe for this card. */
+  status: string
+}
+
+/**
+ * Decide the status region's whole contents in ONE place.
+ *
+ * Text and tone are returned TOGETHER, per case, because the FIX_ROUND-9 defect
+ * was precisely a divergence between them: copy that read "you can still answer
+ * it" painted in the destructive red reserved for errors. One function with one
+ * branch per state makes that divergence unwritable rather than merely guarded —
+ * which is why the separate `elicitationIsError` predicate, and the source guard
+ * that pinned its call site, are gone (FIX_ROUND-20).
+ *
+ * `not-registered` is a case LABEL here and nothing else. It never leaves this
+ * function as a behavioural value, so no resolve path can branch on it.
+ *
+ * Precedence note (FIX_ROUND-20): `resolve-failed` now outranks the
+ * not-registered sentence, where `not-registered` used to outrank it. The cell
+ * differs only when the transport is installed, holds no entry, AND a resolve
+ * failed — which `resolveDidFail` only reports when nothing was carried at all,
+ * i.e. the provider threw. "That didn't go through" is the accurate sentence for
+ * a failure the user just caused; the old order showed them a background
+ * condition they did not.
+ */
+export function elicitationNotice(args: {
+  resolved: 'approved' | 'denied' | null
+  blocked: ElicitationBlockedReason | null
+  /** Does the provider hold a local entry for this id? */
+  entryOpen: boolean
+  /** Has the consumer's bounded self-heal budget been spent? */
+  healExhausted: boolean
+}): ElicitationNotice {
+  if (args.resolved === 'approved') {
+    return { text: 'Approved — script resumed.', tone: 'secondary', status: 'approved' }
+  }
+  if (args.resolved === 'denied') {
+    return { text: 'Denied.', tone: 'secondary', status: 'denied' }
+  }
+  if (args.blocked === 'no-transport') {
+    return {
+      text:
+        'This request cannot be answered right now — the approval channel is unavailable. ' +
+        'It will become answerable on its own once the connection is back, or reload the conversation.',
+      tone: 'danger',
+      status: 'no-transport',
+    }
+  }
+  if (args.blocked === 'resolve-failed') {
+    return { text: "That didn't go through — try again.", tone: 'danger', status: 'resolve-failed' }
+  }
+  if (!args.entryOpen) {
+    // Neither sentence claims work is IN FLIGHT (FIX_ROUND-14): a retry only
+    // happens on a seam change and a failed register bumps nothing, so between
+    // attempts there is genuinely nothing scheduled. Both state the CONDITION and
+    // the thing the user can actually do; the exhausted one adds the reload hint,
+    // because after the budget there is no local path back.
+    return {
+      text: args.healExhausted
+        ? 'This request could not be reopened locally — you can still answer it, or reload the conversation.'
+        : 'This request is not open locally — you can still answer it.',
+      // NOT danger: this is progress the user can act through, not a stop.
+      tone: 'secondary',
+      status: 'not-registered',
+    }
+  }
+  return { text: '', tone: 'secondary', status: 'pending' }
 }
 
 /**

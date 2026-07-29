@@ -37,22 +37,27 @@ import {
  * ## This file COMPLEMENTS the source guards — it does not replace them
  *
  * Round 18 deleted the guards these specs appeared to make redundant, and its own
- * blind re-audit REFUTED the deletion; it was reverted in full. `blocked` has four
- * values and only two are reachable here, so every defect has a spelling keyed on
- * an unreachable value that these specs cannot see (`FIX_ROUND-18.md` §4).
+ * blind re-audit REFUTED the deletion; it was reverted in full. Defects keyed on a
+ * state these specs cannot REACH are invisible here (`FIX_ROUND-18.md` §4).
  *
- * The two unreachable states, with the ACCURATE reason each is out of reach —
- * in both cases it is that no browser-driven spec can invoke the mechanism, not
- * that no mechanism exists:
+ * The unreachable states, with the ACCURATE reason each is out of reach — in every
+ * case it is that no browser-driven spec can invoke the mechanism, not that no
+ * mechanism exists:
  *
  * - `blocked === 'no-transport'` — reachable in production (a throwing
  *   `subscribe` makes `setElicitationTransport` refuse the install; the registry's
  *   `unregister` calls `clearElicitationTransportIfOwnedBy`), but neither path is
  *   driveable from a spec.
- * - `blocked === 'not-registered'` — genuinely reachable in production (mcp's
- *   `initialize` awaits a dynamic import before installing the transport, so a
- *   frame landing in that window is dropped), but it self-heals within the heal
- *   budget, so it is not deterministically observable.
+ * - the NOT-OPEN-LOCALLY condition (`notice.status === 'not-registered'`) —
+ *   genuinely reachable in production (mcp's `initialize` awaits a dynamic import
+ *   before installing the transport, so a frame landing in that window is
+ *   dropped), but it self-heals within the heal budget, so it is not
+ *   deterministically observable.
+ *
+ * FIX_ROUND-20 note: that second one is no longer a `blocked` value at all — it
+ * was removed from `ElicitationBlockedReason` (it had no behavioural effect) and
+ * lives in `elicitationNotice`. `blocked` now has two members plus `null`, of
+ * which `null` and `resolve-failed` are the two this file reaches.
  */
 test.describe('run_js inner-tool approval', () => {
   test.beforeEach(async ({ page, testInfra }) => {
@@ -135,7 +140,8 @@ test.describe('run_js inner-tool approval', () => {
     // controls un-render inside the first discrete event. That happens whether or
     // not the handler has a re-entrancy gate at all — so this assertion cannot
     // enforce its stated subject in general. The flag only matters where the
-    // optimistic update is a no-op (`not-registered`, unreachable here), and it
+    // optimistic update is a no-op (the not-open-locally condition, unreachable
+    // here), and it
     // is pinned by `railIsolation.test.ts`'s in-flight-raise guard.
     await approve.dblclick()
 

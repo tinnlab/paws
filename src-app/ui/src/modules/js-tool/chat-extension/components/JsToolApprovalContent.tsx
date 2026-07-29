@@ -9,7 +9,7 @@ import {
   elicitationVersion,
   hasElicitationTransport,
   elicitationBlockedReason,
-  elicitationIsError,
+  elicitationNotice,
   elicitationIsUnactionable,
   resolveDidFail,
   elicitationExists,
@@ -118,23 +118,35 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
    * disabled the card permanently after a single failure.
    */
   const hasTransport = hasElicitationTransport()
-  // Neither `not-registered` message claims work is IN FLIGHT (FIX_ROUND-14).
-  //
-  // A retry only happens on a seam change, and a failed register bumps nothing —
-  // so between attempts there is genuinely nothing scheduled, and the earlier
-  // present-progressive "Reopening this request…" was false for as long as that
-  // lasted. Both messages now state the CONDITION (the request is not open
-  // locally) and the thing the user can actually do (answer it anyway); the
-  // exhausted one adds the reload hint, because after the budget there is no
-  // local path back.
   const healExhausted =
     healAttempts.id === data.elicitation_id && healAttempts.n >= HEAL_BUDGET
-  // `entryExists` is read from the seam on every bump, so `not-registered` clears
-  // itself the moment the self-heal below succeeds — nothing latches.
-  const blocked = elicitationBlockedReason({
-    hasTransport,
-    entryExists: elicitationExists(data.elicitation_id),
-    resolveFailed,
+  /**
+   * The BEHAVIOURAL state — the only elicitation state anything below may act on.
+   *
+   * FIX_ROUND-20: `entryExists` is no longer one of its signals. "The provider
+   * holds no entry for this id" decides nothing this card DOES (it neither
+   * disables nor errors), so it belongs to the notice below, not here. While it
+   * lived in this union every action path could branch on it, and the one that
+   * did — sending `'cancel'` when the user clicked Approve — was tsc-clean, green
+   * under every source guard, and unreachable by any behavioural test because the
+   * state self-heals in milliseconds.
+   */
+  const blocked = elicitationBlockedReason({ hasTransport, resolveFailed })
+  /**
+   * The PRESENTATIONAL state: one sentence, one tone, one probe token, decided
+   * together so they cannot contradict each other (FIX_ROUND-9's defect was copy
+   * reading "you can still answer it" painted in the destructive red).
+   *
+   * `elicitationExists` is read from the seam on every bump, so the not-registered
+   * sentence clears itself the moment the self-heal below succeeds — nothing
+   * latches. It is passed INLINE: no local binding of it exists for a resolve path
+   * to reach.
+   */
+  const notice = elicitationNotice({
+    resolved,
+    blocked,
+    entryOpen: elicitationExists(data.elicitation_id),
+    healExhausted,
   })
 
   /**
@@ -164,12 +176,12 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
     setHealAttempts(healCount.current)
     registerElicitation(runJsElicitationInit(data))
     // No need to consume the boolean here (FIX_ROUND-7): whether it succeeded is
-    // observable from the seam itself — `entryExists` above derives the
-    // `not-registered` state, which SURFACES the condition and clears itself when
-    // a later attempt lands. (It does NOT disable: since FIX_ROUND-8 only
-    // `no-transport` does, because the provider POSTs unconditionally. An earlier
-    // draft of this comment said otherwise; corrected in FIX_ROUND-11 — the same
-    // stale claim FIX_ROUND-10 fixed in the sibling test file and missed here.)
+    // observable from the seam itself — the `elicitationExists` read fed to the
+    // notice above SURFACES the condition and clears itself when a later attempt
+    // lands. (It does NOT disable, and since FIX_ROUND-20 it is not even a
+    // `blocked` value: only `no-transport` disables, because the provider POSTs
+    // unconditionally. This comment named a since-deleted `entryExists` binding
+    // until FIX_ROUND-20b.)
     // FIX_ROUND-6 routed the failure through `resolveFailed` instead, which
     // reports a resolve the user never attempted, and latched.
     // `seamVersion` is a dep so a FAILED register is retried on the next seam
@@ -279,28 +291,17 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
               id={statusId}
               tabIndex={-1}
               role="status"
-              // `danger` only for the states that genuinely stop the user
-              // (FIX_ROUND-9). `not-registered` is transient, self-healing and
-              // explicitly answerable — painting it in the destructive red
-              // DESIGN_SYSTEM.md reserves for errors contradicted its own copy.
-              type={!resolved && elicitationIsError(blocked) ? 'danger' : 'secondary'}
+              // Text, tone and probe token all come from the ONE decision above
+              // (FIX_ROUND-20). They used to be three independent JSX expressions,
+              // which is how FIX_ROUND-9 shipped copy reading "you can still
+              // answer it" painted in the destructive red DESIGN_SYSTEM.md
+              // reserves for errors — and how blanking the copy stayed green.
+              type={notice.tone}
               className="mt-2 block text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-sm"
               data-testid={statusId}
-              data-status={resolved ?? blocked ?? 'pending'}
+              data-status={notice.status}
             >
-              {resolved === 'approved'
-                ? 'Approved — script resumed.'
-                : resolved === 'denied'
-                  ? 'Denied.'
-                  : blocked === 'no-transport'
-                    ? 'This request cannot be answered right now — the approval channel is unavailable. It will become answerable on its own once the connection is back, or reload the conversation.'
-                    : blocked === 'not-registered'
-                      ? healExhausted
-                        ? 'This request could not be reopened locally — you can still answer it, or reload the conversation.'
-                        : 'This request is not open locally — you can still answer it.'
-                      : blocked === 'resolve-failed'
-                        ? "That didn't go through — try again."
-                        : ''}
+              {notice.text}
             </Text>
             {resolved === null && (
               <div className="mt-3">
@@ -330,7 +331,7 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
                     onClick={() => resolve('accept')}
                     loading={submitting}
                     disabled={elicitationIsUnactionable(blocked)}
-                    aria-describedby={blocked ? statusId : undefined}
+                    aria-describedby={notice.text ? statusId : undefined}
                     size="default"
                     data-testid={`run-js-approval-approve-${data.elicitation_id}`}
                   >
@@ -342,7 +343,7 @@ export function JsToolApprovalContent({ content }: ContentRendererProps) {
                     onClick={() => resolve('decline')}
                     loading={submitting}
                     disabled={elicitationIsUnactionable(blocked)}
-                    aria-describedby={blocked ? statusId : undefined}
+                    aria-describedby={notice.text ? statusId : undefined}
                     size="default"
                     data-testid={`run-js-approval-deny-${data.elicitation_id}`}
                   >

@@ -378,24 +378,44 @@ test('FIX_ROUND-5: ChatMessage re-resolves rail steps THROUGH withSegmentationSh
  * redundant. **Its own blind re-audit refuted the deletion, and it was reverted
  * in full.** Do not attempt it again without reading `FIX_ROUND-18.md` §4.
  *
- * The mechanism, stated once so it is not rediscovered: `blocked` has FOUR values
- * and only TWO of them (`null`, `resolve-failed`) are reachable from a spec —
- * `no-transport` needs mcp's transport absent mid-conversation, and
- * `not-registered` self-heals. So **every** defect this file guards has a
- * spelling keyed on an unreachable value, which the matrix cannot see. Three
- * examples, each verified GREEN under the reduced guards + the matrix and RED
- * under these:
+ * The mechanism, stated once so it is not rediscovered: `blocked` used to have
+ * FOUR values and only TWO of them (`null`, `resolve-failed`) were reachable from
+ * a spec — `no-transport` needs mcp's transport absent mid-conversation, and
+ * `not-registered` self-heals within milliseconds. So **every** defect this file
+ * guarded had a spelling keyed on an unreachable value, which the matrix cannot
+ * see. Three examples, each verified GREEN under the reduced guards + the matrix
+ * and RED under these:
  *   `{resolved === null && blocked !== 'not-registered' && (<controls/>)}`
  *   `className={blocked === 'not-registered' ? 'mt-3 hidden' : 'mt-3'}`
  *   `const carried = blocked === 'not-registered' ? false : await resolveElicitationVia(…)`
  * Each leaves the card unanswerable in a state whose own on-screen copy reads
  * "you can still answer it".
  *
+ * ## FIX_ROUND-20 — the re-scope round 19's ABORT called for
+ *
+ * All three spellings above are now **compile errors**: `not-registered` was
+ * removed from `ElicitationBlockedReason` (it had NO behavioural effect — it
+ * neither disabled nor errored; see the union's own docstring) and moved into
+ * `elicitationNotice`, which returns prose and a tone. `blocked ===
+ * 'not-registered'` is TS2367 "no overlap". Separately, `resolveElicitationVia`
+ * now takes `ElicitationDecision` (`'accept' | 'decline'`), so
+ * `resolveElicitationVia(id, <anything> ? 'cancel' : action)` — round 19's
+ * FR19-10, the sharpest accepted-open finding, where clicking **Approve**
+ * silently CANCELS — is TS2345 for EVERY condition, not just the spelling a
+ * predicate happens to know.
+ *
+ * That does NOT retire this file. `blocked` still has an unreachable value
+ * (`no-transport`), and every defect keyed on `resolveFailed`, `healExhausted`,
+ * `submitting` or a re-derived `elicitationExists(…)` is still perfectly
+ * writable. What it retires is the subset of guards whose only subject was a
+ * spelling the type system now rejects; those are gone (see FIX_ROUND-20.md for
+ * the list, and for what was deliberately KEPT and why).
+ *
  * **The matrix is kept and is worth having** — it pins the reachable half
  * behaviourally, and it already caught a claim these guards could not (see
  * `FIX_ROUND-18.md` §3, mutation A). It is a COMPLEMENT to this file, not a
  * replacement. The structural answer that would actually retire these guards is a
- * COMPONENT-level harness able to construct all four `blocked` values directly;
+ * COMPONENT-level harness able to construct every `blocked` value directly;
  * that does not exist in this repo yet, and `FIX_ROUND-18.md` §8 names it.
  *
  * Round 19's blind audit then found FIVE MORE holes in these restored guards,
@@ -408,6 +428,9 @@ test('FIX_ROUND-5: ChatMessage re-resolves rail steps THROUGH withSegmentationSh
  * sends a DIFFERENT answer than the one the user gave. A component harness closes
  * it by construction (construct `not-registered`, click Approve, assert the POST
  * carries `accept`); a sixth predicate would not close the seventh spelling.
+ * **FR19-10 and FR19-13 are CLOSED as of FIX_ROUND-20** — not by a harness and
+ * not by a predicate, but by the type system: see the round-20 note above. The
+ * remaining round-19 entries (FR19-11, -12, -14) are unaffected and still open.
  *
  * FIX_ROUND-9 closed three proven evasions of the first cut — boolean-shorthand
  * `disabled`, a spread carrying it, and a `>` inside an earlier quoted attribute
@@ -593,7 +616,10 @@ function declarationsOf(sf: ts.SourceFile, scope: ts.Node, name: string): ts.Nod
  * `{resolved === null && (blocked === 'not-registered' ? null : (<controls/>))}`
  * contributed exactly ONE condition and passed — un-rendering both controls in a
  * state the card's own copy calls answerable, which is the harm the check was
- * written for, one token from the spelling it did reject.
+ * written for, one token from the spelling it did reject. (That literal no longer
+ * type-checks after FIX_ROUND-20; the ternary UNWRAPPING it motivated is still
+ * required, because any other condition — `blocked !== null`, `healExhausted` —
+ * hides in the same position.)
  */
 function renderConditions(scope: ts.Node, el: ts.Node): ts.Expression[] {
   const out: ts.Expression[] = []
@@ -895,7 +921,16 @@ function isLiveClassifierArg(sf: ts.SourceFile, scope: ts.Node, call: ts.CallExp
   if (call.arguments.length !== 1) return false
   const arg = call.arguments[0]
   if (!ts.isObjectLiteralExpression(arg)) return false
-  const want = ['hasTransport', 'entryExists', 'resolveFailed']
+  // FIX_ROUND-20: `entryExists` is GONE from the classifier's signature, so the
+  // liveness pinning for it is gone too — and with it FR19-13
+  // (`entryExists: elicitationExists(statusId)`, which pinned `blocked` at
+  // `not-registered` for the life of every card). That signal now feeds
+  // `elicitationNotice` instead — where a wrong argument is NOT harmless: it
+  // blanks the live region and strips the disabled control's only explanation
+  // (an earlier draft of this comment claimed "the worst it can do is show the
+  // wrong sentence"; that was false, and FIX_ROUND-20b's notice-argument check is
+  // what actually holds it).
+  const want = ['hasTransport', 'resolveFailed']
   const got = arg.properties.map(p => p.name?.getText(sf) ?? '')
   if (want.length !== got.length || !want.every(w => got.includes(w))) return false
   for (const p of arg.properties) {
@@ -924,7 +959,6 @@ function isLiveClassifierArg(sf: ts.SourceFile, scope: ts.Node, call: ts.CallExp
   // through the property's value.
   const liveSource: Record<string, string[]> = {
     hasTransport: ['hasElicitationTransport'],
-    entryExists: ['elicitationExists'],
     resolveFailed: ['useState'],
   }
   for (const p of arg.properties) {
@@ -987,6 +1021,38 @@ function isBlockedReasonBinding(sf: ts.SourceFile, scope: ts.Node, name: string)
   return isLiveClassifierArg(sf, scope, init)
 }
 
+/**
+ * The elicitation id THIS card is about — read off the `elicitationStatus(<id>)`
+ * call the decided-const is derived from.
+ *
+ * Derived, never spelled (FIX_ROUND-20b). Every other consumer of the id in the
+ * component must pass the SAME expression: FR19-10's second sentence is
+ * `resolveElicitationVia(statusId, action)`, which POSTs under an id no
+ * elicitation has, so the suspended script never resumes and the card never
+ * resolves — tsc-clean, and GREEN until this existed. Same shape as FR19-13's
+ * `elicitationExists(statusId)`.
+ */
+function seamIdArgument(sf: ts.SourceFile, scope: ts.Node): string | undefined {
+  const ids = new Set<string>()
+  const walk = (n: ts.Node): void => {
+    if (
+      ts.isCallExpression(n) &&
+      n.expression.getText(sf) === 'elicitationStatus' &&
+      n.arguments.length === 1
+    ) {
+      ids.add(n.arguments[0].getText(sf))
+    }
+    ts.forEachChild(n, walk)
+  }
+  walk(scope)
+  // The card legitimately reads the status TWICE (once to derive the decided
+  // const, once after the POST to judge the outcome), so uniqueness of the CALL
+  // is the wrong requirement — agreement on the ID is the right one. Ambiguity is
+  // a failure, not a coin toss: two different ids means this guard cannot say
+  // which one the send must carry.
+  return ids.size === 1 ? [...ids][0] : undefined
+}
+
 /** The ONE module these predicates may come from. */
 const SEAM_MODULE = 'modules/chat/core/elicitation/transport'
 
@@ -1009,6 +1075,9 @@ function isSeamSpecifier(sf: ts.SourceFile, spec: string): boolean {
  *   `elicitationIsError as elicitationIsUnactionable`  — a different predicate,
  *      identical signature, so `resolve-failed` disables both controls and the
  *      disable gates its own reset: the card is dead for the life of the mount.
+ *      (That ONE alias stopped compiling in FIX_ROUND-20, which deleted
+ *      `elicitationIsError`; the alias CLASS is unaffected, and the shadow below
+ *      never depended on a second predicate existing at all.)
  *   a component-local `const elicitationIsUnactionable = () => true` shadowing
  *      the import — the card is permanently unanswerable in every state.
  * The guard's own comment already claimed to stop both; now it does.
@@ -1219,7 +1288,9 @@ test('FIX_ROUND-9: the approval controls disable ONLY through the seam predicate
   // than disabling (no affordance at all), and the JSX ancestor conditions were
   // unguarded, so `resolved === null && blocked !== 'not-registered'` silently
   // removed both controls in a state the card's own copy calls answerable
-  // (FIX_ROUND-16).
+  // (FIX_ROUND-16). That exact spelling no longer compiles (FIX_ROUND-20), but
+  // `blocked !== null` un-renders them in `resolve-failed` — a recoverable state
+  // — for one token less, so this check is unchanged and still load-bearing.
   for (const el of disabling) {
     const conds = renderConditions(scope, el).map(c => c.getText(sf).replace(/\s+/g, ' '))
     assert.deepEqual(
@@ -1511,13 +1582,70 @@ test('FIX_ROUND-14: the click handler gates on the SAME predicate as the control
       `\`${sendDecl?.initializer?.getText(sf).replace(/\s+/g, ' ').slice(0, 90) ?? '<not a const initializer>'}\`. ` +
       `A conditional wrapper skips the POST in states the card calls answerable.`,
   )
+
+  // …and it must carry THIS card's id and THE USER'S OWN decision, unmodified.
+  //
+  // FIX_ROUND-20b — round 19's FR19-10, closed. `ElicitationDecision` removed the
+  // `'cancel'` substitution at the type level, but that is only PART of FR19-10:
+  // both of the spellings below are still valid values of the right type and were
+  // measured tsc-clean and GREEN afterwards.
+  //   `resolveElicitationVia(id, blocked === 'resolve-failed' ? 'decline' : action)`
+  //      — the user clicks APPROVE on a resolve-failed card and a DECLINE is POSTed,
+  //        so the script gets `ToolApprovalDenied`. Worse than the mutation the type
+  //        change closed: `resolve-failed` is one of only TWO spec-reachable states
+  //        and the product deliberately keeps both buttons live there.
+  //   `resolveElicitationVia(statusId, action)`
+  //      — FR19-10's own second sentence: the POST lands under an id no elicitation
+  //        has, so the suspended script never resumes and the card never resolves.
+  // This is TWO pinned arguments, not an open-ended predicate sequence: the send
+  // may carry only the id the card's own state is derived from, and only the
+  // parameter the control handed the handler. There is no third thing to enumerate.
+  const sendArgs = sends[0].arguments
+  const idArg = seamIdArgument(sf, scope)
+  assert.ok(
+    idArg,
+    `${APPROVAL_COMPONENT} must read \`elicitationStatus(<id>)\` exactly once — this guard ` +
+      `resolves the card's elicitation id through it`,
+  )
+  assert.equal(
+    sendArgs[0]?.getText(sf),
+    idArg,
+    `the POST must carry the SAME elicitation id the card derives its own resolved state ` +
+      `from (\`${idArg}\`) — any other id resolves nothing and the suspended script never resumes`,
+  )
+  // The handler's own parameter, derived from its declaration so a rename stays green.
+  const fn = ts.isVariableDeclaration(decl) ? decl.initializer : decl
+  const params =
+    fn && (ts.isArrowFunction(fn) || ts.isFunctionExpression(fn) || ts.isFunctionDeclaration(fn))
+      ? fn.parameters
+      : []
+  assert.equal(
+    params.length,
+    1,
+    `\`${handlerName}\` must take exactly ONE parameter (the user's decision), found ${params.length}`,
+  )
+  const actionParam = params[0].name.getText(sf)
+  assert.equal(
+    sendArgs[1]?.getText(sf),
+    actionParam,
+    `the POST must carry the handler's own decision parameter \`${actionParam}\` VERBATIM, got ` +
+      `\`${sendArgs[1]?.getText(sf) ?? '<absent>'}\` — anything computed here sends a different ` +
+      `answer than the one the user gave, while both controls still read as they did`,
+  )
+  assert.equal(
+    sendArgs.length,
+    2,
+    `the POST must carry exactly (<id>, <decision>), got ${sendArgs.length} arguments`,
+  )
 })
 
 test('FIX_ROUND-11: the two extracted DECISIONS decide at their call sites', () => {
   const sf = parse(APPROVAL_SURFACE_WITH_CONTROLS)
   const scope = componentBody(sf, APPROVAL_COMPONENT)
+  // The decided-const's name, derived from the controls themselves (rename-proof)
+  // — the notice's `resolved` signal must BE it.
   const { resolvedName } = approvalControlNames(sf, scope)
-  for (const p of ['elicitationIsError', 'resolveDidFail']) {
+  for (const p of ['elicitationNotice', 'resolveDidFail']) {
     assert.ok(
       importedFromSeam(sf, p),
       `${p} must be imported from the core elicitation seam — a same-named local ` +
@@ -1525,44 +1653,179 @@ test('FIX_ROUND-11: the two extracted DECISIONS decide at their call sites', () 
     )
   }
 
-  // ── the status tone ────────────────────────────────────────────────────────
+  // ── the status region ──────────────────────────────────────────────────────
+  //
+  // FIX_ROUND-20: text, tone and probe token are now ONE decision, so this is
+  // three property reads off one binding instead of the ~35 lines of
+  // ternary-shape checking that pinned the tone expression alone. The properties
+  // those lines defended — a recoverable state must not be painted destructive, a
+  // resolved card must not be either — moved INSIDE `elicitationNotice`, which
+  // returns text and tone together per case, and are asserted behaviourally in
+  // `transport.test.ts`. That is strictly the better place: this runner can
+  // execute that function and cannot mount this JSX. What remains here is only
+  // the wiring, which source is still the only witness to.
+  //
   // Located by the element whose own attributes carry `data-testid={statusId}`,
   // so an element-valued prop before it cannot mis-anchor the search.
-  const status = elements(sf, 'Text').find(
+  //
+  // FIX_ROUND-20b: SCOPED to the component and required to be UNIQUE. The first cut
+  // used the file-wide `elements()` plus `.find()` — the exact defect FIX_ROUND-16
+  // fixed for the sibling guards and this new one reintroduced. A conforming decoy
+  // region placed before the real one anchored `.find()`, and the region the user
+  // actually reads while the card is answerable could then be blank, frozen at
+  // `data-status="pending"` and permanently destructive-red, with every assertion
+  // below still passing (measured GREEN; a `{false && …}` dead-branch decoy too).
+  const statusRegions = elementsIn(sf, scope, 'Text').filter(
     el => attrExpr(el, 'data-testid')?.getText(sf) === 'statusId',
   )
-  assert.ok(status, 'the status region must be identifiable by data-testid={statusId}')
-  const tone = attrExpr(status, 'type')
-  assert.ok(tone, 'the status region must set a tone')
+  assert.equal(
+    statusRegions.length,
+    1,
+    `${APPROVAL_COMPONENT} must render exactly ONE \`data-testid={statusId}\` region, found ` +
+      `${statusRegions.length} — a second one anchors this guard onto a decoy while the region ` +
+      `the user reads goes unchecked`,
+  )
+  const status = statusRegions[0]
 
-  // The WHOLE expression: `!resolved && <predicate> ? 'danger' : 'secondary'`.
-  // Checking only the condition let a second `: blocked ? 'danger'` branch paint
-  // every recoverable state destructive-red while passing.
-  assert.ok(ts.isConditionalExpression(tone), `the tone must be a ternary, got \`${tone.getText(sf)}\``)
-  assert.equal(
-    tone.whenTrue.getText(sf),
-    "'danger'",
-    'the tone ternary must yield danger on its TRUE branch',
+  // It must be ALWAYS MOUNTED. FIX_ROUND-4 established that a `role=status` element
+  // entering the tree already carrying its text is announced unreliably, so the
+  // region has to pre-exist the change — and it is the focus target when the
+  // buttons unmount. Gating it (`{blocked !== 'no-transport' && (…)}`) leaves the
+  // ONE disabling state with two dead buttons, no explanation, and an
+  // `aria-describedby` pointing at an id that does not exist (measured GREEN).
+  const statusGates = renderConditions(scope, status).map(c => c.getText(sf).replace(/\s+/g, ' '))
+  assert.deepEqual(
+    statusGates,
+    [],
+    `the status region must be unconditionally mounted, got [${statusGates.join(', ')}]`,
   )
-  assert.equal(
-    tone.whenFalse.getText(sf),
-    "'secondary'",
-    `the tone's false branch must be plain 'secondary' — another branch reaching ` +
-      `'danger' re-paints the recoverable states, got \`${tone.whenFalse.getText(sf)}\``,
-  )
+
+  // …and it must not take props through a spread. FIX_ROUND-9's docstring already
+  // lists "a spread carrying it" as a proven evasion it closed for `disabled`; the
+  // first cut of this guard reintroduced it for `type`/`data-status`
+  // (`{...(blocked !== null ? { type: 'danger' as const } : {})}` measured GREEN,
+  // painting every recoverable state destructive-red).
   assert.ok(
-    ts.isBinaryExpression(tone.condition) &&
-      tone.condition.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken &&
-      tone.condition.left.getText(sf) === `!${resolvedName}`,
-    `the tone condition must read \`!${resolvedName} && <predicate>\`, got ` +
-      `\`${tone.condition.getText(sf)}\``,
+    !hasSpread(status),
+    'the status region must not take props through a spread — a spread can override ' +
+      '`type`/`data-status` and this guard cannot see through it',
   )
+
+  const toneExpr = attrExpr(status, 'type')
+  const noticeName =
+    toneExpr && ts.isPropertyAccessExpression(toneExpr)
+      ? toneExpr.expression.getText(sf)
+      : undefined
   assert.ok(
-    isExactCall(sf, scope, (tone.condition as ts.BinaryExpression).right, 'elicitationIsError'),
-    `the status tone must be decided by elicitationIsError(blocked), got ` +
-      `\`${(tone.condition as ts.BinaryExpression).right.getText(sf)}\` — otherwise a ` +
-      `transient, answerable state gets painted in the destructive red ` +
-      `DESIGN_SYSTEM.md reserves for errors`,
+    noticeName,
+    `the status region's \`type\` must be \`<notice>.tone\`, got ` +
+      `\`${toneExpr?.getText(sf) ?? '<absent>'}\``,
+  )
+
+  // The binding must BE the seam decision — a locally assembled object of the
+  // same shape can contradict every property this test then reads off it.
+  const nDecls = declarationsOf(sf, scope, noticeName)
+  assert.equal(
+    nDecls.length,
+    1,
+    `\`${noticeName}\` must be declared exactly once in ${APPROVAL_COMPONENT}, found ${nDecls.length}`,
+  )
+  const nDecl = nDecls[0]
+  assert.ok(
+    ts.isVariableDeclaration(nDecl) &&
+      ts.isVariableDeclarationList(nDecl.parent) &&
+      (nDecl.parent.flags & ts.NodeFlags.Const) !== 0 &&
+      !!nDecl.initializer &&
+      ts.isCallExpression(nDecl.initializer) &&
+      nDecl.initializer.expression.getText(sf) === 'elicitationNotice',
+    `\`${noticeName}\` must be a const whose sole initializer is \`elicitationNotice(...)\`, got ` +
+      `\`${(ts.isVariableDeclaration(nDecl) ? nDecl.initializer?.getText(sf) : undefined)?.replace(/\s+/g, ' ').slice(0, 90) ?? '<not a const initializer>'}\``,
+  )
+
+  // …and its ARGUMENTS must be the live signals, not constants.
+  //
+  // FIX_ROUND-20b. The first cut pinned the CALLEE and stopped — the identical
+  // miss this file's own FIX_ROUND-16 comment describes for `elicitationBlockedReason`
+  // ("checked the classifier's CALLEE and never its arguments"), reintroduced one
+  // rung down on the very call that replaced it. Measured GREEN and tsc-clean:
+  //   `elicitationNotice({ resolved, blocked: null, entryOpen: true, healExhausted })`
+  // — the status text is permanently `''`, `data-status` frozen at `pending`, and
+  // because the component keys `aria-describedby` off the notice text, the
+  // DISABLED `no-transport` control loses its only explanation (WCAG). That is
+  // three of FR19-14's four items in one tsc-clean edit.
+  const nArg = (nDecl as ts.VariableDeclaration).initializer as ts.CallExpression
+  assert.ok(
+    nArg.arguments.length === 1 && ts.isObjectLiteralExpression(nArg.arguments[0]),
+    `\`elicitationNotice\` must be called with the live signals object, got ` +
+      `\`${nArg.arguments.map(a => a.getText(sf)).join(', ')}\``,
+  )
+  const nObj = nArg.arguments[0] as ts.ObjectLiteralExpression
+  const seamId = seamIdArgument(sf, scope)
+  assert.ok(
+    seamId,
+    `${APPROVAL_COMPONENT} must read \`elicitationStatus(<id>)\` exactly once — this guard ` +
+      `resolves the card's elicitation id through it`,
+  )
+  const noticeSignals: Record<string, (v: ts.Expression) => boolean> = {
+    // The decided-const `approvalControlNames` already proved is seam-derived.
+    resolved: v => ts.isIdentifier(v) && v.getText(sf) === resolvedName,
+    // The classifier binding the disable path also reads.
+    blocked: v => ts.isIdentifier(v) && isBlockedReasonBinding(sf, scope, v.getText(sf)),
+    // A LIVE seam read, under THIS card's id (FR19-13 was `elicitationExists(statusId)`).
+    entryOpen: v =>
+      ts.isCallExpression(v) &&
+      v.expression.getText(sf) === 'elicitationExists' &&
+      v.arguments.length === 1 &&
+      v.arguments[0].getText(sf) === seamId,
+    // A local, never a literal — a constant makes the exhausted copy unreachable.
+    healExhausted: v => ts.isIdentifier(v),
+  }
+  const gotKeys = nObj.properties.map(p => p.name?.getText(sf) ?? '')
+  assert.deepEqual(
+    [...gotKeys].sort(),
+    Object.keys(noticeSignals).sort(),
+    `\`elicitationNotice\` must be passed exactly its four live signals, got [${gotKeys.join(', ')}]`,
+  )
+  for (const p of nObj.properties) {
+    const key = p.name?.getText(sf) ?? ''
+    const value: ts.Expression | undefined = ts.isShorthandPropertyAssignment(p)
+      ? (p.name as ts.Expression)
+      : ts.isPropertyAssignment(p)
+        ? p.initializer
+        : undefined
+    assert.ok(
+      value && noticeSignals[key]?.(value),
+      `\`elicitationNotice\`'s \`${key}\` must be the live signal, got ` +
+        `\`${value?.getText(sf) ?? p.getText(sf)}\` — a constant or a re-derived value here ` +
+        `blanks the status region while every other assertion in this test still passes`,
+    )
+  }
+
+  // …and every visible part of the region must come off it. Re-deriving any one
+  // of them locally is how the copy and the tone came to contradict each other
+  // (FIX_ROUND-9), and blanking the copy or dropping the probe token were both
+  // GREEN before this (FR19-14).
+  for (const [prop, expected] of [
+    ['type', `${noticeName}.tone`],
+    ['data-status', `${noticeName}.status`],
+  ] as const) {
+    const got: string | undefined = attrExpr(status, prop)?.getText(sf)
+    assert.equal(
+      got,
+      expected,
+      `the status region's \`${prop}\` must be \`${expected}\`, got \`${got ?? '<absent>'}\``,
+    )
+  }
+  const children =
+    ts.isJsxOpeningElement(status) && ts.isJsxElement(status.parent)
+      ? status.parent.children
+          .filter(c => !ts.isJsxText(c) || c.getText().trim().length > 0)
+          .map(c => c.getText(sf).trim())
+      : []
+  assert.deepEqual(
+    children,
+    [`{${noticeName}.text}`],
+    `the status region's only child must be \`{${noticeName}.text}\`, got [${children.join(', ')}]`,
   )
 
   // ── the failure judgement ──────────────────────────────────────────────────
