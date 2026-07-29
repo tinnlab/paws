@@ -162,6 +162,19 @@ pub async fn preflight(
         }
     }
 
+    // The workspace-dir rule, re-asserted where the value is USED. `preflight`
+    // is the shared funnel for `spawn_run` / `resume_run` / `run_for_test`, all
+    // of which read `extracted_path` back out of the DB rather than from the
+    // resolver that vetted it. `spawn_run` / `resume_run` additionally check it
+    // BEFORE their validate pass — that pass reads every `prompt_file:` through
+    // the very confinement this shape is what makes sound, so checking only here
+    // would run the guard one full confined-read pass too late. This call is
+    // what covers `run_for_test`, whose caller does not validate first.
+    crate::modules::workflow::workspace::check_persisted_workspace_root(
+        &extracted_path,
+        &workspace_root,
+    )?;
+
     // Stage workspace dir: `<workspace_root>/<conv-or-run-id>/workflow/<run_id>/`.
     let conv_dir_id = conversation_id.unwrap_or(run_id);
     let sandbox_workspace = workspace_root
@@ -1236,6 +1249,16 @@ pub async fn spawn_run(
         ));
     }
 
+    // BEFORE any read of the bundle: the validate pass below reads every
+    // `prompt_file:` through `read_prompt_file`'s kernel-confined open, and that
+    // confinement is only sound when the root has a single model-controlled
+    // component. Checking after it would run the guard a full confined-read pass
+    // too late.
+    crate::modules::workflow::workspace::check_persisted_workspace_root(
+        std::path::Path::new(&workflow.extracted_path),
+        &workflow_workspace_root(),
+    )?;
+
     // Parse + validate the on-disk workflow.yaml.
     let wf_yaml_path = PathBuf::from(&workflow.extracted_path).join(&workflow.entry_point);
     let content = tokio::fs::read_to_string(&wf_yaml_path).await.map_err(|e| {
@@ -1543,6 +1566,13 @@ pub async fn resume_run(pool: &PgPool, run_id: Uuid) -> Result<(), AppError> {
     let workflow = repository::find_by_id(pool, workflow_id)
         .await?
         .ok_or_else(|| AppError::not_found("Workflow"))?;
+
+    // Same pre-read guard as `spawn_run` — a resume re-validates the bundle, so
+    // it re-reads every `prompt_file:` through the confined open too.
+    crate::modules::workflow::workspace::check_persisted_workspace_root(
+        std::path::Path::new(&workflow.extracted_path),
+        &workflow_workspace_root(),
+    )?;
 
     // Parse + validate the on-disk workflow.yaml (same as spawn_run).
     let wf_yaml_path = PathBuf::from(&workflow.extracted_path).join(&workflow.entry_point);

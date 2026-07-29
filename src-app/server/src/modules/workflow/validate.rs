@@ -1262,12 +1262,15 @@ fn open_confined(root: &Path, rel: &str) -> Result<std::fs::File, PromptFileErro
     //
     // SCOPE, precisely: this covers the root's FINAL component only. INTERMEDIATE
     // components of `root` are resolved by the caller's own path lookup and
-    // cannot be checked from in here — which is why
-    // `resolve_conversation_workspace_dir` restricts its `dir` to a SINGLE
-    // component. With `dir = "a/b"` the model would control `a`, an intermediate
-    // component, and no guard inside this function could see it. The two rules
-    // are one mechanism: this refuses a swapped final component, that makes the
-    // final component the only one the model can swap.
+    // cannot be checked from in here, so the CALLER owes an intermediate the
+    // model cannot rename. `resolve_conversation_workspace_dir` is what supplies
+    // it — but note WHERE: it requires the CANONICALIZED root to be the
+    // conversation workspace root or a DIRECT child of it. Its `dir`-STRING
+    // check does NOT establish this and must not be relied on for it, because
+    // `canonicalize` expands symlinks and a one-component string can resolve to
+    // a nested root. The two rules are one mechanism: this refuses a swapped
+    // final component, that makes the final component the only one the model
+    // can swap.
     let dir = {
         #[cfg(unix)]
         {
@@ -2401,8 +2404,13 @@ steps:
     /// `#[cfg(unix)]` only because the test needs `symlink` to build the attack.
     /// BOTH resolution paths are asserted, and deliberately not by relying on
     /// which one this platform takes: `read_prompt_file` exercises whichever is
-    /// live (on Linux, `openat2`), and `open_confined_fallback` is then driven
-    /// DIRECTLY — so removing either anchor guard turns this red on Linux.
+    /// live (on Linux, `openat2`), and `open_confined_fallback` is then CALLED
+    /// BY NAME below — on Linux that is the only way its anchor guard runs at
+    /// all, since `read_prompt_file` never reaches it there. Each leg has a
+    /// positive control on the same tree, so a guard that refuses everything
+    /// cannot pass either. Mutating `symlink_metadata` to `metadata` in the
+    /// fallback, or dropping `O_NOFOLLOW` from the Linux anchor open, each turns
+    /// this test red on Linux.
     #[cfg(unix)]
     #[test]
     fn read_prompt_file_refuses_a_bundle_root_that_became_a_symlink() {
@@ -2410,8 +2418,18 @@ steps:
         let real_root = tmp.path().join("flow");
         std::fs::create_dir_all(&real_root).unwrap();
         std::fs::write(real_root.join("task.md"), "REAL PROMPT").unwrap();
-        // Sanity: it reads while the root is a real directory.
+        // Sanity, both legs: an ordinary root reads through the live path AND
+        // through the fallback.
         assert_eq!(read_prompt_file(&real_root, "task.md").unwrap(), "REAL PROMPT");
+        {
+            use std::io::Read;
+            let mut buf = String::new();
+            open_confined_fallback(&real_root, "task.md")
+                .expect("the fallback must read an ordinary root")
+                .read_to_string(&mut buf)
+                .unwrap();
+            assert_eq!(buf, "REAL PROMPT");
+        }
 
         // Now the sandbox swaps the root for a symlink to somewhere else. The
         // target is a real directory holding a real file, so nothing downstream
@@ -2432,6 +2450,24 @@ steps:
             !err.message("etc/passwd").contains("HOST SECRET"),
             "the swapped root's contents must never be reached"
         );
+
+        // The fallback's OWN anchor guard, driven directly. On Linux the call
+        // above took the `openat2` path, so without this the fallback — the
+        // entire non-Linux and pre-5.6 story — is never executed by any test.
+        // A successful open here IS the escape: the returned fd would be
+        // `<elsewhere>/etc/passwd`.
+        match open_confined_fallback(&real_root, "etc/passwd") {
+            Err(PromptFileError::Unreadable(_)) => {}
+            Ok(mut f) => {
+                use std::io::Read;
+                let mut buf = String::new();
+                let _ = f.read_to_string(&mut buf);
+                panic!("the fallback opened a bundle root that is now a symlink; it read {buf:?}");
+            }
+            Err(other) => panic!(
+                "expected the fallback's anchor open to refuse the swapped root, got {other:?}"
+            ),
+        }
     }
 
     /// **TEST-13** — the path-SHAPE rejects, including the two that are not

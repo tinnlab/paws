@@ -236,8 +236,12 @@ pub async fn tool_list(pool: &sqlx::PgPool, user_id: Uuid) -> Result<Value, AppE
 fn workspace_verb_tools() -> Vec<Value> {
     let dir_prop = json!({
         "type": "string",
-        "description": "The workspace subdir (relative to /home/sandboxuser) \
-            holding workflow.yaml + any scripts/ you wrote with the code_sandbox tools.",
+        "description": "The workspace subdir holding workflow.yaml + any scripts/ you wrote \
+            with the code_sandbox tools. A SINGLE directory name directly inside \
+            /home/sandboxuser — e.g. 'my-flow', giving /home/sandboxuser/my-flow/. A nested \
+            path ('a/b'), '.' (/home/sandboxuser itself), and a name that reaches either of \
+            those through a symlink are all refused, so create the directory and write the \
+            files into it rather than at the top level.",
     });
     vec![
         json!({

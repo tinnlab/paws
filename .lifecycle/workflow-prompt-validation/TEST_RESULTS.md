@@ -2,15 +2,16 @@
 
 Every line below was observed. Logs: `/data/pbya/ziee/tmp/lifecycle-logs/wfresid-*.log`.
 
-> **Standing caveat — this branch is NOT READY.** `FIX_ROUND-7.md` records two
-> HIGH findings that are NOT fixed: a real-syscall repro reading the host
-> `/etc/passwd` through the supposedly-confined open (the round-6 workspace `dir`
-> invariant does not survive `canonicalize()`), and a mutation proving TEST-14
-> still does not guard the fallback path its doc claims it drives. A green test
-> table below does not mean the change is correct — two of the entries are
-> annotated with exactly what they fail to assert. Round 7 was authorized on the
-> condition that a further HIGH ends the loop and returns the decision to the
-> owner; it found two, so nothing was fixed in that round.
+> **Round-7's standing caveat is RETRACTED — both HIGHs are fixed in round 8.**
+> Each was reproduced first, through the real production code: the workspace
+> `dir` escape as a confined read returning a planted host-file secret, and
+> TEST-14's hollowness as a mutation (`symlink_metadata` → `metadata`) that left
+> it green. Both repros are now red against the fix. See `FIX_ROUND-8.md` for
+> the round record, including three defects the round-8 blind audits found in
+> round 8's OWN fix (all repaired), the deliberate reversal of the `dir: "."`
+> relaxation, and one **pre-existing HIGH carried to the owner unfixed** — two
+> unconfined resolutions of the bundle root in `preflight`'s staging copy — that
+> is outside this brief's scope and must not be read as closed.
 
 ## Enumerated tests
 
@@ -42,26 +43,43 @@ Every line below was observed. Logs: `/data/pbya/ziee/tmp/lifecycle-logs/wfresid
   baseline-controlled form (`branch 3 vs base 6`), which is A7's own provision
   for a shared gate that is red on the base too. `npm run check (ui)` is PASS
   (recorded below).
-- **TEST-11**: PASS — the whole `workflow::` lib suite, unfiltered:
-  **190 passed; 1 failed**, the one failure being the pre-existing
+- **TEST-11**: PASS — the whole `workflow::` lib suite, unfiltered. Round 8
+  re-ran it at **196 passed; 1 failed** (round 7 measured 190/1; the delta is
+  this round's six new unit tests), the one failure still being the pre-existing
   `models::tests::job_kind_parses_round_trips_and_is_orthogonal` (see below).
   `validation_codes_are_registered_and_humanised` — the guard round 1 broke and a
   scoped filter hid — is green.
 - **TEST-12**: PASS — `read_prompt_file_refuses_what_it_must_not_read` (real FIFO,
   directory, one byte over the cap, exactly at the cap, ordinary file).
 - **TEST-13**: PASS — `prompt_file_shape_refuses_every_absolute_and_traversing_form`.
-- **TEST-14**: PASS **as a run, but it does NOT assert what its doc claims — see
-  FIX_ROUND-7 HIGH-2.** The test is green and the Linux half is genuinely
-  falsifying (dropping `O_NOFOLLOW` turns it RED, 42/1). The FALLBACK half is
-  not: neutering `open_confined_fallback`'s anchor guard (`symlink_metadata` →
-  `metadata`) leaves it **GREEN at 43 passed / 0 failed**, despite the doc
-  claiming the fallback "is then driven DIRECTLY". The test body never names
-  `open_confined_fallback`. Left standing and flagged rather than quietly
-  rewritten, because it is one of the two round-7 HIGHs handed to the owner.
+- **TEST-14**: PASS — `read_prompt_file_refuses_a_bundle_root_that_became_a_symlink`.
+  **The round-7 annotation is withdrawn: the test now asserts what its doc
+  claims.** It calls `open_confined_fallback` BY NAME (`validate.rs`), with a
+  positive control that an ordinary root still reads through the same call.
+  Both halves are falsifying on Linux: `symlink_metadata` → `metadata` in the
+  fallback is now **RED** ("the fallback opened a bundle root that is now a
+  symlink; it read \"HOST SECRET\"") where round 7 measured it GREEN at 43/0,
+  and dropping the anchor `O_NOFOLLOW` remains RED.
 
 - **TEST-15**: PASS — `t1_confine_rejects_nested_dir` +
   `t1_confine_accepts_a_single_safe_dir` (`workflow/workspace.rs`): a nested
   workspace `dir` is refused, a single-component one still resolves.
+
+- **TEST-24**: PASS — `t1_confine_rejects_a_symlinked_dir_that_resolves_to_a_nested_root`.
+  The round-7 HIGH-1 repro, now red-to-green: before the fix it failed with
+  `'proj' (one component) resolved to "…/a/etc", a NESTED root; after swapping
+  the intermediate the confined read returned Ok("HOST SECRET")`.
+- **TEST-25**: PASS — `t1_confine_refuses_the_workspace_root_itself` (`.`, `./`,
+  and the symlink `proj -> .` the string rule cannot see).
+- **TEST-26**: PASS — `t2_workspace_dir_reaching_a_nested_root_via_symlink_is_refused`
+  (tier 2: both workspace verbs refuse it; control confirms the same bundle is
+  valid when reached legitimately).
+- **TEST-27**: PASS — `t1_persisted_workspace_root_shape_is_rechecked` +
+  `t1_persisted_check_survives_a_symlinked_workspace_root`.
+- **TEST-28**: PASS — `t2_persisted_nested_extracted_path_is_refused_at_run_time`
+  (tier 2: a legacy nested `extracted_path` row is refused by the real
+  `POST /workflows/{id}/run`, **and no `workflow_runs` row is created** — the
+  ordering proof; control confirms a direct-child path does not trip the rule).
 
 `npm run check (ui): PASS`
 
@@ -85,6 +103,42 @@ the three real-LLM legs of unknown execution status.
 Final `workflow::` lib suite: **191 passed; 1 failed** (the pre-existing
 `job_kind` case).
 
+## Regression scope for round 8 — measured against the BASE, not asserted
+
+The round-8 change narrows the accepted `dir` further, so "did it break
+anything" had to be answered by comparison rather than by a green count. Same
+box, same invocation, back to back:
+
+`cargo test --test integration_tests -- workflow --test-threads=6`
+
+| tree | result |
+|---|---|
+| **base** (round-7 tree, this round's diff stashed) | 182 passed; **46 failed** |
+| **fix** (round-8 tree, final) | 185 passed; **45 failed** |
+
+The failure SETS were compared, not just the counts, and every failure was
+attributed to a signature individually rather than by a spot check. All 45 are
+**Category A**, key-gated (this worktree has no `tests/.env.test`):
+`No AI provider API keys found` (37), `NO usable provider API key` (7), and
+`test_approval_workflow_multi_model`, which skips all 11 models for a missing key
+and then asserts "At least one model should pass" (1). The fix tree's failure set
+is a strict **subset** of
+the base's; the one difference (`t3_real_bwrap_run_from_workspace_completes`)
+failed on the BASE and passes on the fix tree, and passes 3/3 in isolation on
+both. A second fix-tree run swapped in `workflow::sse_ordering::…` instead — that
+test subscribes to the SSE stream *after* launching the run, so a run that
+finishes first delivers only the already-`completed` snapshot; it also passes 3/3
+in isolation. Both are load flakes on a shared box, in code this diff does not
+touch.
+
+**Zero regressions attributable to the diff.** The real-LLM legs remain of
+unknown execution status for the same reason the round-7 correction gives, and
+are not counted as evidence.
+
+The `workflow_mcp::workspace_test` file specifically: **24 passed; 0 failed** in
+the final run — including the two new tier-2 tests (TEST-26, TEST-28) and both
+`t3_real_bwrap` cases.
+
 ## Acceptance tests (design-invariant proofs)
 
 - **TEST-1** [acceptance, INV-1]: PASS.
@@ -103,6 +157,16 @@ Both are proven FALSIFIABLE by mutation, not merely green:
 | `promptSuppliedByFile` back to `typeof pf === 'string'` | TEST-9 (Rust) + TEST-5 (TS) RED |
 | revert the anchor `O_NOFOLLOW\|O_DIRECTORY` | TEST-14 RED |
 | cfg-disable `openat2` so the fallback serves every call | TEST-14 RED |
+| `symlink_metadata` → `metadata` in `open_confined_fallback` | TEST-14 RED *(round 7 measured this GREEN — the HIGH-2 fix)* |
+| neuter the returned canonical-root check | TEST-24 RED + TEST-26 RED |
+| neuter the `dir`-string component rule | TEST-15 RED *(root check still refuses it)* |
+| allow the resolved root to be the workspace root | TEST-25 RED |
+| widen the persisted depth bound (2 → 3) | TEST-27 RED |
+| drop the workspace-root normalization | TEST-27 symlink leg RED |
+| `check_persisted_workspace_root` always `Ok` | TEST-27 RED |
+| canonical check rejects EVERYTHING | 3 accepts-tests RED *(controls are real)* |
+| remove ONLY the `spawn_run` pre-read check | TEST-28 RED *(on the no-run-row ordering assertion)* |
+| remove ONLY the `preflight` check | TEST-28 **GREEN** — recorded, not hidden: `spawn_run` catches it first, so TEST-28 does not pin the `preflight` copy; its unique coverage is `run_for_test`, which no test drives |
 | kit addon back to the negative margin | TEST-7 LTR rows + control RED |
 | group root clearance back to physical `pl/pr-1.5` | TEST-7 RTL rows RED |
 

@@ -25,7 +25,19 @@ no migration grant), so A9/A10 do not apply.
 - **TEST-12** (tier: unit) [covers: ITEM-16] file: `src-app/server/src/modules/workflow/validate.rs` — asserts: `read_prompt_file`'s RESOURCE guards, against real files of each offending kind — a real FIFO is refused (and the test RETURNING at all is the proof that the `O_NONBLOCK` open plus fd-type check works; a hang is the regression), a directory is refused, a file one byte over `MAX_PROMPT_FILE_BYTES` is `TooLarge` while one exactly at the cap still reads, and an ordinary file still reads.
 - **TEST-13** (tier: unit) [covers: ITEM-16] file: `src-app/server/src/modules/workflow/validate.rs` — asserts: `check_prompt_file_shape` refuses every traversing and ABSOLUTE form on every platform — `..`, a leading `/`, a `C:`/`c:` drive prefix and any backslash — while ordinary bundle-relative paths (including one with a space) pass.
 
+- **TEST-14** (tier: unit) [covers: ITEM-18] file: `src-app/server/src/modules/workflow/validate.rs` — asserts: a bundle root that became a SYMLINK is refused as an anchor on BOTH resolution paths — through whichever path is live (`openat2` on Linux) via `read_prompt_file`, and through `open_confined_fallback` CALLED BY NAME, since on Linux nothing else ever executes the fallback's guard — each with a positive control that an ordinary root still reads through the same call.
+
 - **TEST-15** (tier: unit) [covers: ITEM-18] file: `src-app/server/src/modules/workflow/workspace.rs` — asserts: `resolve_conversation_workspace_dir` refuses a NESTED `dir` and still accepts a single-component one — the rule that makes the final component the only part of a workspace bundle root the model can swap, which is what the anchor guard in `read_prompt_file` is able to refuse.
+
+- **TEST-24** (tier: unit) [covers: ITEM-18] file: `src-app/server/src/modules/workflow/workspace.rs` — asserts: the rule is a property of the RETURNED ROOT, not of the `dir` STRING — a single-component `dir` that is a symlink to a nested path (`proj -> a/etc`) is refused, because `canonicalize` expands symlinks and would otherwise hand back a root with a model-controlled INTERMEDIATE component; on failure the test performs the intermediate swap and reports what the confined read actually returned, so the escape is evidence rather than an assertion about it.
+
+- **TEST-25** (tier: unit) [covers: ITEM-18] file: `src-app/server/src/modules/workflow/workspace.rs` — asserts: the resolved root is never the conversation workspace ROOT itself, by either spelling — `.`/`./` (caught by the string rule) and a symlink `proj -> .` that canonicalizes back to the root (which the string rule cannot see) — because a root returned here becomes the ephemeral row's `extracted_path`, which `delete_user_workflow` `remove_dir_all`s.
+
+- **TEST-26** (tier: integration) [covers: ITEM-18] file: `src-app/server/tests/workflow_mcp/workspace_test.rs` — asserts: the same narrowing at the surface that consumes it — `validate_from_workspace` and `run_from_workspace` both refuse a symlinked single-component `dir` reaching a nested root with `WORKFLOW_WORKSPACE_ESCAPE`, with a control that the identical bundle IS valid when reached the legitimate way.
+
+- **TEST-27** (tier: unit) [covers: ITEM-18] file: `src-app/server/src/modules/workflow/workspace.rs` — asserts: `check_persisted_workspace_root` accepts exactly `<workspace_root>/<conv>/<dir>` and refuses anything deeper, the conversation root itself, and the bare workspace root — under ANY conversation id (it is keyed on the root, not on `preflight`'s client-supplied `conversation_id.unwrap_or(run_id)`) — plus a leg proving a symlinked workspace root does not make the check silently inert.
+
+- **TEST-28** (tier: integration) [covers: ITEM-18] file: `src-app/server/tests/workflow_mcp/workspace_test.rs` — asserts: the USE-time half, on a persisted row — a legacy ephemeral row whose `extracted_path` is nested (a shape the resolver no longer mints) is refused by the real `POST /workflows/{id}/run` with `WORKFLOW_WORKSPACE_ESCAPE`, **and no `workflow_runs` row is created**, which is the observable proof that the refusal precedes the validate + `insert_run` pass rather than landing in `preflight` after it; with a control that a direct-child `extracted_path` does not trip the rule.
 
 ## Coverage map
 
@@ -48,7 +60,7 @@ no migration grant), so A9/A10 do not apply.
 | ITEM-15 | [DESCOPED] — see DECISIONS |
 | ITEM-16 | TEST-1, TEST-3, TEST-6, TEST-11, TEST-12, TEST-13 |
 | ITEM-17 | TEST-7, TEST-10, TEST-11 |
-| ITEM-18 | TEST-14, TEST-15 |
+| ITEM-18 | TEST-14, TEST-15, TEST-24, TEST-25, TEST-26, TEST-27, TEST-28 |
 
 | INV | acceptance test |
 |---|---|
