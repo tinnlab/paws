@@ -223,3 +223,52 @@ the string `reveal`, and a right-panel tab's close button carries the tab id in 
 so the "no reveal affordance" scan matched the close button. The exhaustive control enumeration in
 the same test proves the restricted user has no reveal path at all. Fixture renamed, selector
 tightened to the affordance's real wording.
+
+## Post-merge re-verification (FIX_ROUND-18 / -19 + the `origin/feat/agent-core` merge)
+
+The branch merged `origin/feat/agent-core` (84 commits) after rounds 18-19, so every
+load-bearing result was RE-RUN on the merged tree rather than inherited. Logs under
+`/data/pbya/ziee/tmp/lifecycle-logs/`; each run is wrapped in an explicit `*_EXIT=` marker,
+because round 19 found a 0-byte log being cited as "exit 0" (FR19-9).
+
+| suite | observed | log |
+|---|---|---|
+| `npm run check` (ui) | **`CHECK_UI_EXIT=0`** | `rail19-check-ui.log` |
+| `npm run check` (desktop/ui) | **`CHECK_DESKTOPUI_EXIT=0`** | `rail19-check-desktopui.log` |
+| `railIsolation.test.ts`, post-merge | **10 tests, 10 pass, 0 fail**, `UNIT_EXIT=0` | `rail19-unit-postmerge.log` |
+| restore regression controls (the 5 round-18 holes), post-merge | **5/5 RED**, `RESTORE_EXIT=0` | `rail19-restore-postmerge.log` |
+| e2e — rail family + the run_js matrix, post-merge | see log | `rail19-e2e-postmerge.log` |
+
+npm run check (ui): PASS
+npm run check (desktop/ui): PASS
+
+### Merge conflict resolutions
+
+- `registry.tsx` — union of both import blocks (the rail/elicitation imports and
+  `composeRequestFieldsFrom`); no logic conflict.
+- the four generated gallery artifacts — took the base's, then regenerated
+  (`gen:gallery-coverage` 437 surfaces, `gen:state-matrix` 349 surfaces,
+  `gen:overlay-registry` 38 overlay surfaces).
+- `sdk` — took the base's pointer `675a8ac` and re-ran `gen:testid-registry` on top
+  (1748 ids) as `a50e07c`, rather than merging the branch's sibling regen `7636ad6`.
+  The two diverged only in generated content, so regeneration is the resolution.
+  **`sdk@a50e07c` is local-only and must be pushed before the superproject pointer.**
+- `helpers.rs`, `tests/mcp/mod.rs`, `coverage.ts` auto-merged cleanly.
+
+### Gate state — phase 7 does NOT pass, deliberately
+
+`lifecycle-check --all` reports **8 of 9 phases OK**; phase 7 FAILS with
+"`FIX_ROUND-19.md`: fix loop not converged — 11 new confirmed finding(s)".
+
+That is not a bookkeeping gap to be edited away. Round 18 deleted the js-tool approval
+card's source guards on the strength of seven RED mutations, and its blind audit found
+five spellings those mutations missed; round 19 restored them, and its audit found five
+MORE — including one (FR19-10) where the POST's arguments are unguarded, so
+`resolveElicitationVia(id, blocked === 'not-registered' ? 'cancel' : action)` type-checks
+and silently sends a different answer than the user gave. Two audits in opposite
+directions, same result.
+
+The six `accepted-open` entries are all **pre-existing** and all closed BY CONSTRUCTION by
+the component-level harness named in `FIX_ROUND-18.md` §8. Adding a twentieth predicate is
+the treadmill rounds 13-17 already ran. **This branch should not be pushed as converged
+until that harness lands, or an owner accepts the recorded gaps explicitly.**
