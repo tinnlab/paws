@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Button, Card, Text } from '@ziee/kit'
+import { Button, Card, CardActions, Text } from '@ziee/kit'
 import {
   APPROVAL_DESCRIPTION_COLLAPSED_MAX_PX,
   approvalDescriptionViewKey,
@@ -265,8 +265,16 @@ export function ToolCallPendingApprovalContent({
         className="mb-2"
         data-testid="mcp-tool-approval-card"
         footer={
-          // Right-aligned, negative-left like the elicitation form's Decline/Submit.
-          <div className="flex w-full justify-end gap-2">
+          // Right-aligned, negative-first like the elicitation form's
+          // Decline/Submit. `CardActions` (not a hand-rolled `flex justify-end`
+          // row) is load-bearing HERE above all: three decision controls do not
+          // fit one line in a narrow card, and a non-wrapping `justify-end` row
+          // pushes the overflow out the inline-START edge, where the Card's
+          // `overflow-hidden` clips it away and no scroll can reach it. Measured
+          // at a 390px viewport, that left Deny AND "Approve once" unreachable
+          // with "Approve for this conversation" — the broadest approval — as the
+          // only pressable control.
+          <CardActions>
             <Button
               variant="outline"
               icon={<X />}
@@ -297,14 +305,46 @@ export function ToolCallPendingApprovalContent({
                 Approve for this conversation
               </Button>
             )}
-          </div>
+          </CardActions>
         }
       >
         {/* Header row — status icon + tool name + server label, mirroring the
             elicitation Card's header. */}
-        <div className="flex items-center gap-2 min-w-0">
+        {/* `flex-wrap` is load-bearing, same failure mode as the footer row:
+            the two secondary labels are `whitespace-nowrap` and together need
+            205px of a 238px row at a 390px viewport, so on ONE line they starved
+            the TOOL NAME — the single thing the user is being asked to consent
+            to — down to a rendered width of 0 (measured: name w=0,
+            scrollWidth=98). A `truncate` element sets `overflow:hidden`, which
+            already gives a flex item an automatic minimum size of ZERO, so it is
+            always the sibling that loses; only wrapping saves it. */}
+          {/* `flex-wrap` is load-bearing, same failure mode as the footer row:
+            the two secondary labels are `whitespace-nowrap` and together need
+            205px of a 238px row at a 390px viewport, so on ONE line they starved
+            the TOOL NAME — the single thing the user is being asked to consent
+            to — down to a rendered width of 0 (measured: name w=0,
+            scrollWidth=98). A `truncate` element sets `overflow:hidden`, which
+            already gives a flex item an automatic minimum size of ZERO, so it is
+            always the sibling that loses; only wrapping saves it.
+
+            NOT ADDRESSED HERE, deliberately: a name or label LONGER than the
+            wrapped line still ellipsises, so a hostile server can present a
+            benign-looking prefix. That is a real defect, it is pre-existing, and
+            three attempts to fix it inside this branch each introduced a worse
+            one (unbounded growth that pushed Deny 2800px below the fold; then a
+            clamp that cut ORDINARY names to 34 of 41 characters and offered a
+            "Show more" whose single click produced a 13,343px card). The
+            fix-loop stopped converging on it, so it is split out with its
+            measurements rather than guessed at again — see
+            `.lifecycle/mobile-approval-clipped/FIX_ROUND-5.md` and the
+            follow-up note in DECISIONS.md (DEC-10). `title` is kept as the
+            cheap, non-regressing half: it costs nothing and helps a pointer
+            user, while not pretending to solve the touch case. */}
+        <div className="flex flex-wrap items-center gap-2 min-w-0">
           <Clock className="size-4 shrink-0 text-warning" />
-          <Text strong className="truncate">{toolCall.tool_name}</Text>
+          <Text strong className="truncate" title={toolCall.tool_name}>
+            {toolCall.tool_name}
+          </Text>
           {mcpServerParenLabel(toolCall.server) && (
             <Text type="secondary" className="text-xs whitespace-nowrap">
               {mcpServerParenLabel(toolCall.server)}

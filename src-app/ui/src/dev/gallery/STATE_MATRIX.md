@@ -2751,27 +2751,27 @@ Required states: `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `option.recommended` | 88 |
-| branch | `option.description` | 94 |
-| branch | `option.preview` | 99 |
-| branch | `multi` | 152 |
-| branch | `showOther` | 203 |
-| branch | `multi` | 213 |
-| branch | `multi` | 234 |
-| branch | `otherOn` | 250 |
-| error | `fieldState.error?.message` | 260 |
-| branch | `!mounted.current` | 331 |
-| branch | `otherErr` | 342 |
-| branch | `isSubmitting` | 355 |
-| branch | `isSubmitting` | 369 |
-| branch | `!zodOk \|\| firstBad >= 0` | 386 |
-| branch | `step > 0` | 417 |
-| branch | `isLast` | 429 |
-| branch | `total > 1` | 460 |
-| branch | `current && isChoice && currentSchema.title` | 484 |
-| branch | `current && isChoice && currentSchema.description` | 489 |
-| branch | `current` | 494 |
-| branch | `isChoice` | 495 |
+| branch | `option.recommended` | 89 |
+| branch | `option.description` | 95 |
+| branch | `option.preview` | 100 |
+| branch | `multi` | 153 |
+| branch | `showOther` | 204 |
+| branch | `multi` | 214 |
+| branch | `multi` | 235 |
+| branch | `otherOn` | 251 |
+| error | `fieldState.error?.message` | 261 |
+| branch | `!mounted.current` | 332 |
+| branch | `otherErr` | 343 |
+| branch | `isSubmitting` | 356 |
+| branch | `isSubmitting` | 370 |
+| branch | `!zodOk \|\| firstBad >= 0` | 387 |
+| branch | `step > 0` | 432 |
+| branch | `isLast` | 444 |
+| branch | `total > 1` | 479 |
+| branch | `current && isChoice && currentSchema.title` | 503 |
+| branch | `current && isChoice && currentSchema.description` | 508 |
+| branch | `current` | 513 |
+| branch | `isChoice` | 514 |
 
 ### `modules/mcp/chat-extension/components/ElicitationFormContent`
 
@@ -2779,15 +2779,15 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `isSelectField` | 69 |
-| branch | `isMultiSelect` | 71 |
-| branch | `status === 'accepted'` | 215 |
-| branch | `items.length > 0` | 244 |
-| branch | `status === 'declined'` | 258 |
-| branch | `status === 'cancelled'` | 278 |
-| branch | `schemaNotice` | 308 |
-| branch | `elicitation.message` | 346 |
-| branch | `isRichAskUser` | 366 |
+| branch | `isSelectField` | 70 |
+| branch | `isMultiSelect` | 72 |
+| branch | `status === 'accepted'` | 221 |
+| branch | `items.length > 0` | 250 |
+| branch | `status === 'declined'` | 264 |
+| branch | `status === 'cancelled'` | 284 |
+| branch | `schemaNotice` | 314 |
+| branch | `elicitation.message` | 356 |
+| branch | `isRichAskUser` | 376 |
 
 ### `modules/mcp/chat-extension/components/JsToolApprovalContent`
 
@@ -2832,7 +2832,7 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `serverLabel` | 33 |
+| branch | `serverLabel` | 36 |
 
 ### `modules/mcp/chat-extension/components/ToolCallPendingApprovalContent`
 
@@ -2840,11 +2840,11 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!isControlWrite` | 289 |
-| branch | `mcpServerParenLabel(toolCall.server)` | 308 |
-| branch | `toolCall.dest_host` | 323 |
-| branch | `toolCall.description` | 352 |
-| branch | `toolCall.input !== undefined` | 360 |
+| branch | `!isControlWrite` | 297 |
+| branch | `mcpServerParenLabel(toolCall.server)` | 348 |
+| branch | `toolCall.dest_host` | 363 |
+| branch | `toolCall.description` | 392 |
+| branch | `toolCall.input !== undefined` | 400 |
 
 ### `modules/mcp/chat-extension/components/elicitationFields`
 
@@ -2865,30 +2865,30 @@ Required states: `error`
 | kind | condition | line |
 |---|---|---|
 | branch | `toolCall.status === 'pending_approval'` | 42 |
-| branch | `serverLabel` | 58 |
-| error | `(toolCall.status === 'completed' \|\| toolCall.status === 'error')` | 66 |
-| branch | `toolCall.status === 'started' && toolCall.progress` | 84 |
-| branch | `toolCall.progress.message` | 86 |
-| branch | `isExpanded` | 109 |
-| branch | `toolCall.input !== undefined` | 111 |
-| branch | `toolCall.result !== undefined` | 120 |
-| error | `toolCall.error` | 129 |
-| branch | `!toolUseData.id` | 160 |
-| branch | `toolCall` | 167 |
-| branch | `mcpServerParenLabel(server?.display_name)` | 193 |
-| branch | `toolResultData` | 198 |
-| branch | `hasDetails` | 206 |
-| branch | `isExpanded` | 217 |
-| branch | `!!toolUseData.input` | 219 |
-| branch | `toolResultData` | 227 |
-| branch | `toolResultData.is_error` | 230 |
-| branch | `singleUse` | 338 |
-| branch | `singleServerLabel` | 343 |
-| branch | `isExpanded` | 362 |
-| branch | `!run \|\| !shouldWrapRun(run)` | 395 |
-| branch | `!mcpStore` | 436 |
-| branch | `!streamingMessage` | 890 |
-| branch | `!toolUseId` | 902 |
+| branch | `serverLabel` | 61 |
+| error | `(toolCall.status === 'completed' \|\| toolCall.status === 'error')` | 69 |
+| branch | `toolCall.status === 'started' && toolCall.progress` | 87 |
+| branch | `toolCall.progress.message` | 89 |
+| branch | `isExpanded` | 112 |
+| branch | `toolCall.input !== undefined` | 114 |
+| branch | `toolCall.result !== undefined` | 123 |
+| error | `toolCall.error` | 132 |
+| branch | `!toolUseData.id` | 163 |
+| branch | `toolCall` | 170 |
+| branch | `mcpServerParenLabel(server?.display_name)` | 199 |
+| branch | `toolResultData` | 204 |
+| branch | `hasDetails` | 212 |
+| branch | `isExpanded` | 223 |
+| branch | `!!toolUseData.input` | 225 |
+| branch | `toolResultData` | 233 |
+| branch | `toolResultData.is_error` | 236 |
+| branch | `singleUse` | 347 |
+| branch | `singleServerLabel` | 352 |
+| branch | `isExpanded` | 371 |
+| branch | `!run \|\| !shouldWrapRun(run)` | 404 |
+| branch | `!mcpStore` | 445 |
+| branch | `!streamingMessage` | 899 |
+| branch | `!toolUseId` | 911 |
 
 ### `modules/mcp/components/McpConfigModal`
 

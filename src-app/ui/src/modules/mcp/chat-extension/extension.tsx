@@ -52,7 +52,10 @@ function McpToolCallUI({ toolCall }: { toolCall: McpToolCall }) {
       data-testid={`mcp-toolcall-card-${toolCall.tool_use_id}`}
     >
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2 min-w-0">
+        {/* `flex-wrap`: the nowrap server label would otherwise starve this
+            `truncate` tool name to a rendered width of 0 in a narrow card — the
+            same measured failure fixed on the approval card's header. */}
+        <div className="flex flex-wrap items-center gap-2 min-w-0">
           <ToolStatusIcon status={toolCall.status} />
           <Text strong className="truncate">{toolCall.tool_name}</Text>
           {serverLabel && (
@@ -185,7 +188,10 @@ function McpToolUseRenderer({ content: data }: ContentRendererProps) {
   return (
     <Card size="sm" className={cn('mb-2', !isExpanded && 'py-2.5')} data-testid={`mcp-tooluse-card-${toolUseData.id}`}>
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2 min-w-0">
+        {/* `flex-wrap`: the nowrap server label would otherwise starve this
+            `truncate` tool name to a rendered width of 0 in a narrow card — the
+            same measured failure fixed on the approval card's header. */}
+        <div className="flex flex-wrap items-center gap-2 min-w-0">
           <ToolStatusIcon
             status={toolResultData ? (toolResultData.is_error ? 'failed' : 'success') : 'running'}
           />
@@ -333,7 +339,10 @@ function McpToolGroupCard({
   return (
     <Card size="sm" className={cn('mb-2', !isExpanded && 'py-2.5')} data-testid="mcp-toolgroup-card">
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2 min-w-0">
+        {/* `flex-wrap`: the nowrap server label would otherwise starve this
+            `truncate` tool name to a rendered width of 0 in a narrow card — the
+            same measured failure fixed on the approval card's header. */}
+        <div className="flex flex-wrap items-center gap-2 min-w-0">
           {icon}
           {singleUse ? (
             <>

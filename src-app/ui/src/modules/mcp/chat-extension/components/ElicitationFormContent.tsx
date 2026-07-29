@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react'
 import {
   Button,
   Card,
+  CardActions,
   Descriptions,
   Form,
   FormField,
@@ -203,7 +204,12 @@ export function ElicitationFormContent({
   // Shared card header — a status icon + server name + short state label, matching
   // the tool-call Card's header row (both are chat "status cards").
   const cardHeader = (icon: ReactNode, label: string) => (
-    <div className="flex items-center gap-2 min-w-0">
+    // `flex-wrap`: the trailing label is `whitespace-nowrap`, so on one line it
+    // starves the `truncate` server name to a rendered width of 0 in a narrow card
+    // (the measured failure on the sibling approval card — a `truncate` element is
+    // `overflow:hidden` and so has an automatic minimum size of zero, so it always
+    // loses to a nowrap sibling). Same class as the footer row: wrap, don't clip.
+    <div className="flex flex-wrap items-center gap-2 min-w-0">
       {icon}
       <Text strong className="truncate">{elicitation.server}</Text>
       <Text type="secondary" className="text-xs whitespace-nowrap">{label}</Text>
@@ -316,7 +322,11 @@ export function ElicitationFormContent({
           className="mb-2"
           data-testid="mcp-elicitation-no-fields-card"
           footer={
-            <div className="flex w-full justify-end gap-2">
+            // `CardActions`, not a hand-rolled `flex justify-end` row: "Accept
+            // without values" is a long label, and Decline + it exceed one line
+            // in a narrow card — where a non-wrapping `justify-end` row pushes
+            // the overflow out the unreachable inline-START edge.
+            <CardActions>
               <Button
                 type="button"
                 variant="outline"
@@ -336,7 +346,7 @@ export function ElicitationFormContent({
               >
                 Accept without values
               </Button>
-            </div>
+            </CardActions>
           }
         >
           {cardHeader(
@@ -390,7 +400,10 @@ export function ElicitationFormContent({
         className="mb-2"
         data-testid="mcp-elicitation-pending-card"
         footer={
-          <div className="flex w-full justify-end gap-2">
+          // Decline + Submit fit one line today, but the row stays on the shared
+          // `CardActions` primitive so a longer label (or a narrower pane) wraps
+          // instead of silently pushing a control out of reach.
+          <CardActions>
             <Button
               type="button"
               variant="outline"
@@ -409,7 +422,7 @@ export function ElicitationFormContent({
             >
               Submit
             </Button>
-          </div>
+          </CardActions>
         }
       >
         {cardHeader(

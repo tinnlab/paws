@@ -41,3 +41,30 @@ export const APPROVAL_DESCRIPTION_COLLAPSED_MAX_PX = 120
 export function approvalDescriptionViewKey(toolUseId: string): string {
   return `approval-desc:${toolUseId}`
 }
+
+/**
+ * Collapsed height cap for the card's IDENTITY line (tool name + server label),
+ * in px.
+ *
+ * Same threat, same answer as the description above. The tool name and the
+ * server label are both chosen by the MCP server, and a first attempt at fixing
+ * their truncation simply removed the bound — which measured 5123px of card for
+ * a 6400-character name at 390px, putting Deny ~2800px below the fold. That is
+ * the very failure this module's other constant exists to prevent, reintroduced
+ * one row higher: a hostile server that cannot ellipsise its name into a benign
+ * prefix can otherwise push the decision row out of view instead.
+ *
+ * So the identity line is bounded exactly like the description: a CSS clamp with
+ * a fade and a "Show more" toggle, with the COMPLETE string always in the DOM.
+ * Nothing is hidden — but nothing is unbounded either.
+ *
+ * 56px is ~3 lines of `text-sm`: enough that every realistic tool name and
+ * server label renders in full and the toggle never appears, and small enough
+ * that a pathological one cannot dominate the card.
+ */
+export const APPROVAL_IDENTITY_COLLAPSED_MAX_PX = 56
+
+/** View-state key for the identity line's collapsed flag (see above). */
+export function approvalIdentityViewKey(toolUseId: string): string {
+  return `approval-identity:${toolUseId}`
+}
