@@ -1186,6 +1186,153 @@ likewise redacted + capped at 16 KiB (mirrors the chat path's result caps).
 
 ---
 
+## Agent loop (`agent-core`) — the shared agentic primitive
+
+`src-app/agent-core/` is a **ziee-only workspace crate, NOT an SDK crate**
+(~8.1k lines, 16 modules). It holds the agent loop itself and is hosted
+app-side by three callers: chat, the workflow `kind: agent` step, and parallel
+fan-out. It is built ON the SDK (`ziee-core` for `AppError`, `ziee-identity` for
+permissions) plus `ai-providers` — the dependency direction is one-way, and
+`tests/deps_boundary.rs` enforces it.
+
+### It is domain-free and DB-free — by construction
+
+The loop is generic over injected `Arc<P>` **ports** (the same pattern
+`ziee-framework`'s `RequirePermissions<R: IdentityResolver>` uses), so the crate
+never sees Postgres, ziee's schema, or a concrete provider:
+
+| port | supplies |
+|---|---|
+| `TranscriptStore` | message history read/append |
+| `EventSink` | streaming deltas + lifecycle events |
+| `ToolProvider` | the callable tool set |
+| `HumanGate` | approval / elicitation round-trips |
+| `ApprovalPolicy` | which calls need a human |
+| `ModelResolver` / `ModelClient` | provider + per-call model selection |
+| `TaskListStore` | the agent's own task list |
+| `SteerNotePort` | mid-run user steering |
+| `SchedulePort` | deferred/scheduled continuation |
+
+Everything DB- or domain-shaped lives server-side; that separation is why the
+loop is unit-testable against in-memory fakes (`src/test_fakes.rs`, 15 in-source
+`#[cfg(test)]` modules).
+
+### Beyond the plain loop
+
+`compaction.rs` (context compaction + `Summarizer`), `fanout.rs` (parallel child
+agents, capped by `SubagentLimits`), `reviewer.rs` (an optional second model
+reviewing the run), `budget.rs` + `tokens.rs` (token accounting and caps),
+`guard.rs`, `policy.rs` (the approval matrix), `tasklist.rs`, `core_tools.rs`.
+
+### `AgentCore` construction is exhaustive — mind the struct literal
+
+`AgentCore` is built as a **plain struct literal with 20 fields**, not a
+builder. Adding a field therefore breaks every construction site, and the
+integration test at `agent-core/tests/real_llm_loop.rs` has been the one that
+gets forgotten (it sat un-compiling from 2026-07-19 until it was fixed in this
+line, so `cargo test --workspace` did not build). Canonical values for the two
+easiest to miss: `schedule: None`, `isolate_children: false`. If you add a
+field, `cargo check -p agent-core --tests` is the check that catches the misses —
+`cargo check -p agent-core` alone will not.
+
+```bash
+cargo test -p agent-core                       # unit + fakes
+cargo check -p agent-core --tests              # catches un-updated struct literals
+cargo test -p agent-core --test deps_boundary  # SDK dependency direction
+# real-LLM loop (key-gated):
+cargo test -p agent-core --test real_llm_loop -- --ignored
+```
+
+---
+
+## Agent settings (`modules/agent`)
+
+The server-side singleton settings surface for `agent-core` — deliberately thin,
+because the crate stays domain-free. Mirrors `summarization` / `js_tool`.
+
+- Table `agent_admin_settings` (singleton: sandbox/approval mode, reviewer
+  config, token caps, max steps, fan-out guardrails) + `agent_task_list`.
+  Migrations `202607160100` … `202607191300` (5 files) under
+  `modules/agent/migrations/`.
+- REST `GET/PUT /api/agent/settings`, gated `agent::settings::{read,manage}`.
+  **Admin-only via the `*` wildcard — there is no grant migration**, so do not
+  look for one.
+- Model + repository + read-at-use are all server-side.
+
+Integration tests: `server/tests/agent/` — `settings_test`, `migration_test`,
+`model_resolver_test`, `reviewer_test`, `task_list_test`, `journal_test`,
+`verification_test`. The end-to-end agentic path is `server/tests/agentic_chat/`.
+
+---
+
+## Background runs (`modules/background_mcp`)
+
+A built-in MCP server (`background.ziee.internal`, loopback JSON-RPC at
+`POST/GET /api/background/mcp`) exposing a **generalized background-run backbone**
+to the chat model. Registration mirrors `workflow_mcp` / `memory_mcp` /
+`control_mcp`; the MCP client injects a short-lived JWT + `x-conversation-id`, so
+the handler authenticates the user (`background::use`, granted by migration
+`202607191000`) **and** scopes the run to the originating conversation.
+
+Three tools — deliberately uniform rather than a one-off:
+
+| tool | does |
+|---|---|
+| `spawn_background{kind, spec}` | creates a background `workflow_runs` row of the given `JobKind` and fire-and-forgets it |
+| `check_status` | polls that run |
+| `collect_result` | retrieves the finished output |
+
+**It is backed by `workflow_runs` and the shared runner, not a parallel job
+system.** That is the point: background work reuses workflow's durable-resume
+machinery (`resume.rs`), run notes (`run_notes.rs`), and cascade semantics
+instead of inventing a second lifecycle. As with every built-in MCP server, the
+two `mcp/chat_extension/mcp.rs` edits (`auto_attach_builtin_ids` +
+`is_builtin_server_id`) are required or the tools register and the model never
+sees them.
+
+Integration tests: `server/tests/background_mcp/` — `runs`, `resume`,
+`run_notes`, `sandbox`.
+
+---
+
+## Chat activity rail
+
+Replaces the collapsible tool-group card with a **thin timeline beside the
+answer**. Core owns a registry + a row primitive; **each extension contributes
+its own step descriptor and detail body** — the rail never collects other
+modules' content, and `railIsolation.test.ts` walks the real import graph to fail
+the build if anything in `chat/components/rail/` names an extension. 16 modules
+contribute today (mcp, code-sandbox, js-tool, workflow, scheduler, memory,
+knowledge-base, literature, citations, web-search, skill, file, agent,
+background, …).
+
+- Core: `ui/src/modules/chat/components/rail/` — `railTypes.ts` (the
+  `RailContribution` / `RailStepDescriptor` contract), `railSegmentation.ts`,
+  `ActivityRail.tsx`, `RailStep.tsx`, `RailStepDetail.tsx`, `railBlocks.ts`,
+  `railView.ts`; plus `chat/core/rail/` — `liveSteps.ts`, `redactToolArgs.ts`.
+- A contribution declares `contentTypes` + `describeActivity`, and optionally
+  `renderDetail`. Omitting `renderDetail` delegates to the extension's
+  ALREADY-REGISTERED content renderer, which is the normal case.
+- **`RAIL_EXCLUDED_TYPES` is the one type list core owns** — `text`,
+  `observation`, `file_attachment`, `image`. `thinking` was REMOVED from it
+  (DEC-13): reasoning is now a step contributed by the `text` extension.
+  The invariant the set protects is that the rail can never swallow the ANSWER,
+  and the answer is `text`.
+- A **blocking** step (approval / elicitation) breaks out full-width and
+  non-collapsible rather than becoming a collapsed row — an approval prompt must
+  never be hideable. A failed or timed-out step forces the rail open.
+- Contributions **must not throw**: `describeActivity` degrades to a name-only
+  row, and the segmenter has an outer catch.
+
+Its `railIsolation.test.ts` guards are deliberately **import-graph only**. The
+source-scanning guards that once lived there were replaced by a mounted
+component harness (`JsToolApprovalContent.test.tsx`, vitest + jsdom, run via
+`npm run test:component`) after 20 audit rounds showed a hand-written static
+analyser's evasion space is unbounded. **Do not add source-text assertions
+there** — assert behaviour in the harness instead. `npm run
+test:component:mutations` re-runs the mutation suite that proves it kills real
+edits.
+
 ## Web Search + Page Fetch
 
 The `web_search` module exposes web **search** + page **fetch** as a built-in

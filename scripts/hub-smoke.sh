@@ -8,7 +8,9 @@
 # fixtures via `POST /api/workflows/{id}/test`. Any install or test failure
 # exits non-zero.
 #
-# Invoked by .github/workflows/hub-smoke.yml AFTER ziee is built + started.
+# NO LONGER INVOKED BY CI in this repo: `hub-smoke.yml` was removed (hub CI
+# belongs to the hub repo). This script is still the consumer-side detector and
+# is run MANUALLY — nothing runs it for you.
 # Runnable locally too: build ziee, start it with code_sandbox.enabled=true,
 # then `ZIEE_BASE=http://127.0.0.1:3000 scripts/hub-smoke.sh`.
 #

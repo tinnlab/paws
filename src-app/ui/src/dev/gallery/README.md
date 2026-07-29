@@ -54,18 +54,26 @@ node scripts/visual-judge.mjs --dry-run            # wiring check
 
 Snapshot PNGs depend on the OS/font rendering of the machine that blessed them,
 so they are **git-ignored** (`tests/e2e/visual/**/*-snapshots/`). Bless them in a
-**pinned container** so the pixels are deterministic — the
-`.github/workflows/visual-snapshots.yml` workflow does exactly this in the
-official Playwright image (`mode: bless` → uploads the baselines as an artifact;
-download + commit them, then `mode: compare` gates against that set). Never commit
+**pinned container** so the pixels are deterministic. A
+`visual-snapshots.yml` workflow used to do this in the official Playwright image;
+it was REMOVED along with `visual-tests.yml`, so blessing is now a local task and
+the pixels are only as deterministic as the machine that produced them. Never commit
 a dev laptop's PNGs — they'll false-fail everywhere else.
 
-### CI
+### CI — none
 
-- **`visual-tests.yml`** — runs **Layer A** (deterministic, backend-free) on every
-  PR touching `src-app/ui`. No baseline needed; this is the always-on gate.
-- **`visual-snapshots.yml`** — runs **Layer B** in a pinned Playwright container,
-  manual (`workflow_dispatch`), bless-or-compare. Heavy (~2,600 shots), opt-in.
+Both visual workflows were REMOVED from this repo. `visual-tests.yml` (Layer A,
+the always-on PR gate) and `visual-snapshots.yml` (Layer B, container-pinned
+bless-or-compare, ~2,600 shots) are gone; the only remaining workflows are
+`desktop-release.yml` and `server-release.yml`.
+
+**So nothing gates visual regressions for you.** Layer A still runs locally and
+is still deterministic and backend-free:
+
+```bash
+just visual        # Layer A + the detector meta-test
+just visual-bless  # (re)bless Layer B baselines locally — machine-specific
+```
 
 ## Layer A — what it enforces (`assertLayoutSane`)
 

@@ -5,9 +5,11 @@ Layer 3 of feat/local-llm-runtime: GitHub Actions workflows in the
 `github.com/ziee-ai/mistral.rs` that build + sign + publish engine
 binaries on tag push. This document is the recipe.
 
-The shape is a copy-edit of
-`.github/workflows/code_sandbox.yml` in this repo, which already
-does the same thing for the code-sandbox rootfs.
+The shape is a copy-edit of the rootfs release workflow, which already
+does the same thing for the code-sandbox rootfs. That workflow no longer
+lives here — it moved to the standalone **`ziee-ai/sandbox-rootfs`** repo, which
+is now the reference to copy from. (This repo keeps only two workflows,
+`desktop-release.yml` and `server-release.yml`.)
 
 ## Inputs
 
@@ -75,7 +77,8 @@ jobs:
             arch: x86_64
             backend: cuda
             runs-on: ubuntu-22.04
-          # ... etc — see code_sandbox.yml for the full matrix shape
+          # ... etc — see the ziee-ai/sandbox-rootfs release workflow for the
+          # full matrix shape
     runs-on: ${{ matrix.runs-on }}
     steps:
       - uses: actions/checkout@v4
@@ -105,7 +108,7 @@ jobs:
   # workflow exists in this tree for the engine/server-release pipeline.
   # The pattern that IS shipped is an in-workflow auto-PR job that edits
   # known_revisions.toml in the same run — see the `auto-PR
-  # known_revisions.toml` job in `.github/workflows/code_sandbox.yml`.
+  # known_revisions.toml` job in the `ziee-ai/sandbox-rootfs` release workflow.
   # The block below is a sketch of a future cross-repo follow-up; do not
   # treat it as operational.
   receiver:
@@ -153,10 +156,11 @@ stores the verified version, and the sha256 + cosign signature are
 verified in-process at download time against the release artifacts.
 There is **no cross-repo Layer-2 receiver workflow** in this tree (the
 `receiver:` job above is an illustrative, disabled sketch); the only
-shipped auto-PR-a-revisions-file pattern is the sandbox-rootfs one in
-`code_sandbox.yml` (`auto-PR known_revisions.toml` job), which edits
-`src-app/server/src/modules/code_sandbox/known_revisions.toml` — that
-file is specific to the sandbox rootfs, not the engine pipeline.
+shipped auto-PR-a-revisions-file pattern is the sandbox-rootfs one, which now
+lives entirely in the standalone **`ziee-ai/sandbox-rootfs`** repo along with the
+`known_revisions.toml` it edits. Both left this tree: the workflow was removed,
+and `known_revisions.toml` no longer exists here at all. That pattern is specific
+to the sandbox rootfs, not the engine pipeline.
 
 ## See also
 
@@ -168,4 +172,4 @@ file is specific to the sandbox rootfs, not the engine pipeline.
   `known_revisions.toml` resolver) was folded into the server module and
   replaced by this runtime version manager, so neither that crate path
   nor a `known_revisions.toml`/`PRE-STAGE-RUNBOOK.md` exists anymore.
-- `.github/workflows/code_sandbox.yml` — the exact pattern to copy.
+- the `ziee-ai/sandbox-rootfs` release workflow — the exact pattern to copy.
