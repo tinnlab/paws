@@ -36,6 +36,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+          # `sdk` and `agent-kit` are PRIVATE sibling repos. The default GITHUB_TOKEN is
+          # scoped to THIS repo only, so cloning them 404s with "Repository not found"
+          # (the public pgvector submodule in the same step clones fine — that is the
+          # control that proves this is credentials, not networking). A cross-repo read
+          # cannot be granted via `permissions:`; it needs a real token. Falls back to
+          # GITHUB_TOKEN so this stays a no-op until SUBMODULES_TOKEN is configured.
+          token: ${{ secrets.SUBMODULES_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

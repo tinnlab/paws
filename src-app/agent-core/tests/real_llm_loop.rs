@@ -154,11 +154,13 @@ async fn agent_streams_text_deltas_from_real_model() {
         reviewer: None,
         task_store: None,
         steer: None,
+        schedule: None,
         budget: agent_core::Budget::new(2, 2_000_000, 2_000_000),
         limits: Default::default(),
         sandbox: SandboxMode::ReadOnly { network: false },
         model_name,
         resume_executes_pending: true,
+        isolate_children: false,
     };
     let req = AgentTurnRequest {
         run_id: Uuid::new_v4(),
@@ -232,11 +234,13 @@ async fn agent_loop_does_real_tool_call_round_trip() {
         reviewer: None,
         task_store: None,
         steer: None,
+        schedule: None,
         budget: Budget::new(4, 2_000_000, 2_000_000),
         limits: Default::default(),
         sandbox: SandboxMode::ReadOnly { network: false },
         model_name,
         resume_executes_pending: true,
+        isolate_children: false,
     };
 
     let req = AgentTurnRequest {
