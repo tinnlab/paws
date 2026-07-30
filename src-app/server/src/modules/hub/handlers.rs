@@ -1997,14 +1997,41 @@ pub async fn create_system_skill_from_hub(
 
 /// Bundles the inserted skill row with the hub_entities row id created in
 /// the same transaction.
-struct SystemSkillInstallResult {
-    skill: skill::models::Skill,
-    hub_entity_id: Uuid,
+pub struct SystemSkillInstallResult {
+    pub skill: skill::models::Skill,
+    pub hub_entity_id: Uuid,
+}
+
+/// Map a `skills` / `workflows` unique violation onto a typed 409 instead of
+/// the generic `500 SYSTEM_DATABASE_ERROR` `AppError::database_error` produces.
+///
+/// TOCTOU backstop (CODING_GUIDELINES §4) for the two `install_system_*_tx`
+/// transactions below. Both open with `SELECT prior ids` → `DELETE` → `INSERT`.
+/// A transaction makes that ATOMIC but not SERIALIZED: under READ COMMITTED two
+/// concurrent system installs of the same (name, version) each snapshot the
+/// table before the other's uncommitted INSERT, so both proceed to insert and
+/// the loser trips `uniq_skills_system_name_version` /
+/// `uniq_workflows_system_name_version`.
+///
+/// These transactions write directly rather than going through
+/// `skill::repository::insert` / `workflow::repository::insert`, so they do NOT
+/// inherit the conflict mapping those two carry — this restores it on the
+/// bypassing path. SQLSTATE 23505 = unique_violation.
+fn install_unique_violation_is_conflict(resource: &str) -> impl Fn(sqlx::Error) -> AppError + '_ {
+    move |err: sqlx::Error| match &err {
+        sqlx::Error::Database(db) if db.is_unique_violation() => AppError::conflict(resource),
+        _ => AppError::database_error(err),
+    }
 }
 
 /// M6: transactional system-skill install (insert + group rows +
 /// hub_entities track). Returns Err with the TX rolled back on any step.
-async fn install_system_skill_tx(
+///
+/// `pub` (not private) so the integration suite can drive the REAL transaction
+/// concurrently — the same reason `test_internals` re-exports other internals
+/// rather than letting a test mirror the SQL. Its only production callers are
+/// in this module.
+pub async fn install_system_skill_tx(
     pool: &sqlx::PgPool,
     create: &CreateSkill,
     groups: &[Uuid],
@@ -2079,7 +2106,7 @@ async fn install_system_skill_tx(
     )
     .fetch_one(&mut *tx)
     .await
-    .map_err(AppError::database_error)?;
+    .map_err(install_unique_violation_is_conflict("Skill"))?;
 
     for group_id in groups {
         sqlx::query!(
@@ -2376,14 +2403,16 @@ pub async fn create_system_workflow_from_hub(
     ))
 }
 
-struct SystemWorkflowInstallResult {
-    workflow: workflow::models::Workflow,
-    hub_entity_id: Uuid,
+pub struct SystemWorkflowInstallResult {
+    pub workflow: workflow::models::Workflow,
+    pub hub_entity_id: Uuid,
 }
 
 /// M6: transactional system-workflow install (insert + group rows +
 /// hub_entities track). TX rolls back on any step failure.
-async fn install_system_workflow_tx(
+///
+/// `pub` for the same integration-test reason as `install_system_skill_tx`.
+pub async fn install_system_workflow_tx(
     pool: &sqlx::PgPool,
     create: &CreateWorkflow,
     groups: &[Uuid],
@@ -2458,7 +2487,7 @@ async fn install_system_workflow_tx(
     )
     .fetch_one(&mut *tx)
     .await
-    .map_err(AppError::database_error)?;
+    .map_err(install_unique_violation_is_conflict("Workflow"))?;
 
     for group_id in groups {
         sqlx::query!(

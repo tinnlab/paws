@@ -4,6 +4,9 @@ use serde_json::json;
 mod admin_providers_test;
 mod apple_test;
 mod ldap_test;
+// R4 — concurrent POST /api/auth/link-account racing
+// user_auth_links_provider_id_external_id_key.
+mod link_account_race_test;
 mod oauth_test;
 // Self-service profile (update profile + change password + has_password).
 mod profile_self_service_test;

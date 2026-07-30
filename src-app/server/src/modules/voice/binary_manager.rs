@@ -95,18 +95,17 @@ pub async fn ensure_binary_path() -> Result<PathBuf, AppError> {
 /// default first). 404 when `version_id` does not exist.
 pub async fn set_system_default(version_id: Uuid) -> Result<(), AppError> {
     let pool = crate::core::Repos.pool();
-    // Verify it exists first so a bad id is a clean 404, not a silent no-op.
-    repository::get_by_id(pool, version_id)
-        .await
-        .map_err(AppError::database_error)?
-        .ok_or_else(|| AppError::not_found("Runtime version"))?;
-
-    repository::clear_system_default(pool)
-        .await
-        .map_err(AppError::database_error)?;
-    repository::set_system_default(pool, version_id, true)
+    // ONE serialized transaction does the clear + the set (and answers the
+    // "unknown id" case by rolling back). Splitting it into a pre-check plus
+    // two autocommitted statements is what let two concurrent promotions trip
+    // `voice_runtime_versions_one_default` — see
+    // `repository::promote_to_system_default` for the full analysis.
+    let promoted = repository::promote_to_system_default(pool, version_id)
         .await
         .map_err(AppError::database_error)?;
+    if !promoted {
+        return Err(AppError::not_found("Runtime version"));
+    }
     tracing::info!("Set whisper system default: {}", version_id);
     Ok(())
 }

@@ -336,8 +336,35 @@ pub async fn insert(pool: &PgPool, request: CreateSkill) -> Result<Skill, AppErr
     )
     .fetch_one(pool)
     .await
-    .map_err(AppError::database_error)?;
+    .map_err(unique_violation_is_conflict)?;
     Ok(row)
+}
+
+/// Map a skills-table unique violation onto a typed 409 instead of letting it
+/// flatten into a generic `500 SYSTEM_DATABASE_ERROR`.
+///
+/// TOCTOU backstop (CODING_GUIDELINES §4). Both writers of this table
+/// pre-check with `find_by_name_version_owner` and then DELETE + INSERT
+/// **without a transaction** (`skill::dev_handlers::import_skill`, and the
+/// hub install path). Two concurrent imports of the same skill name therefore
+/// both see "no prior row", both delete nothing, and both INSERT — the loser
+/// trips a partial unique index:
+///
+/// * `uniq_skills_user_name_version_owner` (name, version, owner_user_id) WHERE scope='user'
+/// * `uniq_skills_system_name_version`     (name, version)                WHERE scope='system'
+/// * `uniq_skills_builtin_name`            (name)                         WHERE scope='built_in'
+///
+/// A transaction would NOT close this: under READ COMMITTED both snapshots
+/// still miss the other's uncommitted row, so the index is the only real
+/// arbiter. Answering the loser 409 (retry wins, since the winner's row is
+/// then visible to the pre-check) is what the sibling
+/// `workflow::repository::insert` already does; this is the same shape, with
+/// the sweep's `RESOURCE_CONFLICT` vocabulary. SQLSTATE 23505 = unique_violation.
+fn unique_violation_is_conflict(err: sqlx::Error) -> AppError {
+    match &err {
+        sqlx::Error::Database(db) if db.is_unique_violation() => AppError::conflict("Skill"),
+        _ => AppError::database_error(err),
+    }
 }
 
 /// Upsert a built-in (scope='built_in') skill keyed on `name`. Used by the

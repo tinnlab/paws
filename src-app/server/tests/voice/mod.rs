@@ -32,6 +32,9 @@ mod model_management_test;
 mod model_test;
 mod permissions_test;
 mod real_repo_test;
+// R3 — concurrent `POST /voice/versions/{id}/set-default` racing the
+// `voice_runtime_versions_one_default` partial unique index.
+mod runtime_default_race_test;
 mod settings_test;
 mod streaming_real_test;
 mod streaming_test;

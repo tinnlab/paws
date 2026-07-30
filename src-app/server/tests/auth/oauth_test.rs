@@ -291,7 +291,7 @@ async fn test_oauth_authorization_flow() {
 /// Seed an OIDC auth_providers row that points at the navikt mock.
 /// `extra_config` is merged into the JSONB to test allowed_tenant_ids,
 /// display_name, etc. without retyping the boilerplate.
-async fn seed_oidc_provider(
+pub(super) async fn seed_oidc_provider(
     pool: &sqlx::PgPool,
     name: &str,
     oauth_server: &OAuthMockServer,
@@ -343,7 +343,7 @@ async fn seed_oidc_provider(
 /// returning the (final_status, final_location) from our callback.
 /// `claims_json` is the JSON we POST to navikt's authorize so the
 /// mock emits those claims in the id_token.
-async fn drive_oauth_flow(
+pub(super) async fn drive_oauth_flow(
     test_server: &crate::common::TestServer,
     provider_name: &str,
     subject: &str,
