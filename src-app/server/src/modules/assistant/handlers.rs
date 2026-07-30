@@ -78,6 +78,50 @@ fn default_limit() -> i64 {
 const ASSISTANT_MAX_INSTRUCTIONS_BYTES: usize = 65_536;
 const ASSISTANT_MAX_DESCRIPTION_BYTES: usize = 4_096;
 
+/// Max assistant name length, in characters.
+///
+/// `assistants.name` is `character varying(255)` (see
+/// `assistant/migrations/202607140100_assistant_schema.sql`), and Postgres
+/// bounds varchar by CHARACTERS — so this is counted in `chars()`, not bytes.
+/// Without this gate a 256-character name overflowed the column and the
+/// resulting `22001` surfaced to the client as a generic 500
+/// SYSTEM_DATABASE_ERROR. The value also matches the
+/// `#[schemars(length(max = 255))]` annotation already on
+/// Create/UpdateAssistantRequest, so OpenAPI consumers see the same number.
+const ASSISTANT_MAX_NAME_CHARS: usize = 255;
+
+/// Reject empty/whitespace-only, over-long, and control/bidi-bearing assistant
+/// names. Extracted so it is Tier-1 unit-testable independently of the HTTP
+/// layer (mirrors `validate_assistant_text_lengths` next door).
+pub(crate) fn validate_assistant_name(name: &str) -> Result<(), AppError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::bad_request(
+            "VALIDATION_ERROR",
+            "Assistant name cannot be empty",
+        ));
+    }
+    if trimmed.chars().count() > ASSISTANT_MAX_NAME_CHARS {
+        return Err(AppError::bad_request(
+            "VALIDATION_ERROR",
+            format!("Assistant name must be ≤ {ASSISTANT_MAX_NAME_CHARS} characters"),
+        ));
+    }
+    // Control / bidi-override / zero-width characters let an assistant name
+    // reorder or hide adjacent text wherever the picker is rendered. Same gate
+    // the username validator applies (13-misc F-06).
+    if trimmed
+        .chars()
+        .any(|c| c.is_control() || crate::modules::auth::username::is_bidi_or_zero_width(c))
+    {
+        return Err(AppError::bad_request(
+            "VALIDATION_ERROR",
+            "Assistant name cannot contain control characters",
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_assistant_text_lengths(
     description: Option<&str>,
     instructions: Option<&str>,
@@ -113,12 +157,7 @@ pub async fn create_user_assistant(
     origin: SyncOrigin,
     Json(mut request): Json<CreateAssistantRequest>,
 ) -> ApiResult<Json<Assistant>> {
-    // Validate name is not empty
-    if request.name.trim().is_empty() {
-        return Err(
-            AppError::bad_request("VALIDATION_ERROR", "Assistant name cannot be empty").into(),
-        );
-    }
+    validate_assistant_name(&request.name)?;
     validate_assistant_text_lengths(
         request.description.as_deref(),
         request.instructions.as_deref(),
@@ -227,6 +266,11 @@ pub async fn update_user_assistant(
     origin: SyncOrigin,
     Json(request): Json<UpdateAssistantRequest>,
 ) -> ApiResult<Json<Assistant>> {
+    // A supplied name is bound-checked before it reaches the varchar(255)
+    // column; an absent one leaves the existing name alone.
+    if let Some(name) = request.name.as_deref() {
+        validate_assistant_name(name)?;
+    }
     validate_assistant_text_lengths(
         request.description.as_deref(),
         request.instructions.as_deref(),
@@ -368,12 +412,7 @@ pub async fn create_template_assistant(
     origin: SyncOrigin,
     Json(mut request): Json<CreateAssistantRequest>,
 ) -> ApiResult<Json<Assistant>> {
-    // Validate name is not empty
-    if request.name.trim().is_empty() {
-        return Err(
-            AppError::bad_request("VALIDATION_ERROR", "Assistant name cannot be empty").into(),
-        );
-    }
+    validate_assistant_name(&request.name)?;
     validate_assistant_text_lengths(
         request.description.as_deref(),
         request.instructions.as_deref(),
@@ -478,6 +517,11 @@ pub async fn update_template_assistant(
     origin: SyncOrigin,
     Json(request): Json<UpdateAssistantRequest>,
 ) -> ApiResult<Json<Assistant>> {
+    // A supplied name is bound-checked before it reaches the varchar(255)
+    // column; an absent one leaves the existing name alone.
+    if let Some(name) = request.name.as_deref() {
+        validate_assistant_name(name)?;
+    }
     validate_assistant_text_lengths(
         request.description.as_deref(),
         request.instructions.as_deref(),
@@ -596,7 +640,7 @@ pub fn get_default_template_assistant_docs(op: TransformOperation) -> TransformO
 mod tests {
     use super::{
         ASSISTANT_MAX_DESCRIPTION_BYTES, ASSISTANT_MAX_INSTRUCTIONS_BYTES,
-        validate_assistant_text_lengths,
+        ASSISTANT_MAX_NAME_CHARS, validate_assistant_name, validate_assistant_text_lengths,
     };
 
     // First inline unit coverage for the assistant module: the shared
@@ -625,6 +669,76 @@ mod tests {
             .expect_err("over-cap description must be rejected");
         assert_eq!(err.error_code(), "VALIDATION_ERROR");
         assert_eq!(err.status_code(), 400);
+    }
+
+    // ─── name validator (D2: >255 overflowed varchar(255) → generic 500) ───
+
+    #[test]
+    fn name_validator_rejects_empty_and_whitespace_only() {
+        for n in ["", "   ", "\t\n"] {
+            let err = validate_assistant_name(n).expect_err("must reject");
+            assert_eq!(err.error_code(), "VALIDATION_ERROR");
+            assert_eq!(err.status_code(), 400);
+        }
+    }
+
+    #[test]
+    fn name_validator_accepts_one_char_and_exactly_max() {
+        assert!(validate_assistant_name("a").is_ok());
+        assert!(
+            validate_assistant_name(&"a".repeat(ASSISTANT_MAX_NAME_CHARS)).is_ok(),
+            "exactly-at-cap name must be accepted (255 fits varchar(255))"
+        );
+    }
+
+    #[test]
+    fn name_validator_rejects_over_max() {
+        // The exact D2 boundary observed against the live instance:
+        // 255 -> 200 OK, 256 -> 500 SYSTEM_DATABASE_ERROR. Now 256 -> 400.
+        for len in [ASSISTANT_MAX_NAME_CHARS + 1, 300, 500] {
+            let err = validate_assistant_name(&"b".repeat(len))
+                .expect_err("over-cap name must be rejected");
+            assert_eq!(err.error_code(), "VALIDATION_ERROR", "len {len}");
+            assert_eq!(err.status_code(), 400, "len {len}");
+        }
+    }
+
+    #[test]
+    fn name_validator_bounds_characters_not_bytes() {
+        // 255 CJK chars = 765 bytes but fits varchar(255), which counts
+        // characters. A byte bound would wrongly reject this.
+        let cjk = "\u{4e2d}".repeat(ASSISTANT_MAX_NAME_CHARS);
+        assert!(
+            cjk.len() > ASSISTANT_MAX_NAME_CHARS,
+            "precondition: multibyte"
+        );
+        assert!(validate_assistant_name(&cjk).is_ok());
+        assert!(validate_assistant_name(&"\u{4e2d}".repeat(ASSISTANT_MAX_NAME_CHARS + 1)).is_err());
+    }
+
+    #[test]
+    fn name_validator_measures_after_trimming() {
+        let padded = format!("  {}  ", "a".repeat(ASSISTANT_MAX_NAME_CHARS));
+        assert!(validate_assistant_name(&padded).is_ok());
+    }
+
+    #[test]
+    fn name_validator_rejects_control_and_bidi_characters() {
+        for n in ["a\u{202E}spoof", "a\u{200B}hidden", "a\u{0007}bell"] {
+            assert_eq!(
+                validate_assistant_name(n)
+                    .expect_err("must reject")
+                    .error_code(),
+                "VALIDATION_ERROR"
+            );
+        }
+    }
+
+    #[test]
+    fn name_validator_allows_ordinary_punctuation() {
+        // Negative control: the gate is length + control chars, not a
+        // character blacklist.
+        assert!(validate_assistant_name("Research Helper (v2) — EN/FR").is_ok());
     }
 
     #[test]

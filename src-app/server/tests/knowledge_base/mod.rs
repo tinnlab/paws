@@ -3,6 +3,8 @@
 //! cross-user leak guard, and the MCP surface. Runs against the real TestServer
 //! harness (spawned server + per-test isolated DB).
 
+mod input_validation_test;
+
 use serde_json::{json, Value};
 use std::time::Duration;
 use uuid::Uuid;

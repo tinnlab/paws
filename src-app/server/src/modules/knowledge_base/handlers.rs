@@ -285,15 +285,50 @@ pub fn list_kbs_docs(op: TransformOperation) -> TransformOperation {
     with_permission::<(KnowledgeBaseUse,)>(op).id("KnowledgeBase.list").summary("List the caller's knowledge bases.").response::<200, Json<Vec<KnowledgeBase>>>()
 }
 
+/// Max knowledge-base name length, in characters.
+///
+/// `knowledge_bases.name` is `text`, so unlike the assistant/user name columns
+/// the DB imposes no bound of its own — an unbounded name was accepted with a
+/// 201 and then rendered in every KB picker. 255 matches the app-level bound
+/// the project + assistant modules already use.
+pub(crate) const KB_MAX_NAME_CHARS: usize = 255;
+
+/// Reject empty/whitespace-only, over-long, and control/bidi-bearing KB names.
+/// Extracted from the handler body so it is Tier-1 unit-testable independently
+/// of the HTTP layer (mirrors `project::handlers::validate_project_name`).
+pub(crate) fn validate_kb_name(name: &str) -> Result<(), AppError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::bad_request("INVALID_NAME", "name is required"));
+    }
+    if trimmed.chars().count() > KB_MAX_NAME_CHARS {
+        return Err(AppError::bad_request(
+            "INVALID_NAME",
+            format!("name must be ≤ {KB_MAX_NAME_CHARS} characters"),
+        ));
+    }
+    // Control / bidi-override / zero-width characters let a KB name reorder or
+    // hide adjacent text wherever the list is rendered. Same gate the username
+    // validator applies (13-misc F-06).
+    if trimmed
+        .chars()
+        .any(|c| c.is_control() || crate::modules::auth::username::is_bidi_or_zero_width(c))
+    {
+        return Err(AppError::bad_request(
+            "INVALID_NAME",
+            "name cannot contain control characters",
+        ));
+    }
+    Ok(())
+}
+
 pub async fn create_kb(
     auth: RequirePermissions<(KnowledgeBaseManage,)>,
     origin: SyncOrigin,
     Json(body): Json<CreateKnowledgeBaseRequest>,
 ) -> ApiResult<Json<KnowledgeBase>> {
     let name = body.name.trim();
-    if name.is_empty() {
-        return Err(AppError::bad_request("INVALID_NAME", "name is required").into());
-    }
+    validate_kb_name(name)?;
     let kb = Repos
         .knowledge_base
         .create(auth.user.id, name, body.description.as_deref())
@@ -326,7 +361,17 @@ pub async fn update_kb(
     Path(id): Path<Uuid>,
     Json(body): Json<UpdateKnowledgeBaseRequest>,
 ) -> ApiResult<Json<KnowledgeBase>> {
-    let name = body.name.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty());
+    // A supplied name is validated; a whitespace-only one keeps the existing
+    // filter-to-None ("leave the name alone") semantics rather than becoming a
+    // 400, so PUTs that only change the description are unaffected.
+    let name = body
+        .name
+        .as_deref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
+    if let Some(n) = name {
+        validate_kb_name(n)?;
+    }
     let desc = Some(body.description.as_deref());
     let kb = Repos
         .knowledge_base
@@ -699,5 +744,74 @@ mod stringified_arg_tests {
                     .map_err(|e| format!("{e}"))
             },
         });
+    }
+}
+
+#[cfg(test)]
+mod name_validator_tests {
+    use super::{KB_MAX_NAME_CHARS, validate_kb_name};
+
+    // ─── name validator (D1/D3: unbounded name reached `text` unchecked) ───
+
+    #[test]
+    fn name_validator_rejects_empty_and_whitespace_only() {
+        for n in ["", "   ", "\t\n"] {
+            let err = validate_kb_name(n).expect_err("must reject {n:?}");
+            assert_eq!(err.error_code(), "INVALID_NAME");
+            assert_eq!(err.status_code(), 400);
+        }
+    }
+
+    #[test]
+    fn name_validator_accepts_one_char_and_exactly_max() {
+        assert!(validate_kb_name("a").is_ok());
+        assert!(
+            validate_kb_name(&"a".repeat(KB_MAX_NAME_CHARS)).is_ok(),
+            "exactly-at-cap name must be accepted"
+        );
+    }
+
+    #[test]
+    fn name_validator_rejects_over_max() {
+        // The D3 repro: a 300-character name used to be accepted with a 201.
+        let err = validate_kb_name(&"a".repeat(300)).expect_err("300 chars must be rejected");
+        assert_eq!(err.error_code(), "INVALID_NAME");
+        assert_eq!(err.status_code(), 400);
+
+        let err = validate_kb_name(&"a".repeat(KB_MAX_NAME_CHARS + 1))
+            .expect_err("max+1 must be rejected");
+        assert_eq!(err.status_code(), 400);
+    }
+
+    #[test]
+    fn name_validator_bounds_characters_not_bytes() {
+        // 255 CJK chars = 765 bytes; `text` + a char bound must accept it.
+        let cjk = "\u{4e2d}".repeat(KB_MAX_NAME_CHARS);
+        assert!(cjk.len() > KB_MAX_NAME_CHARS, "precondition: multibyte");
+        assert!(validate_kb_name(&cjk).is_ok());
+    }
+
+    #[test]
+    fn name_validator_measures_after_trimming() {
+        // Surrounding whitespace must not push an otherwise-legal name over.
+        let padded = format!("  {}  ", "a".repeat(KB_MAX_NAME_CHARS));
+        assert!(validate_kb_name(&padded).is_ok());
+    }
+
+    #[test]
+    fn name_validator_rejects_control_and_bidi_characters() {
+        for n in ["kb\u{202E}spoof", "kb\u{200B}hidden", "kb\u{0007}bell"] {
+            let err = validate_kb_name(n).expect_err("must reject {n:?}");
+            assert_eq!(err.error_code(), "INVALID_NAME");
+        }
+    }
+
+    #[test]
+    fn name_validator_allows_ordinary_punctuation_and_markup_text() {
+        // Negative control: the bound is length + control chars, NOT a
+        // character blacklist. A name containing markup is legal data (the UI
+        // escapes on output); only its LENGTH was ever the defect.
+        assert!(validate_kb_name("Q3 Papers (draft) — v2").is_ok());
+        assert!(validate_kb_name("<script>alert(1)</script>").is_ok());
     }
 }

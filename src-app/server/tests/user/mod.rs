@@ -3,6 +3,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 mod sync_emit_test;
+mod username_validation_test;
 
 // ============================================================================
 // Admin User Management Tests with Permission Checks

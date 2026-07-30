@@ -67,19 +67,27 @@ impl KnowledgeBaseRepository {
         name: &str,
         description: Option<&str>,
     ) -> Result<KnowledgeBase, AppError> {
+        // `idx_knowledge_bases_user_name` is UNIQUE on (user_id, lower(name)),
+        // so a duplicate name used to raise a 23505 that `database_error`
+        // flattened into a generic 500 SYSTEM_DATABASE_ERROR. Guard it with
+        // ON CONFLICT DO NOTHING rather than a SELECT-then-INSERT pre-check:
+        // the guarded write is race-safe (CODING_GUIDELINES §4 — no TOCTOU),
+        // and a swallowed row (`None`) is unambiguously the conflict.
         let row = sqlx::query!(
             r#"
             INSERT INTO knowledge_bases (user_id, name, description)
             VALUES ($1, $2, $3)
+            ON CONFLICT (user_id, lower(name)) DO NOTHING
             RETURNING id
             "#,
             user_id,
             name,
             description,
         )
-        .fetch_one(&self.pool)
+        .fetch_optional(&self.pool)
         .await
-        .map_err(AppError::database_error)?;
+        .map_err(AppError::database_error)?
+        .ok_or_else(|| AppError::conflict("Knowledge base name"))?;
         self.get(user_id, row.id)
             .await?
             .ok_or_else(|| AppError::internal_error("created KB not found"))
@@ -181,7 +189,16 @@ impl KnowledgeBaseRepository {
         )
         .fetch_optional(&self.pool)
         .await
-        .map_err(AppError::database_error)?;
+        // Renaming onto a name the user already holds violates
+        // `idx_knowledge_bases_user_name`. UPDATE has no ON CONFLICT form, so
+        // map the unique violation to a 409 here (the idiom used by
+        // workflow/citations/mcp repositories) instead of a generic 500.
+        .map_err(|e| match e {
+            sqlx::Error::Database(db) if db.is_unique_violation() => {
+                AppError::conflict("Knowledge base name")
+            }
+            other => AppError::database_error(other),
+        })?;
         if updated.is_none() {
             return Ok(None);
         }
