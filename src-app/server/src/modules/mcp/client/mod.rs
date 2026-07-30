@@ -1,4 +1,5 @@
 pub mod traits;
+pub mod errors;
 pub mod stdio;
 pub mod http;
 pub mod auth;

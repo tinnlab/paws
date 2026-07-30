@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use super::auth::{self, OAuthClientConfig, StoredToken};
+use super::errors;
 use super::traits::{McpClient, Prompt, PromptResult, Resource, Tool, ToolResult};
 use crate::common::AppError;
 use crate::modules::mcp::models::{McpServer, TransportType};
@@ -1444,8 +1445,13 @@ impl HttpMcpClient {
             req = req.header("Authorization", format!("Bearer {bearer}"));
         }
 
-        let response = req.send().await
-            .map_err(|e| AppError::internal_error(format!("MCP notification {} failed: {}", method, e)))?;
+        let response = req.send().await.map_err(|e| {
+            errors::upstream_error(
+                &self.server_name,
+                errors::classify_transport_error(&e),
+                format!("notification {method} transport failure: {e}"),
+            )
+        })?;
 
         let status = response.status();
         // 202 Accepted (per spec) is the success case; some servers return 200.
@@ -1454,10 +1460,11 @@ impl HttpMcpClient {
             return Ok(());
         }
         let body = response.text().await.unwrap_or_default();
-        Err(AppError::internal_error(format!(
-            "MCP notification {} returned HTTP {}: {}",
-            method, status, body.chars().take(200).collect::<String>()
-        )))
+        Err(errors::upstream_error(
+            &self.server_name,
+            errors::classify_upstream_status(status.as_u16()),
+            format!("notification {method}: upstream HTTP {status}; body: {body}"),
+        ))
     }
 
     fn get_session_id(&self) -> Option<String> {
@@ -1499,7 +1506,12 @@ impl HttpMcpClient {
         // itself must not recurse — guard via the method name.
         let allow_retry_on_404 = method != "initialize";
         match self.request_once::<T>(method, &params).await {
-            Err(e) if allow_retry_on_404 && e.to_string().contains("HTTP 404") => {
+            // Branch on the STABLE error code, not on the human-readable
+            // message. The message no longer echoes the upstream status (it
+            // would have leaked the upstream body along with it), so a
+            // `contains("HTTP 404")` check here would have silently disabled
+            // this spec-required stale-session retry.
+            Err(e) if allow_retry_on_404 && e.error_code() == errors::CODE_UPSTREAM_NOT_FOUND => {
                 tracing::warn!(
                     "[mcp] server '{}' returned 404 for '{}' — stale session; reinitializing per MCP spec",
                     self.server_name, method
@@ -1550,8 +1562,17 @@ impl HttpMcpClient {
                 request = request.header("Authorization", format!("Bearer {bearer}"));
             }
 
-            let response = request.send().await
-                .map_err(|e| AppError::internal_error(format!("HTTP request failed: {}", e)))?;
+            // Transport-level failure: the request never completed, so there is
+            // no upstream status. `e`'s Display embeds the full request URL —
+            // which for an `is_system` server is deliberately redacted from the
+            // user-facing row — so it is logged, not returned.
+            let response = request.send().await.map_err(|e| {
+                errors::upstream_error(
+                    &self.server_name,
+                    errors::classify_transport_error(&e),
+                    format!("{method} transport failure: {e}"),
+                )
+            })?;
 
             let status = response.status();
 
@@ -1582,14 +1603,27 @@ impl HttpMcpClient {
                 .to_string();
 
             let id_for_sse = id;
-            let response_text = response.text().await
-                .map_err(|e| AppError::internal_error(format!("Failed to read response: {}", e)))?;
+            let response_text = response.text().await.map_err(|e| {
+                errors::upstream_error(
+                    &self.server_name,
+                    errors::classify_transport_error(&e),
+                    format!("{method}: failed to read response body: {e}"),
+                )
+            })?;
 
             if !status.is_success() {
-                return Err(AppError::internal_error(format!(
-                    "MCP server returned HTTP {}: {}",
-                    status, response_text.chars().take(200).collect::<String>()
-                )));
+                // The upstream body is third-party content — for a built-in
+                // loopback server it is our own internal diagnostic ("… not
+                // initialized (enabled = false or boot probes failed)"), for
+                // an external one it is whatever that operator chose to emit.
+                // Neither belongs in this API's response body. It goes to the
+                // log in full; the client gets the class (503/504/502) plus a
+                // stable message and a trace_id.
+                return Err(errors::upstream_http_error(
+                    &self.server_name,
+                    status.as_u16(),
+                    &response_text,
+                ));
             }
             break (status, content_type, (id_for_sse, response_text));
         };
