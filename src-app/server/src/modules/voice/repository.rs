@@ -235,7 +235,23 @@ impl VoiceModelRepository {
         )
         .fetch_one(&self.pool)
         .await
-        .map_err(AppError::database_error)?;
+        // `voice_models` carries TWO unique keys and the ON CONFLICT above
+        // guards only the first:
+        //   * `voice_models_filename_key` UNIQUE (filename)  <- handled above
+        //   * `voice_models_one_name`     UNIQUE (name)      <- lands here
+        //
+        // `upload_model` derives the filename from the UPLOAD's extension while
+        // `name` is a separate form field, so uploading the same name as
+        // `x.bin` then `x.gguf` yields DIFFERENT filenames: the ON CONFLICT
+        // misses, the INSERT proceeds, and `voice_models_one_name` fires. That
+        // 23505 used to flatten into a 500 SYSTEM_DATABASE_ERROR. A second
+        // ON CONFLICT target is not expressible on one statement, so map it.
+        .map_err(|e| match e {
+            sqlx::Error::Database(db) if db.is_unique_violation() => {
+                AppError::conflict("Voice model name")
+            }
+            other => AppError::database_error(other),
+        })?;
         Ok(row)
     }
 

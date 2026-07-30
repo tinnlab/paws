@@ -7,6 +7,7 @@ mod ldap_test;
 mod oauth_test;
 // Self-service profile (update profile + change password + has_password).
 mod profile_self_service_test;
+mod provider_uniqueness_test;
 // httpOnly refresh cookies + rotation grace + expiry recovery + prune.
 mod session_refresh_test;
 // Admin-configurable session settings (lifetimes) CRUD + mint-time read.

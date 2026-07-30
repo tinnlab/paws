@@ -30,6 +30,28 @@ pub struct LlmModelRepository {
     pool: PgPool,
 }
 
+/// Map a `llm_models_provider_id_name_unique` violation to a 409 instead of
+/// letting `database_error` flatten it into a 500 SYSTEM_DATABASE_ERROR.
+///
+/// Both the create INSERT and the rename `UPDATE llm_models SET name = ...` can
+/// trip `(provider_id, name)`. The INSERT is inside a shared query fn and the
+/// rename is one statement of a multi-column transaction, so neither has a
+/// convenient `ON CONFLICT` form — mapping the 23505 at the single wrapper both
+/// paths already funnel through is the narrowest correct fix. Every OTHER sqlx
+/// failure still flows to `database_error`, so genuine internal faults are not
+/// downgraded.
+///
+/// The sibling upload path (`handlers/uploads.rs`) already pre-checks for a
+/// duplicate; plain CRUD create/update never got the corresponding treatment.
+fn unique_name_conflict(err: sqlx::Error) -> AppError {
+    match err {
+        sqlx::Error::Database(db) if db.is_unique_violation() => {
+            AppError::conflict("Model name for this provider")
+        }
+        other => AppError::database_error(other),
+    }
+}
+
 impl LlmModelRepository {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
@@ -39,7 +61,7 @@ impl LlmModelRepository {
     pub async fn create(&self, request: CreateLlmModelRequest) -> Result<LlmModel, AppError> {
         create_llm_model(&self.pool, request)
             .await
-            .map_err(AppError::database_error)
+            .map_err(unique_name_conflict)
     }
 
     /// Get LLM model by ID
@@ -83,7 +105,7 @@ impl LlmModelRepository {
     ) -> Result<Option<LlmModel>, AppError> {
         update_llm_model(&self.pool, model_id, request)
             .await
-            .map_err(AppError::database_error)
+            .map_err(unique_name_conflict)
     }
 
     /// Delete an LLM model

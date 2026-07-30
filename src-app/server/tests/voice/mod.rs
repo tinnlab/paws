@@ -38,6 +38,7 @@ mod streaming_test;
 mod transcribe_test;
 mod version_download_test;
 mod version_update_test;
+mod uniqueness_test;
 
 /// The two admin permissions the voice admin surface gates on. Admins hold these
 /// via the `*` wildcard in production; a test grants them explicitly.

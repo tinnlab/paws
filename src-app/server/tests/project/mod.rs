@@ -19,5 +19,6 @@ mod mcp_test;
 mod permissions_test;
 mod search_test;
 mod sync_emit_test;
+mod uniqueness_test;
 
 mod helpers;
