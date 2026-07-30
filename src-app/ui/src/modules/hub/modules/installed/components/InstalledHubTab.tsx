@@ -15,14 +15,24 @@ import {
   message,
 } from '@ziee/kit'
 import { ApiClient } from '@/api-client'
+import { Permissions } from '@/api-client/permissions'
+import { usePermission } from '@/core/permissions'
 import { emitMcpServerDeleted } from '@/modules/mcp/events/emitters'
-import { emitAssistantDeleted } from '@/modules/assistant/events/emitters'
+import {
+  emitAssistantDeleted,
+  emitAssistantTemplateDeleted,
+} from '@/modules/assistant/events/emitters'
 import type { HubInstalledRow } from '@/api-client/types'
 import { Skill } from '@/modules/skill/stores/skill'
 import { Workflow } from '@/modules/workflow/stores/workflow'
 import { HubInstalled } from '@/modules/hub/stores/hub-installed-store'
 import { HubAssistants } from '@/modules/hub/modules/assistants/stores/hub-assistants-store'
 import { HubMcpServers } from '@/modules/hub/modules/mcp/stores/hub-mcp-servers-store'
+import {
+  removeUnsupportedReason,
+  resolveRemoveTarget,
+  type RemoveTarget,
+} from '@/modules/hub/modules/installed/removeTarget'
 
 // Three section cards, data-driven so the row-render loop stays
 // flat. Icons match the per-category icon used elsewhere in the
@@ -76,6 +86,22 @@ export function InstalledHubTab() {
   const error = HubInstalled.error
   const catalogVersion = HubInstalled.catalogVersion
   const [busyId, setBusyId] = useState<string | null>(null)
+
+  // Every permission a Remove target can require, resolved once. `usePermission`
+  // is a hook, so it cannot be called per-row inside the `rows.map()` below —
+  // the hook count would change with the row count. Keyed lookup instead.
+  // Keep in sync with `REMOVE_PERMISSIONS` (asserted by removeTarget.test.ts).
+  const canRemoveByPermission: Record<string, boolean> = {
+    [Permissions.LlmModelsDelete]: usePermission(Permissions.LlmModelsDelete),
+    [Permissions.AssistantsDelete]: usePermission(Permissions.AssistantsDelete),
+    [Permissions.AssistantsTemplateDelete]: usePermission(
+      Permissions.AssistantsTemplateDelete,
+    ),
+    [Permissions.McpServersDelete]: usePermission(Permissions.McpServersDelete),
+    [Permissions.McpServersAdminDelete]: usePermission(
+      Permissions.McpServersAdminDelete,
+    ),
+  }
 
   // Group rows by hub_category. Done in useMemo so the three cards
   // don't re-filter on every render.
@@ -162,41 +188,47 @@ export function InstalledHubTab() {
   // hub_entities tracking row — so we don't need a separate untrack call.
   // Models: pass `delete_file=true` so the on-disk weights are wiped too,
   // matching the symmetric "Remove = gone" semantic across all categories.
-  const remove = async (row: HubInstalledRow) => {
+  //
+  // SCOPE DISPATCH — the endpoint comes from `resolveRemoveTarget(row)`, the
+  // SAME call the render gate below uses, so the button's enablement and the
+  // request it fires can never disagree. A system-scoped install (template
+  // assistant / system MCP server) is NOT reachable through the user-scoped
+  // route: `delete_user_assistant` 403s on `created_by != caller` and
+  // `delete_user_mcp_server` filters `AND user_id = $2 AND is_system = false`.
+  // Sending those rows down the user route made Remove permanently dead — see
+  // the header comment in `removeTarget.ts`.
+  const remove = async (row: HubInstalledRow, target: RemoveTarget) => {
     setBusyId(row.entity_id)
     try {
-      if (row.hub_category === 'mcp_server') {
-        await ApiClient.McpServer.delete({ id: row.entity_id })
-        await emitMcpServerDeleted(row.entity_id)
-      } else if (row.hub_category === 'assistant') {
-        await ApiClient.Assistant.delete({ id: row.entity_id })
-        await emitAssistantDeleted(row.entity_id)
-      } else if (row.hub_category === 'model') {
-        // delete_file=true wipes on-disk weights too (the handler's
-        // default, but explicit here so the intent is obvious).
-        // Skipping the llm_model.deleted emit — it needs providerId,
-        // which the hub row doesn't carry; downstream stores will
-        // pick up the change on next navigation, and the
-        // `loadInstalled` reload below refreshes this tab.
-        await ApiClient.LlmModel.delete({
-          model_id: row.entity_id,
-          delete_file: true,
-        })
-      } else if (row.hub_category === 'skill') {
-        if (row.is_system) {
-          await ApiClient.SkillSystem.delete({ id: row.entity_id })
-        } else {
-          await ApiClient.Skill.delete({ id: row.entity_id })
-        }
-      } else if (row.hub_category === 'workflow') {
-        if (row.is_system) {
-          await ApiClient.Workflow.deleteSystem({ id: row.entity_id })
-        } else {
-          await ApiClient.Workflow.delete({ id: row.entity_id })
-        }
-      } else {
-        // Unhandled category — surface an error instead of a false success.
-        throw new Error(`Remove not supported for ${row.hub_category}`)
+      switch (target.kind) {
+        case 'mcp-server':
+          await ApiClient.McpServer.delete({ id: row.entity_id })
+          await emitMcpServerDeleted(row.entity_id)
+          break
+        case 'mcp-server-system':
+          await ApiClient.McpServerSystem.delete({ id: row.entity_id })
+          await emitMcpServerDeleted(row.entity_id)
+          break
+        case 'assistant':
+          await ApiClient.Assistant.delete({ id: row.entity_id })
+          await emitAssistantDeleted(row.entity_id)
+          break
+        case 'assistant-template':
+          await ApiClient.AssistantTemplate.delete({ id: row.entity_id })
+          await emitAssistantTemplateDeleted(row.entity_id)
+          break
+        case 'model':
+          // delete_file=true wipes on-disk weights too (the handler's
+          // default, but explicit here so the intent is obvious).
+          // Skipping the llm_model.deleted emit — it needs providerId,
+          // which the hub row doesn't carry; downstream stores will
+          // pick up the change on next navigation, and the
+          // `loadInstalled` reload below refreshes this tab.
+          await ApiClient.LlmModel.delete({
+            model_id: row.entity_id,
+            delete_file: true,
+          })
+          break
       }
       message.success(`Removed ${row.name || row.hub_id}`)
       await HubInstalled.loadInstalled()
@@ -279,6 +311,18 @@ export function InstalledHubTab() {
                       return installedAtIso
                     }
                   })()
+                  // Which DELETE endpoint this row needs + the permission that
+                  // endpoint enforces. `null` → no Remove endpoint exists for
+                  // the category at all.
+                  const removeTarget = resolveRemoveTarget(row)
+                  // Never render a Remove the caller can't complete: without the
+                  // endpoint's permission the click could only ever 403
+                  // (CODING_GUIDELINES §13). Suppressing rather than disabling
+                  // matches the template-assistant admin list and the backend's
+                  // own `HubInstalledRow.is_system` doc comment.
+                  const canRemove =
+                    removeTarget !== null &&
+                    canRemoveByPermission[removeTarget.permission] === true
                   return (
                     <Fragment key={`${row.entity_type}:${row.entity_id}`}>
                       {i > 0 && <Separator className="!my-3" />}
@@ -360,28 +404,47 @@ export function InstalledHubTab() {
                               </Button>
                             </Confirm>
                           )}
-                          <Confirm
-                            data-testid={`hub-installed-remove-confirm-${row.entity_id}`}
-                            title="Remove this install?"
-                            description={
-                              row.hub_category === 'model'
-                                ? `Delete "${row.name || row.hub_id}" and remove the on-disk model files. This can't be undone.`
-                                : `Delete "${row.name || row.hub_id}". This can't be undone.`
-                            }
-                            okText="Remove"
-                            okButtonProps={{ danger: true }}
-                            cancelText="Cancel"
-                            onConfirm={() => remove(row)}
-                          >
-                            <Button
-                              variant="ghost"
-                              icon={<Trash2 />}
-                              loading={busyId === row.entity_id}
-                              data-testid={`hub-installed-remove-btn-${row.entity_id}`}
+                          {removeTarget === null ? (
+                            // Category with no Remove endpoint — explain rather
+                            // than offering a button that throws on click.
+                            <Tooltip
+                              content={removeUnsupportedReason(
+                                row.hub_category,
+                              )}
                             >
-                              Remove
-                            </Button>
-                          </Confirm>
+                              <Button
+                                variant="ghost"
+                                icon={<Trash2 />}
+                                disabled
+                                data-testid={`hub-installed-remove-disabled-btn-${row.entity_id}`}
+                              >
+                                Remove
+                              </Button>
+                            </Tooltip>
+                          ) : canRemove ? (
+                            <Confirm
+                              data-testid={`hub-installed-remove-confirm-${row.entity_id}`}
+                              title="Remove this install?"
+                              description={
+                                row.hub_category === 'model'
+                                  ? `Delete "${row.name || row.hub_id}" and remove the on-disk model files. This can't be undone.`
+                                  : `Delete "${row.name || row.hub_id}". This can't be undone.`
+                              }
+                              okText="Remove"
+                              okButtonProps={{ danger: true }}
+                              cancelText="Cancel"
+                              onConfirm={() => remove(row, removeTarget)}
+                            >
+                              <Button
+                                variant="ghost"
+                                icon={<Trash2 />}
+                                loading={busyId === row.entity_id}
+                                data-testid={`hub-installed-remove-btn-${row.entity_id}`}
+                              >
+                                Remove
+                              </Button>
+                            </Confirm>
+                          ) : null}
                         </div>
                       </div>
                     </Fragment>
