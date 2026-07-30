@@ -190,34 +190,80 @@ pub async fn get_system_default(pool: &PgPool) -> Result<Option<RuntimeVersion>,
     }))
 }
 
-/// Clear the system-default flag on every version (there is at most one).
-pub async fn clear_system_default(pool: &PgPool) -> Result<(), sqlx::Error> {
+/// Advisory-lock key serializing every "promote this version to system
+/// default" operation across the whole cluster (so it also holds between two
+/// server processes sharing one database, which a per-process mutex would not).
+/// Arbitrary but stable; the only requirement is that no other subsystem picks
+/// the same number.
+const PROMOTE_DEFAULT_LOCK_KEY: i64 = 0x7601_0001_0000_0001;
+
+/// Promote `version_id` to THE system default: clear whatever holds the flag
+/// and set it on this row, atomically and serialized.
+///
+/// Returns `false` (with the transaction rolled back, so nothing is cleared)
+/// when `version_id` does not exist — the caller turns that into a 404.
+///
+/// WHY A TRANSACTION IS NECESSARY BUT NOT SUFFICIENT
+///
+/// The previous shape ran `clear_system_default` and then `set_system_default`
+/// as two autocommitted statements on a bare pool. `voice_runtime_versions_one_default`
+/// is `UNIQUE (is_system_default) WHERE is_system_default = true`, so two
+/// concurrent promotions interleaving as
+/// `clear(A) · clear(B) · set(A) · set(B)` made the last statement trip 23505,
+/// which `AppError::database_error` flattened into `500 SYSTEM_DATABASE_ERROR`
+/// — and the caller was left believing it had set a default it had not.
+///
+/// Wrapping the pair in a transaction alone does NOT fix it. Under READ
+/// COMMITTED the second transaction's `clear` runs against a snapshot taken
+/// before the first transaction committed, so it never sees (and therefore
+/// never clears) the row the winner just set; its `set` then collides exactly
+/// as before. Serializing the whole read-modify-write is the actual
+/// requirement, so the transaction opens by taking a transaction-scoped
+/// advisory lock: the loser waits, then re-reads fresh (each statement in READ
+/// COMMITTED takes a new snapshot), clears the winner's row, and sets its own.
+/// Both callers succeed and exactly one default survives.
+pub async fn promote_to_system_default(
+    pool: &PgPool,
+    version_id: Uuid,
+) -> Result<bool, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+
+    // Serialize against every other promotion. Released automatically when the
+    // transaction commits or rolls back (including on a dropped connection).
+    sqlx::query!("SELECT pg_advisory_xact_lock($1)", PROMOTE_DEFAULT_LOCK_KEY)
+        .execute(&mut *tx)
+        .await?;
+
     sqlx::query!(
         r#"UPDATE voice_runtime_versions
            SET is_system_default = false
-           WHERE is_system_default = true"#,
-    )
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
-/// Set (or clear) the system-default flag on a specific version.
-pub async fn set_system_default(
-    pool: &PgPool,
-    version_id: Uuid,
-    is_default: bool,
-) -> Result<(), sqlx::Error> {
-    sqlx::query!(
-        r#"UPDATE voice_runtime_versions
-           SET is_system_default = $2
-           WHERE id = $1"#,
+           WHERE is_system_default = true AND id <> $1"#,
         version_id,
-        is_default
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
-    Ok(())
+
+    let promoted = sqlx::query_scalar!(
+        r#"UPDATE voice_runtime_versions
+           SET is_system_default = true
+           WHERE id = $1
+           RETURNING id"#,
+        version_id,
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    .is_some();
+
+    if !promoted {
+        // Unknown id: roll back so a bad request cannot leave the deployment
+        // with NO default (the old code's pre-check kept that safe only
+        // because it ran before the clear).
+        tx.rollback().await?;
+        return Ok(false);
+    }
+
+    tx.commit().await?;
+    Ok(true)
 }
 
 /// Delete a runtime version row.

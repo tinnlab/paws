@@ -17,6 +17,9 @@ pub(crate) mod mock_release_server;
 mod sync_emit_test;
 // Slug → reverse-DNS rewrite for legacy hub_entities rows.
 mod migration_test;
+// R2 — concurrent system-skill / system-workflow installs racing inside
+// `install_system_*_tx` (TOCTOU: SELECT prior → DELETE → INSERT).
+mod install_race_test;
 
 // ============================================================================
 // Hub Models Tests

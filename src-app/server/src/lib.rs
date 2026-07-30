@@ -356,6 +356,22 @@ pub mod test_internals {
     };
     // `resolve_optional_secret` is already re-exported at the crate root
     // (see the `pub use common::secret::{...}` above) — tests use that path.
+
+    // Skill/workflow install writes, so the TOCTOU concurrency suite
+    // (`tests/skill/toctou_race_test.rs`, `tests/hub/install_race_test.rs`) can
+    // fire the REAL repository fn / REAL install transaction from N tasks at
+    // once instead of mirroring their SQL. Driving them directly is what makes
+    // those races deterministic: the HTTP entry points also extract a bundle to
+    // a shared on-disk path, whose own (separate) races would otherwise mask
+    // the database one under test.
+    pub use crate::modules::hub::handlers::{
+        SystemSkillInstallResult, SystemWorkflowInstallResult, install_system_skill_tx,
+        install_system_workflow_tx,
+    };
+    pub use crate::modules::skill::models::CreateSkill;
+    pub use crate::modules::skill::repository::insert as skill_repository_insert;
+    pub use crate::modules::workflow::models::CreateWorkflow;
+    pub use crate::modules::workflow::repository::insert as workflow_repository_insert;
 }
 
 // Re-export axum types for route building

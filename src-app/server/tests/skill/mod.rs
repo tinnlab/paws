@@ -27,6 +27,7 @@ mod install_from_hub;
 mod listing_in_chat;
 mod skill_mcp_load;
 mod sync_emit_test;
+mod toctou_race_test;
 mod bundle_security_http;
 mod real_llm;
 mod real_llm_test;
