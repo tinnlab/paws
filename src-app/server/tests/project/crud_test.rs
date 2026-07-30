@@ -90,8 +90,15 @@ async fn name_unique_per_user_but_allowed_across_users() {
     // Different user — same name is fine.
     helpers::create_project(&server, &user_b, "Shared Name").await;
 
-    // Same user — duplicate name should be rejected by the unique
-    // index. Surfaced as 4xx (Postgres unique-violation → bad_request).
+    // Same user — duplicate name is rejected by `projects_user_name_unique`
+    // and must surface as a 409 RESOURCE_CONFLICT.
+    //
+    // This assertion used to accept `is_client_error() || is_server_error()`,
+    // with a comment claiming the unique violation became a `bad_request`. It
+    // did not: the bare INSERT flattened the 23505 into a
+    // `500 SYSTEM_DATABASE_ERROR`, and the `is_server_error()` arm made this
+    // test PASS on exactly the defect it was supposed to catch. Pin the real
+    // contract so the 500 cannot come back.
     let dup_resp = reqwest::Client::new()
         .post(server.api_url("/projects"))
         .header("Authorization", format!("Bearer {}", user_a.token))
@@ -99,10 +106,17 @@ async fn name_unique_per_user_but_allowed_across_users() {
         .send()
         .await
         .unwrap();
-    assert!(
-        dup_resp.status().is_client_error() || dup_resp.status().is_server_error(),
-        "duplicate name within one user must NOT succeed (got {})",
-        dup_resp.status()
+    let dup_status = dup_resp.status();
+    let dup_body: serde_json::Value = dup_resp.json().await.unwrap_or(serde_json::Value::Null);
+    assert_eq!(
+        dup_status,
+        StatusCode::CONFLICT,
+        "duplicate name within one user must be a 409 (body: {dup_body})"
+    );
+    assert_eq!(
+        dup_body.get("error_code").and_then(|v| v.as_str()),
+        Some("RESOURCE_CONFLICT"),
+        "duplicate name must carry the shared conflict code (body: {dup_body})"
     );
 }
 

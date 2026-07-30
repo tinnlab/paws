@@ -10,6 +10,7 @@ mod repo_files_real_test;
 mod storage_test;
 mod sync_emit_test;
 mod upload_test;
+mod uniqueness_test;
 
 use reqwest::StatusCode;
 use serde_json::json;

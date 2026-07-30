@@ -27,6 +27,16 @@ impl ProjectRepository {
         // CreateProjectRequest drops its mcp_* fields entirely (migration 78
         // + project↔mcp inversion). Clients customize MCP via a separate
         // PUT /api/projects/{id}/mcp-settings call after create.
+        // `projects_user_name_unique` is UNIQUE on (user_id, name), so reusing a
+        // name the caller already holds used to raise a 23505 that
+        // `database_error` flattened into a generic 500 SYSTEM_DATABASE_ERROR.
+        // Guard it with ON CONFLICT DO NOTHING rather than a SELECT-then-INSERT
+        // pre-check: the guarded write is race-safe (CODING_GUIDELINES §4 — no
+        // TOCTOU), and a swallowed row (`None`) is unambiguously the conflict.
+        //
+        // Note the asymmetry this closes: the rename path (handlers.rs
+        // `update_project`) and the duplicate path (`duplicate_in_tx`) each got
+        // a uniqueness pre-check in earlier audits; `create` never did.
         let project = sqlx::query_as!(
             Project,
             r#"
@@ -35,6 +45,7 @@ impl ProjectRepository {
                 default_assistant_id, default_model_id
             )
             VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (user_id, name) DO NOTHING
             RETURNING
                 id, user_id, name, description, instructions,
                 default_assistant_id as "default_assistant_id: _",
@@ -49,9 +60,10 @@ impl ProjectRepository {
             req.default_assistant_id,
             req.default_model_id,
         )
-        .fetch_one(&self.pool)
+        .fetch_optional(&self.pool)
         .await
-        .map_err(AppError::database_error)?;
+        .map_err(AppError::database_error)?
+        .ok_or_else(|| AppError::conflict("Project name"))?;
 
         Ok(project)
     }
