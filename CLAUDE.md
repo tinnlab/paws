@@ -1748,6 +1748,69 @@ cargo test --test integration_tests citations:: -- --test-threads=1
 
 ---
 
+## Live UI exploration rig (`live-ui-explore`)
+
+A continuously-running auditor that pokes at a **running** ziee with a vision
+model, given **no knowledge of the app**: no route list, no selectors, no
+scripted journeys. It screenshots, picks one action, does it, and watches what
+happens. Everything is in `agent-kit/skills/live-ui-explore/` — read its
+`SKILL.md` before changing anything there.
+
+```bash
+cd agent-kit/skills/live-ui-explore
+bash setup-rig.sh --rev origin/main          # worktree + config + build + serve
+bash explore-loop.sh                         # the loop
+bash watchdog.sh --loop 20                   # health + coverage, every 20 min
+node api-coverage.mjs                        # % of the API actually exercised
+```
+
+Needs a vision-capable OpenAI-compatible endpoint (`EXPLORE_LLM_URL`,
+`EXPLORE_MODEL`) and a Postgres container. It uses a **dedicated database** and a
+non-default port, so it never touches your dev DB.
+
+### Why it exists — and why NOT to add scripted journeys
+
+Its predecessor (`live-ui-audit`, still in the tree, **superseded**) drove a
+hardcoded route list. Of its 19 interactions ~17 were the chat composer, so
+across 149 cycles it *rendered* `/projects`, `/knowledge` and `/settings/users`
+but never created a project, added a group or scheduled a task. Every write path
+went unexercised.
+
+Adding scripted journeys would not have fixed that: a journey only finds bugs in
+the path someone thought to script — the same failure mode as a hand-written
+static-analysis guard, which this repo has paid for twice (the activity rail's
+20 non-converging audit rounds; `gate-ui`'s port guard). Exploration is the fix.
+
+### Reading its output — volume is NOT signal
+
+Findings land in `$STATE/FINDINGS_LEDGER.md` (deduped, machine-verified only),
+with recurrence counts in `seen.json`. Two rules, both learned expensively:
+
+- **A finding class that dominates is probably the harness.** Three times, a
+  high-volume class was a rig bug — once 458 of ~600 findings, on buttons that
+  hand-probe at 29-67 ms. `watchdog.sh` now shouts when any one class exceeds
+  half the total. Hand-probe before believing it.
+- **The real defects came from the low-volume tail** (2-5 occurrences), and
+  entries marked `MODEL VISION ONLY` are unverified leads, deliberately kept out
+  of the ledger.
+
+`api-coverage.mjs` is the honest coverage measure: route coverage looks healthy
+while writes go untouched. It diffs actually-hit endpoints against
+`openapi.json`, split by method — a run that is all `GET` is a read-only tour.
+
+### It accumulates state on purpose
+
+No per-cycle database reset: a real deployment runs for years without a wipe, and
+the bugs that only appear after accumulation are invisible to a rig that starts
+clean. `RESET_DB=1` restores the old behaviour.
+
+The consequence is real. The explorer eventually renamed the admin account —
+through the normal profile UI — to `admin' OR '1'='1; DROP TABLE users;--`,
+locking itself out. (The injection did **not** execute; that was a missing
+username validation, since fixed.) `explore-loop.sh` therefore restores ACCESS
+without restoring STATE: it re-applies a captured admin identity keyed on the
+primary key, and logs loudly when it fires.
+
 ## UI Build Gate — the visual-testing exit condition
 
 The component gallery (`src-app/ui/src/dev/gallery/`, mirrored in
