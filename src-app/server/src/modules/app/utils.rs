@@ -1,50 +1,21 @@
 use super::types::SetupAdminRequest;
 use crate::common::AppError;
+// Shared username rules — ONE definition for first-run setup and every
+// runtime username write path (register / profile / admin-create / admin-edit).
+use crate::modules::auth::username::{is_bidi_or_zero_width, validate_username};
 use axum::http::StatusCode;
 
 // =====================================================
 // Validation Functions
 // =====================================================
 
-/// True for Unicode bidirectional-control / zero-width / format characters that
-/// `char::is_control()` (category Cc only) misses. These enable Trojan-source /
-/// homoglyph display spoofing (e.g. U+202E RIGHT-TO-LEFT OVERRIDE reordering an
-/// admin's visible username), so they are rejected in user/display names.
-/// Closes 13-misc F-06.
-fn is_bidi_or_zero_width(c: char) -> bool {
-    matches!(c,
-        '\u{200B}'..='\u{200F}'   // zero-width space/joiner/non-joiner + LRM/RLM
-        | '\u{202A}'..='\u{202E}' // bidi embeddings + LRO/RLO override
-        | '\u{2060}'..='\u{2064}' // word joiner + invisible operators
-        | '\u{2066}'..='\u{2069}' // bidi isolates
-        | '\u{061C}'              // arabic letter mark
-        | '\u{FEFF}'              // zero-width no-break space / BOM
-    )
-}
-
 pub fn validate_setup_request(req: &SetupAdminRequest) -> Result<(), (StatusCode, AppError)> {
-    // Username validation. Closes 13-misc F-06 (Low): reject control
-    // chars (incl. RTL override U+202E) and whitespace, which can be
-    // used to spoof admin display names in the UI.
-    if req.username.len() < 3 || req.username.len() > 100 {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            AppError::bad_request("INVALID_USERNAME", "Username must be 3-100 characters"),
-        ));
-    }
-    if req
-        .username
-        .chars()
-        .any(|c| c.is_control() || c.is_whitespace() || is_bidi_or_zero_width(c))
-    {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            AppError::bad_request(
-                "INVALID_USERNAME",
-                "Username cannot contain whitespace or control characters",
-            ),
-        ));
-    }
+    // Username validation, delegated to the shared `auth::username` gate so
+    // first-run setup and the four runtime username write paths (register /
+    // profile / admin-create / admin-edit) cannot drift apart. Keeps the
+    // long-standing 3-100 bound + control/whitespace/bidi rejection (13-misc
+    // F-06) and adds the charset allowlist.
+    validate_username(&req.username).map_err(AppError::to_api_error)?;
 
     // Display name: same control-char gate when present.
     if let Some(dn) = &req.display_name {

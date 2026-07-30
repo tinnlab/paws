@@ -105,12 +105,15 @@ pub async fn create_user(
     auth: RequirePermissions<(UsersCreate,)>,
     Extension(ctx): Extension<AuthContext>,
     origin: SyncOrigin,
-    Json(request): Json<CreateUserRequest>,
+    Json(mut request): Json<CreateUserRequest>,
 ) -> ApiResult<Json<User>> {
-    // Validate username and email format
-    if request.username.is_empty() {
-        return Err(AppError::bad_request("VALIDATION_ERROR", "Username cannot be empty").into());
-    }
+    // Validate username and email format. The username runs through the
+    // shared `validate_username` gate (length ≤ the varchar(100) column, no
+    // whitespace/control/bidi, alnum + `. _ - @ +` only) — the previous
+    // is_empty() check let a 500-character name reach Postgres as a generic
+    // 500 and an injection-shaped name be persisted verbatim.
+    request.username = request.username.trim().to_string();
+    crate::modules::auth::username::validate_username(&request.username)?;
     if request.email.is_empty() {
         return Err(AppError::bad_request("VALIDATION_ERROR", "Email cannot be empty").into());
     }
@@ -235,8 +238,17 @@ pub async fn update_user(
     Extension(ctx): Extension<AuthContext>,
     Path(user_id): Path<Uuid>,
     origin: SyncOrigin,
-    Json(request): Json<UpdateUserRequest>,
+    Json(mut request): Json<UpdateUserRequest>,
 ) -> ApiResult<Json<User>> {
+    // Trim + validate the username before anything touches the DB. This path
+    // previously had NO username validation whatsoever: an empty string, a
+    // 500-character string (→ varchar(100) overflow → generic 500) and an
+    // injection-shaped string were all accepted.
+    if let Some(name) = request.username.as_mut() {
+        *name = name.trim().to_string();
+        crate::modules::auth::username::validate_username(name)?;
+    }
+
     // Check if user exists and get user data
     let user = ctx.user()
         .get_by_id(user_id)

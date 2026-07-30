@@ -59,7 +59,7 @@ pub mod session_settings {
 pub use ziee_auth::auth::{
     AuthRepository, AuthResponse, JwtService, SessionSettingsRepository, auth_admin_routes,
     auth_routes, context, cookie, events, hash_password, jwt, password, providers, refresh_tokens,
-    repository, trust_forwarded_headers, types,
+    repository, trust_forwarded_headers, types, username,
 };
 
 use aide::axum::ApiRouter;

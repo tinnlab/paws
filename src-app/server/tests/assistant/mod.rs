@@ -5,6 +5,7 @@ use uuid::Uuid;
 // Integration tests for Assistant module
 
 mod sync_emit_test;
+mod input_validation_test;
 // Integration tests for Assistant module
 
 mod message_attribution_test;
