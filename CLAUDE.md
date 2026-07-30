@@ -2057,6 +2057,46 @@ cargo test &  # Output is lost or fragmented
    - 245/256 tests pass
    - 11 failures in `llm_model::download_*` tests (expected)
 
+#### Known test-environment floor — CLASSIFY before claiming a regression
+
+This shared 192-core box produces a **recurring set of environmental failures
+that are NOT code/merge regressions**. Do NOT re-derive or complain about these
+every run — classify each failure into A/B/C first, and only treat
+Category-B-on-a-quiet-box + non-A/B/C failures as candidate real regressions.
+Never mark an A/B failure "green" by soft-skip without naming the category +
+its error signature.
+
+- **A — genuinely blocked/missing deps (verified from log signatures; cannot pass
+  here regardless of the diff):**
+  - **llm / local-runtime (~73)** — SSRF guard blocks the loopback LiteLLM bridge
+    on model-refresh: `refresh_provider_models … blocked url … loopback … (::1); SSRF`.
+    The bridge is `localhost:4000`. NOTE a debug loopback seam exists for the
+    *discover* path (`LLM_DISCOVER_ALLOW_LOOPBACK`, mirroring
+    `WEB_SEARCH_FETCH_ALLOW_LOOPBACK`) but **NOT yet for `refresh_provider_models`** —
+    until that seam is added these are expected-blocked.
+  - **hub (12)** — needs real GitHub (`api.github.com/.../releases/latest` → 403/404).
+    `tests/.env.test` ships a **placeholder** `GITHUB_TOKEN=ghp_xxx…`; export a real
+    read-only token or expect-skip.
+  - **07-mcp external-approval** — uses a deliberately fake host; SSRF correctly
+    blocks (`DNS resolution failed for host 'nonexistent.invalid'`). Expected.
+  - **settings sandbox-rootfs-versions / sandbox `tier6_version_swap`** — need
+    multiple rootfs versions installed; only `minimal` is present. Expected-skip
+    unless the full rootfs is staged.
+- **B — shared-box contention (real, but "box overloaded," NOT "service missing"):**
+  a full parallel run showed **~185k `ERR_CONNECTION_REFUSED`** — test servers
+  starved because many other worktrees were running suites at the same time
+  (this box is shared with CytoAnalyst's trees too), hitting the heaviest
+  **chat (real-LLM streaming)** cluster hardest. Do NOT mis-frame this as
+  "bridge saturation" or "env floor."
+  **Trustworthy signal = a quiet box with `--workers=1` / low `--test-threads`.**
+  Diagnose contention by **concurrent cargo/playwright processes and `%idle`,
+  NOT by load average** — on 192 cores a load figure in the 200s can coexist
+  with ~30% CPU use, so it will send you chasing a ghost.
+- **C — inferred, NOT per-test verified (flag as inferred, don't assert):** voice
+  (whisper runtime), literature (live scholarly APIs), file-rag/memory (embedding
+  model). Plausible from the feature + prior runs, but confirm the error signature
+  before calling them environmental.
+
 ### Database Migrations
 
 **Migrations are PER-MODULE, not one global directory.** There is no
