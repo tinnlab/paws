@@ -99,6 +99,8 @@ mod tool_call_timeout_test;
 mod elicitation_jsonrpc_test;
 // JSON-RPC route tests for /elicitation/mcp (tools/call fallback)
 mod elicitation_cancel_test;
+// GET /mcp/servers/{id}/tools — upstream-failure status mapping + redaction
+mod upstream_error_mapping_test;
 
 // ============================================================================
 // User MCP Server Tests

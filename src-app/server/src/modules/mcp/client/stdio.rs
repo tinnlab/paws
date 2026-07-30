@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use tokio::process::Command;
 use uuid::Uuid;
 
+use super::errors;
 use super::traits::{
     McpClient, Prompt, PromptArgument, PromptResult, Resource, Tool, ToolContent, ToolResult,
 };
@@ -139,8 +140,18 @@ impl StdioMcpClient {
                 .stderr(std::process::Stdio::piped())
                 .spawn()
                 .map_err(|e| {
-                    tracing::error!(server_id = %self.server_id, error = %e, "Failed to spawn MCP stdio subprocess");
-                    AppError::internal_error(format!("Failed to spawn: {}", e))
+                    // The OS error text embeds the RESOLVED binary path
+                    // (e.g. the embedded uv/bun under the server's data
+                    // dir) — a host-layout detail the caller has no
+                    // business seeing. Log it, return the stable message.
+                    errors::upstream_error(
+                        &self.server_config.name,
+                        errors::UpstreamFailure::Unreachable,
+                        format!(
+                            "server_id={} failed to spawn stdio subprocess: {e}",
+                            self.server_id
+                        ),
+                    )
                 })?;
 
         // Shared buffer for the connect-failure message + a tracing
@@ -208,21 +219,23 @@ impl StdioMcpClient {
                     .map(|buf| String::from_utf8_lossy(&buf).into_owned())
                     .unwrap_or_default();
                 let trimmed = stderr_text.trim();
-                let suffix = if trimmed.is_empty() {
-                    String::new()
-                } else {
-                    format!("\n\nServer stderr:\n{}", trimmed)
-                };
-                tracing::error!(
-                    server_id = %self.server_id,
-                    error = %e,
-                    stderr_captured = %trimmed,
-                    "Failed to connect to MCP server",
-                );
-                Err(AppError::internal_error(format!(
-                    "Failed to connect: {}{}",
-                    e, suffix
-                )))
+                // SECURITY: the captured stderr is a subprocess's own
+                // diagnostics — Python tracebacks, host filesystem paths,
+                // environment values, and (for a server configured with
+                // credentials) potentially secrets. It used to be appended
+                // to the returned error and therefore rendered verbatim in
+                // the HTTP response body of `GET /mcp/servers/{id}/tools`
+                // and friends. It now goes to the log ONLY; the client gets
+                // the stable message from `UpstreamFailure::Unreachable`
+                // plus a `trace_id` to correlate against this log line.
+                Err(errors::upstream_error(
+                    &self.server_config.name,
+                    errors::UpstreamFailure::Unreachable,
+                    format!(
+                        "server_id={} stdio serve() failed: {e}; captured stderr: {trimmed}",
+                        self.server_id
+                    ),
+                ))
             }
         }
     }
@@ -268,7 +281,11 @@ impl StdioMcpClient {
         match transport {
             McpSandboxTransport::LinuxBwrap { child, _inflight } => {
                 let service = ().serve(child).await.map_err(|e| {
-                    AppError::internal_error(format!("rmcp serve (sandboxed/linux): {}", e))
+                    errors::upstream_error(
+                        &self.server_config.name,
+                        errors::UpstreamFailure::Unreachable,
+                        format!("rmcp serve (sandboxed/linux): {e}"),
+                    )
                 })?;
                 self.service = Some(service);
                 self._sandbox_inflight = _inflight;
@@ -277,7 +294,11 @@ impl StdioMcpClient {
                 let (rd, wr) = tokio::io::split(io);
                 let transport = rmcp::transport::async_rw::AsyncRwTransport::new_client(rd, wr);
                 let service = ().serve(transport).await.map_err(|e| {
-                    AppError::internal_error(format!("rmcp serve (sandboxed/vm): {}", e))
+                    errors::upstream_error(
+                        &self.server_config.name,
+                        errors::UpstreamFailure::Unreachable,
+                        format!("rmcp serve (sandboxed/vm): {e}"),
+                    )
                 })?;
                 self.service = Some(service);
                 self._vm_session = Some(session);
