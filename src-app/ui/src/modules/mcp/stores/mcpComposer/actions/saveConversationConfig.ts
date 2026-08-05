@@ -29,11 +29,26 @@ export default (set: McpComposerSet, get: McpComposerGet) => async (
       .map(id => ({ server_id: id, tools: [] }))
   }
 
+  const existingDisabled = config.disabledServers || []
+
   // For partially selected servers (specific tools chosen), compute disabled tools
   if (serverToolsMap) {
     for (const [serverId, selection] of config.selectedServers.entries()) {
       if (selection.tools.length > 0) {
-        const allTools = serverToolsMap.get(serverId) || []
+        const allTools = serverToolsMap.get(serverId)
+        if (allTools === undefined) {
+          // We never learned this server's tool list — its `tools/list` failed
+          // (an unreachable MCP server answers 502, which is a COMMON and
+          // transient condition). The disabled set is derived by subtracting
+          // the selection from the full list, so with no list there is nothing
+          // to subtract from: treating that as `[]` silently produced an empty
+          // disabled set and RE-ENABLED every tool the user had turned off, on
+          // a save the user never asked for (close auto-saves). Carry the
+          // previously-persisted entry forward untouched instead.
+          const prior = existingDisabled.find((d: DisabledServer) => d.server_id === serverId)
+          if (prior) disabledServers.push(prior)
+          continue
+        }
         const disabledTools = allTools.filter(t => !selection.tools.includes(t))
         if (disabledTools.length > 0) {
           disabledServers.push({ server_id: serverId, tools: disabledTools })
@@ -43,7 +58,6 @@ export default (set: McpComposerSet, get: McpComposerGet) => async (
   }
 
   // Also include any previously saved disabled servers for unavailable servers
-  const existingDisabled = config.disabledServers || []
   const availableSet = new Set(availableServerIds || [])
   const unavailableDisabled = existingDisabled.filter((d: DisabledServer) => !availableSet.has(d.server_id))
   disabledServers = [...disabledServers, ...unavailableDisabled]

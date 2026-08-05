@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Dialog, Accordion, Switch, Tag, Text, Title, Empty, Checkbox, Select, Separator, Button, InputNumber, message } from '@ziee/kit'
+import { Dialog, Accordion, Switch, Tag, Text, Title, Empty, Alert, Checkbox, Select, Separator, Button, InputNumber, message } from '@ziee/kit'
 import { Drawer } from '@/modules/layouts/app-layout/components/Drawer'
 import { useWindowMinSize } from '@/modules/layouts/app-layout/hooks/useWindowMinSize'
 import { Trash2 } from 'lucide-react'
@@ -32,6 +32,36 @@ import { effectiveApprovalMode } from '@/modules/mcp/stores/approvalDefaults'
 // instances would both open on the same global flag, duplicating the dialog.
 // A module-level mount guard ensures only the first-mounted instance renders.
 let mcpConfigModalMounts = 0
+
+/**
+ * Why a `tools/list` failed, as a clause a person can read.
+ *
+ * An unreachable MCP server is the COMMON case here, not an exceptional one:
+ * the backend deliberately answers a dependency failure with a gateway-class
+ * status (502 unreachable / 503 unavailable / 504 timeout) so it is
+ * distinguishable from a bug in the API itself. The modal must therefore say
+ * "we could not ask this server" rather than render the same empty state a
+ * genuinely tool-less server produces.
+ *
+ * NEVER the raw `Error.message`: the api-client builds that from the wire
+ * (`HTTP error! status: 502 - <html>…`), so interpolating it would put an
+ * unbounded machine string into human copy.
+ */
+function describeToolsFetchError(error: unknown): string {
+  const status =
+    typeof (error as { status?: unknown } | null)?.status === 'number'
+      ? (error as { status: number }).status
+      : null
+  if (status === 401) return 'the session is no longer signed in'
+  if (status === 403) return 'you do not have access to this server'
+  if (status === 404) return 'the server is no longer registered'
+  if (status === 408 || status === 504) return 'it timed out'
+  if (status === 429) return 'it is rate-limiting requests'
+  if (status === 502) return 'it could not be reached'
+  if (status !== null && status >= 500) return 'it is unavailable'
+  if (status !== null && status >= 400) return 'it rejected the request'
+  return 'it did not respond'
+}
 
 export function McpConfigModal() {
   // Below the mobile (sm) breakpoint — the same width at which the sidebar
@@ -70,6 +100,11 @@ export function McpConfigModal() {
   // Local state for tools (loaded on demand)
   const [serverTools, setServerTools] = useState<Map<string, Tool[]>>(new Map())
   const [loadingTools, setLoadingTools] = useState<Set<string>>(new Set())
+  // Per-server tools/list failure. Kept separate from `serverTools` because an
+  // absent entry and an empty array must stay distinguishable: without this a
+  // 502 rendered as "0 tools / No tools yet", which reads as a fact about the
+  // server rather than a failure to ask it.
+  const [toolErrors, setToolErrors] = useState<Map<string, string>>(new Map())
   const [saving, setSaving] = useState(false)
   const [savingDefaults, setSavingDefaults] = useState(false)
 
@@ -178,8 +213,16 @@ export function McpConfigModal() {
           try {
             const response = await McpComposer.listServerTools(server.id)
             setServerTools(prev => new Map(prev).set(server.id, response.tools))
+            setToolErrors(prev => {
+              if (!prev.has(server.id)) return prev
+              const next = new Map(prev)
+              next.delete(server.id)
+              return next
+            })
           } catch (error) {
-            console.error('[MCP Config Modal] Failed to load tools for server:', server.id, error)
+            // Surfaced in the row below. An unreachable MCP server is an
+            // expected condition, not a console-only event.
+            setToolErrors(prev => new Map(prev).set(server.id, describeToolsFetchError(error)))
           } finally {
             setLoadingTools(prev => {
               const next = new Set(prev)
@@ -313,6 +356,7 @@ export function McpConfigModal() {
   const collapseItems = enabledServers.map(server => {
     const tools = serverTools.get(server.id) || []
     const selection = selectedServers.get(server.id)
+    const toolError = toolErrors.get(server.id)
 
     return {
       key: server.id,
@@ -336,11 +380,18 @@ export function McpConfigModal() {
             </Tag>
           </div>
           <Text type="secondary" className="text-xs">
-            {tools.length} tool{tools.length !== 1 ? 's' : ''}
+            {toolError ? 'unavailable' : `${tools.length} tool${tools.length !== 1 ? 's' : ''}`}
           </Text>
         </div>
       ),
-      children: tools.length === 0 ? (
+      children: toolError ? (
+        <Alert
+          tone="warning"
+          title="Couldn't load this server's tools"
+          description={`We couldn't ask ${server.display_name} for its tools because ${toolError}. Its saved tool selection is left unchanged.`}
+          data-testid={`mcp-config-server-tools-error-${server.id}`}
+        />
+      ) : tools.length === 0 ? (
         <Empty description="No tools yet" data-testid={`mcp-config-server-empty-${server.id}`} />
       ) : (
         <div className="space-y-2">

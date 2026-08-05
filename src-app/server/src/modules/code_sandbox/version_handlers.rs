@@ -336,14 +336,36 @@ pub async fn subscribe_install_progress_handler(
         version_install_tasks::send_to(&tx, SSEInstallTaskEvent::TaskState(state));
     }
 
+    // The slot is now OWNED by this guard — constructed eagerly the instant
+    // registration succeeds (and only on success: the 503 path inserted
+    // nothing, so nothing may claim ownership). It is moved into the stream
+    // below.
+    //
+    // It CANNOT be declared inside the `stream!` body: that body is a
+    // generator that does not run until the stream's FIRST poll, so a client
+    // that goes away before the response body is ever polled would leave a
+    // registration whose guard was never constructed. Nor may release live
+    // AFTER the recv loop: `rx.recv()` only yields `None` once every sender is
+    // gone, and a sender is held both by the registry entry and by this
+    // stream, so that tail was unreachable — and a dropped generator never
+    // runs its remaining statements anyway. Either way the slot was held for
+    // the life of the process and every reconnect burned another, until the
+    // endpoint 503'd permanently for everyone. Captured by the generator, the
+    // guard lives in the future's state and is dropped when the future is
+    // dropped, polled or not.
+    let guard = ConnGuard(client_id);
+
     let stream = stream! {
+        // Release on ANY termination — disconnect, server shutdown, INCLUDING
+        // a stream dropped before it was ever polled (the guard was
+        // constructed at registration and is merely MOVED in here).
+        let _guard = guard;
         // Keep the local sender alive for the stream's lifetime so
         // the SSE_CLIENTS entry stays valid.
         let _tx_keeper = tx;
         while let Some(event) = rx.recv().await {
             yield event;
         }
-        version_install_tasks::remove_client(client_id);
     };
 
     // Audit Net2: `X-Accel-Buffering: no` tells nginx (and other
@@ -357,6 +379,15 @@ pub async fn subscribe_install_progress_handler(
         axum::http::HeaderValue::from_static("no"),
     );
     Ok((StatusCode::OK, response))
+}
+
+/// Releases its SSE registry slot on drop, covering every way a stream can end.
+struct ConnGuard(Uuid);
+
+impl Drop for ConnGuard {
+    fn drop(&mut self) {
+        version_install_tasks::remove_client(self.0);
+    }
 }
 
 pub fn subscribe_install_progress_docs(

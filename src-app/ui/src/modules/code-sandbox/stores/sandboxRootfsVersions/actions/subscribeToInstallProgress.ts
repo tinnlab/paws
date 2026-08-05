@@ -35,11 +35,22 @@ export default (set: SandboxRootfsVersionsSet) => {
     try {
       await ApiClient.CodeSandbox.subscribeRootfsInstallProgress(undefined, {
         SSE: {
+          // Only the abort handle is knowable here: the transport dispatches
+          // `__init` as soon as fetch() resolves and BEFORE it checks
+          // response.ok, so a 503/502 reaches this callback too. Resetting the
+          // retry counter here made every failed attempt look like a fresh
+          // start — the catch below would take it 0 → 1, forever short of
+          // maxReconnectAttempts — so the "bounded" reconnect never terminated
+          // and hammered the endpoint every reconnectDelayMs for as long as the
+          // page stayed mounted.
           __init: ({ abortController }: { abortController: AbortController }) => {
             st.controller = abortController
-            st.reconnectAttempts = 0
           },
           connected: (_d: unknown) => {
+            // The server's handshake, reachable only on a real 200 stream —
+            // this is where a connection has genuinely succeeded, so this is
+            // where the backoff resets.
+            st.reconnectAttempts = 0
             set(s => {
               s.sseConnected = true
               s.sseError = null
