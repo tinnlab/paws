@@ -78,6 +78,27 @@ fn malicious_symlink_targz() -> Vec<u8> {
     enc.finish().expect("gz finish").into_inner()
 }
 
+/// A well-formed skill bundle — the positive control for the malformed-input
+/// tests below, so a fix that merely rejects everything can't pass.
+fn valid_skill_targz() -> Vec<u8> {
+    let cur = Cursor::new(Vec::<u8>::new());
+    let enc = GzEncoder::new(cur, Compression::default());
+    let mut builder = Builder::new(enc);
+
+    let md = b"---\nname: Import Smoke\ndescription: a valid bundle\n---\n\nbody\n";
+    let mut header = Header::new_gnu();
+    header.set_size(md.len() as u64);
+    header.set_mode(0o644);
+    header.set_entry_type(tar::EntryType::Regular);
+    header.set_cksum();
+    builder
+        .append_data(&mut header, "SKILL.md", &md[..])
+        .expect("append SKILL.md");
+
+    let enc = builder.into_inner().expect("into_inner");
+    enc.finish().expect("gz finish").into_inner()
+}
+
 async fn upload_bundle(server: &TestServer, token: &str, body: Vec<u8>) -> reqwest::Response {
     let form = multipart::Form::new().part(
         "bundle",
@@ -109,6 +130,95 @@ async fn user_skill_count(server: &TestServer, token: &str) -> usize {
         .map(|a| a.len())
         .or_else(|| body.as_array().map(|a| a.len()))
         .unwrap_or(0)
+}
+
+/// A body that isn't a gzip archive at all — the import dialog accepts any
+/// file, so users routinely upload the raw `SKILL.md` instead of a tar.gz.
+/// That is bad input, so it must answer 4xx with an actionable message; a 500
+/// tells the user nothing and reads as a server fault.
+#[tokio::test]
+async fn import_rejects_non_archive_upload_over_http() {
+    let server = TestServer::start().await;
+    let user = create_user_with_permissions(
+        &server,
+        "bundle_garbage",
+        &["skills::read", "skills::install"],
+    )
+    .await;
+
+    let before = user_skill_count(&server, &user.token).await;
+    let raw_markdown = b"---\nname: not a tarball\ndescription: raw SKILL.md\n---\n".to_vec();
+    let resp = upload_bundle(&server, &user.token, raw_markdown).await;
+
+    let status = resp.status();
+    let body: serde_json::Value = resp.json().await.expect("parse error body");
+    assert!(
+        status.is_client_error(),
+        "a non-archive upload must be a 4xx, got {status}: {body}"
+    );
+    let blob = body.to_string().to_lowercase();
+    assert!(
+        blob.contains("archive") || blob.contains("tar.gz") || blob.contains("gzip"),
+        "expected an actionable not-an-archive message, got: {body}"
+    );
+
+    let after = user_skill_count(&server, &user.token).await;
+    assert_eq!(
+        after, before,
+        "no skill row may be created by a rejected bundle"
+    );
+}
+
+/// A gzip stream cut off mid-entry (an interrupted upload). The failure
+/// surfaces later than the non-gzip case — after the header decodes — but it
+/// is still client input and must not be a 5xx.
+#[tokio::test]
+async fn import_rejects_truncated_archive_over_http() {
+    let server = TestServer::start().await;
+    let user = create_user_with_permissions(
+        &server,
+        "bundle_truncated",
+        &["skills::read", "skills::install"],
+    )
+    .await;
+
+    let full = valid_skill_targz();
+    let truncated = full[..full.len() / 2].to_vec();
+    let resp = upload_bundle(&server, &user.token, truncated).await;
+
+    let status = resp.status();
+    let body: serde_json::Value = resp.json().await.expect("parse error body");
+    assert!(
+        status.is_client_error(),
+        "a truncated upload must be a 4xx, got {status}: {body}"
+    );
+}
+
+/// Positive control: the same endpoint still installs a well-formed bundle,
+/// so the malformed-input rejections above can't be satisfied by refusing
+/// every upload.
+#[tokio::test]
+async fn import_accepts_valid_bundle_over_http() {
+    let server = TestServer::start().await;
+    let user = create_user_with_permissions(
+        &server,
+        "bundle_valid",
+        &["skills::read", "skills::install"],
+    )
+    .await;
+
+    let resp = upload_bundle(&server, &user.token, valid_skill_targz()).await;
+    let status = resp.status();
+    let body: serde_json::Value = resp.json().await.expect("parse import body");
+    assert_eq!(
+        status, 201,
+        "a valid bundle must still install; got {status}: {body}"
+    );
+    assert_eq!(
+        body.get("description").and_then(|v| v.as_str()),
+        Some("a valid bundle"),
+        "the installed row must carry the parsed SKILL.md frontmatter: {body}"
+    );
 }
 
 /// A path-traversal bundle uploaded through `POST /api/skills/import` is

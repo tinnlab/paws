@@ -32,6 +32,7 @@ mod builder_crud_test;
 mod builder_validate_def_test;
 mod elicit;
 mod elicit_data_seeding;
+mod input_validation;
 mod install_from_hub;
 mod permissions_gating;
 mod real_llm;
