@@ -4,10 +4,10 @@
 
 export type Actions = {
   attachFile: typeof import('./actions/attachFile')['default']
-  batchDelete: typeof import('./actions/batchDelete')['default']
+  batchDetach: typeof import('./actions/batchDetach')['default']
   clearError: typeof import('./actions/clearError')['default']
-  deleteFile: typeof import('./actions/deleteFile')['default']
   deselectAll: typeof import('./actions/deselectAll')['default']
+  detachFile: typeof import('./actions/detachFile')['default']
   dismissUploadingFile: typeof import('./actions/dismissUploadingFile')['default']
   loadFiles: typeof import('./actions/loadFiles')['default']
   selectAll: typeof import('./actions/selectAll')['default']

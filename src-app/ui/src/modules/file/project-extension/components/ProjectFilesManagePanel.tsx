@@ -69,35 +69,46 @@ export function ProjectFilesManagePanel() {
   const [drawerBody, setDrawerBody] = useState<HTMLElement | null>(null)
   const [isDragging, setIsDragging] = useState(false)
 
-  const handleDelete = async (fileId: string, filename: string) => {
+  // This panel is project-SCOPED, so both affordances detach (drop the
+  // project↔file membership) and never delete from the library. The copy below
+  // has to say so: it previously promised a permanent library-wide delete while
+  // the store called one, which destroyed the file in every OTHER project it was
+  // attached to. Copy and call must move together.
+  const handleRemove = async (fileId: string, filename: string) => {
     if (!projectId) return
     try {
-      await ProjectFilesStore.deleteFile(projectId, fileId)
-      message.success(`Deleted ${filename}`)
+      await ProjectFilesStore.detachFile(projectId, fileId)
+      message.success(`Removed ${filename} from this project`)
     } catch (err) {
       message.error(
-        err instanceof Error ? err.message : 'Failed to delete file',
+        err instanceof Error
+          ? err.message
+          : 'Failed to remove file from project',
       )
     }
   }
 
-  const handleBatchDelete = async () => {
+  const handleBatchRemove = async () => {
     if (!projectId || selectedFileIds.size === 0) return
     const n = selectedFileIds.size
     const confirmed = await dialog.confirm({
-      title: `Delete ${n} file${n === 1 ? '' : 's'}?`,
-      description: 'This permanently removes the files from your library.',
-      okText: 'Delete',
+      title: `Remove ${n} file${n === 1 ? '' : 's'} from this project?`,
+      description:
+        n === 1
+          ? 'The file stays in your library and in any other project it is attached to.'
+          : 'They stay in your library and in any other project they are attached to.',
+      okText: 'Remove',
       cancelText: 'Cancel',
-      danger: true,
     })
     if (confirmed) {
       try {
-        await ProjectFilesStore.batchDelete(projectId)
-        message.success(`Deleted ${n} file${n === 1 ? '' : 's'}`)
+        await ProjectFilesStore.batchDetach(projectId)
+        message.success(
+          `Removed ${n} file${n === 1 ? '' : 's'} from this project`,
+        )
       } catch (err) {
         message.error(
-          err instanceof Error ? err.message : 'Batch delete failed',
+          err instanceof Error ? err.message : 'Failed to remove files',
         )
       }
     }
@@ -247,10 +258,13 @@ export function ProjectFilesManagePanel() {
           size="default"
           variant="ghost"
           icon={<Trash2 />}
-          onClick={handleBatchDelete}
+          onClick={handleBatchRemove}
+          // testid keeps its legacy `-delete-` spelling: the registry that
+          // validates it (`testIds.generated.ts`) lives in the `sdk` submodule,
+          // so renaming it here would strand every other sdk consumer.
           data-testid="file-project-delete-selected-btn"
         >
-          Delete selected
+          Remove selected
         </Button>
       </div>
     </div>
@@ -320,21 +334,20 @@ export function ProjectFilesManagePanel() {
                   // Button to kill its own auto-tooltip. Two overlapping Base-UI
                   // tooltips thrash (flash-then-vanish); a single one on a sibling
                   // coexists with the Confirm popover.
-                  <Tooltip title="Delete">
+                  <Tooltip title="Remove from project">
                     <span className="inline-flex">
                       <Confirm
-                        title="Delete this file?"
-                        description="This permanently removes the file from your library."
-                        okText="Delete"
+                        title="Remove this file from the project?"
+                        description="It stays in your library and in any other project it is attached to."
+                        okText="Remove"
                         cancelText="Cancel"
-                        okButtonProps={{ danger: true }}
-                        onConfirm={() => handleDelete(file.id, file.filename)}
+                        onConfirm={() => handleRemove(file.id, file.filename)}
                         data-testid={`file-project-delete-confirm-${file.id}`}
                       >
                         <Button
                           variant="outline"
                           icon={<Trash2 />}
-                          aria-label={`Delete ${file.filename}`}
+                          aria-label={`Remove ${file.filename} from this project`}
                           data-tooltip-wrapped=""
                           data-testid={`file-project-delete-btn-${file.id}`}
                         />
