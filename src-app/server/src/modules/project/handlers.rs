@@ -151,6 +151,27 @@ fn validate_project_name(name: &str) -> Result<(), AppError> {
             "Project name must be ≤ 255 characters",
         ));
     }
+    reject_nul(name, "Project name")?;
+    Ok(())
+}
+
+/// A Postgres `text`/`varchar` column cannot hold U+0000 at ALL — the wire
+/// protocol rejects it with `22021 invalid byte sequence for encoding UTF8`,
+/// which `AppError::database_error` flattens into a generic 500
+/// `SYSTEM_DATABASE_ERROR`. Every user-supplied string that reaches an INSERT
+/// therefore needs this gate; the length caps above do not catch it because a
+/// NUL-bearing value can be arbitrarily short.
+///
+/// Deliberately narrower than the display-name gate: `\n`/`\t` are legitimate
+/// in `instructions` and `description`, so ONLY the byte Postgres physically
+/// cannot store is rejected.
+fn reject_nul(value: &str, field: &str) -> Result<(), AppError> {
+    if value.contains('\0') {
+        return Err(AppError::bad_request(
+            "VALIDATION_ERROR",
+            format!("{field} cannot contain NUL characters"),
+        ));
+    }
     Ok(())
 }
 
@@ -158,27 +179,29 @@ fn validate_project_text_lengths(
     description: Option<&str>,
     instructions: Option<&str>,
 ) -> Result<(), AppError> {
-    if let Some(d) = description
-        && d.len() > PROJECT_MAX_DESCRIPTION_BYTES
-    {
-        return Err(AppError::bad_request(
-            "VALIDATION_ERROR",
-            format!(
-                "description exceeds {} bytes",
-                PROJECT_MAX_DESCRIPTION_BYTES
-            ),
-        ));
+    if let Some(d) = description {
+        if d.len() > PROJECT_MAX_DESCRIPTION_BYTES {
+            return Err(AppError::bad_request(
+                "VALIDATION_ERROR",
+                format!(
+                    "description exceeds {} bytes",
+                    PROJECT_MAX_DESCRIPTION_BYTES
+                ),
+            ));
+        }
+        reject_nul(d, "description")?;
     }
-    if let Some(i) = instructions
-        && i.len() > PROJECT_MAX_INSTRUCTIONS_BYTES
-    {
-        return Err(AppError::bad_request(
-            "VALIDATION_ERROR",
-            format!(
-                "instructions exceeds {} bytes",
-                PROJECT_MAX_INSTRUCTIONS_BYTES
-            ),
-        ));
+    if let Some(i) = instructions {
+        if i.len() > PROJECT_MAX_INSTRUCTIONS_BYTES {
+            return Err(AppError::bad_request(
+                "VALIDATION_ERROR",
+                format!(
+                    "instructions exceeds {} bytes",
+                    PROJECT_MAX_INSTRUCTIONS_BYTES
+                ),
+            ));
+        }
+        reject_nul(i, "instructions")?;
     }
     Ok(())
 }

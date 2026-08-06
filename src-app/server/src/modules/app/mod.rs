@@ -3,7 +3,7 @@ mod handlers;
 mod repository;
 mod routes;
 mod types;
-mod utils;
+pub(crate) mod utils;
 
 pub use repository::AppRepository;
 pub use routes::app_routes;

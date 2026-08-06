@@ -1,8 +1,8 @@
 use super::types::SetupAdminRequest;
 use crate::common::AppError;
-// Shared username rules — ONE definition for first-run setup and every
-// runtime username write path (register / profile / admin-create / admin-edit).
-use crate::modules::auth::username::{is_bidi_or_zero_width, validate_username};
+// Shared username + display-name rules — ONE definition for first-run setup and
+// every runtime write path (register / profile / admin-create / admin-edit).
+use crate::modules::auth::username::{validate_display_name, validate_username};
 use axum::http::StatusCode;
 
 // =====================================================
@@ -17,32 +17,17 @@ pub fn validate_setup_request(req: &SetupAdminRequest) -> Result<(), (StatusCode
     // F-06) and adds the charset allowlist.
     validate_username(&req.username).map_err(AppError::to_api_error)?;
 
-    // Display name: same control-char gate when present.
+    // Display name, delegated to the shared `auth::username` gate for the same
+    // no-drift reason as the username above. The bound moves from this path's
+    // hand-rolled 200 BYTES to the column's real 255 CHARACTERS — a legitimate
+    // 100-character CJK display name was being rejected here while Postgres
+    // would have stored it fine.
     if let Some(dn) = &req.display_name {
-        if dn.len() > 200 {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                AppError::bad_request("INVALID_DISPLAY_NAME", "Display name exceeds 200 chars"),
-            ));
-        }
-        if dn.chars().any(|c| c.is_control() || is_bidi_or_zero_width(c)) {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                AppError::bad_request(
-                    "INVALID_DISPLAY_NAME",
-                    "Display name cannot contain control characters",
-                ),
-            ));
-        }
+        validate_display_name(dn).map_err(AppError::to_api_error)?;
     }
 
     // Email validation
-    if !is_valid_email(&req.email) {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            AppError::bad_request("INVALID_EMAIL", "Invalid email format"),
-        ));
-    }
+    validate_email(&req.email).map_err(AppError::to_api_error)?;
 
     // Password strength validation.
     // Uses the shared validate_password_strength helper (auth::password)
@@ -58,6 +43,21 @@ pub fn validate_setup_request(req: &SetupAdminRequest) -> Result<(), (StatusCode
     }
 
     Ok(())
+}
+
+/// `is_valid_email` as a `Result`, so every write path can gate on it with `?`
+/// and get the same `400 INVALID_EMAIL` body. Added when `POST /api/users`
+/// turned out to gate email on `is_empty()` alone — an over-long or
+/// NUL-bearing address reached Postgres as a raw 500.
+pub fn validate_email(email: &str) -> Result<(), AppError> {
+    if is_valid_email(email) {
+        Ok(())
+    } else {
+        Err(AppError::bad_request(
+            "INVALID_EMAIL",
+            "Invalid email format",
+        ))
+    }
 }
 
 /// Validate an email address. Closes 13-misc F-05 (Low): the previous
@@ -141,6 +141,9 @@ pub fn is_strong_password(password: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Test-only: the boundary assertions below pin the shared bound rather than
+    // restating a literal, so widening the column can't leave them stale.
+    use crate::modules::auth::username::DISPLAY_NAME_MAX_CHARS;
 
 
     const GOOD_PW: &str = "Str0ng-Pass!42";
@@ -189,7 +192,12 @@ mod tests {
         assert!(
             validate_setup_request(&req("admin", "a@b.com", GOOD_PW, Some("Ad\u{0007}min"))).is_err()
         );
-        let long_dn = "x".repeat(201);
+        // The bound is now the shared one — `users.display_name` is
+        // varchar(255) counted in CHARACTERS, not this path's old hand-rolled
+        // 200 bytes. 255 fits the column and must be accepted; 256 must not.
+        let at_bound = "x".repeat(DISPLAY_NAME_MAX_CHARS);
+        assert!(validate_setup_request(&req("admin", "a@b.com", GOOD_PW, Some(&at_bound))).is_ok());
+        let long_dn = "x".repeat(DISPLAY_NAME_MAX_CHARS + 1);
         assert!(validate_setup_request(&req("admin", "a@b.com", GOOD_PW, Some(&long_dn))).is_err());
     }
 
@@ -245,7 +253,7 @@ mod tests {
 
     #[test]
     fn validate_setup_rejects_long_display_name_and_bad_email_and_weak_password() {
-        assert!(validate_setup_request(&req("rootadmin", "a@b.co", GOOD_PW, Some(&"d".repeat(201)))).is_err());
+        assert!(validate_setup_request(&req("rootadmin", "a@b.co", GOOD_PW, Some(&"d".repeat(DISPLAY_NAME_MAX_CHARS + 1)))).is_err());
         assert!(validate_setup_request(&req("rootadmin", "not-an-email", GOOD_PW, None)).is_err());
         assert!(validate_setup_request(&req("rootadmin", "a@b.co", "weak", None)).is_err());
     }
@@ -310,7 +318,7 @@ mod tests {
         // Control char in display name.
         assert!(validate_setup_request(&req("admin", "a@b.com", "password123", Some("ev\u{0007}il"))).is_err());
         // Over-length display name.
-        assert!(validate_setup_request(&req("admin", "a@b.com", "password123", Some(&"x".repeat(201)))).is_err());
+        assert!(validate_setup_request(&req("admin", "a@b.com", "password123", Some(&"x".repeat(DISPLAY_NAME_MAX_CHARS + 1)))).is_err());
         // A clean request passes all gates.
         assert!(validate_setup_request(&req("admin", "a@b.com", "password123", Some("Admin User"))).is_ok());
     }
