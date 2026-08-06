@@ -428,3 +428,53 @@ async fn subscribe_streams_connected_event_for_reader() {
         "first SSE event should be `connected`; got: {text:?}"
     );
 }
+
+/// Regression: reconnecting must not exhaust the subscriber registry.
+///
+/// The handler caps concurrent subscribers at `MAX_SSE_CLIENTS` (256). The
+/// slot used to be released by a statement placed AFTER the stream's recv
+/// loop, which never ran — the loop only ends when every sender is dropped,
+/// and a dropped generator does not run its remaining statements anyway. So
+/// each connection leaked its slot permanently and, because the only other
+/// reclaim path (`broadcast`) fires solely while an install task is running,
+/// a deployment with the sandbox disabled could never recover: after 256
+/// subscribes the endpoint answered 503 to everyone for the life of the
+/// process. Observed live as a settings page reconnecting every 3s against
+/// `current: 256, cap: 256` for two days without freeing a single slot.
+///
+/// Opening and dropping well over the cap must therefore still leave the
+/// endpoint serving. Each `TestServer` owns its server subprocess, so the
+/// registry under test is this test's alone.
+#[tokio::test]
+async fn subscribe_slot_is_released_on_disconnect() {
+    const CAP: usize = 256;
+
+    let server = TestServer::start().await;
+    let token = user_with_read_only(&server).await;
+    let client = reqwest::Client::new();
+    let url = versions_url(&server, "/install/subscribe");
+
+    for i in 0..(CAP + 20) {
+        let resp = client
+            .get(&url)
+            .header("Authorization", format!("Bearer {token}"))
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("subscribe #{i} failed to send: {e}"));
+        assert_eq!(
+            resp.status().as_u16(),
+            200,
+            "subscribe #{i} should be served; the registry leaked slots"
+        );
+        // Dropping the response closes the body, which drops the server-side
+        // stream future and must release the slot.
+        drop(resp);
+
+        // Give the server a moment to observe the disconnects. This only
+        // affects HOW FAST slots come back — before the fix they never came
+        // back at all, so no amount of waiting would turn this green.
+        if i % 32 == 0 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+}

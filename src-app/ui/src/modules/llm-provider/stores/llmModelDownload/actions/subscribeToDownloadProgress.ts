@@ -23,12 +23,23 @@ export default (set: LlmModelDownloadSet, get: LlmModelDownloadGet) => {
     try {
       await ApiClient.LlmModel.subscribeDownloadProgress(undefined, {
         SSE: {
+          // Only the abort handle is knowable here: the transport dispatches
+          // `__init` as soon as fetch() resolves and BEFORE it checks
+          // response.ok, so a failing status reaches this callback too.
+          // Marking the stream connected and resetting the retry counter here
+          // made every failed attempt look like a fresh start — the catch
+          // below would take it 0 → 1, forever short of maxAttempts — so the
+          // bounded reconnect never terminated and re-hit the endpoint every
+          // 3s indefinitely.
           __init: ({ abortController }) => {
             // Signal the abort controller so onCleanup can abort it.
             ;(globalThis as Record<string, unknown>).__LLM_DL_SSE_ABORT = abortController
+          },
+          connected: (_data: SSEDownloadProgressConnectedData) => {
+            // The server's handshake, reachable only on a real 200 stream —
+            // the one point at which the connection has genuinely succeeded.
             set({ sseConnected: true, sseError: null, reconnectAttempts: 0 })
           },
-          connected: (_data: SSEDownloadProgressConnectedData) => {},
           update: (updates: DownloadProgressUpdate[]) => {
             const prevState = get()
             const prevStatusById = new Map<string, string>(

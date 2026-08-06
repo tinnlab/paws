@@ -28,10 +28,19 @@ export default (set: McpComposerSet, get: McpComposerGet) => async (
       .filter(id => !selectedServerIds.has(id))
       .map(id => ({ server_id: id, tools: [] }))
   }
+  const existingDisabled = config.disabledServers || []
   if (serverToolsMap) {
     for (const [serverId, selection] of config.selectedServers.entries()) {
       if (selection.tools.length > 0) {
-        const allTools = serverToolsMap.get(serverId) || []
+        const allTools = serverToolsMap.get(serverId)
+        if (allTools === undefined) {
+          // No tool list was ever fetched for this server (its `tools/list`
+          // failed). See saveConversationConfig: deriving the disabled set from
+          // an assumed-empty list re-enables every tool the user disabled.
+          const prior = existingDisabled.find((d: DisabledServer) => d.server_id === serverId)
+          if (prior) disabledServers.push(prior)
+          continue
+        }
         const disabledTools = allTools.filter(t => !selection.tools.includes(t))
         if (disabledTools.length > 0) {
           disabledServers.push({ server_id: serverId, tools: disabledTools })
@@ -39,7 +48,6 @@ export default (set: McpComposerSet, get: McpComposerGet) => async (
       }
     }
   }
-  const existingDisabled = config.disabledServers || []
   const availableSet = new Set(availableServerIds || [])
   const unavailableDisabled = existingDisabled.filter((d: DisabledServer) => !availableSet.has(d.server_id))
   disabledServers = [...disabledServers, ...unavailableDisabled]

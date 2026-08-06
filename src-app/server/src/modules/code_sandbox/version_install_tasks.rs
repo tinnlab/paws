@@ -171,21 +171,56 @@ pub fn list_tasks() -> Vec<InstallTaskState> {
 // SSE client lifecycle
 // =====================================================================
 
-pub fn register_client(tx: ClientSender) -> Option<ClientId> {
-    let id = Uuid::new_v4();
-    let mut g = SSE_CLIENTS.lock().ok()?;
+/// Drop every client whose stream is gone, returning how many were freed.
+///
+/// The liveness signal is `is_closed()`: a client's `Receiver` is owned solely
+/// by its own SSE stream, so a closed sender means exactly "that stream no
+/// longer exists". An idle-but-live stream is never touched.
+///
+/// Caller already holds the lock.
+fn prune_closed_locked(g: &mut HashMap<ClientId, ClientSender>) -> usize {
+    let before = g.len();
+    g.retain(|_, tx| !tx.is_closed());
+    before - g.len()
+}
+
+/// Cap-check + insert against an already-locked map. Split out from
+/// `register_client` so the cap/sweep interaction is unit-testable without the
+/// process-wide singleton, which sibling tests share concurrently.
+fn register_into(
+    g: &mut HashMap<ClientId, ClientSender>,
+    tx: ClientSender,
+    cap: usize,
+) -> Option<ClientId> {
     // Audit Net1: refuse new subscribers once cap is hit so a
     // reconnect storm can't blow up server memory.
-    if g.len() >= MAX_SSE_CLIENTS {
+    //
+    // A cap is only ever charged for clients that are still ALIVE. `broadcast`
+    // reclaims dead senders, but it only runs when a task has something to
+    // emit — on a deployment where no install ever runs (code_sandbox
+    // disabled, the common case) it never fires, so without this sweep a
+    // single leaked slot could never be reclaimed and the endpoint would 503
+    // for the life of the process. The primary release is the subscribe
+    // handler's `ConnGuard`; this is the backstop.
+    if g.len() >= cap {
+        prune_closed_locked(g);
+    }
+    if g.len() >= cap {
         tracing::warn!(
             current = g.len(),
-            cap = MAX_SSE_CLIENTS,
+            cap = cap,
             "code_sandbox: SSE subscribe rejected — connection cap reached"
         );
         return None;
     }
+    let id = Uuid::new_v4();
     g.insert(id, tx);
     Some(id)
+}
+
+pub fn register_client(tx: ClientSender) -> Option<ClientId> {
+    let mut g = SSE_CLIENTS.lock().ok()?;
+    register_into(&mut g, tx, MAX_SSE_CLIENTS)
 }
 
 pub fn remove_client(id: ClientId) {
@@ -353,4 +388,107 @@ pub fn start_install_task(
     });
 
     state
+}
+
+// =====================================================================
+// Unit tests — SSE slot accounting
+// =====================================================================
+
+#[cfg(test)]
+mod sse_slot_tests {
+    use super::*;
+    use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
+
+    type ClientReceiver = UnboundedReceiver<Result<Event, axum::Error>>;
+
+    /// A sender whose stream is gone: the receiver is dropped, exactly as when
+    /// axum drops an SSE response body.
+    fn dead_sender() -> ClientSender {
+        let (tx, rx) = unbounded_channel();
+        drop(rx);
+        tx
+    }
+
+    /// A sender whose stream is still open. The receiver must be kept alive by
+    /// the caller, or the sender reads as closed.
+    fn live_sender() -> (ClientSender, ClientReceiver) {
+        unbounded_channel()
+    }
+
+    #[test]
+    fn prune_reclaims_only_dead_clients() {
+        let mut g: HashMap<ClientId, ClientSender> = HashMap::new();
+        let (live, _rx) = live_sender();
+        g.insert(Uuid::new_v4(), live);
+        g.insert(Uuid::new_v4(), dead_sender());
+        g.insert(Uuid::new_v4(), dead_sender());
+
+        assert_eq!(prune_closed_locked(&mut g), 2, "both dead slots freed");
+        assert_eq!(g.len(), 1, "the live client is untouched");
+    }
+
+    /// The regression: slots leaked by disconnected clients must not charge the
+    /// cap forever. Before the fix the endpoint answered 503 for the life of
+    /// the process once `cap` connections had ever been made.
+    #[test]
+    fn register_reclaims_leaked_slots_at_cap() {
+        let cap = 4;
+        let mut g: HashMap<ClientId, ClientSender> = HashMap::new();
+        for _ in 0..cap {
+            g.insert(Uuid::new_v4(), dead_sender());
+        }
+        assert_eq!(g.len(), cap, "registry starts saturated with dead slots");
+
+        let (tx, _rx) = live_sender();
+        assert!(
+            register_into(&mut g, tx, cap).is_some(),
+            "a new subscriber must be admitted once dead slots are swept"
+        );
+        assert_eq!(g.len(), 1, "the four dead slots were reclaimed");
+    }
+
+    /// Negative control: the sweep must not amount to removing the cap. With
+    /// every client genuinely alive there is nothing to reclaim, and the cap
+    /// must still refuse — otherwise the test above would pass on a build that
+    /// simply deleted the limit.
+    #[test]
+    fn register_still_refuses_when_all_clients_are_live() {
+        let cap = 4;
+        let mut g: HashMap<ClientId, ClientSender> = HashMap::new();
+        let mut keep_alive: Vec<ClientReceiver> = Vec::new();
+        for _ in 0..cap {
+            let (tx, rx) = live_sender();
+            keep_alive.push(rx);
+            g.insert(Uuid::new_v4(), tx);
+        }
+
+        let (tx, _rx) = live_sender();
+        assert!(
+            register_into(&mut g, tx, cap).is_none(),
+            "a saturated registry of LIVE clients must still refuse"
+        );
+        assert_eq!(g.len(), cap, "no live client was evicted to make room");
+    }
+
+    /// The guard's release path: a reclaimed slot frees capacity for the next
+    /// subscriber, which is what makes reconnecting work.
+    #[test]
+    fn removing_a_client_frees_its_slot() {
+        let cap = 2;
+        let mut g: HashMap<ClientId, ClientSender> = HashMap::new();
+        let (a, _rx_a) = live_sender();
+        let (b, _rx_b) = live_sender();
+        let id_a = register_into(&mut g, a, cap).expect("first admitted");
+        register_into(&mut g, b, cap).expect("second admitted");
+
+        let (c, _rx_c) = live_sender();
+        assert!(register_into(&mut g, c, cap).is_none(), "at cap");
+
+        g.remove(&id_a); // what ConnGuard::drop does via remove_client
+        let (d, _rx_d) = live_sender();
+        assert!(
+            register_into(&mut g, d, cap).is_some(),
+            "the freed slot admits the next subscriber"
+        );
+    }
 }
