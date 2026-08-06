@@ -11,6 +11,14 @@ export const onboardingState = {
   completedStepIds: [] as string[],
   loading: false,
   loaded: false,
+  // The user explicitly asked to leave the wizard ("Back to Chat" / "Go to
+  // Chat"). Suppresses the auto-redirect for the rest of the session so the
+  // escape affordance the page RENDERS is one the redirect actually honors.
+  // Without it a non-admin whose guide cannot be completed (a step's
+  // beforeNext throwing — a 403 on an admin-only toggle, or an incompatible
+  // hub item) is trapped on /onboarding with no way out. Re-armed on a user
+  // switch (see index.ts) so a genuinely new user is still onboarded.
+  dismissed: false,
 }
 
 export type OnboardingState = typeof onboardingState
