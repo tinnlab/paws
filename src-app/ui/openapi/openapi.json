@@ -17541,23 +17541,6 @@
         ]
       }
     },
-    "/api/hardware/types": {
-      "get": {
-        "description": "Types for OpenAPI generation",
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HardwareUsageUpdate"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/agent/settings": {
       "get": {
         "tags": [

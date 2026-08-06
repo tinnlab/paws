@@ -16,8 +16,8 @@ use super::detection::detect_gpu_devices;
 use super::monitoring::{add_client, remove_client, start_hardware_monitoring};
 use super::permissions::{HardwareMonitor, HardwareRead};
 use super::types::{
-    CPUInfo, HardwareInfo, HardwareInfoResponse, HardwareUsageUpdate, MemoryInfo,
-    OperatingSystemInfo, SSEHardwareUsageConnectedData, SSEHardwareUsageEvent,
+    CPUInfo, HardwareInfo, HardwareInfoResponse, MemoryInfo, OperatingSystemInfo,
+    SSEHardwareUsageConnectedData, SSEHardwareUsageEvent,
 };
 
 // =====================================================
@@ -185,20 +185,24 @@ pub fn subscribe_hardware_usage_docs(op: TransformOperation) -> TransformOperati
         .response::<401, ()>()
 }
 
-/// Type-generation anchor that also serves a one-shot usage snapshot.
-///
-/// Its primary purpose is to pull `HardwareUsageUpdate` into the OpenAPI spec
-/// (the real data flows over the SSE stream), but the route is registered and
-/// therefore reachable — so it returns a real snapshot rather than panicking
-/// with `unreachable!()` (which would 500 any caller that hits it).
-pub async fn hardware_types() -> Json<HardwareUsageUpdate> {
-    let mut sys = System::new_all();
-    sys.refresh_all();
-    Json(super::monitoring::collect_hardware_usage(&mut sys))
-}
-
-/// Documentation for types endpoint
-pub fn hardware_types_docs(op: TransformOperation) -> TransformOperation {
-    op.description("Types for OpenAPI generation")
-        .response::<200, Json<HardwareUsageUpdate>>()
-}
+// REMOVED: `hardware_types` / `hardware_types_docs` (`GET /api/hardware/types`).
+//
+// It was written as an OpenAPI type-generation anchor for `HardwareUsageUpdate`,
+// but a registered route is a REACHABLE route: it took no auth extractor and so
+// served a live host-telemetry snapshot (CPU usage/frequency, RAM, swap) to any
+// unauthenticated caller — verified 200 against a running server with no
+// Authorization header.
+//
+// It is deleted rather than permission-gated because the anchor it provided was
+// redundant. `HardwareUsageUpdate` reaches the spec transitively through
+// `SSEHardwareUsageEvent::Update(HardwareUsageUpdate)`, the documented 200
+// response of `subscribe_hardware_usage` above, which IS gated on
+// `hardware::monitor`. Gating this handler would have left a live endpoint whose
+// only purpose is type registration — surface to maintain and re-audit forever.
+// Nothing consumed it: it had no `operationId`, so codegen emitted no client
+// method and `apiEndpoints.ts` has no entry for it.
+//
+// The schema-presence guard in `openapi::tests` asserts `HardwareUsageUpdate`
+// stays in `components.schemas`, so a future change that breaks the remaining
+// (SSE) anchor fails the build instead of silently regenerating the frontend
+// types wrong.

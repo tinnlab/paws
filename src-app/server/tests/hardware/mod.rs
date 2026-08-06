@@ -446,8 +446,7 @@ async fn test_hardware_usage_stream_emits_real_snapshot_frames() {
                             Some(serde_json::from_str(d).expect("connected data is JSON"));
                     }
                     (Some("update"), Some(d)) => {
-                        update_data =
-                            Some(serde_json::from_str(d).expect("update data is JSON"));
+                        update_data = Some(serde_json::from_str(d).expect("update data is JSON"));
                     }
                     _ => {}
                 }
@@ -508,7 +507,10 @@ async fn test_hardware_usage_stream_emits_real_snapshot_frames() {
     // gpu_devices is always present (empty vec when no GPU) — proves the full
     // snapshot shape serialized, not a truncated frame.
     assert!(
-        update.get("gpu_devices").map(|g| g.is_array()).unwrap_or(false),
+        update
+            .get("gpu_devices")
+            .map(|g| g.is_array())
+            .unwrap_or(false),
         "update must include a gpu_devices array, got: {update}"
     );
 }
@@ -563,11 +565,13 @@ async fn test_subscribe_hardware_usage_sse_emits_json_frame() {
     .await
     .expect("no SSE data frame within 20s");
 
-    let json: serde_json::Value =
-        serde_json::from_str(&data_line).unwrap_or_else(|e| panic!("data frame must be JSON ({e}): {data_line}"));
+    let json: serde_json::Value = serde_json::from_str(&data_line)
+        .unwrap_or_else(|e| panic!("data frame must be JSON ({e}): {data_line}"));
     // The hardware usage payload reports CPU + memory utilization.
     assert!(
-        json.get("cpu").is_some() || json.get("memory").is_some() || json.get("timestamp").is_some(),
+        json.get("cpu").is_some()
+            || json.get("memory").is_some()
+            || json.get("timestamp").is_some(),
         "usage frame should carry hardware usage fields; got: {json}"
     );
 }
@@ -647,3 +651,124 @@ async fn test_subscribe_hardware_usage_emits_connected_frame() {
     );
 }
 
+// ============================================================================
+// `GET /api/hardware/types` — removed unauthenticated telemetry leak
+// ============================================================================
+//
+// This route used to exist as an OpenAPI type-generation anchor for
+// `HardwareUsageUpdate`. Because a registered route is a *reachable* route and
+// its handler took no auth extractor, it served a live host-telemetry snapshot
+// (CPU usage/frequency, RAM, swap) to any unauthenticated caller — verified 200
+// against a running server with no Authorization header.
+//
+// It was deleted rather than gated: the anchor was redundant (the schema is
+// pulled in transitively via `SSEHardwareUsageEvent::Update(HardwareUsageUpdate)`
+// from the `hardware::monitor`-gated usage stream), and it had no `operationId`,
+// so nothing could ever call it through the generated client.
+
+/// The route must be GONE, not merely permission-gated.
+///
+/// Asserting only "unauthenticated → 401" would still pass if someone
+/// re-introduced the handler behind an extractor, leaving a live data endpoint
+/// whose sole stated purpose is type registration. Requiring 404 for BOTH an
+/// anonymous caller and a fully-permissioned one pins the stronger property:
+/// the endpoint does not exist for anybody.
+#[tokio::test]
+async fn test_hardware_types_route_is_removed() {
+    let server = crate::common::TestServer::start().await;
+
+    // Anonymous — the exact request that used to return live telemetry.
+    let anon = reqwest::Client::new()
+        .get(server.api_url("/hardware/types"))
+        .send()
+        .await
+        .expect("Request failed");
+
+    assert_eq!(
+        anon.status(),
+        404,
+        "GET /api/hardware/types must not exist; an unauthenticated caller \
+         previously received 200 with a live host-telemetry snapshot"
+    );
+
+    // The leak regression itself: whatever the server answers, it must not be
+    // hardware telemetry. This is the assertion that keeps failing if a future
+    // change re-adds the route ungated (a 200 body carrying `cpu`/`memory`),
+    // rather than silently passing because the status code happens to differ.
+    let body = anon.text().await.unwrap_or_default();
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) {
+        assert!(
+            json.get("cpu").is_none() && json.get("memory").is_none(),
+            "unauthenticated response must not carry host telemetry, got: {json}"
+        );
+    }
+
+    // Holding BOTH hardware permissions must not resurrect it either.
+    let privileged = crate::common::test_helpers::create_user_with_permissions(
+        &server,
+        "hw_full",
+        &["hardware::read", "hardware::monitor"],
+    )
+    .await;
+
+    let authed = reqwest::Client::new()
+        .get(server.api_url("/hardware/types"))
+        .header("Authorization", format!("Bearer {}", privileged.token))
+        .send()
+        .await
+        .expect("Request failed");
+
+    assert_eq!(
+        authed.status(),
+        404,
+        "the route must be removed outright, not gated — a permitted user must \
+         also get 404 (a 200/401/403 here means the handler is back)"
+    );
+}
+
+/// Positive control for the removal: the legitimate, permission-gated surfaces
+/// that actually carry `HardwareUsageUpdate` still work. Without this, the test
+/// above could be satisfied by having broken hardware monitoring entirely.
+#[tokio::test]
+async fn test_hardware_surfaces_still_served_after_types_route_removal() {
+    let server = crate::common::TestServer::start().await;
+
+    let user = crate::common::test_helpers::create_user_with_permissions(
+        &server,
+        "hw_full_control",
+        &["hardware::read", "hardware::monitor"],
+    )
+    .await;
+
+    // Static info endpoint still serves.
+    let info = reqwest::Client::new()
+        .get(server.api_url("/hardware"))
+        .header("Authorization", format!("Bearer {}", user.token))
+        .send()
+        .await
+        .expect("Request failed");
+    assert_eq!(info.status(), 200, "GET /hardware must still serve");
+
+    // The SSE stream — the surviving carrier of `HardwareUsageUpdate` and the
+    // reason the removed route's schema anchor was redundant — still serves.
+    let stream = reqwest::Client::new()
+        .get(server.api_url("/hardware/usage-stream"))
+        .header("Authorization", format!("Bearer {}", user.token))
+        .send()
+        .await
+        .expect("Request failed");
+    assert_eq!(
+        stream.status(),
+        200,
+        "GET /hardware/usage-stream must still serve for a hardware::monitor holder"
+    );
+    assert!(
+        stream
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .contains("text/event-stream"),
+        "usage stream must still be an SSE stream"
+    );
+}
