@@ -75,6 +75,44 @@ pub fn validate_auth_type(auth_type: &str) -> Result<(), AppError> {
 /// payload is wasteful.
 const MAX_REPO_NAME_LEN: usize = 128;
 
+/// Validate a repository name: non-blank, within the length cap, free of
+/// control characters.
+///
+/// The length cap was the ONLY rule here, which left two holes that both
+/// surfaced as 500s on `POST /api/llm-repositories/{id}`:
+///
+/// * a name carrying U+0000 cannot be stored in a Postgres text column at all
+///   (`22021 invalid byte sequence for encoding "UTF8": 0x00`), and
+///   `AppError::database_error` flattened that into a generic
+///   `SYSTEM_INTERNAL_ERROR`;
+/// * a blank name was accepted outright, silently storing an unnamed
+///   repository that the admin list then renders as an empty row.
+///
+/// Rejecting every control character (not just NUL) also closes the
+/// Trojan-source display spoof the username/assistant-name gates reject —
+/// this string is rendered in the repository picker.
+pub(crate) fn validate_repository_name(name: &str) -> Result<(), AppError> {
+    if name.trim().is_empty() {
+        return Err(AppError::bad_request(
+            "VALIDATION_ERROR",
+            "Repository name cannot be empty",
+        ));
+    }
+    if name.len() > MAX_REPO_NAME_LEN {
+        return Err(AppError::bad_request(
+            "VALIDATION_ERROR",
+            format!("Repository name exceeds {MAX_REPO_NAME_LEN} chars"),
+        ));
+    }
+    if name.chars().any(char::is_control) {
+        return Err(AppError::bad_request(
+            "VALIDATION_ERROR",
+            "Repository name cannot contain control characters",
+        ));
+    }
+    Ok(())
+}
+
 /// Bound + validate the optional auth_test_api_endpoint URL. Closes
 /// 09-llm-repository F-08 (Medium): the field was unvalidated
 /// free-form text stored in DB, then fetched without scheme/host
@@ -110,13 +148,8 @@ pub(crate) fn validate_test_endpoint(endpoint: &Option<String>) -> Result<(), Ap
 pub fn validate_auth_config_for_create(
     request: &CreateLlmRepositoryRequest,
 ) -> Result<(), AppError> {
-    // Bound the repository name (09-llm-repository F-10).
-    if request.name.len() > MAX_REPO_NAME_LEN {
-        return Err(AppError::bad_request(
-            "VALIDATION_ERROR",
-            format!("Repository name exceeds {} chars", MAX_REPO_NAME_LEN),
-        ));
-    }
+    // Bound + sanity-check the repository name (09-llm-repository F-10).
+    validate_repository_name(&request.name)?;
     // Validate auth_test_api_endpoint when set (09-llm-repository F-08).
     if let Some(ac) = &request.auth_config {
         validate_test_endpoint(&ac.auth_test_api_endpoint)?;
@@ -179,13 +212,9 @@ pub fn validate_auth_config_for_update(
     request: &UpdateLlmRepositoryRequest,
 ) -> Result<(), AppError> {
     // Mirror create-time bounds (09-llm-repository F-08/F-10).
-    if let Some(name) = &request.name
-        && name.len() > MAX_REPO_NAME_LEN {
-            return Err(AppError::bad_request(
-                "VALIDATION_ERROR",
-                format!("Repository name exceeds {} chars", MAX_REPO_NAME_LEN),
-            ));
-        }
+    if let Some(name) = &request.name {
+        validate_repository_name(name)?;
+    }
     if let Some(ac) = &request.auth_config {
         validate_test_endpoint(&ac.auth_test_api_endpoint)?;
     }
@@ -376,5 +405,32 @@ pub async fn test_repository_connectivity(
                 Err(format!("Network request failed: {}", e))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repository_name_accepts_ordinary_names() {
+        for n in ["hf", "Hugging Face", "my-mirror.internal", "モデル置き場"] {
+            assert!(validate_repository_name(n).is_ok(), "input {n:?}");
+        }
+        // Exactly at the cap is legal.
+        assert!(validate_repository_name(&"a".repeat(MAX_REPO_NAME_LEN)).is_ok());
+    }
+
+    #[test]
+    fn repository_name_rejects_blank_over_long_and_control_bearing() {
+        for n in ["", "   ", "bad\u{0}name", "line\nbreak"] {
+            let err = validate_repository_name(n).expect_err("expected rejection");
+            assert_eq!(err.status_code(), 400, "input {n:?}");
+            assert_eq!(err.error_code(), "VALIDATION_ERROR", "input {n:?}");
+        }
+        let err = validate_repository_name(&"a".repeat(MAX_REPO_NAME_LEN + 1))
+            .expect_err("over-cap name must be rejected");
+        assert_eq!(err.status_code(), 400);
+        assert_eq!(err.error_code(), "VALIDATION_ERROR");
     }
 }

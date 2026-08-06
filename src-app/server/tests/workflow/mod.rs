@@ -26,6 +26,7 @@ use crate::hub::mock_release_server::MockVersion;
 use crate::hub::mock_release_server::spawn_mock_hub;
 
 
+mod create_name_bounds_test;
 mod access_and_durability;
 mod builder_agent_activity_test;
 mod builder_crud_test;

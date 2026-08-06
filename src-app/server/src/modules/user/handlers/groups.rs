@@ -25,6 +25,69 @@ use crate::modules::user::{
 };
 
 // =====================================================
+// Validation
+// =====================================================
+
+/// Max group name length, in CHARACTERS.
+///
+/// `groups.name` is `character varying(100)` (see
+/// `ziee-auth/migrations/202607140050_auth_schema.sql`) and Postgres bounds
+/// varchar by characters, not bytes.
+const GROUP_MAX_NAME_CHARS: usize = 100;
+
+/// Reject blank, over-long and control-bearing group names.
+///
+/// Create checked only `is_empty()` and update checked nothing, so all three
+/// of these reached the write and came back as a generic 500:
+/// a 101-character name overflowed the column (`22001 value too long`), a name
+/// carrying U+0000 could not be stored at all (`22021 invalid byte sequence`),
+/// and `"   "` was persisted as an unnamed group. Control/bidi characters are
+/// rejected for the same display-spoof reason `validate_assistant_name` does —
+/// a group name is rendered in the admin list and in permission dialogs.
+///
+/// Extracted so it is Tier-1 unit-testable independently of the HTTP layer.
+pub(crate) fn validate_group_name(name: &str) -> Result<(), AppError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::bad_request(
+            "VALIDATION_ERROR",
+            "Group name cannot be empty",
+        ));
+    }
+    if trimmed.chars().count() > GROUP_MAX_NAME_CHARS {
+        return Err(AppError::bad_request(
+            "VALIDATION_ERROR",
+            format!("Group name must be ≤ {GROUP_MAX_NAME_CHARS} characters"),
+        ));
+    }
+    if trimmed
+        .chars()
+        .any(|c| c.is_control() || crate::modules::auth::username::is_bidi_or_zero_width(c))
+    {
+        return Err(AppError::bad_request(
+            "VALIDATION_ERROR",
+            "Group name cannot contain control characters",
+        ));
+    }
+    Ok(())
+}
+
+/// A Postgres `text` column cannot hold U+0000 at all (`22021`), which
+/// `AppError::database_error` flattens into a generic 500. `description` is
+/// free-form prose, so unlike the name it accepts `\n`/`\t` — only the byte the
+/// storage layer physically cannot hold is rejected. Mirrors
+/// `project::handlers::reject_nul`.
+pub(crate) fn reject_nul(value: &str, field: &str) -> Result<(), AppError> {
+    if value.contains('\0') {
+        return Err(AppError::bad_request(
+            "VALIDATION_ERROR",
+            format!("{field} cannot contain NUL characters"),
+        ));
+    }
+    Ok(())
+}
+
+// =====================================================
 // Route Handlers
 // =====================================================
 
@@ -95,9 +158,10 @@ pub async fn create_group(
     origin: SyncOrigin,
     Json(request): Json<CreateGroupRequest>,
 ) -> ApiResult<Json<Group>> {
-    // Validate group name
-    if request.name.is_empty() {
-        return Err(AppError::bad_request("VALIDATION_ERROR", "Group name cannot be empty").into());
+    // Validate group name + description
+    validate_group_name(&request.name)?;
+    if let Some(ref description) = request.description {
+        reject_nul(description, "Group description")?;
     }
 
     // Prevent self-escalation: caller must hold every permission they're
@@ -167,6 +231,16 @@ pub async fn update_group(
     origin: SyncOrigin,
     Json(request): Json<UpdateGroupRequest>,
 ) -> ApiResult<Json<Group>> {
+    // Same field gates as create — this path had NONE, so an over-long or
+    // NUL-bearing name reached Postgres as a generic 500 and a blank name was
+    // silently stored.
+    if let Some(ref name) = request.name {
+        validate_group_name(name)?;
+    }
+    if let Some(ref description) = request.description {
+        reject_nul(description, "Group description")?;
+    }
+
     // Check if group exists
     let existing_group = ctx.group()
         .get_by_id(group_id)
@@ -507,4 +581,47 @@ pub fn remove_user_from_group_docs(op: TransformOperation) -> TransformOperation
         .response_with::<204, (), _>(|res| res.description("User removed successfully"))
         .response_with::<401, (), _>(|res| res.description("Unauthorized"))
         .response_with::<404, (), _>(|res| res.description("User or Group not found"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn group_name_accepts_ordinary_names() {
+        for n in ["Users", "Administrators", "Lab A — imaging", "研究チーム"] {
+            assert!(validate_group_name(n).is_ok(), "input {n:?}");
+        }
+        // Exactly at the varchar(100) bound is legal.
+        assert!(validate_group_name(&"g".repeat(GROUP_MAX_NAME_CHARS)).is_ok());
+    }
+
+    #[test]
+    fn group_name_rejects_blank_over_long_and_control_bearing() {
+        for n in ["", "   ", "bad\u{0}name", "line\nbreak", "spoof\u{202e}ed"] {
+            let err = validate_group_name(n).expect_err("expected rejection");
+            assert_eq!(err.status_code(), 400, "input {n:?}");
+            assert_eq!(err.error_code(), "VALIDATION_ERROR", "input {n:?}");
+        }
+        let err = validate_group_name(&"g".repeat(GROUP_MAX_NAME_CHARS + 1))
+            .expect_err("over-cap name must be rejected");
+        assert_eq!(err.status_code(), 400);
+        assert_eq!(err.error_code(), "VALIDATION_ERROR");
+    }
+
+    #[test]
+    fn group_name_bound_counts_characters_not_bytes() {
+        // `groups.name` is varchar(100) and Postgres bounds varchar by
+        // CHARACTERS, so 100 multi-byte characters must be accepted.
+        assert!(validate_group_name(&"é".repeat(GROUP_MAX_NAME_CHARS)).is_ok());
+    }
+
+    #[test]
+    fn description_rejects_only_nul() {
+        assert!(reject_nul("multi\nline\tprose", "Group description").is_ok());
+        let err = reject_nul("bad\u{0}description", "Group description")
+            .expect_err("expected rejection");
+        assert_eq!(err.status_code(), 400);
+        assert_eq!(err.error_code(), "VALIDATION_ERROR");
+    }
 }

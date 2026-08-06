@@ -40,7 +40,10 @@ use super::super::{
 ///   - `search` → ILIKE on name / display_name / description
 ///   - `status` → one of `enabled` | `disabled` | `system` | `user`
 ///                (translated here to enabled/is_system bool predicates)
-#[derive(Debug, Deserialize, JsonSchema)]
+///
+/// `page`/`per_page` are clamped at deserialize, like the `PaginationQuery`
+/// this claims to extend — see the `Deserialize` impl below for why.
+#[derive(Debug, JsonSchema)]
 pub struct ListAccessibleServersQuery {
     #[serde(default = "default_page")]
     pub page: u32,
@@ -50,6 +53,45 @@ pub struct ListAccessibleServersQuery {
     pub search: Option<String>,
     #[serde(default)]
     pub status: Option<String>,
+}
+
+/// Re-declaring `page`/`per_page` as bare `u32` above dropped the clamp the
+/// shared `common::PaginationQuery` exists to provide, and both failure modes
+/// it guards were live: `page=0` made `(page - 1) * per_page` a negative
+/// `OFFSET` (Postgres `2201X`), and `per_page=0` made
+/// `(total + per_page - 1) / per_page` an integer divide-by-zero that PANICKED
+/// the handler mid-response.
+///
+/// Hand-written rather than `#[serde(flatten)]` of `PaginationQuery` because
+/// `serde_urlencoded` (what axum's `Query` uses) does not support flattened
+/// structs — the same approach `assistant::handlers::PaginationQuery` takes.
+/// The `#[serde(default = …)]` attributes on the struct are consumed by the
+/// `JsonSchema` derive and are what keep both fields OPTIONAL (with their
+/// documented defaults) in the emitted OpenAPI; removing them flips the
+/// generated `types.ts` to required and breaks every caller that omits them.
+impl<'de> Deserialize<'de> for ListAccessibleServersQuery {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Raw {
+            #[serde(default = "default_page")]
+            page: u32,
+            #[serde(default = "default_per_page")]
+            per_page: u32,
+            #[serde(default)]
+            search: Option<String>,
+            #[serde(default)]
+            status: Option<String>,
+        }
+        let raw = Raw::deserialize(d)?;
+        Ok(ListAccessibleServersQuery {
+            page: raw.page.max(1),
+            per_page: raw
+                .per_page
+                .clamp(1, crate::common::PAGINATION_MAX_PER_PAGE as u32),
+            search: raw.search,
+            status: raw.status,
+        })
+    }
 }
 
 fn default_page() -> u32 {
@@ -436,4 +478,51 @@ pub fn delete_server_oauth_config_docs(op: TransformOperation) -> TransformOpera
         .response_with::<204, (), _>(|res| res.description("OAuth config removed"))
         .response_with::<401, (), _>(|res| res.description("Unauthorized"))
         .response_with::<404, (), _>(|res| res.description("Server not found"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Drives the same `Deserialize` impl axum's `Query` uses. The clamp lives
+    /// in that impl, not in the wire format, so `serde_json` exercises it
+    /// identically to `serde_urlencoded`.
+    fn parse(json: serde_json::Value) -> ListAccessibleServersQuery {
+        serde_json::from_value(json).expect("query parses")
+    }
+
+    #[test]
+    fn out_of_range_pagination_is_clamped_at_deserialize() {
+        // page=0 previously produced a negative OFFSET.
+        assert_eq!(parse(serde_json::json!({ "page": 0 })).page, 1);
+        // per_page=0 previously divided by zero computing total_pages.
+        assert_eq!(parse(serde_json::json!({ "per_page": 0 })).per_page, 1);
+        let both = parse(serde_json::json!({ "page": 0, "per_page": 0 }));
+        assert_eq!((both.page, both.per_page), (1, 1));
+        // An unbounded page is capped rather than materialized.
+        assert_eq!(
+            parse(serde_json::json!({ "per_page": 100_000 })).per_page,
+            crate::common::PAGINATION_MAX_PER_PAGE as u32
+        );
+    }
+
+    #[test]
+    fn in_range_pagination_and_filters_pass_through_untouched() {
+        let q = parse(serde_json::json!({
+            "page": 3, "per_page": 7, "search": "foo", "status": "enabled"
+        }));
+        assert_eq!(q.page, 3);
+        assert_eq!(q.per_page, 7);
+        assert_eq!(q.search.as_deref(), Some("foo"));
+        assert_eq!(q.status.as_deref(), Some("enabled"));
+    }
+
+    #[test]
+    fn omitted_pagination_uses_the_documented_defaults() {
+        let q = parse(serde_json::json!({}));
+        assert_eq!(q.page, 1);
+        assert_eq!(q.per_page, 20);
+        assert!(q.search.is_none());
+        assert!(q.status.is_none());
+    }
 }

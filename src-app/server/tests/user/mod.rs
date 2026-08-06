@@ -3,6 +3,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 mod delete_cascade_test;
+mod group_name_validation_test;
 mod display_name_email_validation_test;
 mod sync_emit_test;
 mod username_validation_test;

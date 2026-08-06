@@ -13,6 +13,7 @@ use crate::{
     common::{ApiResult, AppError},
     modules::{
         chat::core::{
+            handlers::validation,
             permissions::*,
             types::{
                 EditMessageRequest, EditMessageResponse, MessageHistoryQuery, MessageSearchQuery,
@@ -193,6 +194,10 @@ pub async fn edit_message(
     if request.content.trim().is_empty() {
         return Err(AppError::bad_request("VALIDATION_ERROR", "Message content cannot be empty").into());
     }
+    // The edited text lands in the same `jsonb` content column as a fresh send,
+    // so it needs the same NUL gate — otherwise Postgres rejects the write and
+    // the caller sees a generic 500 instead of a validation error.
+    validation::reject_nul_in_content(&request.content)?;
 
     // Verify conversation exists and user owns it
     let conversation = Repos.chat.core.get_conversation( conversation_id, auth.user.id)

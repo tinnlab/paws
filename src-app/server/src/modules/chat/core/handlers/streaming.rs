@@ -15,6 +15,7 @@ use crate::{
     modules::{
         chat::core::{
             extension::{ExtensionRegistry, SendMessageRequest},
+            handlers::validation,
             permissions::*,
             services::StreamingService,
         },
@@ -45,6 +46,13 @@ pub async fn send_message(
     Path(conversation_id): Path<Uuid>,
     Json(request): Json<SendMessageRequest>,
 ) -> ApiResult<Json<SendMessageResponse>> {
+    // Field-shape validation FIRST — both of these used to reach Postgres and
+    // come back as a generic 500: a NUL in `content` is unrepresentable in the
+    // `jsonb` content column, and `fork_level` is a free-form String fronting a
+    // CHECK constraint.
+    validation::reject_nul_in_content(&request.content)?;
+    validation::validate_fork_level(&request.fork_level)?;
+
     // Verify conversation exists and user owns it
     let _conversation = Repos
         .chat
@@ -150,6 +158,9 @@ pub fn send_message_docs(op: TransformOperation) -> TransformOperation {
              `sync:conversation` notification so other surfaces refetch.",
         )
         .response::<200, Json<SendMessageResponse>>()
+        .response_with::<400, (), _>(|res| {
+            res.description("Invalid content (NUL byte) or fork_level")
+        })
         .response::<404, ()>()
         .response::<401, ()>()
 }
