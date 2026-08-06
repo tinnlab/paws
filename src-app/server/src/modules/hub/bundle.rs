@@ -538,6 +538,24 @@ struct LocalExtraction {
     total_bytes: u64,
 }
 
+/// A failure to DECODE the uploaded bytes (bad gzip header, truncated
+/// stream, corrupt tar header). The bytes came from the client — the raw
+/// `SKILL.md`/`workflow.yaml` a user dropped into the import dialog, or an
+/// interrupted upload — so this is a 4xx, NOT `internal_with_id` (which
+/// answers 500 with a generic "An internal error occurred" that tells the
+/// user nothing and reads as a server fault). 422 matches every other
+/// bundle-content rejection below.
+///
+/// Only failures reading the ARCHIVE STREAM route here. Filesystem failures
+/// (create_dir_all / open / write / rename) are genuinely internal and keep
+/// using `internal_with_id`.
+fn malformed_archive(e: impl std::fmt::Display) -> AppError {
+    AppError::unprocessable_entity(
+        "BUNDLE_MALFORMED_ARCHIVE",
+        format!("upload is not a readable tar.gz archive: {e}"),
+    )
+}
+
 /// Stream-extract a tar.gz with bomb guards + path safety. Caller
 /// owns staging / promotion / cleanup.
 fn extract_tar_gz_to(
@@ -558,12 +576,11 @@ fn extract_tar_gz_to(
     // pass the file-count + byte caps while exhausting inodes at extract.
     let mut dir_count: u32 = 0;
 
-    for entry_result in archive.entries().map_err(|e| {
-        AppError::internal_with_id(e)
-    })? {
-        let mut entry = entry_result.map_err(|e| {
-            AppError::internal_with_id(e)
-        })?;
+    for entry_result in archive.entries().map_err(AppError::internal_with_id)? {
+        // First read of the gz/tar stream — a non-gzip body ("invalid gzip
+        // header") or a truncated upload ("unexpected end of file") lands
+        // HERE. Client input, so 422.
+        let mut entry = entry_result.map_err(malformed_archive)?;
         let entry_type = entry.header().entry_type();
 
         // Reject anything but regular files + directories.
@@ -577,12 +594,8 @@ fn extract_tar_gz_to(
             ));
         }
 
-        let path = entry
-            .path()
-            .map_err(|e| {
-                AppError::internal_with_id(e)
-            })?
-            .into_owned();
+        // A tar header whose path bytes don't decode is corrupt client data.
+        let path = entry.path().map_err(malformed_archive)?.into_owned();
 
         // Path safety: no `..`, no absolute, no Windows root.
         // Only allow Normal components.
@@ -621,9 +634,8 @@ fn extract_tar_gz_to(
         }
 
         // Regular file.
-        let size = entry.header().size().map_err(|e| {
-            AppError::internal_with_id(e)
-        })?;
+        // A corrupt size field in the tar header is likewise client data.
+        let size = entry.header().size().map_err(malformed_archive)?;
         if size > MAX_BUNDLE_SINGLE_FILE_BYTES {
             return Err(AppError::unprocessable_entity(
                 "BUNDLE_FILE_TOO_LARGE",
@@ -661,9 +673,9 @@ fn extract_tar_gz_to(
         // EOF-trimmed entry).
         let mut buf: Vec<u8> = Vec::with_capacity(size as usize);
         let mut reader = (&mut entry).take(MAX_BUNDLE_SINGLE_FILE_BYTES + 1);
-        reader.read_to_end(&mut buf).map_err(|e| {
-            AppError::internal_with_id(e)
-        })?;
+        // Reads the ARCHIVE stream (not the disk), so a failure here means
+        // the upload's gz/tar payload is truncated or corrupt.
+        reader.read_to_end(&mut buf).map_err(malformed_archive)?;
         if buf.len() as u64 > MAX_BUNDLE_SINGLE_FILE_BYTES {
             return Err(AppError::unprocessable_entity(
                 "BUNDLE_FILE_TOO_LARGE",
@@ -1181,6 +1193,52 @@ mod tests {
                 || msg.contains("256")),
             "file-count cap should fire, got: {err}"
         );
+    }
+
+    /// A body that isn't a gzip stream at all — the single most common real
+    /// upload mistake (the import dialogs accept any file, so users drop the
+    /// raw `workflow.yaml` / `SKILL.md` in). The decode failure is CLIENT
+    /// input, not a server fault, so it must not surface as a 5xx.
+    #[tokio::test]
+    async fn rejects_non_gzip_body_as_client_error() {
+        let tmp = tempdir().unwrap();
+        let err = extract_tarball_bytes(
+            b"steps:\n  - id: hello\n    kind: llm\n",
+            &tmp.path().join("wf").join("0.0.0-dev"),
+            BundleKind::Workflow,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            err.status_code(),
+            422,
+            "a non-gzip upload is bad input, not an internal error; got {}: {err}",
+            err.status_code()
+        );
+        assert_eq!(err.error_code(), "BUNDLE_MALFORMED_ARCHIVE");
+    }
+
+    /// A gzip stream truncated mid-entry: the header decodes, then the tar
+    /// read fails partway. Same class as above — malformed client input.
+    #[tokio::test]
+    async fn rejects_truncated_targz_as_client_error() {
+        let body = build_tar_gz(&[("SKILL.md", 0o644, b"---\nname: x\n---\nbody")], None);
+        let truncated = body[..body.len() / 2].to_vec();
+        let tmp = tempdir().unwrap();
+        let err = extract_tarball_bytes(
+            &truncated,
+            &tmp.path().join("sk").join("0.0.0-dev"),
+            BundleKind::Skill,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            err.status_code(),
+            422,
+            "a truncated upload is bad input, not an internal error; got {}: {err}",
+            err.status_code()
+        );
+        assert_eq!(err.error_code(), "BUNDLE_MALFORMED_ARCHIVE");
     }
 
     #[test]
