@@ -14,6 +14,7 @@ export default (set: McpServersStepSet, get: McpServersStepGet) =>
     } = get()
     const errors: string[] = []
     const newlyInstalled: string[] = []
+    set({ applyErrors: [] })   // a retry starts clean
 
     // 1. Install hub servers — skip already-installed (idempotent so both
     //    McpServersStep and FinishStep can register this handler).
@@ -59,7 +60,11 @@ export default (set: McpServersStepSet, get: McpServersStepGet) =>
       }
     }
 
-    if (errors.length > 0) {
-      throw new Error(`Failed to apply MCP server changes: ${errors.join('; ')}`)
-    }
+    // Record, do not throw. Throwing aborted the caller's before-next handler
+    // (OnboardingPage `handleGlobalNext`), so `completeStep` and `completeGuide`
+    // never ran — one optional install that could not succeed made the guide
+    // permanently uncompletable. Combined with the redirect that returned a
+    // non-admin to /onboarding on every navigation, that was an inescapable
+    // trap. The user still needs to know, so failures surface on the step.
+    set({ applyErrors: errors })
   }

@@ -19,7 +19,7 @@ import { McpServersStep as McpServersStepStore } from '@/modules/onboarding/guid
 
 export default function McpServersStep({ registerBeforeNext }: OnboardingStepProps) {
   const selectedMcpServerIds = McpServersStepStore.selectedMcpServerIds
-  const { systemServers, hubServers, installedNames, loadingServers, serversError, disabledSystemIds } = McpServersStepStore
+  const { systemServers, hubServers, installedNames, loadingServers, serversError, disabledSystemIds, applyErrors } = McpServersStepStore
 
   // The step renders for every authenticated user, but the controls are
   // admin-only. Non-admins see just the intro paragraph and continue.
@@ -61,6 +61,27 @@ export default function McpServersStep({ registerBeforeNext }: OnboardingStepPro
           ? 'MCP servers extend your AI assistant with tools and data access. Toggle the ones you want to use, or install new ones from the Hub.'
           : 'MCP servers extend your AI assistant with tools and data access. Your administrator has already configured the servers available to you.'}
       </Paragraph>
+
+      {applyErrors.length > 0 && canSeeAdminControls && (
+        // A warning, not an error: these are optional installs that did not take.
+        // Onboarding still completes — the previous behaviour threw here, which
+        // made one unavailable hub item block the guide forever.
+        <Alert
+          data-testid="onboarding-mcp-apply-warning"
+          tone="warning"
+          title="Some MCP servers could not be set up"
+          className="mb-4"
+        >
+          <ul className="list-disc ps-5">
+            {applyErrors.map(e => (
+              <li key={e}>{e}</li>
+            ))}
+          </ul>
+          <p className="mt-2">
+            You can finish setup and add these later from Settings.
+          </p>
+        </Alert>
+      )}
 
       {serversError && canSeeAdminControls && (
         <Alert data-testid="onboarding-mcp-error-alert" tone="error" title={serversError} className="mb-4" />
