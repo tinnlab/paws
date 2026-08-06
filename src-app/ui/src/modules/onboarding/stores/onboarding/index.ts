@@ -23,6 +23,10 @@ const OnboardingDef = defineStore<OnboardingState, Actions>('Onboarding', {
           draft.completedGuideIds = []
           draft.completedStepIds = []
           draft.loaded = false
+          // Re-arm the onboarding gate for the incoming identity: a "leave the
+          // wizard" choice belongs to the user who made it, never to the next
+          // one to sign in on this device.
+          draft.dismissed = false
         })
         if (userId) void actions.loadProgress()
       },

@@ -100,6 +100,16 @@ export default function OnboardingPage() {
     }
   }, [guide, currentStepIndex, navigate])
 
+  // Leaving the wizard must RECORD the choice, not just navigate: the
+  // `routerEffects` OnboardingRedirect re-evaluates on the very next
+  // pathname change and would send a non-admin with an incomplete guide
+  // straight back here, making these buttons no-ops. See
+  // `shouldRedirectToOnboarding`.
+  const leaveWizard = useCallback(() => {
+    OnboardingStore.dismiss()
+    navigate('/chat')
+  }, [navigate])
+
   const handleSelectGuide = (g: OnboardingSlot) => {
     setActiveGuideId(g.id)
     setManualStep(null)
@@ -129,7 +139,7 @@ export default function OnboardingPage() {
         <Button
           data-testid="onboarding-no-guides-go-to-chat"
           variant="default"
-          onClick={() => navigate('/chat')}
+          onClick={() => leaveWizard()}
         >
           Go to Chat
         </Button>
@@ -161,7 +171,7 @@ export default function OnboardingPage() {
           variant="ghost"
           size="default"
           icon={<ArrowLeft />}
-          onClick={() => navigate('/chat')}
+          onClick={() => leaveWizard()}
           className="!px-0 mb-3"
         >
           Back to Chat

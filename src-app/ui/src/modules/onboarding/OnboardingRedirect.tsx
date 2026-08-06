@@ -15,6 +15,11 @@
  *     loop they can't escape (no way to mark guides "done" from
  *     the limited remote surface). Admins can still navigate to
  *     `/onboarding` manually from the sidebar.
+ *   - User explicitly left the wizard ("Back to Chat" / "Go to Chat").
+ *     The SAME trap the admin exemption above describes applies to a
+ *     non-admin whose guide cannot be completed, and the exemption did
+ *     not cover them: the page renders escape buttons, and this effect
+ *     used to undo them on the next render.
  *   - User already on `/onboarding` (don't fight the user).
  *   - User has completed every registered guide.
  *
@@ -25,13 +30,14 @@
 import { useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import type { OnboardingSlot } from './types/OnboardingSlot'
+import { shouldRedirectToOnboarding } from './shouldRedirectToOnboarding'
 import { Onboarding } from '@/modules/onboarding/stores/onboarding'
 import { Auth as AuthStore } from '@/modules/auth/Auth.store'
 import { ModuleSystem } from '@ziee/framework/stores'
 
 export function OnboardingRedirect() {
   const { isAuthenticated, user, isInitializing } = AuthStore
-  const { completedGuideIds, loaded } = Onboarding
+  const { completedGuideIds, loaded, dismissed } = Onboarding
   const guides = (ModuleSystem.slots.get('onboarding') as
     | OnboardingSlot[]
     | undefined) ?? []
@@ -44,19 +50,26 @@ export function OnboardingRedirect() {
     // and calls initAuth() which sets isInitializing=true). OnboardingRedirect
     // is rendered OUTSIDE AuthGuard (as a routerEffect sibling of <Routes>),
     // so it must independently respect this guard.
-    if (isInitializing) return
-    if (!isAuthenticated || !user) return
-    if (user.is_admin === true) return
-    // Wait until the onboarding store has fetched progress — without this
-    // guard a fully-onboarded user would briefly look "incomplete"
-    // (empty list, loaded=false) on first paint and get mis-redirected.
-    if (!loaded) return
-    if (location.pathname.startsWith('/onboarding')) return
-    const firstIncomplete = guides.find(g => !completedGuideIds.includes(g.id))
-    if (firstIncomplete) {
-      navigate(`/onboarding?id=${firstIncomplete.id}`, { replace: true })
+    // The decision itself lives in `shouldRedirectToOnboarding` so it can be
+    // asserted without a mounted router — including the escape case, which
+    // had no test and was the reason a non-admin could be locked in here.
+    // Note `loaded` gates the fetch race: without it a fully-onboarded user
+    // would briefly look "incomplete" on first paint and get mis-redirected.
+    const target = shouldRedirectToOnboarding({
+      isInitializing,
+      isAuthenticated,
+      hasUser: !!user,
+      isAdmin: user?.is_admin === true,
+      loaded,
+      dismissed,
+      pathname: location.pathname,
+      guideIds: guides.map(g => g.id),
+      completedGuideIds,
+    })
+    if (target) {
+      navigate(`/onboarding?id=${target}`, { replace: true })
     }
-  }, [isAuthenticated, user, isInitializing, completedGuideIds, loaded, guides, location.pathname, navigate])
+  }, [isAuthenticated, user, isInitializing, completedGuideIds, loaded, dismissed, guides, location.pathname, navigate])
 
   return null
 }

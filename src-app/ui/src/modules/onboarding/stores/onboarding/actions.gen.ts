@@ -5,6 +5,7 @@
 export type Actions = {
   completeGuide: typeof import('./actions/completeGuide')['default']
   completeStep: typeof import('./actions/completeStep')['default']
+  dismiss: typeof import('./actions/dismiss')['default']
   loadProgress: typeof import('./actions/loadProgress')['default']
   reset: typeof import('./actions/reset')['default']
   setNextError: typeof import('./actions/setNextError')['default']
