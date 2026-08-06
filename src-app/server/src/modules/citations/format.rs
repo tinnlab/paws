@@ -41,11 +41,89 @@ impl ExportFormat {
 /// Render `items` (CSL-JSON values) in the requested format. `style_path` is an
 /// optional path to a `.csl` file (used only by `Text`); `None` → pandoc's
 /// built-in default style.
+/// Coerce a stored CSL-JSON record into something a STRICT CSL reader accepts.
+///
+/// doi.org content negotiation is the documented way to get CSL-JSON, but the
+/// records Crossref serves through it are not strictly CSL: `ISSN`/`ISBN` come
+/// back as arrays, and extra Crossref-native keys ride along (`link`, `license`,
+/// `assertion`, `subject`, `relation`, `reference`, `content-domain`). Pandoc is
+/// a strict reader and rejects the whole file:
+///
+///   Error in $[0]: expected String or Number, but encountered Array
+///
+/// which surfaced as a hard 500 on GET /api/citations/export for any library
+/// containing a single Crossref-sourced entry — the export was unusable, not
+/// degraded. Found by the live UI explorer, reproduced from the stored record.
+///
+/// Sanitising here rather than at ingest is deliberate: the stored blob stays a
+/// faithful copy of what the provider returned (it is the source of truth, and
+/// re-fetching is expensive), and every export path shares one normalisation.
+fn sanitize_csl(item: &Value) -> Value {
+    // Keys that are Crossref-native and have no CSL meaning. Passing them through
+    // is what makes a strict reader fail; none carry citation semantics.
+    const DROP: &[&str] = &[
+        "link", "license", "assertion", "relation", "reference", "content-domain",
+        "journal-issue", "resource", "update-policy", "subject", "article-number",
+        "alternative-id", "prefix", "member", "score", "deposited", "indexed",
+        "reference-count", "references-count", "is-referenced-by-count",
+    ];
+    // CSL declares these as a single value; Crossref sends arrays. Take the first.
+    const FIRST_OF_ARRAY: &[&str] = &["ISSN", "ISBN", "container-title", "title", "short-title"];
+
+    let Some(obj) = item.as_object() else { return item.clone() };
+    let mut out = serde_json::Map::new();
+    for (k, v) in obj {
+        if DROP.contains(&k.as_str()) {
+            continue;
+        }
+        if FIRST_OF_ARRAY.contains(&k.as_str()) {
+            if let Some(arr) = v.as_array() {
+                // An empty array means the field is simply absent, not empty-string.
+                match arr.first() {
+                    Some(first) => {
+                        out.insert(k.clone(), first.clone());
+                    }
+                    None => {}
+                }
+                continue;
+            }
+        }
+        // Any other bare array/object where CSL wants a scalar would fail the same
+        // way. Name-ish and date-ish fields are legitimately structured, so they
+        // are left alone; everything else that is an array of scalars collapses.
+        if let Some(arr) = v.as_array() {
+            let structured = matches!(
+                k.as_str(),
+                "author" | "editor" | "translator" | "container-author" | "original-author"
+                    | "recipient" | "interviewer" | "composer" | "director" | "editorial-director"
+                    | "illustrator" | "reviewed-author" | "issued" | "accessed" | "event-date"
+                    | "submitted" | "original-date" | "categories"
+            );
+            if !structured {
+                if arr.iter().all(|x| x.is_string() || x.is_number()) {
+                    match arr.first() {
+                        Some(first) => {
+                            out.insert(k.clone(), first.clone());
+                        }
+                        None => {}
+                    }
+                } // an array of objects in a non-structured field: drop it
+                continue;
+            }
+        }
+        out.insert(k.clone(), v.clone());
+    }
+    Value::Object(out)
+}
+
 pub async fn export(
     items: Vec<Value>,
     format: ExportFormat,
     style_path: Option<PathBuf>,
 ) -> Result<String, AppError> {
+    // Every format goes through the same normalisation, so a record that exports
+    // as CSL-JSON cannot fail as BibTeX or text.
+    let items: Vec<Value> = items.iter().map(sanitize_csl).collect();
     match format {
         ExportFormat::CslJson => serde_json::to_string_pretty(&items)
             .map_err(|e| AppError::internal_error(format!("csljson serialize: {e}"))),
@@ -355,5 +433,68 @@ mod tests {
             .expect("ris export is infallible");
         assert!(ris.contains("TY  - JOUR"));
         assert!(ris.contains("DO  - 10.1038/abc"));
+    }
+}
+
+#[cfg(test)]
+mod sanitize_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// The exact shape that produced a 500 in the live rig: a Crossref record
+    /// served through doi.org's CSL-JSON negotiation, with ISSN as an array and
+    /// Crossref-native keys attached.
+    fn crossref_shaped() -> Value {
+        json!({
+            "id": "cf7199ff", "type": "article-journal",
+            "title": "Highly accurate protein structure prediction",
+            "ISSN": ["0028-0836", "1476-4687"],
+            "link": [{"URL": "https://www.nature.com/x.pdf", "content-type": "application/pdf"}],
+            "license": [{"URL": "https://creativecommons.org/licenses/by/4.0"}],
+            "subject": [], "subtitle": [],
+            "assertion": [{"name": "received", "group": {"name": "ArticleHistory"}}],
+            "reference-count": 1234,
+            "author": [{"family": "Jumper", "given": "John"}],
+            "issued": {"date-parts": [[2021, 7, 15]]},
+            "container-title": ["Nature"]
+        })
+    }
+
+    #[test]
+    fn strips_crossref_extras_and_flattens_scalar_arrays() {
+        let out = sanitize_csl(&crossref_shaped());
+        let o = out.as_object().unwrap();
+        // scalar-in-CSL fields become scalars
+        assert_eq!(o.get("ISSN").unwrap(), "0028-0836");
+        assert_eq!(o.get("container-title").unwrap(), "Nature");
+        // Crossref-native keys are gone
+        for k in ["link", "license", "assertion", "subject", "reference-count"] {
+            assert!(!o.contains_key(k), "{k} should have been dropped");
+        }
+        // an empty array is absence, not empty string
+        assert!(!o.contains_key("subtitle"));
+        // structured CSL fields survive untouched
+        assert!(o.get("author").unwrap().is_array());
+        assert!(o.get("issued").unwrap().is_object());
+        assert_eq!(o.get("type").unwrap(), "article-journal");
+    }
+
+    #[test]
+    fn no_bare_arrays_remain_where_csl_wants_a_scalar() {
+        let out = sanitize_csl(&crossref_shaped());
+        for (k, v) in out.as_object().unwrap() {
+            if v.is_array() {
+                assert!(
+                    matches!(k.as_str(), "author" | "editor" | "translator" | "categories"),
+                    "unexpected array left in {k}, a strict CSL reader would reject it"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn already_clean_csl_is_unchanged() {
+        let clean = json!({"id": "x", "type": "book", "title": "T", "ISSN": "1234-5678"});
+        assert_eq!(sanitize_csl(&clean), clean);
     }
 }
