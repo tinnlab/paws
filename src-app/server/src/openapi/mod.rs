@@ -299,4 +299,60 @@ update_check:
             panic!("{} types.ts parity mismatch (trailing-content difference)", ui_rel);
         }
     }
+
+    /// SCHEMA-ANCHOR GUARD for `HardwareUsageUpdate`.
+    ///
+    /// `GET /api/hardware/types` was deleted: it existed only to pull this type
+    /// into the spec, but being a registered route it also served a live host
+    /// telemetry snapshot to unauthenticated callers. The type is still emitted
+    /// because `SSEHardwareUsageEvent::Update(HardwareUsageUpdate)` `$ref`s it,
+    /// and that enum is the documented 200 response of the
+    /// `hardware::monitor`-gated `/api/hardware/usage-stream`.
+    ///
+    /// That anchor is now the ONLY one. If a refactor ever changes the stream's
+    /// documented response type, the schema would silently vanish and the
+    /// frontend's `types.ts` would regenerate WITHOUT `HardwareUsageUpdate` —
+    /// breaking `hardware/state.ts`'s `currentUsage` typing. The parity test
+    /// above cannot catch that (it would happily regenerate a consistent-but-
+    /// wrong pair), so assert the invariant directly.
+    #[test]
+    fn hardware_usage_update_schema_still_emitted() {
+        for ui_rel in ["../ui", "../desktop/ui"] {
+            let manifest = env!("CARGO_MANIFEST_DIR");
+            let openapi_path = format!("{}/{}/openapi/openapi.json", manifest, ui_rel);
+            let spec: serde_json::Value = serde_json::from_str(
+                &std::fs::read_to_string(&openapi_path)
+                    .unwrap_or_else(|e| panic!("read {}: {}", openapi_path, e)),
+            )
+            .expect("openapi.json parses");
+
+            assert!(
+                spec["components"]["schemas"]["HardwareUsageUpdate"].is_object(),
+                "{} openapi.json lost components.schemas.HardwareUsageUpdate — the \
+                 SSEHardwareUsageEvent anchor broke; the frontend types would \
+                 regenerate without it",
+                ui_rel
+            );
+
+            // Pin the anchor itself, not just its effect, so the failure names
+            // the actual cause.
+            let sse = &spec["components"]["schemas"]["SSEHardwareUsageEvent"];
+            assert!(
+                sse.to_string()
+                    .contains("#/components/schemas/HardwareUsageUpdate"),
+                "{} SSEHardwareUsageEvent must $ref HardwareUsageUpdate — it is the \
+                 sole remaining schema anchor now that /api/hardware/types is gone",
+                ui_rel
+            );
+
+            // The deleted route must not come back: it served live CPU/RAM/swap
+            // telemetry to unauthenticated callers.
+            assert!(
+                spec["paths"]["/api/hardware/types"].is_null(),
+                "{} /api/hardware/types reappeared in the spec — that route was an \
+                 unauthenticated host-telemetry leak and must stay deleted",
+                ui_rel
+            );
+        }
+    }
 }

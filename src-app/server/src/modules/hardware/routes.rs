@@ -13,8 +13,14 @@ pub fn hardware_router() -> ApiRouter {
             "/hardware/usage-stream",
             get_with(subscribe_hardware_usage, subscribe_hardware_usage_docs),
         )
-        .api_route(
-            "/hardware/types",
-            get_with(hardware_types, hardware_types_docs),
-        )
+    // NOTE: there is deliberately no `/hardware/types` route. It used to exist
+    // purely as an OpenAPI type-generation anchor for `HardwareUsageUpdate`, but
+    // being a registered route it was also *reachable* — ungated — and returned a
+    // live host-telemetry snapshot (CPU load/frequency, RAM, swap) to any
+    // unauthenticated caller. The anchor was redundant: `HardwareUsageUpdate` is
+    // already pulled into the spec transitively via `SSEHardwareUsageEvent`
+    // (`Update(HardwareUsageUpdate)`), which is the documented 200 response of
+    // the `hardware::monitor`-gated `/hardware/usage-stream` above. A schema
+    // anchor must never be a live data route — if you need a new type in the
+    // spec, reference it from a real, permission-gated endpoint's response.
 }
