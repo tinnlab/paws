@@ -189,7 +189,7 @@
             "description": "Username already taken"
           },
           "400": {
-            "description": "Username is empty"
+            "description": "Username or display name failed validation"
           }
         },
         "security": [
@@ -12242,6 +12242,9 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Invalid content (NUL byte) or fork_level"
           },
           "404": {
             "description": "no content"
@@ -35440,7 +35443,7 @@
         ]
       },
       "ListAccessibleServersQuery": {
-        "description": "Query params for the user-accessible MCP server list.\n\n Extends `PaginationQuery` with server-side filters that match\n the UI's controls 1-to-1:\n   - `search` → ILIKE on name / display_name / description\n   - `status` → one of `enabled` | `disabled` | `system` | `user`\n                (translated here to enabled/is_system bool predicates)",
+        "description": "Query params for the user-accessible MCP server list.\n\n Extends `PaginationQuery` with server-side filters that match\n the UI's controls 1-to-1:\n   - `search` → ILIKE on name / display_name / description\n   - `status` → one of `enabled` | `disabled` | `system` | `user`\n                (translated here to enabled/is_system bool predicates)\n\n `page`/`per_page` are clamped at deserialize, like the `PaginationQuery`\n this claims to extend — see the `Deserialize` impl below for why.",
         "type": "object",
         "properties": {
           "page": {

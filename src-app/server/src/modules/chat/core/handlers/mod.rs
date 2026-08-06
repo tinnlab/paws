@@ -5,6 +5,7 @@ pub mod conversations;
 pub mod messages;
 pub mod providers;
 pub mod streaming;
+pub mod validation;
 
 // Re-export for convenience
 pub use branches::*;

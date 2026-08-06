@@ -21,6 +21,7 @@ pub(crate) mod helpers;
 // `file_attachments_*` tests moved to `tests/file/`, and `mcp_*`
 // tests moved to `tests/mcp/`, as part of the chat→file/mcp bridge
 // extraction. What remains here tests chat's own surface only.
+mod adversarial_input_test;
 mod permissions_test;
 mod conversations_test;
 // Content search + sort on the conversation list endpoint (chat-power-features).

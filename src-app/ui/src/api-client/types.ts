@@ -2932,6 +2932,9 @@ export interface LinkAccountRequest {
  *    - `search` → ILIKE on name / display_name / description
  *    - `status` → one of `enabled` | `disabled` | `system` | `user`
  *                 (translated here to enabled/is_system bool predicates)
+ *
+ *  `page`/`per_page` are clamped at deserialize, like the `PaginationQuery`
+ *  this claims to extend — see the `Deserialize` impl below for why.
  */
 export interface ListAccessibleServersQuery {
   page?: number

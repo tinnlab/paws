@@ -227,6 +227,17 @@ pub(crate) async fn install_workflow_from_bytes(
     let name = format!("local.dev.{owner_ns}/{slug}");
     let version = "0.0.0-dev".to_string();
 
+    // Bound the slug BEFORE it is used to build a path. It is a directory
+    // COMPONENT of `target_dir` below, and most filesystems cap a component at
+    // 255 bytes — so a long posted name died inside `extract_tarball_bytes`
+    // with `ENAMETOOLONG` and surfaced as a generic 500 SYSTEM_INTERNAL_ERROR.
+    // This check (slug body ≤ 87 chars, for the composed MCP tool name) is
+    // strictly tighter than the filesystem's limit and already returns the
+    // typed 400, so running it first makes the path unreachable. It used to sit
+    // after extraction, where it could only ever catch names the filesystem had
+    // already accepted.
+    crate::modules::workflow_mcp::tools::check_install_slug_len(&name)?;
+
     // H1: owner-scope the on-disk dir too.
     let app_data_dir = crate::core::get_app_data_dir();
     let target_dir = app_data_dir
@@ -268,13 +279,6 @@ pub(crate) async fn install_workflow_from_bytes(
         validate::validate_for_install_async(&workflow_def, &extraction.extracted_path, true)
             .await
     {
-        let _ = tokio::fs::remove_dir_all(&extraction.extracted_path).await;
-        return Err(e.into());
-    }
-
-    // Reject if the computed MCP tool slug would overflow the 128-char
-    // composed-name cap (slug body > 87 chars). Audit gap 4 / plan §4.
-    if let Err(e) = crate::modules::workflow_mcp::tools::check_install_slug_len(&name) {
         let _ = tokio::fs::remove_dir_all(&extraction.extracted_path).await;
         return Err(e.into());
     }
