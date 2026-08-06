@@ -193,20 +193,24 @@ test.describe('Projects - Knowledge / file attach', () => {
     expect(cardWidthFixed96).toBe(false)
   })
 
-  test('row-variant delete requires Popconfirm — Cancel preserves the file', async ({
+  test('row-variant remove requires Popconfirm, and detaches without deleting from the library', async ({
     page,
     testInfra,
   }) => {
-    // Regression for the "click trash, file deletes immediately"
-    // bug. Manage drawer's row-variant FileCard now wraps its delete
-    // button in a Popconfirm; Cancel must not delete.
+    // Two regressions in one journey:
+    //  1. "click trash, file removes immediately" — the row-variant FileCard
+    //     wraps its remove button in a Popconfirm; Cancel must not remove.
+    //  2. SILENT DATA LOSS — confirming used to call `DELETE /api/files/{id}`,
+    //     destroying the file library-wide (and so in every other project it
+    //     was attached to). The final assertion is the one that pins it: after
+    //     a confirmed removal the file must STILL resolve in the library.
     const { baseURL } = testInfra
     await getProjectCard(page, 'Knowledge Target').click()
     await page.waitForURL(/\/projects\/[0-9a-f-]+$/)
     const projectId = page.url().split('/').pop()!
     const token = await getAdminToken(baseURL)
 
-    const status = await page.evaluate(
+    const uploaded = await page.evaluate(
       async ([apiBase, pid, t]) => {
         const fd = new FormData()
         fd.append('file', new Blob(['x'], { type: 'text/plain' }), 'doomed.txt')
@@ -215,11 +219,12 @@ test.describe('Projects - Knowledge / file attach', () => {
           headers: { Authorization: `Bearer ${t}` },
           body: fd,
         })
-        return r.status
+        return { status: r.status, id: r.ok ? (await r.json()).id : null }
       },
       [baseURL, projectId, token],
     )
-    expect(status).toBe(201)
+    expect(uploaded.status).toBe(201)
+    expect(uploaded.id).toBeTruthy()
 
     await page.reload()
     await byTestId(page, 'project-knowledge-manage-button').click()
@@ -227,32 +232,51 @@ test.describe('Projects - Knowledge / file attach', () => {
     await drawer.waitFor({ state: 'visible' })
     const row = () =>
       drawer.locator('[data-testid="file-card"][data-filename="doomed.txt"]')
-    // The delete trigger is a tooltip-wrapped Base-UI alert-dialog trigger that
+    // The remove trigger is a tooltip-wrapped Base-UI alert-dialog trigger that
     // sits below the fold, animates ("not stable"), and re-renders/detaches with
     // the row — so dispatch the click directly instead of the actionability path.
-    const deleteBtn = () =>
+    // (The testid keeps its legacy `-delete-` spelling; the registry that
+    // validates it lives in the `sdk` submodule.)
+    const removeBtn = () =>
       row().locator('[data-testid^="file-project-delete-btn-"]')
     await expect(row()).toBeVisible()
 
-    // Click the row's delete button — should open the Confirm
-    // (AlertDialog), NOT delete immediately.
-    await deleteBtn().dispatchEvent('click')
+    // Click the row's remove button — should open the Confirm
+    // (AlertDialog), NOT remove immediately.
+    await removeBtn().dispatchEvent('click')
     const confirm = page.getByRole('alertdialog')
     await expect(confirm).toBeVisible({ timeout: 5000 })
+
+    // The dialog must promise a project-scoped removal, not a library delete —
+    // the copy/behaviour mismatch IS the bug.
+    await expect(confirm).toContainText('Remove this file from the project?')
 
     // Cancel (Escape dismisses the Confirm) — the file must remain.
     await page.keyboard.press('Escape')
     await expect(confirm).toBeHidden()
     await expect(row()).toBeVisible()
 
-    // Reopen + confirm via the Confirm's primary (Delete) button.
-    await deleteBtn().dispatchEvent('click')
+    // Reopen + confirm via the Confirm's primary (Remove) button.
+    await removeBtn().dispatchEvent('click')
     await expect(confirm).toBeVisible()
-    // The dialog's Delete button animates in ("not stable"); dispatch the click.
+    // The dialog's Remove button animates in ("not stable"); dispatch the click.
     await confirm.locator('[data-testid$="-confirm"]').dispatchEvent('click')
 
-    // File disappears after confirmed delete.
+    // Row disappears from the project after a confirmed removal.
     await expect(row()).toHaveCount(0, { timeout: 5000 })
+
+    // …but the file itself SURVIVES in the library. On the pre-fix source this
+    // returned 404, because the panel had destroyed it everywhere.
+    const stillInLibrary = await page.evaluate(
+      async ([apiBase, fid, t]) => {
+        const r = await fetch(`${apiBase}/api/files/${fid}`, {
+          headers: { Authorization: `Bearer ${t}` },
+        })
+        return r.status
+      },
+      [baseURL, uploaded.id as string, token],
+    )
+    expect(stillInLibrary).toBe(200)
   })
 
   test('uploads a file through the real Manage-drawer Upload control', async ({
