@@ -16,6 +16,7 @@ mod duplicate_test;
 mod files_test;
 mod injection_test;
 mod mcp_test;
+mod nul_byte_test;
 mod permissions_test;
 mod search_test;
 mod sync_emit_test;

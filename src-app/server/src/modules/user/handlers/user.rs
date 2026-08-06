@@ -114,8 +114,22 @@ pub async fn create_user(
     // 500 and an injection-shaped name be persisted verbatim.
     request.username = request.username.trim().to_string();
     crate::modules::auth::username::validate_username(&request.username)?;
-    if request.email.is_empty() {
-        return Err(AppError::bad_request("VALIDATION_ERROR", "Email cannot be empty").into());
+
+    // Email ran through an `is_empty()` check ONLY, so a 256-character address
+    // overflowed the varchar(255) column and one containing U+0000 could not be
+    // stored at all — both surfaced as a generic 500 SYSTEM_DATABASE_ERROR. It
+    // also accepted `   `, `<script>alert(1)</script>` and injection-shaped
+    // text outright. Delegates to the same gate the first-run setup path uses
+    // (modules::app::utils) so the two cannot drift.
+    request.email = request.email.trim().to_string();
+    crate::modules::app::utils::validate_email(&request.email)?;
+
+    // Same story for display_name: no validation whatsoever, so >255 chars and
+    // an embedded NUL were both raw 500s. Trim first so the bound applies to
+    // the value that is actually stored.
+    if let Some(dn) = request.display_name.as_mut() {
+        *dn = dn.trim().to_string();
+        crate::modules::auth::username::validate_display_name(dn)?;
     }
 
     // Prevent self-escalation via the permissions field: every permission
@@ -247,6 +261,14 @@ pub async fn update_user(
     if let Some(name) = request.username.as_mut() {
         *name = name.trim().to_string();
         crate::modules::auth::username::validate_username(name)?;
+    }
+
+    // display_name had the same total absence of validation as the create path,
+    // and the same two raw-500 shapes (>255 chars → varchar overflow; embedded
+    // U+0000 → unstorable). Gated here for symmetry with create_user.
+    if let Some(dn) = request.display_name.as_mut() {
+        *dn = dn.trim().to_string();
+        crate::modules::auth::username::validate_display_name(dn)?;
     }
 
     // Check if user exists and get user data
