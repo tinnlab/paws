@@ -1,4 +1,4 @@
-import { Trash2 } from 'lucide-react'
+import { Trash2, X } from 'lucide-react'
 import { Button, Card, Confirm, Space, Text, Paragraph, message } from '@ziee/kit'
 import type { BibliographyEntry } from '@/api-client/types'
 import { VerificationBadge } from './VerificationBadge'
@@ -26,11 +26,27 @@ function authorLine(csl: unknown): string {
 export function CitationCard({
   entry,
   canManage,
+  projectId,
+  onDetached,
 }: {
   entry: BibliographyEntry
   // Required (no default) so a caller can't accidentally fail-OPEN and render
   // an ungated Delete; both call sites pass the resolved permission.
   canManage: boolean
+  /**
+   * Project scope. When set, the card's removal affordance DETACHES the entry
+   * from that project instead of deleting it from the library — a project panel
+   * must never offer a library-wide destroy, because the entry is shared with
+   * every other project and with the chat agent's citation tools.
+   */
+  projectId?: string
+  /**
+   * Fired after a successful detach. Required alongside `projectId` because the
+   * sync fan-out deliberately SKIPS the originating connection, so the panel
+   * that hosts this card never receives its own `sync:bibliography_entry` and
+   * would keep showing the removed row until an unrelated event arrived.
+   */
+  onDetached?: () => void
 }) {
   const handleDelete = async () => {
     try {
@@ -39,6 +55,19 @@ export function CitationCard({
       message.error(e instanceof Error ? e.message : 'Delete failed')
     }
   }
+
+  const handleDetach = async () => {
+    if (!projectId) return
+    try {
+      await Citations.detachFromProject(projectId, entry.id)
+      message.success(`Removed ${entry.citation_key} from this project`)
+      onDetached?.()
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'Remove failed')
+    }
+  }
+
+  const scoped = projectId !== undefined
   const authors = authorLine(entry.csl_json)
   const meta = [authors, entry.year ? String(entry.year) : '']
     .filter(Boolean)
@@ -71,11 +100,17 @@ export function CitationCard({
           {canManage && (
             <div className="shrink-0">
               <Confirm
-                title="Delete from library?"
-                description="Removes it from the library and every project."
-                okButtonProps={{ danger: true }}
-                onConfirm={handleDelete}
-                okText="OK"
+                title={
+                  scoped ? 'Remove from this project?' : 'Delete from library?'
+                }
+                description={
+                  scoped
+                    ? 'It stays in your library and in any other project it is attached to.'
+                    : 'Removes it from the library and every project.'
+                }
+                okButtonProps={{ danger: !scoped }}
+                onConfirm={scoped ? handleDetach : handleDelete}
+                okText={scoped ? 'Remove' : 'OK'}
                 cancelText="Cancel"
                 data-testid={`cite-card-delete-confirm-${entry.id}`}
               >
@@ -83,8 +118,12 @@ export function CitationCard({
                   size="default"
                   variant="outline"
                   type="button"
-                  aria-label={`Delete ${entry.citation_key}`}
-                  icon={<Trash2 />}
+                  aria-label={
+                    scoped
+                      ? `Remove ${entry.citation_key} from this project`
+                      : `Delete ${entry.citation_key}`
+                  }
+                  icon={scoped ? <X /> : <Trash2 />}
                   data-testid={`cite-card-delete-button-${entry.id}`}
                 />
               </Confirm>

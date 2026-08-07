@@ -19,6 +19,7 @@ import {
 import { Drawer } from '@/modules/layouts/app-layout/components/Drawer'
 import { McpToolCallsTab } from '@/modules/mcp/components/common/McpToolCallsTab'
 import { McpToolApprovalsTab } from '@/modules/mcp/components/common/McpToolApprovalsTab'
+import { McpServerRuntimeTab } from '@/modules/mcp/components/common/McpServerRuntimeTab'
 import { useEffect, useMemo, useState } from 'react'
 import { usePermission } from '@/core/permissions'
 import { type CreateMcpServerRequest, type UpdateMcpServerRequest, type TestMcpConnectionRequest, type McpServer, type EnvVarEntry, type HeaderEntry, type UsageMode, type TransportType } from '@/api-client/types'
@@ -1478,6 +1479,21 @@ export function McpServerDrawer() {
               key: 'calls',
               label: 'Calls',
               children: <McpToolCallsTab serverId={editingServer.id} />,
+            },
+            // Live introspection of the RUNNING server (ping / prompts /
+            // resources / test call / reconnect). Every endpoint behind it is
+            // gated `mcp_servers::read`, which is already required to open this
+            // drawer, so the tab itself needs no extra gate — `canManage` gates
+            // the two acting controls inside it.
+            {
+              key: 'runtime',
+              label: 'Runtime',
+              children: (
+                <McpServerRuntimeTab
+                  serverId={editingServer.id}
+                  canManage={canManage}
+                />
+              ),
             },
             // Per-tool approval overrides are a SYSTEM-server-only admin control
             // (the backend PUT rejects non-system servers), so the tab is shown

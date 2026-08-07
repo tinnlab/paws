@@ -21,7 +21,9 @@ export type Actions = {
   loadModelsForProvider: typeof import('./actions/loadModelsForProvider')['default']
   refreshProviderModels: typeof import('./actions/refreshProviderModels')['default']
   removeGroupFromProvider: typeof import('./actions/removeGroupFromProvider')['default']
+  rotateProxyToken: typeof import('./actions/rotateProxyToken')['default']
   updateGroupProviders: typeof import('./actions/updateGroupProviders')['default']
   updateLlmModel: typeof import('./actions/updateLlmModel')['default']
   updateLlmProvider: typeof import('./actions/updateLlmProvider')['default']
+  validateLlmModel: typeof import('./actions/validateLlmModel')['default']
 }

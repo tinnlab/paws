@@ -11,5 +11,6 @@ export type Actions = {
   loadWorkflows: typeof import('./actions/loadWorkflows')['default']
   run: typeof import('./actions/run')['default']
   test: typeof import('./actions/test')['default']
+  updateWorkflow: typeof import('./actions/updateWorkflow')['default']
   validateWorkflow: typeof import('./actions/validateWorkflow')['default']
 }

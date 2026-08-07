@@ -1,4 +1,4 @@
-import { Trash2, Pencil, Plus, Upload, RefreshCw } from 'lucide-react'
+import { Trash2, Pencil, Plus, ShieldCheck, Upload, RefreshCw } from 'lucide-react'
 import {
   Badge,
   Button,
@@ -38,7 +38,7 @@ export function LlmModelsSection() {
   // (useEffect + useStore — see framework/src/stores.ts), and inside that helper
   // it sat behind two early returns, so the hook count varied with the provider
   // type / edit permission (taxonomy O2).
-  const { llmModelsLoading, refreshingModels } = LlmProvider
+  const { llmModelsLoading, refreshingModels, validatingModels } = LlmProvider
   const canEditModels = usePermission(Permissions.LlmModelsEdit)
   const canDeleteModels = usePermission(Permissions.LlmModelsDelete)
   const canCreateModels = usePermission(Permissions.LlmModelsCreate)
@@ -105,6 +105,35 @@ export function LlmModelsSection() {
           ? error.message
           : `Failed to ${enabled ? 'enable' : 'disable'} ${modelName}.`
       message.error(reason, { duration: 8000 })
+    }
+  }
+
+  // Validate a model end-to-end. Remote providers answer synchronously with a
+  // verdict; local providers queue a runtime check and answer later on the
+  // model's `validation_status` (delivered by `sync:llm_model`), so the two
+  // outcomes get deliberately different copy — reporting "valid" for a queued
+  // local check would be a lie.
+  const handleValidateLlmModel = async (llmModel: LlmModel) => {
+    try {
+      const result = await LlmProvider.validateLlmModel(llmModel.id)
+      if (result.queued) {
+        message.info(
+          result.message ??
+            `Validation queued for ${llmModel.display_name} — the result appears on the model shortly.`,
+        )
+      } else if (result.valid) {
+        message.success(`${llmModel.display_name} responded correctly`)
+      } else {
+        message.error(
+          `${llmModel.display_name} failed validation — check its credentials and model ID.`,
+          { duration: 8000 },
+        )
+      }
+    } catch (error) {
+      message.error(
+        error instanceof Error ? error.message : 'Failed to validate model',
+        { duration: 8000 },
+      )
     }
   }
 
@@ -235,6 +264,25 @@ export function LlmModelsSection() {
           data-testid={`llm-model-edit-btn-${llmModel.id}`}
         >
           {'Edit'}
+        </Button>,
+      )
+    }
+
+    // Validate — probes the model end-to-end (a real completion for a remote
+    // provider; a queued local-runtime check that lands on `validation_status`).
+    // Gated on edit to match the backend's `llm_models::edit`.
+    if (canEditModels) {
+      actions.push(
+        <Button
+          key="validate"
+          variant="ghost"
+          icon={<ShieldCheck aria-hidden="true" />}
+          loading={Boolean(validatingModels[llmModel.id])}
+          onClick={() => handleValidateLlmModel(llmModel)}
+          aria-label={`Validate ${llmModel.display_name} model`}
+          data-testid={`llm-model-validate-btn-${llmModel.id}`}
+        >
+          {'Validate'}
         </Button>,
       )
     }
@@ -387,6 +435,32 @@ export function LlmModelsSection() {
                             data-testid={`llm-model-deprecated-badge-${llmModel.id}`}
                           >
                             Deprecated
+                          </Badge>
+                        </Tooltip>
+                      )}
+                      {/* The verdict of a validation run. Without it a queued
+                          local check has nowhere to land and the Validate
+                          button would look like it did nothing. */}
+                      {llmModel.validation_status && (
+                        <Tooltip
+                          content={
+                            llmModel.validation_issues?.length
+                              ? llmModel.validation_issues.join('; ')
+                              : `Last validation: ${llmModel.validation_status}`
+                          }
+                        >
+                          <Badge
+                            tone={
+                              llmModel.validation_status === 'valid'
+                                ? 'success'
+                                : llmModel.validation_status === 'pending'
+                                  ? 'info'
+                                  : 'error'
+                            }
+                            className="ms-2 align-middle"
+                            data-testid={`llm-model-validation-badge-${llmModel.id}`}
+                          >
+                            {llmModel.validation_status}
                           </Badge>
                         </Tooltip>
                       )}

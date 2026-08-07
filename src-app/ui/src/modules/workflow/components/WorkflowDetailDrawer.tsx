@@ -3,6 +3,7 @@ import {
   CirclePlay,
   FlaskConical,
   Pencil,
+  SquarePen,
   Trash2,
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
@@ -26,6 +27,7 @@ import { DryRunPreviewDialog } from './DryRunPreviewDialog'
 import { WorkflowRunDialog } from './WorkflowRunDialog'
 import { WorkflowRunProgressView } from './WorkflowRunProgressView'
 import { WorkflowRunsList } from './WorkflowRunsList'
+import { WorkflowMetadataDialog } from './WorkflowMetadataDialog'
 import { WorkflowScopeBadge } from './WorkflowScopeBadge'
 import { WorkflowTestsPanel } from './WorkflowTestsPanel'
 import { parseWorkflowIr } from './workflowIr'
@@ -54,6 +56,7 @@ export function WorkflowDetailDrawer() {
   // null while the drawer's data loads, then non-null), tripping React #310 and
   // blanking the whole route via the error boundary.
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [metadataOpen, setMetadataOpen] = useState(false)
   const [activeRunId, setActiveRunId] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<'details' | 'runs'>('details')
 
@@ -88,6 +91,10 @@ export function WorkflowDetailDrawer() {
   // (gated `workflows::manage`, matching the /edit route). System workflows are
   // authored elsewhere, so the Edit affordance is user-scope only.
   const editableDefinition = workflow.scope !== 'system' && canEditDefinition
+  // Metadata edit (`PUT /api/workflows/{id}`) is USER-scope + owner-only on the
+  // backend — it rejects a system or ephemeral row outright — so the affordance
+  // is narrower than `editableDefinition` and must not reuse it.
+  const editableMetadata = workflow.scope === 'user' && canEditDefinition
 
   const handleDelete = async () => {
     try {
@@ -122,8 +129,19 @@ export function WorkflowDetailDrawer() {
         </Space>
       }
       footer={
-        editable || editableDefinition ? (
+        editable || editableDefinition || editableMetadata ? (
           <>
+            {editableMetadata && (
+              <Button
+                data-testid="wf-detail-edit-details-btn"
+                onClick={() => setMetadataOpen(true)}
+                variant="outline"
+                size="default"
+                icon={<SquarePen />}
+              >
+                Details
+              </Button>
+            )}
             {editableDefinition && (
               <Button
                 data-testid="wf-detail-edit-btn"
@@ -185,6 +203,21 @@ export function WorkflowDetailDrawer() {
                     { key: 'name', label: 'Name', children: workflow.name },
                     ...(workflow.version ? [{ key: 'version', label: 'Version', children: workflow.version }] : []),
                     { key: 'files', label: 'Files', children: workflow.file_count },
+                    // Surfaced now that it is editable: a disabled workflow
+                    // silently refuses to run and nothing on this page said so.
+                    {
+                      key: 'enabled',
+                      label: 'Status',
+                      children: (
+                        <Tag
+                          variant="outline"
+                          tone={workflow.enabled ? 'success' : undefined}
+                          data-testid="wf-detail-enabled-tag"
+                        >
+                          {workflow.enabled ? 'Enabled' : 'Disabled'}
+                        </Tag>
+                      ),
+                    },
                   ]}
                 />
 
@@ -290,6 +323,13 @@ export function WorkflowDetailDrawer() {
         open={dryRunOpen}
         onClose={() => setDryRunOpen(false)}
       />
+      {editableMetadata && (
+        <WorkflowMetadataDialog
+          workflow={workflow}
+          open={metadataOpen}
+          onClose={() => setMetadataOpen(false)}
+        />
+      )}
       <WorkflowTestsPanel
         workflow={workflow}
         open={testsOpen}

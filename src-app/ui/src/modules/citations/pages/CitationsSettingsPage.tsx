@@ -1,7 +1,19 @@
 import { useState } from 'react'
 import { Download, Import, ShieldCheck } from 'lucide-react'
-import { Button, Card, Space, Spin, Text, Empty, Dropdown, ErrorState } from '@ziee/kit'
+import {
+  Button,
+  Card,
+  Dialog,
+  Select,
+  Space,
+  Spin,
+  Text,
+  Empty,
+  Dropdown,
+  ErrorState,
+} from '@ziee/kit'
 import { message } from '@ziee/kit'
+import { Field, FieldDescription, FieldTitle } from '@ziee/kit/shadcn/field'
 import { Permissions } from '@/api-client/permissions'
 import { usePermission } from '@/core/permissions'
 import { SettingsPageContainer } from '@/modules/settings/components/SettingsPageContainer'
@@ -26,11 +38,21 @@ function download(content: string, filename: string, mime: string) {
   URL.revokeObjectURL(url)
 }
 
+/**
+ * The one export format that takes a CSL style. The others are structured
+ * interchange formats with no style dimension, so picking a style for them
+ * would be meaningless — only this key opens the style dialog.
+ */
+const STYLED_FORMAT = 'text'
+
 export function CitationsSettingsPage() {
-  const { entries, loading, importing, verifying, error } = CitationsStore
+  const { entries, loading, importing, verifying, error, styles, stylesLoading } =
+    CitationsStore
   // Import / Delete require `citations::manage`; Verify-all + Export are `use`.
   const canManage = usePermission(Permissions.CitationsManage)
   const [importOpen, setImportOpen] = useState(false)
+  const [styleOpen, setStyleOpen] = useState(false)
+  const [style, setStyle] = useState<string>('')
 
   const handleVerifyAll = async () => {
     try {
@@ -45,14 +67,26 @@ export function CitationsSettingsPage() {
     }
   }
 
-  const handleExport = async (format: string) => {
+  const handleExport = async (format: string, styleName?: string) => {
     try {
-      const out = await CitationsStore.exportLibrary(format)
+      const out = await CitationsStore.exportLibrary(format, styleName)
       const fmt = EXPORT_FORMATS.find(f => f.key === format)
       download(out, `citations.${fmt?.ext ?? 'txt'}`, fmt?.mime ?? 'text/plain')
     } catch (e) {
       message.error(e instanceof Error ? e.message : 'Export failed')
     }
+  }
+
+  // "Formatted (CSL style)" is the only format whose output depends on a style,
+  // and it previously shipped a style parameter the UI never sent — so it always
+  // rendered in pandoc's built-in default and the bundled styles were unreachable.
+  const handleExportSelect = (format: string) => {
+    if (format !== STYLED_FORMAT) {
+      void handleExport(format)
+      return
+    }
+    setStyleOpen(true)
+    void CitationsStore.loadStyles()
   }
 
   return (
@@ -85,7 +119,7 @@ export function CitationsSettingsPage() {
           <Dropdown
             disabled={entries.length === 0}
             items={EXPORT_FORMATS.map(f => ({ key: f.key, label: f.label }))}
-            onSelect={(key) => void handleExport(key)}
+            onSelect={handleExportSelect}
             data-testid="cite-settings-export-dropdown"
           >
             <Button icon={<Download />} data-testid="cite-settings-export-button">Export</Button>
@@ -120,6 +154,59 @@ export function CitationsSettingsPage() {
         open={importOpen}
         onClose={() => setImportOpen(false)}
       />
+
+      <Dialog
+        open={styleOpen}
+        title="Export in a citation style"
+        data-testid="cite-export-style-dialog"
+        onOpenChange={v => {
+          if (!v) setStyleOpen(false)
+        }}
+        footer={
+          <>
+            <Button
+              variant="outline"
+              data-testid="cite-export-style-cancel"
+              onClick={() => setStyleOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              data-testid="cite-export-style-submit"
+              onClick={() => {
+                setStyleOpen(false)
+                void handleExport(STYLED_FORMAT, style || undefined)
+              }}
+            >
+              Export
+            </Button>
+          </>
+        }
+      >
+        <Field>
+          <FieldTitle>Citation style</FieldTitle>
+          <Select
+            value={style}
+            allowClear
+            clearLabel="Use the default style"
+            loading={stylesLoading}
+            disabled={styles.length === 0}
+            aria-label="Citation style"
+            placeholder={
+              styles.length === 0
+                ? 'No styles bundled — the default will be used'
+                : 'Default style'
+            }
+            data-testid="cite-export-style-select"
+            options={styles.map(s => ({ label: s, value: s }))}
+            onChange={(v: string) => setStyle(v)}
+          />
+          <FieldDescription>
+            Renders each reference as formatted text. Leave it unset to use the
+            built-in default style.
+          </FieldDescription>
+        </Field>
+      </Dialog>
     </SettingsPageContainer>
   )
 }

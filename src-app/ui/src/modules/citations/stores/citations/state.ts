@@ -9,6 +9,16 @@ export const citationsState = {
   error: null as string | null,
   /** When set, the store scopes to a project's reference list. */
   projectId: null as string | null,
+  /**
+   * Bundled CSL style names (`GET /api/citations/styles`). Fetched lazily by
+   * `loadStyles` rather than at init: only the export dialog needs them, and the
+   * set is fixed for the life of the binary, so one fetch per session is enough.
+   */
+  styles: [] as string[],
+  stylesLoading: false,
+  /** In-flight flag for the project reference-list membership mutations. */
+  attaching: false,
+  detaching: false,
 }
 
 export type CitationsState = typeof citationsState

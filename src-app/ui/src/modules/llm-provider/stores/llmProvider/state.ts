@@ -18,6 +18,10 @@ export const llmProviderState = {
   discoverLoading: {} as Record<string, boolean>,
   // "Refresh models" (deprecation reconcile) in-flight, keyed by providerId.
   refreshingModels: {} as Record<string, boolean>,
+  // Proxy-token rotation in-flight, keyed by providerId (local providers only).
+  rotatingProxyToken: {} as Record<string, boolean>,
+  // Model validation in-flight, keyed by modelId.
+  validatingModels: {} as Record<string, boolean>,
   error: null as string | null,
 }
 
