@@ -3,8 +3,11 @@
 // `import.meta.glob('./actions/*.ts')` in index.ts; these are the TYPES.
 
 export type Actions = {
+  checkHealth: typeof import('./actions/checkHealth')['default']
   clearError: typeof import('./actions/clearError')['default']
+  clearFailed: typeof import('./actions/clearFailed')['default']
   loadInstance: typeof import('./actions/loadInstance')['default']
+  loadStatus: typeof import('./actions/loadStatus')['default']
   loadUsage: typeof import('./actions/loadUsage')['default']
   restartModel: typeof import('./actions/restartModel')['default']
   startModel: typeof import('./actions/startModel')['default']

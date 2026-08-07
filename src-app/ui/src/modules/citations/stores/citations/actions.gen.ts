@@ -3,9 +3,12 @@
 // `import.meta.glob('./actions/*.ts')` in index.ts; these are the TYPES.
 
 export type Actions = {
+  attachToProject: typeof import('./actions/attachToProject')['default']
+  detachFromProject: typeof import('./actions/detachFromProject')['default']
   exportLibrary: typeof import('./actions/exportLibrary')['default']
   importItems: typeof import('./actions/importItems')['default']
   load: typeof import('./actions/load')['default']
+  loadStyles: typeof import('./actions/loadStyles')['default']
   remove: typeof import('./actions/remove')['default']
   setProjectId: typeof import('./actions/setProjectId')['default']
   verifyAll: typeof import('./actions/verifyAll')['default']

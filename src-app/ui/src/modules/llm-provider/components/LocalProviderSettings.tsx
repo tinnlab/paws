@@ -5,6 +5,7 @@ import { Loading } from '@/core/components/Loading'
 import { ProviderHeader } from '@/modules/llm-provider/components/ProviderHeader'
 import { LlmModelsSection } from '@/modules/llm-provider/components/LlmModelsSection'
 import { ProviderGroupAssignmentCard } from '@/modules/llm-provider/components/ProviderGroupAssignmentCard'
+import { ProxyTokenCard } from '@/modules/llm-provider/components/ProxyTokenCard'
 import { DownloadsSection } from '@/modules/llm-provider/components/downloads/DownloadsSection'
 import { AddLocalLlmModelUploadDrawer } from '@/modules/llm-provider/components/llm-models/AddLocalLlmModelUploadDrawer'
 import { AddLocalLlmModelDownloadDrawer } from '@/modules/llm-provider/components/llm-models/AddLocalLlmModelDownloadDrawer'
@@ -49,6 +50,8 @@ export function LocalProviderSettings() {
         Local providers use models running on your local machine. Configure your
         local inference server separately.
       </Text>
+
+      <ProxyTokenCard providerId={currentProvider.id} />
 
       <DownloadsSection providerId={currentProvider.id} />
 

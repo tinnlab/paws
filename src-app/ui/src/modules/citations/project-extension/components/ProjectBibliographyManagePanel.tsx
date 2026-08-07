@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState } from 'react'
-import { Import } from 'lucide-react'
-import { Button, Empty, message, Spin, Tag, Text } from '@ziee/kit'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Import, Plus } from 'lucide-react'
+import { Button, Empty, message, Space, Spin, Tag, Text } from '@ziee/kit'
 import { ApiClient } from '@/api-client'
 import { Permissions } from '@/api-client/permissions'
 import type { BibliographyEntry } from '@/api-client/types'
 import { usePermission } from '@/core/permissions'
+import { AttachCitationsDialog } from '../../components/AttachCitationsDialog'
 import { CitationCard } from '../../components/CitationCard'
 import { ImportCitationsModal } from '../../components/ImportCitationsModal'
 import { ProjectDetail } from '@/modules/projects/stores/projectDetail'
@@ -20,6 +21,12 @@ export function ProjectBibliographyManagePanel() {
   const [entries, setEntries] = useState<BibliographyEntry[]>([])
   const [loading, setLoading] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
+  const [attachOpen, setAttachOpen] = useState(false)
+
+  const attachedIds = useMemo(
+    () => new Set(entries.map(e => e.id)),
+    [entries],
+  )
 
   const reload = useCallback(async () => {
     if (!projectId) return
@@ -60,14 +67,28 @@ export function ProjectBibliographyManagePanel() {
           </Tag>
         </div>
         {canManage && (
-          <Button
-            variant="default"
-            icon={<Import />}
-            onClick={() => setImportOpen(true)}
-            data-testid="cite-bib-panel-import-button"
-          >
-            Import
-          </Button>
+          // Two ways in, because they answer different questions: "Add" links a
+          // reference the user already has, "Import" resolves+verifies a new one
+          // from a pasted DOI/PMID. Add is the quiet variant — Import is the
+          // primary action that also creates library rows.
+          <Space size={8} wrap>
+            <Button
+              variant="outline"
+              icon={<Plus />}
+              onClick={() => setAttachOpen(true)}
+              data-testid="cite-bib-panel-add-button"
+            >
+              Add from library
+            </Button>
+            <Button
+              variant="default"
+              icon={<Import />}
+              onClick={() => setImportOpen(true)}
+              data-testid="cite-bib-panel-import-button"
+            >
+              Import
+            </Button>
+          </Space>
         )}
       </div>
 
@@ -78,7 +99,16 @@ export function ProjectBibliographyManagePanel() {
       ) : (
         <div>
           {entries.map(e => (
-            <CitationCard key={e.id} entry={e} canManage={canManage} />
+            // `projectId` switches the card's removal affordance from a
+            // library-wide delete to a project detach — this panel is
+            // project-scoped, so its remove must be too.
+            <CitationCard
+              key={e.id}
+              entry={e}
+              canManage={canManage}
+              projectId={projectId}
+              onDetached={() => void reload()}
+            />
           ))}
         </div>
       )}
@@ -91,6 +121,18 @@ export function ProjectBibliographyManagePanel() {
           void reload()
         }}
       />
+
+      {canManage && (
+        <AttachCitationsDialog
+          open={attachOpen}
+          projectId={projectId}
+          attachedIds={attachedIds}
+          onClose={() => {
+            setAttachOpen(false)
+            void reload()
+          }}
+        />
+      )}
     </div>
   )
 }

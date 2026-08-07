@@ -11,7 +11,17 @@ import {
   Text,
   Tooltip,
 } from '@ziee/kit'
-import { ChevronDown, CirclePlay, Power, RotateCw, ChevronUp } from 'lucide-react'
+import {
+  ChevronDown,
+  ChevronUp,
+  CirclePlay,
+  HeartPulse,
+  Power,
+  RotateCw,
+  Stethoscope,
+  Wrench,
+} from 'lucide-react'
+import { message } from '@ziee/kit'
 import type { RuntimeEngine } from '../types'
 import { LiveLogsPanel } from './LiveLogsPanel'
 import { RuntimeModelUsage } from '@/modules/llm-local-runtime/stores/runtimeModelUsage'
@@ -124,10 +134,62 @@ function ModelRow({
   canManage: boolean
   canViewLogs: boolean
 }) {
-  const { acting, instances } = RuntimeModelUsage
+  const { acting, instances, statuses, health } = RuntimeModelUsage
   const [expanded, setExpanded] = useState(false)
   const busy = acting.get(model.id) || false
   const instance = instances.get(model.id)
+  const status = statuses.get(model.id)
+  const probe = health.get(model.id)
+  const failed = status?.status === 'failed'
+
+  // Diagnose a model that ISN'T running: the usage snapshot only carries a
+  // boolean, so "never started" and "gave up after five crashes" look identical
+  // until this resolves the real state.
+  const handleDiagnose = async () => {
+    try {
+      const s = await RuntimeModelUsage.loadStatus(model.id)
+      if (s.status !== 'failed') {
+        message.info(`${model.display_name} is ${s.status}`)
+      }
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'Failed to read status')
+    }
+  }
+
+  const handleClearFailed = async () => {
+    try {
+      const r = await RuntimeModelUsage.clearFailed(engine, model.id)
+      message.success(
+        r.cleared
+          ? `${model.display_name} reset — auto-start can retry it`
+          : `${model.display_name} was not in a failed state`,
+      )
+    } catch (e) {
+      message.error(
+        e instanceof Error ? e.message : 'Failed to clear the failed state',
+      )
+    }
+  }
+
+  const handleHealth = async () => {
+    try {
+      const h = await RuntimeModelUsage.checkHealth(model.id)
+      if (h.healthy) {
+        message.success(
+          `${model.display_name} answered${
+            h.response_time_ms != null ? ` in ${h.response_time_ms} ms` : ''
+          }`,
+        )
+      } else {
+        message.error(
+          h.message ?? `${model.display_name} is up but not answering`,
+          { duration: 8000 },
+        )
+      }
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'Health check failed')
+    }
+  }
 
   // Lazily fetch instance detail when the row is expanded on a running model.
   useEffect(() => {
@@ -143,6 +205,26 @@ function ModelRow({
           <span className={`inline-block size-2 rounded-full ${model.running ? 'bg-primary' : 'bg-muted-foreground/40'}`} aria-hidden />
           <span>{model.display_name}</span>
           {!model.pinned && <Tag variant="outline" tone="default" data-testid={`llmrt-model-inherited-tag-${model.id}`}>inherited</Tag>}
+          {/* Probe results are pinned to the row, not left in a toast: an
+              operator triaging several models needs to compare them. */}
+          {failed && (
+            <Tag
+              variant="outline"
+              tone="error"
+              data-testid={`llmrt-model-failed-tag-${model.id}`}
+            >
+              failed
+            </Tag>
+          )}
+          {model.running && probe && (
+            <Tag
+              variant="outline"
+              tone={probe.healthy ? 'success' : 'error'}
+              data-testid={`llmrt-model-health-tag-${model.id}`}
+            >
+              {probe.healthy ? 'healthy' : 'not responding'}
+            </Tag>
+          )}
         </Space>
         <Space>
           {canManage && (
@@ -176,6 +258,16 @@ function ModelRow({
               {model.running ? (
                 <>
                   <Button
+                    variant="outline"
+                    icon={<HeartPulse />}
+                    data-testid={`llmrt-model-health-${model.id}`}
+                    loading={busy}
+                    onClick={() => void handleHealth()}
+                    aria-label={`Check health of ${model.display_name}`}
+                  >
+                    Health
+                  </Button>
+                  <Button
                     icon={<RotateCw />}
                     data-testid={`llmrt-model-restart-${model.id}`}
                     loading={busy}
@@ -202,18 +294,46 @@ function ModelRow({
                   </Button>
                 </>
               ) : (
-                <Button
-                  icon={<CirclePlay />}
-                  data-testid={`llmrt-model-start-${model.id}`}
-                  loading={busy}
-                  onClick={() =>
-                    RuntimeModelUsage.startModel(engine, model.id).catch(
-                      () => {},
-                    )
-                  }
-                >
-                  Start
-                </Button>
+                <>
+                  {/* Only offered once a probe has actually reported `failed` —
+                      a recovery button on a merely-stopped model would read as
+                      "something is wrong here" on every idle row. */}
+                  {failed ? (
+                    <Button
+                      variant="outline"
+                      icon={<Wrench />}
+                      data-testid={`llmrt-model-clear-failed-${model.id}`}
+                      loading={busy}
+                      onClick={() => void handleClearFailed()}
+                      aria-label={`Clear the failed state of ${model.display_name}`}
+                    >
+                      Clear failed state
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="ghost"
+                      icon={<Stethoscope />}
+                      data-testid={`llmrt-model-diagnose-${model.id}`}
+                      loading={busy}
+                      onClick={() => void handleDiagnose()}
+                      aria-label={`Check the runtime state of ${model.display_name}`}
+                    >
+                      Diagnose
+                    </Button>
+                  )}
+                  <Button
+                    icon={<CirclePlay />}
+                    data-testid={`llmrt-model-start-${model.id}`}
+                    loading={busy}
+                    onClick={() =>
+                      RuntimeModelUsage.startModel(engine, model.id).catch(
+                        () => {},
+                      )
+                    }
+                  >
+                    Start
+                  </Button>
+                </>
               )}
             </>
           )}
