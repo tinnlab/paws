@@ -2974,3 +2974,5 @@ async fn test_concurrent_provider_group_assignment_converges_to_one_row() {
     );
 }
 
+
+mod group_assignment_bounds_test;

@@ -480,3 +480,6 @@ pub async fn poll_run_for(server: &TestServer, token: &str, run_id: Uuid, secs: 
     }
 }
 
+mod create_nul_text_test;
+
+mod group_assignment_bounds_test;

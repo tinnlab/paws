@@ -1,4 +1,5 @@
 pub mod embedded;
+pub mod groups;
 pub mod macros;
 pub mod secret;
 pub mod tokens;

@@ -56,6 +56,12 @@ type CopyFn = (ctx: CopyContext) => string
  *  - stay one sentence where possible — the panel is dense.
  */
 const HUMAN_COPY: Record<string, CopyFn> = {
+  // ── storability ─────────────────────────────────────────────────────────
+  // A NUL almost always arrives by paste (from a binary file or a terminal
+  // capture), never by typing, so the copy names the likely cause.
+  "WORKFLOW_NUL_CHARACTER": () =>
+    'Some text here contains an invisible character that cannot be saved — retype it, or paste it as plain text.',
+
   // ── whole-workflow shape ────────────────────────────────────────────────
   "WORKFLOW_NO_STEPS": () => 'This workflow has no steps yet — add at least one.',
   // LIMIT MIRROR: `validate.rs::check_steps_shape` — the literal `50` step cap.

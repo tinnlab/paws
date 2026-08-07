@@ -23,3 +23,6 @@ mod sync_emit_test;
 mod uniqueness_test;
 
 mod helpers;
+
+
+mod update_race_test;

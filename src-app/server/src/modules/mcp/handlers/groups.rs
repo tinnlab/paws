@@ -59,6 +59,7 @@ pub async fn assign_server_to_groups(
     origin: SyncOrigin,
     Json(request): Json<ServerGroupsRequest>,
 ) -> ApiResult<StatusCode> {
+    crate::common::groups::reject_unknown_group_ids(Repos.pool(), &request.group_ids).await?;
     Repos.mcp.set_server_groups(id, request.group_ids).await?;
 
     // Emit group assignment changed event
@@ -78,7 +79,9 @@ pub fn assign_server_to_groups_docs(op: TransformOperation) -> TransformOperatio
         .description("Assign MCP server to groups (replaces all assignments)")
         .response_with::<204, (), _>(|res| res.description("Server assigned successfully"))
         .response_with::<400, (), _>(|res| {
-            res.description("Bad request - only system servers can be assigned to groups")
+            res.description(
+                "Bad request - only system servers can be assigned to groups, or an unknown group id",
+            )
         })
         .response_with::<401, (), _>(|res| res.description("Unauthorized"))
         .response_with::<404, (), _>(|res| res.description("Server not found"))

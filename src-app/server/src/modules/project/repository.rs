@@ -170,18 +170,24 @@ impl ProjectRepository {
     ) -> Result<Project, AppError> {
         let mut tx = self.pool.begin().await.map_err(AppError::database_error)?;
 
-        // Confirm ownership first so per-field updates can rely on it.
-        let exists: i64 = sqlx::query_scalar!(
-            "SELECT COUNT(*) FROM projects WHERE id = $1 AND user_id = $2",
+        // Confirm ownership first so per-field updates can rely on it, and
+        // LOCK the row for the rest of the transaction. `FOR UPDATE` is what
+        // makes the check authoritative: with a plain COUNT(*) a concurrent
+        // `DELETE /projects/{id}` could commit inside the window, and the
+        // trailing SELECT below then raised `RowNotFound` — which
+        // `AppError::database_error` flattened into a 500 instead of the 404
+        // the caller should see. Now a racing delete either lost (it waits on
+        // this lock and applies after we commit) or won (we see no row → 404).
+        let owned = sqlx::query_scalar!(
+            "SELECT id FROM projects WHERE id = $1 AND user_id = $2 FOR UPDATE",
             id,
             user_id
         )
-        .fetch_one(&mut *tx)
+        .fetch_optional(&mut *tx)
         .await
-        .map_err(AppError::database_error)?
-        .unwrap_or(0);
+        .map_err(AppError::database_error)?;
 
-        if exists == 0 {
+        if owned.is_none() {
             return Err(AppError::not_found("Project"));
         }
 
@@ -194,7 +200,21 @@ impl ProjectRepository {
             )
             .execute(&mut *tx)
             .await
-            .map_err(AppError::database_error)?;
+            // The handler pre-checks the name, but that check is a separate
+            // statement — two renames to the same name race past it and one
+            // hits `projects_user_name_unique`. `create` closed the identical
+            // hole with `ON CONFLICT`; the UPDATE has no such form, so the
+            // constraint is mapped to the SAME typed error the pre-check
+            // returns rather than to a generic 500.
+            .map_err(|e| match &e {
+                sqlx::Error::Database(db) if db.is_unique_violation() => {
+                    AppError::unprocessable_entity(
+                        "PROJECT_NAME_DUPLICATE",
+                        format!("A project named \"{name}\" already exists"),
+                    )
+                }
+                _ => AppError::database_error(e),
+            })?;
         }
         if let Some(description) = &req.description {
             sqlx::query!(
@@ -252,7 +272,13 @@ impl ProjectRepository {
         )
         .fetch_one(&mut *tx)
         .await
-        .map_err(AppError::database_error)?;
+        // Defensive: the `FOR UPDATE` above holds the row for this whole
+        // transaction, so this cannot legitimately be `RowNotFound`. Map it
+        // anyway — "the row is gone" is a 404, never an internal error.
+        .map_err(|e| match e {
+            sqlx::Error::RowNotFound => AppError::not_found("Project"),
+            e => AppError::database_error(e),
+        })?;
 
         tx.commit().await.map_err(AppError::database_error)?;
         Ok(project)
@@ -597,5 +623,4 @@ impl ProjectRepository {
         // fan-out.
         Ok(new_project)
     }
-
 }

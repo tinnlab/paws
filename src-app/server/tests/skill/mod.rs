@@ -142,3 +142,4 @@ pub async fn admin_and_refresh(server: &TestServer) -> crate::common::test_helpe
     admin
 }
 
+mod group_assignment_bounds_test;
