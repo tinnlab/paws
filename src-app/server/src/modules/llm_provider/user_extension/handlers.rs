@@ -73,6 +73,7 @@ pub async fn assign_provider_to_group(
     origin: SyncOrigin,
     Json(request): Json<AssignProviderToGroupRequest>,
 ) -> ApiResult<StatusCode> {
+    crate::common::groups::reject_unknown_group_ids(Repos.pool(), &[request.group_id]).await?;
     Repos
         .user_group_llm_provider
         .assign_to_group(provider_id, request.group_id)
@@ -130,6 +131,7 @@ pub fn assign_provider_to_group_docs(
         .response_with::<204, (), _>(|res| {
             res.description("Provider assigned to group successfully")
         })
+        .response_with::<400, (), _>(|res| res.description("Bad request — unknown group id"))
         .response_with::<401, (), _>(|res| res.description("Unauthorized"))
 }
 

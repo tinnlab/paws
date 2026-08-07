@@ -402,6 +402,8 @@ fn default_expose_mode() -> ExposeMode {
 /// making the humanisation half vacuously pass.
 #[cfg(test)]
 pub(crate) const VALIDATION_CODES: &[&str] = &[
+    // validate.rs — storability
+    "WORKFLOW_NUL_CHARACTER",
     // validate.rs — whole-workflow shape
     "WORKFLOW_NO_STEPS",
     "WORKFLOW_TOO_MANY_STEPS",
@@ -623,6 +625,9 @@ pub fn validate_collecting(
     is_dev: bool,
 ) -> Vec<ValidationError> {
     let mut out = Vec::new();
+    // Layer 1 — storability. Runs first: a NUL makes the row unwritable
+    // regardless of whether the def is otherwise semantically valid.
+    out.extend(check_no_nul(workflow));
     // Layer 2 + 3 — semantic + security.
     out.extend(check_steps_shape(workflow));
     out.extend(check_dependencies(workflow));
@@ -1689,6 +1694,66 @@ fn check_no_mock(workflow: &WorkflowDef) -> Vec<ValidationError> {
             ));
         }
     }
+    out
+}
+
+/// Reject U+0000 anywhere in the definition's author text.
+///
+/// Postgres cannot store a NUL in `text` and cannot convert the ` `
+/// escape inside `jsonb` (`22P05`), and `workflows.compiled_ir_json` carries
+/// the author's input names + `default` VALUES, output names + `from`
+/// expressions and step ids/descriptions — so a NUL in any of those reached
+/// the INSERT and `AppError::database_error` flattened it into a generic 500.
+///
+/// The walk is over the SERIALIZED def rather than a hand-written field list:
+/// the set of author-supplied strings grows with every new step kind, and a
+/// per-field list silently misses the next one added. Location is the JSON
+/// path of the offending value so the builder can point at the field.
+fn check_no_nul(workflow: &WorkflowDef) -> Vec<ValidationError> {
+    fn walk(value: &serde_json::Value, path: &str, out: &mut Vec<ValidationError>) {
+        match value {
+            serde_json::Value::String(s) => {
+                if s.contains('\0') {
+                    out.push(ValidationError::at(
+                        "schema",
+                        "WORKFLOW_NUL_CHARACTER",
+                        format!("{path} contains a NUL character, which cannot be stored"),
+                        path.to_string(),
+                    ));
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for (i, item) in items.iter().enumerate() {
+                    walk(item, &format!("{path}[{i}]"), out);
+                }
+            }
+            serde_json::Value::Object(map) => {
+                for (k, v) in map {
+                    // An object KEY can carry a NUL too (an input `default:`
+                    // is free-form JSON, and its keys land in the IR's
+                    // inferred object type).
+                    if k.contains('\0') {
+                        out.push(ValidationError::at(
+                            "schema",
+                            "WORKFLOW_NUL_CHARACTER",
+                            format!("a field name under {path} contains a NUL character"),
+                            path.to_string(),
+                        ));
+                    }
+                    walk(v, &format!("{path}.{k}"), out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // A def that cannot be serialized cannot reach the DB either, so there is
+    // nothing to guard; the install path surfaces that failure on its own.
+    let Ok(value) = serde_json::to_value(workflow) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    walk(&value, "workflow", &mut out);
     out
 }
 

@@ -588,6 +588,7 @@ pub async fn set_skill_groups(
         .collect::<std::collections::HashSet<Uuid>>()
         .into_iter()
         .collect();
+    crate::common::groups::reject_unknown_group_ids(Repos.pool(), &desired).await?;
     Repos.skill.set_skill_groups(id, &desired).await?;
     events::emit_system_skill(SyncAction::Update, id, origin.0);
     Ok((StatusCode::NO_CONTENT, StatusCode::NO_CONTENT))
@@ -599,7 +600,9 @@ pub fn set_skill_groups_docs(op: TransformOperation) -> TransformOperation {
         .tag("Skills - System")
         .summary("Replace the set of groups assigned to a skill")
         .response_with::<204, (), _>(|r| r.description("Assignments updated"))
-        .response_with::<400, (), _>(|r| r.description("Bad request — non-system scope"))
+        .response_with::<400, (), _>(|r| {
+            r.description("Bad request — non-system scope, or an unknown group id")
+        })
         .response_with::<401, (), _>(|r| r.description("Unauthorized"))
         .response_with::<404, (), _>(|r| r.description("Skill not found"))
 }
