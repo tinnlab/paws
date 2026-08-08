@@ -130,7 +130,6 @@ test.describe('Voice — runtime health of key states (TEST-31)', () => {
       'live caption words',
       { timeout: 15000 },
     )
-    await expect(byTestId(page, 'voice-live-caption')).toHaveCount(0)
 
     // The whole recording-with-live-caption state produced zero runtime findings.
     expect(probe.findings, probe.findings.join('\n')).toEqual([])

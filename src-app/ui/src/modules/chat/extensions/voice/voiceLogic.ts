@@ -61,11 +61,40 @@ function clampIndex(i: number, length: number): number {
   return Math.min(length, Math.max(0, Math.trunc(i)))
 }
 
-/** Normalize a possibly-reversed / out-of-range span against `value`. */
+/**
+ * True when `i` lands BETWEEN the two halves of a surrogate pair. JS string
+ * indices are UTF-16 code units, so slicing there would split one astral
+ * character (an emoji, most CJK extension B+) into two lone surrogates.
+ */
+function splitsSurrogatePair(value: string, i: number): boolean {
+  if (i <= 0 || i >= value.length) return false
+  const hi = value.charCodeAt(i - 1)
+  const lo = value.charCodeAt(i)
+  return hi >= 0xd800 && hi <= 0xdbff && lo >= 0xdc00 && lo <= 0xdfff
+}
+
+/**
+ * Normalize a possibly-reversed / out-of-range span against `value`, and move it
+ * off any surrogate-pair boundary so a splice can never leave a lone surrogate
+ * behind.
+ *
+ * A COLLAPSED span (a caret) is SNAPPED past the pair — it stays collapsed, so
+ * an insertion point lands beside the character rather than swallowing it. A
+ * real RANGE is widened outward to cover whichever pair it straddles, so a
+ * replacement never cuts a character in half.
+ */
 function normalizeSpan(value: string, span: ComposerSpan): ComposerSpan {
   const a = clampIndex(span.start, value.length)
   const b = clampIndex(span.end, value.length)
-  return { start: Math.min(a, b), end: Math.max(a, b) }
+  let start = Math.min(a, b)
+  let end = Math.max(a, b)
+  if (start === end) {
+    if (splitsSurrogatePair(value, start)) start = end = start + 1
+    return { start, end }
+  }
+  if (splitsSurrogatePair(value, start)) start -= 1
+  if (splitsSurrogatePair(value, end)) end += 1
+  return { start, end }
 }
 
 function needsLeadingPad(before: string): boolean {
@@ -88,7 +117,16 @@ function needsTrailingPad(after: string): boolean {
  *
  * A BLANK transcript REMOVES the span (the interim-shrink case: a decode that
  * came back empty must take the previous provisional words away rather than
- * leaving them stranded) and collapses the seam back to one separator.
+ * leaving them stranded).
+ *
+ * Removal is EXACTLY `[start, end)` — no seam tidying. That is what makes the
+ * operation reversible, and it is safe precisely BECAUSE the span this function
+ * returns already includes the join padding it added: deleting the span deletes
+ * the pads with it, leaving the surrounding text byte-for-byte as it was. An
+ * earlier version also collapsed whitespace across the seam, which silently ate
+ * one of the user's OWN characters — on a zero-length span (an empty first
+ * decode, which is common) it corrupted a draft before a single word had been
+ * dictated, and `restoreSpan` could not undo it. Do not reintroduce it.
  */
 export function spliceTranscript(
   value: string,
@@ -101,13 +139,8 @@ export function spliceTranscript(
   const text = transcript.trim()
 
   if (!text) {
-    // Removing the span can leave whitespace on BOTH sides; collapse to one.
-    const collapsed =
-      /\s$/.test(before) && /^[^\S\r\n]/.test(after)
-        ? after.replace(/^[^\S\r\n]/, '')
-        : after
     return {
-      value: before + collapsed,
+      value: before + after,
       caret: before.length,
       start: before.length,
       end: before.length,

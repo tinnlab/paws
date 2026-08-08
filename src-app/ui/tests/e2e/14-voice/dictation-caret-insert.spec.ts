@@ -54,6 +54,29 @@ async function placeCaret(page: Page, start: number, end = start) {
   )
 }
 
+/**
+ * The text content of the composer's TOOLBAR ROW, mid-recording.
+ *
+ * Located from two controls that genuinely live in it — the "+" button and the
+ * Stop button — by walking up to their common ancestor. Deliberately NOT
+ * `[data-testid="chat-input-toolbar"]`: no such element exists, so an assertion
+ * against it matches nothing, `allInnerTexts()` returns `[]`, and every
+ * `not.toContain(...)` passes vacuously. Returns null if the row cannot be
+ * found, so the caller fails loudly instead of asserting against nothing.
+ */
+async function toolbarRowText(page: Page): Promise<string | null> {
+  return page.evaluate(() => {
+    const add = document.querySelector('[data-testid="chat-input-add-btn"]')
+    const stop = document.querySelector(
+      'button[aria-label="Stop recording and transcribe"]',
+    )
+    if (!add || !stop) return null
+    let row: HTMLElement | null = add as HTMLElement
+    while (row && !row.contains(stop)) row = row.parentElement
+    return row ? (row.textContent ?? '') : null
+  })
+}
+
 /** Dismiss the one-time privacy hint, then start recording. */
 async function startDictation(page: Page) {
   const hintDismiss = byTestId(page, 'voice-privacy-hint-dismiss')
@@ -93,6 +116,20 @@ test.describe('Voice — dictation inserts at the caret (TEST-17..TEST-23)', () 
     expect((await composerState(page)).start).toBe(CARET)
 
     await startDictation(page)
+
+    // MID-RECORDING: the provisional words are in the CHAT INPUT, and the
+    // toolbar row — the literal "tools" of the defect report — carries none of
+    // them. Asserted here rather than after Stop, because after Stop the
+    // recording chrome is unmounted and any such check passes vacuously.
+    await expect(textarea).toHaveValue('Please book a tabl for next Tuesday.', {
+      timeout: 15000,
+    })
+    const toolbar = await toolbarRowText(page)
+    expect(toolbar, 'the composer toolbar row must be locatable').not.toBeNull()
+    expect(toolbar).not.toContain('a tabl')
+    // Positive control for the probe itself: it really is reading the toolbar.
+    expect(toolbar).toMatch(/0:0\d/)
+
     await stopDictation(page)
 
     // The transcript is INSIDE the sentence. Append-at-end — the shipped defect —
@@ -107,14 +144,6 @@ test.describe('Voice — dictation inserts at the caret (TEST-17..TEST-23)', () 
     expect(after.value.slice(0, after.start)).toBe('Please book a table')
     expect(after.start).toBeLessThan(after.value.length)
 
-    // NOTHING transcript-shaped is rendered in the composer toolbar. The
-    // removed caption element is gone, and the toolbar's whole text content
-    // carries none of the transcript.
-    await expect(byTestId(page, 'voice-live-caption')).toHaveCount(0)
-    const toolbarText = await page
-      .locator('[data-testid="chat-input-toolbar"], [role="group"]')
-      .allInnerTexts()
-    expect(toolbarText.join(' ')).not.toContain('a table')
   })
 
   // TEST-18
@@ -163,18 +192,19 @@ test.describe('Voice — dictation inserts at the caret (TEST-17..TEST-23)', () 
     await loginAsAdmin(page, baseURL)
     await gotoComposer(page, baseURL)
 
-    // Seed the draft WITHOUT ever focusing the textarea, so it has no caret at
-    // all — the historical append-at-end path.
+    // Seed the draft the way the composer's own draft-restore effect does — an
+    // imperative `el.value =` — and NEVER focus or click the textarea. This is
+    // the genuine never-focused state; nothing about the DOM is fabricated.
+    // (An earlier version of this spec stubbed `selectionStart` to null, a value
+    // a mounted textarea never returns, so it proved nothing about production.)
     await page.evaluate(draft => {
       const el = document.querySelector<HTMLTextAreaElement>(
         '[data-testid="chat-message-textarea"]',
       )!
       el.value = draft
-      // A textarea that has never been focused reports 0/0; blank the selection
-      // API so the store genuinely sees "no insertion point".
-      Object.defineProperty(el, 'selectionStart', { configurable: true, get: () => null })
-      Object.defineProperty(el, 'selectionEnd', { configurable: true, get: () => null })
+      el.dispatchEvent(new Event('input', { bubbles: true }))
     }, DRAFT)
+    expect(await page.evaluate(() => document.activeElement?.tagName)).not.toBe('TEXTAREA')
 
     await startDictation(page)
     await stopDictation(page)

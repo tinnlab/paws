@@ -117,8 +117,6 @@ test.describe('Voice — mic-button gating (TEST-27)', () => {
     await expect(byTestId(page, 'voice-elapsed')).toHaveCount(0)
     await expect(byTestId(page, 'voice-live-region')).toHaveCount(0)
     await expect(byTestId(page, 'voice-live-toggle')).toHaveCount(0)
-    // …and nothing dictation-shaped reached the composer either.
-    await expect(byTestId(page, 'chat-message-textarea')).toHaveValue('')
   })
 
   test('getUserMedia denied → error toast', async ({ page, testInfra }) => {

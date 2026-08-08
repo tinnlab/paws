@@ -77,12 +77,49 @@ test('spliceTranscript treats a newline as whitespace (no pad added)', () => {
   assert.equal(edit.value, 'line one\ntwo\nrest')
 })
 
-// TEST-3 — a blank transcript REMOVES the span (the interim-shrink case).
-test('spliceTranscript with a blank transcript removes the span and collapses the seam', () => {
-  const edit = spliceTranscript('keep provisional words here', { start: 5, end: 22 }, '')
-  assert.equal(edit.value, 'keep here')
-  assert.equal(edit.start, edit.end, 'the written span is now empty')
-  assert.equal(edit.caret, edit.start)
+// TEST-3 — a blank transcript REMOVES the span, and removal is byte-EXACT.
+// This is the reversibility property the whole session design rests on, and the
+// case that shipped broken: an earlier version tidied whitespace across the seam
+// and so ate one of the user's own characters.
+test('spliceTranscript with a blank transcript removes exactly the span it wrote', () => {
+  // Round trip: write over a caret, then blank it out → byte-for-byte original.
+  const draft = 'Please book  for next Tuesday.'
+  const written = spliceTranscript(draft, { start: 12, end: 12 }, 'a tabl')
+  assert.equal(written.value, 'Please book a tabl for next Tuesday.')
+  const cleared = spliceTranscript(
+    written.value,
+    { start: written.start, end: written.end },
+    '',
+  )
+  assert.equal(cleared.value, draft, 'write → blank must restore the draft EXACTLY')
+  assert.equal(cleared.start, cleared.end, 'the written span is now empty')
+  assert.equal(cleared.caret, cleared.start)
+})
+
+test('spliceTranscript with a blank transcript at a COLLAPSED span changes nothing', () => {
+  // The first interim decode commonly comes back empty, and it is applied over
+  // the zero-length anchor span. Removing "nothing" must remove NOTHING — this
+  // previously deleted one of the two spaces in the user's untouched draft, and
+  // no cancel could put it back.
+  for (const draft of ['Please book  for next Tuesday.', 'a b', ' ', '', 'trailing ']) {
+    for (const i of [0, 1, Math.floor(draft.length / 2), draft.length]) {
+      const edit = spliceTranscript(draft, { start: i, end: i }, '')
+      assert.equal(
+        edit.value,
+        draft,
+        `blank at collapsed span ${i} of ${JSON.stringify(draft)} must be a no-op`,
+      )
+    }
+  }
+})
+
+test('spliceTranscript never splits a surrogate pair', () => {
+  // JS indices are UTF-16 code units; a naive slice at 2 would cut the emoji in
+  // half and leave two lone surrogates in the user's message.
+  const value = 'a\u{1F44D}b'
+  const edit = spliceTranscript(value, { start: 2, end: 2 }, 'X')
+  assert.equal([...edit.value].every(c => c.codePointAt(0)! < 0xd800 || c.codePointAt(0)! > 0xdfff), true)
+  assert.equal(edit.value.includes('\u{1F44D}'), true, 'the emoji survives intact')
 })
 
 // TEST-4 [acceptance, INV-1] — the transcript lands AT THE CARET, and the caret
@@ -112,14 +149,24 @@ test('insertTranscript with NO caret appends at the end (INV-5), and the caret p
   const value = 'Please book  for next Tuesday.'
   const transcript = 'a table'
 
-  const appended = insertTranscript(value, null, transcript)
+  // The state a never-focused composer ACTUALLY reports. A mounted <textarea>
+  // whose value was assigned imperatively (which is how the draft-restore effect
+  // fills it) reports selectionStart === value.length — so this, not `null`, is
+  // the shape production hands in for "the user never put a caret anywhere".
+  const atEnd = insertTranscript(value, { start: value.length, end: value.length }, transcript)
+  assert.equal(atEnd.value, 'Please book  for next Tuesday. a table')
+  assert.equal(atEnd.caret, atEnd.value.length, 'caret at the end')
   assert.equal(
-    appended.value,
+    atEnd.value,
     appendTranscript(value, transcript),
-    'the no-caret path IS the historical append path',
+    'the never-focused composer appends, exactly as it always has',
   )
-  assert.equal(appended.value, 'Please book  for next Tuesday. a table')
-  assert.equal(appended.caret, appended.value.length, 'caret at the end')
+
+  // `null` is the DEFENSIVE case only (no element / a control with no selection
+  // API); it must behave identically so the fallback can never diverge.
+  const appended = insertTranscript(value, null, transcript)
+  assert.equal(appended.value, atEnd.value)
+  assert.equal(appended.caret, atEnd.caret)
 
   // NEGATIVE CONTROL: if insert-at-caret ever silently degrades back to
   // append-at-end, these two become equal and this fails.

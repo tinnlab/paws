@@ -43,10 +43,18 @@ one that would itself risk the "designed in isolation, fights its parent"
 finding class. Rejected as gold-plating.
 
 ### DEC-4: Does the "Live captions" toggle keep its name, icon and `aria-label` now that captions live in the composer?
-**Resolution:** Yes — unchanged, including `data-testid="voice-live-toggle"`,
-the `Captions`/`CaptionsOff` icons and the "Turn live captions on/off"
-labels. What it controls is unchanged too: whether the interim decode loop runs
-at all.
+**Resolution (REVISED after the phase-6 audit):** the USER-FACING LABEL changes,
+the identity does not. Tooltip + `aria-label` become "Turn on/off live dictation
+— show words in the message as you speak"; `data-testid="voice-live-toggle"`, the
+`Captions`/`CaptionsOff` icons, the `liveCaptions` state field and the
+`ziee.voice.liveCaptions` storage key all stay. The audit was right that a
+control named for a surface this change DELETED is undiscoverable — it is the
+only gate on real-time dictation and its label described nothing that exists. But
+renaming the stored key would silently reset every user's preference, and
+renaming the testid churns the registry, for no user-visible gain.
+
+**Superseded reasoning:** keep the name unchanged. What it controls is unchanged
+too: whether the interim decode loop runs at all.
 **Basis:** convention — the toggle's meaning ("show me words as I speak, rather
 than only at the end") is still exactly right; only the render target moved.
 Renaming it would churn three e2e specs, the testid registry and the
@@ -102,7 +110,17 @@ rewrite. The genuinely operational voice tunables that DO exist
 admin-configurable rows in `voice_settings` and are untouched by this change.
 
 ### DEC-9: Should dictated text be written into the per-conversation draft store?
-**Resolution:** No — out of scope, and explicitly NOT a regression. Composer
+**Resolution (REVISED after the phase-6 audit — both angles escalated it):**
+**Yes.** `applyComposerEdit` dispatches a native `input` event, so dictated text
+persists exactly as typed text does. The original resolution below was wrong on
+its own terms: it reasoned from "pre-existing, therefore not a regression", but
+this change makes dictation the composer's PRIMARY content producer, which turns
+"dictate a paragraph → switch conversation → come back → the draft-restore effect
+overwrites the transcript" from a corner case into a routine data-loss path. A
+defect does not need to be new to be worth fixing when your own change is what
+makes it reachable.
+
+**Superseded reasoning:** out of scope, and explicitly NOT a regression. Composer
 drafts are persisted from `TextInput`'s `onChange` handler, which imperative
 `.value` writes do not fire; the pre-existing `TextStore.setText` (used by
 dictation today, and by edit/regenerate prefill) already behaves this way.
@@ -143,6 +161,19 @@ state is re-blessed as an explicit, separately-reviewed step, and the change is
 recorded in the drift log — never folded silently into an unrelated commit.
 **Basis:** convention — a screenshot baseline is an assertion; overwriting one
 without stating what changed is how a real visual regression gets blessed in.
+
+### DEC-13: A transcription FAILURE after words have streamed into the composer — restore the draft, or keep the words?
+**Resolution:** KEEP the words, and surface the error beside them. Only
+cancel / supersede / unmount restore.
+**Basis:** convention (CODING_GUIDELINES §6, never destroy user data) — INV-4
+enumerates cancelled / superseded / unmounted, every one of which is the USER
+asking for the recording to go away. A backend error is not. By the time
+`/transcribe` fails the audio is gone, so the streamed words are the only
+surviving record of what the user said; deleting them to tidy up after our own
+failure destroys the user's only copy. This REVERSES DRIFT-1.6, which had
+extended the restore to `fail()` — the phase-6 design-conformance angle
+correctly objected that no rule in the design authorised that user-data
+decision. Covered by TEST-17.
 
 ---
 

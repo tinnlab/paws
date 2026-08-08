@@ -72,14 +72,28 @@ test.describe('Voice — live captions stream into the composer (TEST-24)', () =
     expect(voice.state.streamCount).toBeGreaterThanOrEqual(1)
     expect(voice.state.transcribeCount).toBe(0)
 
-    // There is NO transcript surface in the toolbar, in any recording state.
-    await expect(byTestId(page, 'voice-live-caption')).toHaveCount(0)
+    // There is NO transcript surface in the toolbar. Read the real toolbar row
+    // (located from two controls that live in it) WHILE recording — the only
+    // moment such a surface could exist. A `toHaveCount(0)` on the deleted
+    // element would be a tautology: no implementation could make it non-zero.
+    const toolbar = await page.evaluate(() => {
+      const add = document.querySelector('[data-testid="chat-input-add-btn"]')
+      const stop = document.querySelector(
+        'button[aria-label="Stop recording and transcribe"]',
+      )
+      if (!add || !stop) return null
+      let row: HTMLElement | null = add as HTMLElement
+      while (row && !row.contains(stop)) row = row.parentElement
+      return row ? (row.textContent ?? '') : null
+    })
+    expect(toolbar, 'the composer toolbar row must be locatable').not.toBeNull()
+    expect(toolbar).not.toContain('live interim words')
+    expect(toolbar).toMatch(/0:0\d/) // positive control: it IS the toolbar
 
     // Stop → the AUTHORITATIVE final transcript replaces the interim words
     // (rather than being appended after them).
     await page.getByRole('button', { name: 'Stop recording and transcribe' }).click()
     await expect(textarea).toHaveValue('the final authoritative sentence', { timeout: 15000 })
-    await expect(byTestId(page, 'voice-live-caption')).toHaveCount(0)
 
     // Exactly one FINAL transcribe, and nothing sent.
     expect(voice.state.transcribeCount).toBe(1)

@@ -94,12 +94,21 @@ export function MicButton() {
     setHintOpen(false)
   }
 
-  // Live-captions availability + per-device toggle (only when the deployment
-  // offers streaming captions). Idle-only affordance so the mode is chosen before
+  // Live-dictation availability + per-device toggle (only when the deployment
+  // offers streaming). Idle-only affordance so the mode is chosen before
   // recording (the interim loop is armed at record start).
+  //
+  // The LABEL says "live dictation", not "live captions": the caption strip this
+  // used to name was removed, and what the switch now controls is whether the
+  // words appear in the message as you speak or only when you stop. The state
+  // field + storage key keep the `liveCaptions` name — renaming them would churn
+  // every user's stored preference for no user-visible benefit.
   const streamingAvailable = !!capability.streaming_enabled
+  const liveLabel = liveCaptions
+    ? 'Turn off live dictation — show words only when you stop recording'
+    : 'Turn on live dictation — show words in the message as you speak'
   const liveToggle = streamingAvailable ? (
-    <Tooltip content={liveCaptions ? 'Turn live captions off' : 'Turn live captions on'}>
+    <Tooltip content={liveLabel}>
       <Button
         data-testid="voice-live-toggle"
         data-tooltip-wrapped=""
@@ -112,7 +121,7 @@ export function MicButton() {
         }
         variant="ghost"
         size="default"
-        aria-label={liveCaptions ? 'Turn live captions off' : 'Turn live captions on'}
+        aria-label={liveLabel}
         aria-pressed={liveCaptions}
         onClick={() => voice.setLiveCaptions(!liveCaptions)}
       />

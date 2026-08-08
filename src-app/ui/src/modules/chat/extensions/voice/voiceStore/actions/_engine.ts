@@ -9,6 +9,7 @@ import {
 } from '../../voiceRecordingLock'
 import { recordedBlobToWav16k } from '../../audio/wav'
 import {
+  type ComposerEdit,
   type ComposerSpan,
   insertTranscript,
   isSuperseded,
@@ -121,17 +122,25 @@ interface ComposerAccess {
   focusInput(): void
 }
 
-/** The TextStore of the OWNING pane (ITEM-45) — the pane that recorded — so the
- *  transcript lands in ITS composer, not the focused pane's. paneId null → the
- *  focused/single-pane bridge (unchanged). */
-function ownerTextStore(paneId: string | null): ComposerAccess {
+/**
+ * The TextStore of the OWNING pane (ITEM-45) — the pane that recorded — so the
+ * transcript lands in ITS composer, not the focused pane's.
+ *
+ * Returns null when the owning pane is GONE (its handle was unregistered on
+ * unmount). Callers that write must BAIL on null rather than fall back to the
+ * focused pane: this module now applies ABSOLUTE offsets computed against the
+ * owning pane's draft, so writing them into a different pane's composer would
+ * delete or overwrite an arbitrary range of another conversation's text. (The
+ * older append-only code could only strand a stray transcript there; an
+ * offset-based splice is destructive.) `paneId === null` is the single-pane
+ * route, where the bridge IS the one composer.
+ */
+function ownerTextStore(paneId: string | null): ComposerAccess | null {
   if (paneId) {
     const handle = paneRegistry.get(paneId)
-    if (handle) {
-      return (
-        handle.api.getState() as unknown as { TextStore: ComposerAccess }
-      ).TextStore
-    }
+    if (!handle) return null
+    return (handle.api.getState() as unknown as { TextStore: ComposerAccess })
+      .TextStore
   }
   return Chat.$.TextStore as unknown as ComposerAccess
 }
@@ -148,15 +157,26 @@ function ownerTextStore(paneId: string | null): ComposerAccess {
  * `ui/docs/VOICE_DICTATION_COMPOSER.md` §2.1.
  *
  * Deferred a frame because callers focus as part of a state transition whose
- * re-render may not have committed yet.
+ * re-render may not have committed yet — but that frame is a window in which the
+ * world can change, so the work is GUARDED by the generation token it was
+ * scheduled under. Without that guard a conversation switch (TextInput is REUSED
+ * across an in-app A->B switch and its draft-restore effect rewrites `el.value`
+ * directly) would have this force a stale caret offset into the new draft and
+ * steal focus for a recording that is over.
  */
 function focusComposer(paneId: string | null, select?: ComposerSpan): void {
-  if (typeof requestAnimationFrame === 'undefined') return
-  requestAnimationFrame(() => {
+  const gen = requestGeneration
+  const apply = () => {
+    if (isSuperseded(gen, requestGeneration)) return
     const store = ownerTextStore(paneId)
+    if (!store) return // the owning pane closed — never touch another one
     store.focusInput()
     if (select) store.applyEdit(store.getText(), select.start, select.end)
-  })
+  }
+  // No rAF (jsdom without a shim, SSR) → do it synchronously rather than drop
+  // the caret restore on the floor.
+  if (typeof requestAnimationFrame === 'undefined') apply()
+  else requestAnimationFrame(apply)
 }
 
 // ── the dictation session ────────────────────────────────────────────────────
@@ -215,32 +235,79 @@ function resolveWriteSpan(
 function writeDictation(session: DictationSession, transcript: string): boolean {
   if (session.detached) return false
   const store = ownerTextStore(session.paneId)
+  if (!store) return false // the owning pane closed mid-recording
   const value = store.getText()
   const span = resolveWriteSpan(session, value)
   if (!span) {
     session.detached = true
     return false
   }
+  const before = store.getSelection()
   const edit = spliceTranscript(value, span, transcript)
-  store.applyEdit(edit.value, edit.caret)
+  store.applyEdit(edit.value, ...nextSelection(before, span, edit))
   session.span = { start: edit.start, end: edit.end }
   session.written = edit.value.slice(edit.start, edit.end)
   return true
 }
 
 /**
- * Put the composer back exactly as it was before this session wrote anything —
- * the cancel / supersede path (INV-4). A session that never wrote, or that
- * detached, restores nothing.
+ * Where the caret/selection should sit after a dictation write.
+ *
+ * The user's typing always wins (§3 rule 7), and that includes their CARET:
+ * an interim tick fires about once a second, so unconditionally parking the
+ * caret after the dictated words would yank it out from under a user editing
+ * elsewhere in the draft — their next keystrokes would land inside the dictated
+ * span, which in turn trips `relocateSpan` into detaching. So:
+ *
+ *  - caret inside / at the edge of the span we just rewrote (the normal case —
+ *    it is where we left it last tick) → follow the words;
+ *  - caret entirely BEFORE the span → untouched;
+ *  - caret entirely AFTER it → shifted by the span's length delta, so it stays
+ *    on the same characters it was on.
  */
-function restoreDictation(session: DictationSession): void {
-  if (session.detached || !session.span) return
+function nextSelection(
+  before: ComposerSpan | null,
+  oldSpan: ComposerSpan,
+  edit: ComposerEdit,
+): [number, number] {
+  if (!before) return [edit.caret, edit.caret]
+  if (before.start >= oldSpan.start && before.end <= oldSpan.end) {
+    return [edit.caret, edit.caret]
+  }
+  if (before.end <= oldSpan.start) return [before.start, before.end]
+  if (before.start >= oldSpan.end) {
+    const delta = edit.end - edit.start - (oldSpan.end - oldSpan.start)
+    return [before.start + delta, before.end + delta]
+  }
+  // A selection STRADDLING the span (it covers our words plus some of theirs);
+  // collapsing it anywhere would be a guess, so follow the words.
+  return [edit.caret, edit.caret]
+}
+
+/**
+ * Put the composer back exactly as it was before this session wrote anything —
+ * the cancel / supersede path (INV-4). A session that never wrote, that
+ * detached, or whose pane has closed restores nothing.
+ *
+ * Returns the span the restored text now occupies (so the caller can re-select
+ * exactly what the user had selected), or **null when nothing was restored** —
+ * which the caller must treat as "do not touch the selection either". Handing
+ * back the stale anchor offsets in that case would SELECT a range of the user's
+ * own text at coordinates that no longer mean anything, and their next keystroke
+ * would delete it.
+ */
+function restoreDictation(session: DictationSession): ComposerSpan | null {
+  if (session.detached || !session.span) return null
   const store = ownerTextStore(session.paneId)
+  if (!store) return null
   const value = store.getText()
   const span = relocateSpan(value, session.span, session.written)
-  if (!span) return // the user has since edited it — leave their text alone
+  if (!span) return null // the user has since edited it — leave their text alone
   const edit = restoreSpan(value, span, session.anchorText)
   store.applyEdit(edit.value, edit.start, edit.end)
+  // The RESTORED bounds, not the anchor's: if the user typed before the span
+  // while recording, everything after it shifted and the anchor is stale.
+  return { start: edit.start, end: edit.end }
 }
 
 /**
@@ -259,8 +326,11 @@ function restoreDictation(session: DictationSession): void {
 function commitTranscript(
   paneId: string | null,
   transcript: string,
-): ComposerSpan {
+): ComposerSpan | undefined {
   const store = ownerTextStore(paneId)
+  // The owning pane closed while transcribing — drop the transcript rather than
+  // splice absolute offsets into whatever composer happens to be focused.
+  if (!store) return undefined
   const session = dictation && !dictation.detached ? dictation : null
 
   if (session?.span) {
@@ -344,13 +414,18 @@ export default function voiceEngine(
     requestGeneration++
     stopStream()
     chunks = []
-    // A failed recording must leave the composer exactly as it was (INV-4):
-    // take back any provisional words this session streamed in, so the user is
-    // left with their draft plus an error toast, never half a transcript.
-    if (dictation) {
-      restoreDictation(dictation)
-      endDictation()
-    }
+    // A FAILURE is not a cancel, and must not be treated as one. INV-4 covers
+    // cancelled / superseded / unmounted — all cases where the user asked for
+    // the recording to go away. When transcription FAILS, the audio is gone and
+    // the words already streamed into the composer are the only surviving
+    // record of what the user said; deleting them would destroy the user's only
+    // copy to tidy up after our own error. So the provisional words STAY (the
+    // user can edit or delete them) and the error is surfaced alongside them.
+    // The session is closed so nothing writes to it again — but ONLY if it is
+    // ours. `fail()` runs before the recording lock is taken on one path (an
+    // unsupported browser), and clearing unconditionally there would silently
+    // orphan another pane's live session.
+    if (dictation && dictation.paneId === get().recordingPaneId) endDictation()
     releaseRecordingLock(get().recordingPaneId) // ITEM-45: free the exclusive lock
     message.error(msg)
     set({
@@ -538,8 +613,8 @@ export default function voiceEngine(
     // so this still reads the user's insertion point after the mic button took
     // focus; null means the composer was never focused → append at the end.
     const composer = ownerTextStore(paneId)
-    const anchor = composer.getSelection()
-    const draft = composer.getText()
+    const anchor = composer?.getSelection() ?? null
+    const draft = composer?.getText() ?? ''
     dictation = {
       gen,
       paneId,
@@ -717,10 +792,14 @@ export default function voiceEngine(
     // back every provisional word this session streamed in and re-select what
     // the user had selected. A session the user has since edited restores
     // nothing — that text is theirs now (DEC-5).
+    // `restored` is the span the restore ACTUALLY put back — never the anchor.
+    // A detached session (or one whose pane closed) returns null, and then the
+    // selection is left strictly alone: re-selecting the anchor's old
+    // coordinates would highlight the user's own text and arm the next
+    // keystroke to delete it.
     let restored: ComposerSpan | undefined
     if (dictation) {
-      restoreDictation(dictation)
-      restored = dictation.anchor ?? undefined
+      restored = restoreDictation(dictation) ?? undefined
       endDictation()
     }
     releaseRecordingLock(ownerPaneId) // ITEM-45: free the exclusive lock

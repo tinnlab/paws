@@ -965,10 +965,10 @@ Required states: `open`
 | branch | `!canDictate` | 76 |
 | branch | `!capabilityLoaded \|\| !capability \|\| !capability.enabled` | 79 |
 | branch | `!isRecordingSupported()` | 80 |
-| branch | `streamingAvailable` | 101 |
-| branch | `liveCaptions` | 107 |
-| branch | `isRequesting` | 235 |
-| overlay | `<Popover open>` | 253 |
+| branch | `streamingAvailable` | 110 |
+| branch | `liveCaptions` | 116 |
+| branch | `isRequesting` | 244 |
+| overlay | `<Popover open>` | 262 |
 
 ### `modules/chat/pages/ChatHistoryPage`
 

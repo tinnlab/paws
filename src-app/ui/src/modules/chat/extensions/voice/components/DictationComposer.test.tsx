@@ -46,6 +46,8 @@ const script = {
   final: '',
   /** Every `/transcribe` (final) call the engine made. */
   finalCalls: 0,
+  /** When true the final transcribe REJECTS, driving the engine's fail path. */
+  failFinal: false,
 }
 
 vi.mock('@/api-client', () => ({
@@ -67,6 +69,7 @@ vi.mock('@/api-client', () => ({
       }),
       transcribe: async () => {
         script.finalCalls++
+        if (script.failFinal) throw new Error('transcribe backend exploded')
         return { text: script.final }
       },
     },
@@ -204,6 +207,7 @@ beforeEach(async () => {
   script.interim = []
   script.final = ''
   script.finalCalls = 0
+  script.failFinal = false
 
   ;(globalThis as unknown as { MediaRecorder: unknown }).MediaRecorder = FakeMediaRecorder
   Object.defineProperty(window, 'isSecureContext', { configurable: true, get: () => true })
@@ -221,8 +225,13 @@ beforeEach(async () => {
     root.render(<Composer elementRef={el => { composerEl = el }} />)
   })
 
-  // A fresh engine per test: `voiceEngine` memoizes on the `get` identity, so a
-  // new `get` closure yields a new engine with clean module-scope session state.
+  // A fresh engine per test. `voiceEngine` memoizes on the `get` identity, so a
+  // new `get` closure yields a new ENGINE — but the dictation session, the
+  // recorder, the chunk buffer and the generation token are MODULE scope and are
+  // deliberately shared (the exclusive recording lock is what makes that safe).
+  // Only `errorRevertTimer` is per-instance. Isolation therefore comes from
+  // afterEach's `cancelRecording()`, which tears the live session down; building
+  // a second engine does NOT reset module state.
   const { default: voiceEngine } = await import('../voiceStore/actions/_engine')
   let state: Record<string, unknown> = {
     status: 'idle',
@@ -404,6 +413,32 @@ describe('TEST-14 [acceptance INV-4] — a cancelled recording leaves the compos
     expect(snapshot()).toEqual(before)
     expect(composerEl!.value.slice(5, 8)).toBe('Bob')
   })
+
+  test('cancel re-selects the restored text even after the user typed BEFORE it', async () => {
+    seedComposer('call Bob tomorrow', 5, 8) // "Bob" selected
+    script.interim = ['Alice Smith']
+
+    await act(async () => {
+      await engine.startRecording(null)
+    })
+    await settle(TICK * 2)
+    expect(composerEl!.value).toBe('call Alice Smith tomorrow')
+
+    // The user types at the very start, shifting our span right by 2.
+    composerEl!.value = `AB${composerEl!.value}`
+    await settle(TICK)
+
+    await act(async () => {
+      engine.cancelRecording()
+    })
+    await settle(30)
+
+    expect(composerEl!.value).toBe('ABcall Bob tomorrow')
+    // The selection must follow the text to {7,10}; the stale anchor {5,8}
+    // would select "l B" — the wrong three characters.
+    const after = snapshot()
+    expect(after.value.slice(after.start, after.end)).toBe('Bob')
+  })
 })
 
 // ── TEST-15 — the final transcript replaces the provisional one ──────────────
@@ -453,6 +488,32 @@ describe('TEST-15 — the authoritative transcript supersedes the interim (ITEM-
   })
 })
 
+// ── TEST-17 — a backend failure does not destroy the user's words ────────────
+
+describe('TEST-17 — a failed transcription keeps the provisional transcript', () => {
+  test('the streamed words survive a /transcribe error, with the draft intact', async () => {
+    seedComposer('Please book  for next Tuesday.', 12)
+    script.interim = ['a table for four']
+    script.failFinal = true
+
+    await act(async () => {
+      await engine.startRecording(null)
+    })
+    await settle(TICK * 2)
+    expect(composerEl!.value).toBe('Please book a table for four for next Tuesday.')
+
+    await act(async () => {
+      await engine.stopRecording()
+    })
+    await settle(60)
+
+    // The audio is gone; these words are the only surviving record of what the
+    // user said. Deleting them to tidy up after our own error would destroy the
+    // user's only copy.
+    expect(composerEl!.value).toBe('Please book a table for four for next Tuesday.')
+  })
+})
+
 // ── TEST-16 — the user's own typing always wins ──────────────────────────────
 
 describe("TEST-16 — the user's typing wins over dictation (ITEM-3, ITEM-8, ITEM-10)", () => {
@@ -473,6 +534,25 @@ describe("TEST-16 — the user's typing wins over dictation (ITEM-3, ITEM-8, ITE
     expect(composerEl!.value).toBe('Please book a table for Tuesday.')
   })
 
+  test('an interim write leaves the caret alone when the user is editing elsewhere', async () => {
+    seedComposer('draft start and the end', 23) // caret at the very end
+    script.interim = ['one', 'one two']
+
+    await act(async () => {
+      await engine.startRecording(null)
+    })
+    await settle(TICK * 2)
+
+    // Dictation owns a span at the END; put the user's caret near the START.
+    composerEl!.setSelectionRange(5, 5)
+    const marked = composerEl!.value.slice(0, 5)
+    await settle(TICK * 2)
+
+    // The words kept flowing, but the user's caret did NOT move to follow them.
+    expect(composerEl!.value).toContain('one two')
+    expect(composerEl!.value.slice(0, composerEl!.selectionStart)).toBe(marked)
+  })
+
   test('editing INSIDE the provisional span detaches: no overwrite, and cancel restores nothing', async () => {
     seedComposer('keep this', 9)
     script.interim = ['provisional']
@@ -490,11 +570,42 @@ describe("TEST-16 — the user's typing wins over dictation (ITEM-3, ITEM-8, ITE
 
     expect(composerEl!.value).toBe('keep this MY OWN EDIT')
 
+    const beforeCancel = snapshot()
     await act(async () => {
       engine.cancelRecording()
     })
     await settle(30)
     // A detached session restores NOTHING — it must not delete the user's text.
     expect(composerEl!.value).toBe('keep this MY OWN EDIT')
+    // …and must not SELECT any of it either. Re-selecting the anchor's stale
+    // offsets would highlight the user's own characters and arm the next
+    // keystroke to delete them.
+    expect(snapshot().start).toBe(snapshot().end)
+    expect(snapshot().value).toBe(beforeCancel.value)
+  })
+
+  test('a detached selection-anchored session never re-selects the user text', async () => {
+    seedComposer('call Bob tomorrow', 5, 8) // "Bob" selected
+    script.interim = ['Alice Smith']
+
+    await act(async () => {
+      await engine.startRecording(null)
+    })
+    await settle(TICK * 2)
+    expect(composerEl!.value).toBe('call Alice Smith tomorrow')
+
+    // The user edits our words → detach.
+    composerEl!.value = 'call Alice EDITED tomorrow'
+    await settle(TICK)
+
+    await act(async () => {
+      engine.cancelRecording()
+    })
+    await settle(30)
+
+    expect(composerEl!.value).toBe('call Alice EDITED tomorrow')
+    // A collapsed caret, NOT a 3-character selection at the stale anchor {5,8}
+    // (which would be "l A" here, and the next keypress would delete it).
+    expect(snapshot().start).toBe(snapshot().end)
   })
 })

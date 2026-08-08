@@ -50,7 +50,13 @@ export function createComposerAccess(
       const el = element()
       if (!el) return null
       const { selectionStart, selectionEnd } = el
+      // `null` (an input type that does not support selection) and a
+      // non-finite offset both mean "no usable insertion point" — the caller
+      // must then append at the end rather than silently treat it as 0.
       if (selectionStart == null || selectionEnd == null) return null
+      if (!Number.isFinite(selectionStart) || !Number.isFinite(selectionEnd)) {
+        return null
+      }
       return { start: selectionStart, end: selectionEnd }
     },
 
@@ -64,13 +70,23 @@ export function createComposerAccess(
       if (!el) return
       el.value = text
       const max = text.length
-      const from = Math.min(Math.max(start, 0), max)
-      const to = Math.min(Math.max(end, from), max)
+      const from = Number.isFinite(start) ? Math.min(Math.max(start, 0), max) : max
+      const to = Number.isFinite(end) ? Math.min(Math.max(end, from), max) : from
       try {
         el.setSelectionRange(from, to)
       } catch {
         /* a detached/unsupported element — the value write still stands */
       }
+      // Tell React the composer changed, exactly as typing would.
+      //
+      // An imperative `el.value =` fires no event, so TextInput's `onChange`
+      // (and therefore `setDraft`) never runs. That was tolerable when the only
+      // programmatic writer appended once at the end of a recording; it is not
+      // now that dictation is the composer's primary content producer. Without
+      // this, a user dictates a paragraph, switches conversation and comes back,
+      // and TextInput's draft-restore effect writes the STALE stored draft over
+      // the whole transcript — silent data loss.
+      el.dispatchEvent(new Event('input', { bubbles: true }))
     },
 
     focusMessage: () => {
