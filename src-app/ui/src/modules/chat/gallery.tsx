@@ -15,6 +15,7 @@ import type { ModuleGallery } from '@/dev/gallery/support'
 import {
   holdForever,
   holdPatch,
+  lazyBound,
   lazyNamed,
   lazyProps,
   whenTrue,
@@ -118,8 +119,65 @@ function mkRecentConvos(n: number) {
   }))
 }
 
+/**
+ * Composer "+" submenu picker fixtures. 26 entries so the height cap + overlay
+ * scrollbar are exercised by a REAL populated render (a 3-item list would prove
+ * nothing), and one deliberately long name so the width cap is visible too.
+ */
+const PICKER_ITEMS = Array.from({ length: 26 }, (_, i) => ({
+  id: `picker-${i}`,
+  label:
+    i === 0
+      ? 'An assistant with a deliberately very long name that must truncate instead of widening the panel'
+      : `Picker entry ${String(i).padStart(2, '0')}`,
+}))
+
 export const gallery: ModuleGallery = {
   cassette: chatCassette,
+  overlays: [
+    // The composer picker panel is prop-driven (items in, onSelect out), so it is
+    // rendered directly rather than through its Popover — an auto-opened popup
+    // would portal a panel over the whole browse canvas (see overlays.story.tsx).
+    {
+      slug: 'overlay-composer-picker-populated',
+      surface: 'modules/chat/components/ComposerPickerPopover',
+      title: 'Composer picker — populated (26 entries)',
+      component: lazyBound(
+        () => import('@/modules/chat/components/ComposerPickerPopover'),
+        'ComposerPickerPanel',
+        {
+          'data-testid': 'gallery-composer-picker',
+          items: PICKER_ITEMS,
+          selectedIds: new Set(['picker-3']),
+          onSelect: () => undefined,
+          searchLabel: 'Search entries',
+          searchPlaceholder: 'Filter entries…',
+          emptyContent: null,
+        },
+      ),
+    },
+    {
+      slug: 'overlay-composer-picker-empty',
+      surface: 'modules/chat/components/ComposerPickerPopover',
+      title: 'Composer picker — nothing configured yet',
+      component: lazyBound(
+        () => import('@/modules/chat/components/ComposerPickerPopover'),
+        'ComposerPickerPanel',
+        {
+          'data-testid': 'gallery-composer-picker-empty',
+          items: [],
+          onSelect: () => undefined,
+          searchLabel: 'Search entries',
+          searchPlaceholder: 'Filter entries…',
+          emptyContent: (
+            <div className="px-2 py-2 text-sm text-muted-foreground">
+              No knowledge bases yet — create one →
+            </div>
+          ),
+        },
+      ),
+    },
+  ],
   deepStates: [
     {
       slug: 'deep-chat-streaming',

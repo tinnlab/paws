@@ -1,12 +1,16 @@
-import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Input, Popover, message } from '@ziee/kit'
+import { message } from '@ziee/kit'
 import { BookOpen, Check, ChevronRight } from 'lucide-react'
 import { type KnowledgeBase } from '@/api-client/types'
 import { Permissions } from '@/api-client/permissions'
 import { usePermission } from '@/core/permissions'
 import { kbKey } from '@/modules/knowledge-base/stores/kbSelectionKey'
 import { useChatPaneOrNull } from '@/modules/chat/core/pane/ChatPaneContext'
+import { PlusMenuItem } from '@/modules/chat/components/PlusMenuItem'
+import {
+  ComposerPickerPopover,
+  type ComposerPickerItem,
+} from '@/modules/chat/components/ComposerPickerPopover'
 import { KnowledgeBases } from '@/modules/knowledge-base/stores/knowledgeBases'
 import { KnowledgeBaseComposer } from '@/modules/knowledge-base/stores/knowledgeBaseComposer'
 import { Chat } from '@/modules/chat/core/stores/chatBridge'
@@ -26,8 +30,13 @@ function statusSuffix(kb: KnowledgeBase): { text: string; className: string } | 
 /**
  * KbMenuItem — the "+" dropdown row for grounding the conversation on knowledge
  * bases. Opens a submenu listing the user's KBs; each row TOGGLES attach/detach.
- * Searchable (when there are many), shows per-KB index status, and — when the
- * user has no KBs — links to /knowledge instead of hiding.
+ *
+ * Multi-SELECT, so activating a row deliberately does NOT close the "+" dropdown
+ * (that asymmetry with the assistant item is why closing is the caller's call, not
+ * the primitive's). Shows per-KB index status, and — when the user has no KBs —
+ * links to /knowledge instead of hiding. The popover shell (bounded width, capped +
+ * overlay-scrolled list, always-present search, keyboard model) is
+ * `ComposerPickerPopover`; the previous `kbs.length > 6` search threshold is gone.
  */
 export function KbMenuItem() {
   const navigate = useNavigate()
@@ -42,14 +51,10 @@ export function KbMenuItem() {
   const paneId = pane?.paneId ?? null
   const convId = chat.conversation?.id ?? null
   const selectedKbIds = selectionByConversation.get(kbKey(convId, paneId)) ?? EMPTY_SET
-  const [query, setQuery] = useState('')
 
   if (!canUse) return null
 
   const kbs = Array.from(items.values())
-  const filtered = query.trim()
-    ? kbs.filter(k => k.name.toLowerCase().includes(query.trim().toLowerCase()))
-    : kbs
 
   const toggle = (id: string) => {
     const p = selectedKbIds.has(id)
@@ -60,9 +65,42 @@ export function KbMenuItem() {
     )
   }
 
-  const popoverContent = (
-    <div data-testid="kb-menu-options" style={{ minWidth: 220, margin: -4 }}>
-      {kbs.length === 0 ? (
+  const pickerItems: ComposerPickerItem[] = kbs.map(kb => {
+    const active = selectedKbIds.has(kb.id)
+    const status = statusSuffix(kb)
+    return {
+      id: kb.id,
+      label: kb.name,
+      testId: `kb-option-${kb.id}`,
+      leading: <Check className={`size-4 shrink-0 ${active ? 'opacity-100' : 'opacity-0'}`} />,
+      trailing: (
+        <>
+          {status && <span className={`shrink-0 text-xs ${status.className}`}>{status.text}</span>}
+          <span className="shrink-0 text-xs text-muted-foreground">{kb.document_count}</span>
+        </>
+      ),
+    }
+  })
+
+  return (
+    <ComposerPickerPopover
+      data-testid="kb-menu-options"
+      trigger={
+        <PlusMenuItem
+          data-testid="kb-menu-trigger"
+          aria-label="Knowledge bases"
+          aria-haspopup="listbox"
+          icon={<BookOpen />}
+          label="Knowledge bases"
+          trailing={<ChevronRight className="size-3 opacity-45" />}
+        />
+      }
+      items={pickerItems}
+      selectedIds={selectedKbIds}
+      onSelect={item => toggle(item.id)}
+      searchLabel="Search knowledge bases"
+      searchPlaceholder="Filter knowledge bases…"
+      emptyContent={
         // Empty → link to management, instead of a dead end.
         <div
           data-testid="kb-menu-empty"
@@ -75,73 +113,11 @@ export function KbMenuItem() {
               navigate('/knowledge')
             }
           }}
-          className="cursor-pointer rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-muted focus-visible:outline focus-visible:outline-2"
+          className="cursor-pointer rounded-md px-2 py-2 text-sm text-muted-foreground hover:bg-muted focus-visible:outline focus-visible:outline-2"
         >
           No knowledge bases yet — create one →
         </div>
-      ) : (
-        <>
-          {kbs.length > 6 && (
-            <div className="px-2 pb-2 pt-1">
-              <Input
-                data-testid="kb-menu-search"
-                value={query}
-                onChange={e => setQuery(e.target.value)}
-                placeholder="Filter knowledge bases…"
-                onClick={e => e.stopPropagation()}
-              />
-            </div>
-          )}
-          {filtered.map(kb => {
-            const active = selectedKbIds.has(kb.id)
-            const status = statusSuffix(kb)
-            return (
-              <div
-                key={kb.id}
-                data-testid={`kb-option-${kb.id}`}
-                role="button"
-                tabIndex={0}
-                aria-pressed={active}
-                onClick={() => toggle(kb.id)}
-                onKeyDown={e => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault()
-                    toggle(kb.id)
-                  }
-                }}
-                className={`flex cursor-pointer items-center gap-2 rounded-md px-3 py-1.5 text-sm hover:bg-muted focus-visible:outline focus-visible:outline-2 ${
-                  active ? 'text-primary' : 'text-foreground'
-                }`}
-              >
-                <Check className={`size-4 shrink-0 ${active ? 'opacity-100' : 'opacity-0'}`} />
-                <span className="min-w-0 flex-1 truncate">{kb.name}</span>
-                {status && (
-                  <span className={`shrink-0 text-xs ${status.className}`}>{status.text}</span>
-                )}
-                <span className="shrink-0 text-xs text-muted-foreground">{kb.document_count}</span>
-              </div>
-            )
-          })}
-          {filtered.length === 0 && (
-            <div className="px-3 py-2 text-sm text-muted-foreground">No matches.</div>
-          )}
-        </>
-      )}
-    </div>
-  )
-
-  return (
-    <Popover content={popoverContent} side="right" align="start" className="w-auto">
-      <div
-        data-testid="kb-menu-trigger"
-        className="flex items-center gap-2 rounded-md px-3 py-1.5 cursor-pointer text-foreground hover:bg-muted whitespace-nowrap"
-      >
-        <div className="flex min-w-0 items-center gap-2">
-          <BookOpen className="size-4 shrink-0" />
-          <span className="min-w-0 flex-1 truncate text-sm">Knowledge bases</span>
-        </div>
-        <ChevronRight className="size-3 shrink-0 opacity-45" />
-      </div>
-    </Popover>
+      }
+    />
   )
 }

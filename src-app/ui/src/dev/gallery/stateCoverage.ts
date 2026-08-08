@@ -127,8 +127,6 @@ export const STATE_COVERAGE = {
     reason:
       "the footer renders NULL for a conversation with no background runs — its 'empty' state is the deliberate absence of any chrome, so there is nothing to snapshot; the absence is asserted by the 15-background/background-in-conversation e2e (TEST-15)",
   },
-  "modules/assistant/chat-extension/components/AssistantMenuItem:empty": { skip: true, reason: "via surface — rendered within its page; 'empty' branch proven by Part 2 runtime coverage" },
-  "modules/assistant/chat-extension/components/AssistantSelector:empty": { skip: true, reason: "via surface — rendered within its page; 'empty' branch proven by Part 2 runtime coverage" },
   "modules/assistant/components/AssistantFormDrawer:open": { via: 'overlay' },
   "modules/chat/core/components/ChatRightPanel:open": { via: 'overlay' },
   "modules/assistant/pages/AssistantsSettings:delayed": { via: 'page-state-mode' },
@@ -353,7 +351,6 @@ export const STATE_COVERAGE = {
   "modules/knowledge-base/pages/KnowledgeBasesListPage:open": { via: 'page-state-mode' },
   "modules/knowledge-base/pages/KnowledgeBaseDetailPage:delayed": { via: 'page-state-mode' },
   "modules/knowledge-base/pages/KnowledgeBaseDetailPage:open": { via: 'page-state-mode' },
-  "modules/knowledge-base/chat-extension/components/KbMenuItem:empty": { skip: true, reason: "via surface — composer '+' item; hidden-when-no-KBs branch proven by Part 2 runtime coverage" },
   "modules/knowledge-base/chat-extension/components/KbStatusRow:empty": { skip: true, reason: "via surface — composer chips; empty (no attachments) branch proven by Part 2 runtime coverage" },
   "modules/knowledge-base/chat-extension/components/SearchKnowledgeToolResultCard:empty": { skip: true, reason: "via surface — tool_result card; no-hits branch proven by Part 2 runtime coverage + the KB e2e" },
   "modules/knowledge-base/chat-extension/extension:panel-open": { skip: true, reason: "via surface — the kb_source right-panel opens from a search_knowledge hit; open branch exercised by the KB chat e2e" },
@@ -485,6 +482,10 @@ export const STATE_COVERAGE = {
   'modules/notification/pages/AgentInboxPage:empty': { skip: true, reason: 'agent-core surface merged from feat/agent-core; state-matrix state-coverage annotation deferred to a follow-up gallery pass' },
   'modules/notification/pages/AgentInboxPage:error': { skip: true, reason: 'agent-core surface merged from feat/agent-core; state-matrix state-coverage annotation deferred to a follow-up gallery pass' },
   'modules/router/components/RouterComponent:delayed': { skip: true, reason: 'agent-core surface merged from feat/agent-core; state-matrix state-coverage annotation deferred to a follow-up gallery pass' },
+  // This branch's own surface: the picker's populated arm and its
+  // `items.length === 0` arm each render for real as overlay cells.
+  'modules/chat/components/ComposerPickerPopover:open': { via: 'overlay' },
+  'modules/chat/components/ComposerPickerPopover:empty': { via: 'overlay' },
   // ── The eight no-UI-path affordances (c94987cec) shipped their conditional
   //    renders without the matching state-coverage mapping. Each key below got a
   //    real decision, not a scaffold stamp.

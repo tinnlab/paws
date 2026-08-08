@@ -1,0 +1,325 @@
+import {
+  cloneElement,
+  useCallback,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactElement,
+  type ReactNode,
+} from 'react'
+import { Input, Popover, ScrollArea } from '@ziee/kit'
+import { Search } from 'lucide-react'
+import { cn } from '@/lib/utils'
+
+/**
+ * The composer "+" submenu picker — ONE shell for every list-style item in the
+ * chat composer's "+" dropdown.
+ *
+ * Realizes `docs/design/composer-picker-popover.md`. Before it, the assistant and
+ * knowledge-base items each hand-rolled the same popover, the same
+ * `style={{ minWidth, margin: -4 }}` content box and the same row markup, and
+ * NEITHER bounded its width or height or (for assistants) offered a search box —
+ * so one long name stretched the panel across the chat column and twenty entries
+ * ran off the viewport with no way to reach the bottom.
+ *
+ * The three promises this component owns, and how:
+ *
+ *  - **bounded width** — the panel is `w-auto` between `min-w-60` and `max-w-80`
+ *    (240–320px). A long label is absorbed by the ROW (`min-w-0 flex-1 truncate`,
+ *    full text kept in `title` so it stays recoverable), never by the panel.
+ *  - **bounded height + overlay scrollbar** — the list lives in the app's
+ *    overlayscrollbars `ScrollArea` capped at `max-h-64` (256px), copying the
+ *    in-popover recipe at `sdk/packages/kit/src/kit/dropdown.tsx`. Deliberately NOT
+ *    a native `overflow-y-auto` (see `scripts/lint-native-scroll.mjs`).
+ *  - **search on top** — always rendered (suppressed only when the caller has zero
+ *    items, where there is nothing to search). Its predecessor showed the box only
+ *    above six knowledge bases, which both hid it exactly when the list was still
+ *    unusable and stranded a stale query when the list shrank back.
+ *
+ * Keyboard model is the ARIA 1.2 combobox/listbox pattern already used by the kit's
+ * `MultiSelect`: the search input keeps focus and owns `aria-activedescendant`, the
+ * list is a `listbox` of `option`s, arrows wrap, Home/End jump, Enter activates, and
+ * Escape closes ONLY this submenu — its propagation is stopped so the parent "+"
+ * dropdown survives (a submenu that dismissed its parent would lose the user's place).
+ *
+ * Callers stay declarative: they pass DATA (`ComposerPickerItem[]` with optional
+ * `leading`/`trailing` adornments) and a select handler. They must NOT read a store
+ * proxy inside those adornments — reactive proxy reads are hooks in this codebase and
+ * these render inside a `.map()`.
+ */
+
+/** Panel width bounds — kept as one named constant so the two callers cannot drift. */
+const PICKER_PANEL_CLASSES = 'flex w-auto min-w-60 max-w-80 flex-col gap-2 p-2'
+/**
+ * List height cap (256px). Matches the caps the kit's own `ComboboxList` /
+ * `MultiSelect` use, so every list-in-a-popover in the app agrees.
+ */
+const PICKER_LIST_MAX_H = 'max-h-64'
+/** Neutralizes the kit popup's own `w-72` / `p-2.5` / `gap-2.5` so the panel owns them. */
+const PICKER_POPUP_CLASSES = 'w-auto max-w-none gap-0 p-0'
+
+export interface ComposerPickerItem {
+  /** Stable identity; also what `onSelect` hands back. */
+  id: string
+  /** The searchable, truncatable text. */
+  label: string
+  /** Per-row test selector (e.g. `kb-option-<uuid>`); derived by the caller. */
+  testId?: string
+  /** Leading adornment — a selection check, an icon. */
+  leading?: ReactNode
+  /** Trailing metadata — an index-status suffix, a document count. */
+  trailing?: ReactNode
+  /** Renders a divider under this row (used for the assistant "No assistant" row). */
+  separatorAfter?: boolean
+  disabled?: boolean
+}
+
+export interface ComposerPickerPanelProps {
+  items: readonly ComposerPickerItem[]
+  /** Ids rendered as `aria-selected` — a set so multi-select callers are natural. */
+  selectedIds?: ReadonlySet<string>
+  onSelect: (item: ComposerPickerItem) => void
+  /** Called when the user dismisses with Escape. */
+  onDismiss?: () => void
+  /** Accessible name for the search box (required — the caller owns i18n). */
+  searchLabel: string
+  searchPlaceholder: string
+  /** Rendered INSTEAD of the search box + list when `items` is empty. */
+  emptyContent: ReactNode
+  /**
+   * Initial filter text. The query is otherwise uncontrolled; this exists so the
+   * gallery can render the FILTERED and NO-MATCHES states deterministically (they
+   * are reachable only through typing, which a mount-only screenshot cannot do).
+   * Production callers leave it unset.
+   */
+  defaultQuery?: string
+  /** Container test selector; sub-elements derive `${id}-search` / `${id}-no-matches`. */
+  'data-testid': string
+}
+
+/**
+ * The picker's presentational body. Exported separately from the popover so it can be
+ * mounted (and screenshot in the gallery) without a portal — the popover is what makes
+ * a component untestable in jsdom, not the list.
+ */
+export function ComposerPickerPanel({
+  items,
+  selectedIds,
+  onSelect,
+  onDismiss,
+  searchLabel,
+  searchPlaceholder,
+  emptyContent,
+  defaultQuery = '',
+  'data-testid': testId,
+}: ComposerPickerPanelProps) {
+  const [query, setQuery] = useState(defaultQuery)
+  const [activeIndex, setActiveIndex] = useState(0)
+  const listRef = useRef<HTMLDivElement | null>(null)
+  const baseId = useId()
+  const listId = `${baseId}-list`
+  const optionId = useCallback((index: number) => `${baseId}-opt-${index}`, [baseId])
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) return items
+    return items.filter(item => item.label.toLowerCase().includes(q))
+  }, [items, query])
+
+  // Derived, not stored: the filter can shrink the list under the stored index at any
+  // keystroke, so clamping here keeps `aria-activedescendant` pointing at a row that
+  // actually exists without an effect that lags a render behind.
+  const active = filtered.length === 0 ? -1 : Math.min(activeIndex, filtered.length - 1)
+
+  const moveActive = useCallback(
+    (next: number) => {
+      setActiveIndex(next)
+      // getElementById, NOT a `#id` querySelector: `useId()` ids contain characters
+      // that are not valid bare CSS selectors, and `CSS.escape` does not exist in
+      // jsdom (nor in every browser we claim to support).
+      const el = listRef.current?.ownerDocument.getElementById(optionId(next))
+      // jsdom has no layout and no scrollIntoView; guard rather than crash.
+      el?.scrollIntoView?.({ block: 'nearest' })
+    },
+    [optionId],
+  )
+
+  const activate = useCallback(
+    (item: ComposerPickerItem | undefined) => {
+      if (!item || item.disabled) return
+      onSelect(item)
+    },
+    [onSelect],
+  )
+
+  const onSearchKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    const count = filtered.length
+    switch (event.key) {
+      case 'ArrowDown':
+        event.preventDefault()
+        if (count > 0) moveActive(active < 0 || active === count - 1 ? 0 : active + 1)
+        break
+      case 'ArrowUp':
+        event.preventDefault()
+        if (count > 0) moveActive(active <= 0 ? count - 1 : active - 1)
+        break
+      case 'Home':
+        if (count > 0) {
+          event.preventDefault()
+          moveActive(0)
+        }
+        break
+      case 'End':
+        if (count > 0) {
+          event.preventDefault()
+          moveActive(count - 1)
+        }
+        break
+      case 'Enter':
+        event.preventDefault()
+        activate(filtered[active])
+        break
+      case 'Escape':
+        event.preventDefault()
+        // Close THIS submenu only — the parent "+" dropdown must stay open.
+        event.stopPropagation()
+        onDismiss?.()
+        break
+      default:
+        break
+    }
+  }
+
+  if (items.length === 0) {
+    return (
+      <div data-testid={testId} className={PICKER_PANEL_CLASSES}>
+        {emptyContent}
+      </div>
+    )
+  }
+
+  return (
+    <div data-testid={testId} className={PICKER_PANEL_CLASSES}>
+      <Input
+        data-testid={`${testId}-search`}
+        role="combobox"
+        aria-label={searchLabel}
+        aria-expanded
+        aria-controls={listId}
+        aria-autocomplete="list"
+        aria-activedescendant={active >= 0 ? optionId(active) : undefined}
+        value={query}
+        onChange={event => {
+          setQuery(event.target.value)
+          setActiveIndex(0)
+        }}
+        onKeyDown={onSearchKeyDown}
+        placeholder={searchPlaceholder}
+        prefix={<Search aria-hidden />}
+        size="sm"
+      />
+      {filtered.length === 0 ? (
+        // A real state, never a blank panel.
+        <div
+          data-testid={`${testId}-no-matches`}
+          className="px-2 py-2 text-sm text-muted-foreground"
+        >
+          No matches.
+        </div>
+      ) : (
+        <ScrollArea axis="y" autoHide="leave" className={cn(PICKER_LIST_MAX_H, '-mx-1 px-1')}>
+          <div ref={listRef} id={listId} role="listbox" aria-label={searchLabel}>
+            {filtered.map((item, index) => {
+              const selected = selectedIds?.has(item.id) ?? false
+              return (
+                <div key={item.id}>
+                  <div
+                    id={optionId(index)}
+                    data-testid={item.testId}
+                    role="option"
+                    aria-selected={selected}
+                    aria-disabled={item.disabled || undefined}
+                    data-active={index === active || undefined}
+                    onClick={() => activate(item)}
+                    onMouseMove={() => {
+                      if (index !== activeIndex) setActiveIndex(index)
+                    }}
+                    className={cn(
+                      'flex min-w-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm',
+                      'data-[active]:bg-accent data-[active]:text-accent-foreground',
+                      'aria-disabled:pointer-events-none aria-disabled:opacity-50',
+                      selected ? 'text-primary' : 'text-foreground',
+                    )}
+                  >
+                    {item.leading}
+                    {/* min-w-0 + truncate is what keeps a long name from widening the
+                        panel; `title` keeps the elided text recoverable. */}
+                    <span className="min-w-0 flex-1 truncate" title={item.label}>
+                      {item.label}
+                    </span>
+                    {item.trailing}
+                  </div>
+                  {item.separatorAfter && <div className="my-1 h-px bg-border" />}
+                </div>
+              )
+            })}
+          </div>
+        </ScrollArea>
+      )}
+    </div>
+  )
+}
+
+export interface ComposerPickerPopoverProps extends Omit<ComposerPickerPanelProps, 'onDismiss'> {
+  /**
+   * The "+" row that opens this submenu — always a `PlusMenuItem`, rendered by the
+   * CALLER rather than assembled from icon/label props here.
+   *
+   * Why the caller owns it: the generated static testid registry
+   * (`sdk/packages/kit/src/testIds.generated.ts`) only records literal
+   * `data-testid="…"` occurrences. Passing the id down as a prop would turn
+   * `assistant-menu-trigger` / `kb-menu-trigger` — the ids ~10 existing e2e specs
+   * target — into template-derived ids and silently drop their compile-time
+   * typo-check. Keeping the element at the call site keeps the literal where the
+   * scanner can see it. `aria-expanded` is injected here so the caller cannot
+   * forget it.
+   */
+  trigger: ReactElement<{ 'aria-expanded'?: boolean }>
+  /** Whether activating an item should close the picker (single-select) or not. */
+  closeOnSelect?: boolean
+}
+
+export function ComposerPickerPopover({
+  trigger,
+  closeOnSelect = false,
+  onSelect,
+  ...panel
+}: ComposerPickerPopoverProps) {
+  // Controlled so Escape can close THIS popover while its propagation is stopped
+  // (a stopped event never reaches Base UI's own dismiss handler).
+  const [open, setOpen] = useState(false)
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={setOpen}
+      side="right"
+      align="start"
+      className={PICKER_POPUP_CLASSES}
+      content={
+        <ComposerPickerPanel
+          {...panel}
+          onSelect={item => {
+            onSelect(item)
+            if (closeOnSelect) setOpen(false)
+          }}
+          onDismiss={() => setOpen(false)}
+        />
+      }
+    >
+      {cloneElement(trigger, { 'aria-expanded': open })}
+    </Popover>
+  )
+}
