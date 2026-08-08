@@ -3,13 +3,19 @@
 // `import.meta.glob('./actions/*.ts')` in index.ts; these are the TYPES.
 
 export type Actions = {
+  applyEdit: typeof import('./actions/applyEdit')['default']
   clearText: typeof import('./actions/clearText')['default']
+  focusInput: typeof import('./actions/focusInput')['default']
   getBackupMessage: typeof import('./actions/getBackupMessage')['default']
+  getSelection: typeof import('./actions/getSelection')['default']
   getText: typeof import('./actions/getText')['default']
   restoreFromBackup: typeof import('./actions/restoreFromBackup')['default']
+  setApplyEdit: typeof import('./actions/setApplyEdit')['default']
   setBackupMessage: typeof import('./actions/setBackupMessage')['default']
   setClearMessage: typeof import('./actions/setClearMessage')['default']
+  setFocusInput: typeof import('./actions/setFocusInput')['default']
   setGetMessage: typeof import('./actions/setGetMessage')['default']
+  setGetSelection: typeof import('./actions/setGetSelection')['default']
   setSetMessage: typeof import('./actions/setSetMessage')['default']
   setText: typeof import('./actions/setText')['default']
 }

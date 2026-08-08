@@ -4,7 +4,7 @@
 // renders + overlay triggers + panel/slot registrations) that the reconciliation
 // gate (scripts/reconcile-state-matrix.mjs) checks the gallery entries against.
 //
-// 349 surfaces carry renderable-state signals; 2135 signals total.
+// 352 surfaces carry renderable-state signals; 2171 signals total.
 
 /** A signal is one mechanically-detected render fork (a state the surface can be in). */
 export interface StateSignal {
@@ -806,11 +806,11 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/chat/extensions/text/components/TextInput",
     requiredStates: [],
     signals: [
-      { kind: "branch", condition: "!el", line: 83 },
-      { kind: "branch", condition: "isEditing", line: 84 },
-      { kind: "branch", condition: "restoredKeyRef.current === draftKey", line: 92 },
-      { kind: "branch", condition: "isEditingRef.current", line: 100 },
-      { kind: "branch", condition: "sending || isStreaming || inFlightRef.current", line: 129 },
+      { kind: "branch", condition: "!el", line: 101 },
+      { kind: "branch", condition: "isEditing", line: 102 },
+      { kind: "branch", condition: "restoredKeyRef.current === draftKey", line: 110 },
+      { kind: "branch", condition: "isEditingRef.current", line: 118 },
+      { kind: "branch", condition: "sending || isStreaming || inFlightRef.current", line: 147 },
     ],
   },
   "modules/chat/extensions/text/components/ThinkingContent": {
@@ -844,9 +844,8 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
       { kind: "branch", condition: "!isRecordingSupported()", line: 80 },
       { kind: "branch", condition: "streamingAvailable", line: 101 },
       { kind: "branch", condition: "liveCaptions", line: 107 },
-      { kind: "branch", condition: "liveCaptions && interimText", line: 191 },
-      { kind: "branch", condition: "isRequesting", line: 245 },
-      { kind: "overlay", condition: "<Popover open>", line: 263 },
+      { kind: "branch", condition: "isRequesting", line: 235 },
+      { kind: "overlay", condition: "<Popover open>", line: 253 },
     ],
   },
   "modules/chat/pages/ChatHistoryPage": {
@@ -935,13 +934,25 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
       { kind: "branch", condition: "!open && keepMenuOpen", line: 483 },
     ],
   },
+  "modules/citations/components/AttachCitationsDialog": {
+    surface: "modules/citations/components/AttachCitationsDialog",
+    requiredStates: ["empty","open"],
+    signals: [
+      { kind: "branch", condition: "attachedIds.has(e.id)", line: 57 },
+      { kind: "empty", condition: "ids.length === 0", line: 78 },
+      { kind: "overlay", condition: "<Dialog open>", line: 91 },
+      { kind: "empty", condition: "candidates.length === 0", line: 135 },
+    ],
+  },
   "modules/citations/components/CitationCard": {
     surface: "modules/citations/components/CitationCard",
     requiredStates: [],
     signals: [
-      { kind: "branch", condition: "canManage", line: 71 },
-      { kind: "branch", condition: "meta", line: 95 },
-      { kind: "branch", condition: "entry.doi", line: 96 },
+      { kind: "branch", condition: "!projectId", line: 60 },
+      { kind: "branch", condition: "canManage", line: 100 },
+      { kind: "branch", condition: "scoped", line: 126 },
+      { kind: "branch", condition: "meta", line: 134 },
+      { kind: "branch", condition: "entry.doi", line: 135 },
     ],
   },
   "modules/citations/components/ImportCitationsModal": {
@@ -957,11 +968,13 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/citations/pages/CitationsSettingsPage",
     requiredStates: ["delayed","empty","error","open"],
     signals: [
-      { kind: "branch", condition: "canManage", line: 65 },
-      { kind: "loading", condition: "loading", line: 96 },
-      { kind: "empty", condition: "entries.length === 0", line: 98 },
-      { kind: "error", condition: "error", line: 99 },
-      { kind: "overlay", condition: "<ImportCitationsModal open>", line: 119 },
+      { kind: "branch", condition: "format !== STYLED_FORMAT", line: 84 },
+      { kind: "branch", condition: "canManage", line: 99 },
+      { kind: "loading", condition: "loading", line: 130 },
+      { kind: "empty", condition: "entries.length === 0", line: 132 },
+      { kind: "error", condition: "error", line: 133 },
+      { kind: "overlay", condition: "<ImportCitationsModal open>", line: 153 },
+      { kind: "overlay", condition: "<Dialog open>", line: 158 },
     ],
   },
   "modules/citations/project-extension/components/ProjectBibliographyInlinePreview": {
@@ -976,12 +989,14 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/citations/project-extension/components/ProjectBibliographyManagePanel",
     requiredStates: ["delayed","empty","open"],
     signals: [
-      { kind: "branch", condition: "!projectId", line: 25 },
-      { kind: "branch", condition: "!projectId", line: 49 },
-      { kind: "branch", condition: "canManage", line: 62 },
-      { kind: "loading", condition: "loading", line: 74 },
-      { kind: "empty", condition: "entries.length === 0", line: 76 },
-      { kind: "overlay", condition: "<ImportCitationsModal open>", line: 86 },
+      { kind: "branch", condition: "!projectId", line: 32 },
+      { kind: "branch", condition: "!projectId", line: 56 },
+      { kind: "branch", condition: "canManage", line: 69 },
+      { kind: "loading", condition: "loading", line: 95 },
+      { kind: "empty", condition: "entries.length === 0", line: 97 },
+      { kind: "overlay", condition: "<ImportCitationsModal open>", line: 116 },
+      { kind: "branch", condition: "canManage", line: 125 },
+      { kind: "overlay", condition: "<AttachCitationsDialog open>", line: 126 },
     ],
   },
   "modules/code-sandbox/components/AvailableRootfsCard": {
@@ -1374,26 +1389,26 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/file/project-extension/components/ProjectFilesManagePanel",
     requiredStates: ["empty"],
     signals: [
-      { kind: "branch", condition: "!projectId", line: 73 },
-      { kind: "empty", condition: "!projectId || selectedFileIds.size === 0", line: 85 },
-      { kind: "empty", condition: "!projectId || incoming.length === 0", line: 109 },
-      { kind: "branch", condition: "atCap", line: 110 },
-      { kind: "empty", condition: "accepted.length === 0", line: 126 },
-      { kind: "branch", condition: "!canUpload", line: 135 },
-      { kind: "branch", condition: "!body", line: 139 },
-      { kind: "branch", condition: "!Array.from(e.dataTransfer?.types ?? []).includes('Files')", line: 150 },
-      { kind: "branch", condition: "!Array.from(e.dataTransfer?.types ?? []).includes('Files')", line: 156 },
-      { kind: "branch", condition: "!Array.from(e.dataTransfer?.types ?? []).includes('Files')", line: 162 },
-      { kind: "branch", condition: "!Array.from(e.dataTransfer?.types ?? []).includes('Files')", line: 166 },
-      { kind: "branch", condition: "!project", line: 188 },
-      { kind: "branch", condition: "canUpload", line: 200 },
-      { kind: "branch", condition: "selectedFileIds.size > 0", line: 235 },
-      { kind: "empty", condition: "!(uploadingRows.length === 0)", line: 261 },
-      { kind: "branch", condition: "initialLoading", line: 283 },
-      { kind: "empty", condition: "files.length === 0", line: 287 },
-      { kind: "branch", condition: "canEdit", line: 317 },
-      { kind: "branch", condition: "atCap", line: 363 },
-      { kind: "branch", condition: "isDragging && drawerBody", line: 376 },
+      { kind: "branch", condition: "!projectId", line: 78 },
+      { kind: "empty", condition: "!projectId || selectedFileIds.size === 0", line: 92 },
+      { kind: "empty", condition: "!projectId || incoming.length === 0", line: 120 },
+      { kind: "branch", condition: "atCap", line: 121 },
+      { kind: "empty", condition: "accepted.length === 0", line: 137 },
+      { kind: "branch", condition: "!canUpload", line: 146 },
+      { kind: "branch", condition: "!body", line: 150 },
+      { kind: "branch", condition: "!Array.from(e.dataTransfer?.types ?? []).includes('Files')", line: 161 },
+      { kind: "branch", condition: "!Array.from(e.dataTransfer?.types ?? []).includes('Files')", line: 167 },
+      { kind: "branch", condition: "!Array.from(e.dataTransfer?.types ?? []).includes('Files')", line: 173 },
+      { kind: "branch", condition: "!Array.from(e.dataTransfer?.types ?? []).includes('Files')", line: 177 },
+      { kind: "branch", condition: "!project", line: 199 },
+      { kind: "branch", condition: "canUpload", line: 211 },
+      { kind: "branch", condition: "selectedFileIds.size > 0", line: 246 },
+      { kind: "empty", condition: "!(uploadingRows.length === 0)", line: 275 },
+      { kind: "branch", condition: "initialLoading", line: 297 },
+      { kind: "empty", condition: "files.length === 0", line: 301 },
+      { kind: "branch", condition: "canEdit", line: 331 },
+      { kind: "branch", condition: "atCap", line: 376 },
+      { kind: "branch", condition: "isDragging && drawerBody", line: 389 },
     ],
   },
   "modules/file/viewers/image/body": {
@@ -1738,13 +1753,15 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/hub/modules/installed/components/InstalledHubTab",
     requiredStates: ["delayed","empty","error"],
     signals: [
-      { kind: "loading", condition: "loading && items.length === 0", line: 212 },
-      { kind: "error", condition: "error && items.length === 0", line: 220 },
-      { kind: "empty", condition: "rows.length === 0", line: 254 },
-      { kind: "branch", condition: "i > 0", line: 284 },
-      { kind: "branch", condition: "row.is_system", line: 292 },
-      { kind: "branch", condition: "row.name && row.name !== row.hub_id", line: 317 },
-      { kind: "branch", condition: "row.hub_category === 'model' || ((row.hub_category === 'skill' || row.hub_category === 'workflow') && row.is_system)", line: 330 },
+      { kind: "loading", condition: "loading && items.length === 0", line: 244 },
+      { kind: "error", condition: "error && items.length === 0", line: 252 },
+      { kind: "empty", condition: "rows.length === 0", line: 286 },
+      { kind: "branch", condition: "i > 0", line: 328 },
+      { kind: "branch", condition: "row.is_system", line: 336 },
+      { kind: "branch", condition: "row.name && row.name !== row.hub_id", line: 361 },
+      { kind: "branch", condition: "row.hub_category === 'model' || ((row.hub_category === 'skill' || row.hub_category === 'workflow') && row.is_system)", line: 374 },
+      { kind: "branch", condition: "removeTarget === null", line: 407 },
+      { kind: "branch", condition: "canRemove", line: 424 },
     ],
   },
   "modules/hub/modules/llm-models/components/ModelDetailsDrawer": {
@@ -2298,16 +2315,19 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
   },
   "modules/llm-local-runtime/components/VersionModelsBlock": {
     surface: "modules/llm-local-runtime/components/VersionModelsBlock",
-    requiredStates: ["empty"],
+    requiredStates: ["empty","error"],
     signals: [
-      { kind: "empty", condition: "models.length === 0", line: 79 },
-      { kind: "branch", condition: "!model.pinned", line: 145 },
-      { kind: "branch", condition: "canManage", line: 148 },
-      { kind: "branch", condition: "model.running", line: 176 },
-      { kind: "branch", condition: "model.running && canViewLogs", line: 220 },
-      { kind: "branch", condition: "expanded", line: 224 },
-      { kind: "branch", condition: "expanded && model.running", line: 239 },
-      { kind: "branch", condition: "instance", line: 241 },
+      { kind: "empty", condition: "models.length === 0", line: 89 },
+      { kind: "branch", condition: "!model.pinned", line: 207 },
+      { kind: "error", condition: "failed", line: 210 },
+      { kind: "branch", condition: "model.running && probe", line: 219 },
+      { kind: "branch", condition: "canManage", line: 230 },
+      { kind: "branch", condition: "model.running", line: 258 },
+      { kind: "error", condition: "failed", line: 301 },
+      { kind: "branch", condition: "model.running && canViewLogs", line: 340 },
+      { kind: "branch", condition: "expanded", line: 344 },
+      { kind: "branch", condition: "expanded && model.running", line: 359 },
+      { kind: "branch", condition: "instance", line: 361 },
     ],
   },
   "modules/llm-local-runtime/components/drawers/RuntimeDownloadDrawer": {
@@ -2336,31 +2356,32 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     requiredStates: ["delayed","empty"],
     signals: [
       { kind: "branch", condition: "!currentProvider", line: 54 },
-      { kind: "branch", condition: "!currentProvider", line: 112 },
-      { kind: "branch", condition: "!currentProvider || currentProvider.provider_type !== 'local'", line: 126 },
-      { kind: "branch", condition: "!currentProvider", line: 150 },
-      { kind: "branch", condition: "!currentProvider", line: 165 },
-      { kind: "branch", condition: "!currentProvider", line: 172 },
-      { kind: "branch", condition: "!currentProvider", line: 261 },
-      { kind: "branch", condition: "!canCreateModels", line: 262 },
-      { kind: "branch", condition: "currentProvider.provider_type === 'local'", line: 264 },
-      { kind: "branch", condition: "!currentProvider || currentProvider.provider_type === 'local'", line: 327 },
-      { kind: "branch", condition: "!canEditModels", line: 330 },
-      { kind: "branch", condition: "!currentProvider", line: 358 },
-      { kind: "loading", condition: "loading", line: 364 },
-      { kind: "empty", condition: "llmModels.length === 0", line: 366 },
-      { kind: "branch", condition: "llmModel.is_deprecated", line: 382 },
-      { kind: "branch", condition: "llmModel.is_active && llmModel.port", line: 403 },
-      { kind: "branch", condition: "llmModel.description", line: 415 },
-      { kind: "branch", condition: "llmModel.capabilities", line: 420 },
-      { kind: "branch", condition: "llmModel.capabilities.vision", line: 422 },
-      { kind: "branch", condition: "llmModel.capabilities.audio", line: 427 },
-      { kind: "branch", condition: "llmModel.capabilities.tools", line: 432 },
-      { kind: "branch", condition: "llmModel.capabilities.code_interpreter", line: 437 },
-      { kind: "branch", condition: "llmModel.capabilities.chat", line: 442 },
-      { kind: "branch", condition: "llmModel.capabilities.text_embedding", line: 447 },
-      { kind: "branch", condition: "llmModel.capabilities.image_generator", line: 452 },
-      { kind: "branch", condition: "index < llmModels.length - 1", line: 462 },
+      { kind: "branch", condition: "!currentProvider", line: 141 },
+      { kind: "branch", condition: "!currentProvider || currentProvider.provider_type !== 'local'", line: 155 },
+      { kind: "branch", condition: "!currentProvider", line: 179 },
+      { kind: "branch", condition: "!currentProvider", line: 194 },
+      { kind: "branch", condition: "!currentProvider", line: 201 },
+      { kind: "branch", condition: "!currentProvider", line: 309 },
+      { kind: "branch", condition: "!canCreateModels", line: 310 },
+      { kind: "branch", condition: "currentProvider.provider_type === 'local'", line: 312 },
+      { kind: "branch", condition: "!currentProvider || currentProvider.provider_type === 'local'", line: 375 },
+      { kind: "branch", condition: "!canEditModels", line: 378 },
+      { kind: "branch", condition: "!currentProvider", line: 406 },
+      { kind: "loading", condition: "loading", line: 412 },
+      { kind: "empty", condition: "llmModels.length === 0", line: 414 },
+      { kind: "branch", condition: "llmModel.is_deprecated", line: 430 },
+      { kind: "branch", condition: "llmModel.validation_status", line: 444 },
+      { kind: "branch", condition: "llmModel.is_active && llmModel.port", line: 477 },
+      { kind: "branch", condition: "llmModel.description", line: 489 },
+      { kind: "branch", condition: "llmModel.capabilities", line: 494 },
+      { kind: "branch", condition: "llmModel.capabilities.vision", line: 496 },
+      { kind: "branch", condition: "llmModel.capabilities.audio", line: 501 },
+      { kind: "branch", condition: "llmModel.capabilities.tools", line: 506 },
+      { kind: "branch", condition: "llmModel.capabilities.code_interpreter", line: 511 },
+      { kind: "branch", condition: "llmModel.capabilities.chat", line: 516 },
+      { kind: "branch", condition: "llmModel.capabilities.text_embedding", line: 521 },
+      { kind: "branch", condition: "llmModel.capabilities.image_generator", line: 526 },
+      { kind: "branch", condition: "index < llmModels.length - 1", line: 536 },
     ],
   },
   "modules/llm-provider/components/LlmProviderDrawer": {
@@ -2390,8 +2411,8 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/llm-provider/components/LocalProviderSettings",
     requiredStates: ["delayed"],
     signals: [
-      { kind: "loading", condition: "!currentProvider && (loading || !isInitialized)", line: 35 },
-      { kind: "branch", condition: "!currentProvider || currentProvider.provider_type !== 'local'", line: 40 },
+      { kind: "loading", condition: "!currentProvider && (loading || !isInitialized)", line: 36 },
+      { kind: "branch", condition: "!currentProvider || currentProvider.provider_type !== 'local'", line: 41 },
     ],
   },
   "modules/llm-provider/components/ProviderGroupAssignmentCard": {
@@ -2413,6 +2434,14 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
       { kind: "branch", condition: "canDelete && !currentProvider.built_in", line: 174 },
       { kind: "branch", condition: "canEdit", line: 197 },
       { kind: "branch", condition: "disabledReason && !currentProvider.enabled", line: 213 },
+    ],
+  },
+  "modules/llm-provider/components/ProxyTokenCard": {
+    surface: "modules/llm-provider/components/ProxyTokenCard",
+    requiredStates: [],
+    signals: [
+      { kind: "branch", condition: "!canEdit", line: 28 },
+      { kind: "branch", condition: "token", line: 68 },
     ],
   },
   "modules/llm-provider/components/RemoteProviderSettings": {
@@ -2721,20 +2750,21 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/mcp/components/McpConfigModal",
     requiredStates: ["empty","open"],
     signals: [
-      { kind: "branch", condition: "!configModalVisible || !isProjectScope", line: 147 },
-      { kind: "branch", condition: "selectedServers.size > 0", line: 150 },
-      { kind: "branch", condition: "!selection", line: 198 },
-      { kind: "branch", condition: "!selection", line: 220 },
-      { kind: "branch", condition: "!isProjectScope && !currentConversationId", line: 251 },
-      { kind: "empty", condition: "tools.length === 0", line: 343 },
-      { kind: "branch", condition: "approvalMode === 'manual_approve'", line: 358 },
-      { kind: "branch", condition: "tool.description", line: 372 },
-      { kind: "branch", condition: "!isPrimaryModal", line: 385 },
-      { kind: "branch", condition: "!isProjectScope", line: 394 },
-      { kind: "empty", condition: "enabledServers.length === 0", line: 436 },
-      { kind: "branch", condition: "isMobile", line: 562 },
-      { kind: "overlay", condition: "<Drawer open>", line: 563 },
-      { kind: "overlay", condition: "<Dialog open>", line: 575 },
+      { kind: "branch", condition: "!configModalVisible || !isProjectScope", line: 182 },
+      { kind: "branch", condition: "selectedServers.size > 0", line: 185 },
+      { kind: "branch", condition: "!selection", line: 241 },
+      { kind: "branch", condition: "!selection", line: 263 },
+      { kind: "branch", condition: "!isProjectScope && !currentConversationId", line: 294 },
+      { kind: "branch", condition: "toolError", line: 387 },
+      { kind: "empty", condition: "tools.length === 0", line: 394 },
+      { kind: "branch", condition: "approvalMode === 'manual_approve'", line: 409 },
+      { kind: "branch", condition: "tool.description", line: 423 },
+      { kind: "branch", condition: "!isPrimaryModal", line: 436 },
+      { kind: "branch", condition: "!isProjectScope", line: 445 },
+      { kind: "empty", condition: "enabledServers.length === 0", line: 487 },
+      { kind: "branch", condition: "isMobile", line: 613 },
+      { kind: "overlay", condition: "<Drawer open>", line: 614 },
+      { kind: "overlay", condition: "<Dialog open>", line: 626 },
     ],
   },
   "modules/mcp/components/common/KeyValueSecretEditor": {
@@ -2771,38 +2801,61 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/mcp/components/common/McpServerDrawer",
     requiredStates: ["error","open"],
     signals: [
-      { kind: "branch", condition: "cancelled", line: 194 },
-      { kind: "branch", condition: "!Array.isArray(parsed)", line: 368 },
-      { kind: "error", condition: "hasError", line: 480 },
-      { kind: "branch", condition: "args === null", line: 483 },
-      { kind: "branch", condition: "clientId && !clientSecret && !hasExistingOAuth", line: 611 },
-      { kind: "branch", condition: "!saved", line: 642 },
-      { kind: "branch", condition: "!saved", line: 707 },
-      { kind: "branch", condition: "!open", line: 854 },
-      { kind: "branch", condition: "mode === 'create' || mode === 'create-system'", line: 896 },
-      { kind: "branch", condition: "v === false", line: 897 },
-      { kind: "branch", condition: "missingRequired", line: 912 },
-      { kind: "branch", condition: "!editingServer", line: 969 },
-      { kind: "branch", condition: "v === false", line: 973 },
-      { kind: "branch", condition: "!saved", line: 998 },
-      { kind: "branch", condition: "(mode === 'edit' || mode === 'edit-system') && editingServer?.last_health_check_status === 'unhealthy'", line: 1068 },
-      { kind: "branch", condition: "(mode === 'create' || mode === 'create-system')", line: 1093 },
-      { kind: "branch", condition: "(!!editingServer || mode === 'create' || mode === 'create-system')", line: 1116 },
-      { kind: "branch", condition: "prefillTransportSwapped", line: 1148 },
-      { kind: "branch", condition: "transportType === 'stdio'", line: 1183 },
-      { kind: "branch", condition: "(transportType === 'http' || transportType === 'sse')", line: 1229 },
-      { kind: "branch", condition: "transportType === 'http' && isUserMode", line: 1255 },
-      { kind: "branch", condition: "oauthEnabled", line: 1275 },
-      { kind: "branch", condition: "supportsSampling", line: 1333 },
-      { kind: "branch", condition: "transportType === 'stdio' && (mode === 'create-system' || mode === 'edit-system')", line: 1364 },
-      { kind: "branch", condition: "runInSandbox", line: 1385 },
-      { kind: "branch", condition: "isUserMode && transportType === 'stdio'", line: 1399 },
-      { kind: "overlay", condition: "<Drawer open>", line: 1429 },
-      { kind: "branch", condition: "canManage && !!transportType", line: 1437 },
-      { kind: "branch", condition: "canManage", line: 1453 },
-      { kind: "branch", condition: "isHistoryMode && editingServer", line: 1467 },
-      { kind: "branch", condition: "isEditMode && editingServer", line: 1471 },
-      { kind: "branch", condition: "isSystemMode", line: 1485 },
+      { kind: "branch", condition: "cancelled", line: 195 },
+      { kind: "branch", condition: "!Array.isArray(parsed)", line: 369 },
+      { kind: "error", condition: "hasError", line: 481 },
+      { kind: "branch", condition: "args === null", line: 484 },
+      { kind: "branch", condition: "clientId && !clientSecret && !hasExistingOAuth", line: 612 },
+      { kind: "branch", condition: "!saved", line: 643 },
+      { kind: "branch", condition: "!saved", line: 708 },
+      { kind: "branch", condition: "!open", line: 855 },
+      { kind: "branch", condition: "mode === 'create' || mode === 'create-system'", line: 897 },
+      { kind: "branch", condition: "v === false", line: 898 },
+      { kind: "branch", condition: "missingRequired", line: 913 },
+      { kind: "branch", condition: "!editingServer", line: 970 },
+      { kind: "branch", condition: "v === false", line: 974 },
+      { kind: "branch", condition: "!saved", line: 999 },
+      { kind: "branch", condition: "(mode === 'edit' || mode === 'edit-system') && editingServer?.last_health_check_status === 'unhealthy'", line: 1069 },
+      { kind: "branch", condition: "(mode === 'create' || mode === 'create-system')", line: 1094 },
+      { kind: "branch", condition: "(!!editingServer || mode === 'create' || mode === 'create-system')", line: 1117 },
+      { kind: "branch", condition: "prefillTransportSwapped", line: 1149 },
+      { kind: "branch", condition: "transportType === 'stdio'", line: 1184 },
+      { kind: "branch", condition: "(transportType === 'http' || transportType === 'sse')", line: 1230 },
+      { kind: "branch", condition: "transportType === 'http' && isUserMode", line: 1256 },
+      { kind: "branch", condition: "oauthEnabled", line: 1276 },
+      { kind: "branch", condition: "supportsSampling", line: 1334 },
+      { kind: "branch", condition: "transportType === 'stdio' && (mode === 'create-system' || mode === 'edit-system')", line: 1365 },
+      { kind: "branch", condition: "runInSandbox", line: 1386 },
+      { kind: "branch", condition: "isUserMode && transportType === 'stdio'", line: 1400 },
+      { kind: "overlay", condition: "<Drawer open>", line: 1430 },
+      { kind: "branch", condition: "canManage && !!transportType", line: 1438 },
+      { kind: "branch", condition: "canManage", line: 1454 },
+      { kind: "branch", condition: "isHistoryMode && editingServer", line: 1468 },
+      { kind: "branch", condition: "isEditMode && editingServer", line: 1472 },
+      { kind: "branch", condition: "isSystemMode", line: 1501 },
+    ],
+  },
+  "modules/mcp/components/common/McpServerRuntimeTab": {
+    surface: "modules/mcp/components/common/McpServerRuntimeTab",
+    requiredStates: ["error"],
+    signals: [
+      { kind: "branch", condition: "canManage", line: 143 },
+      { kind: "branch", condition: "result", line: 163 },
+      { kind: "branch", condition: "result.detail", line: 175 },
+      { kind: "error", condition: "error", line: 250 },
+      { kind: "error", condition: "items !== null && items.length === 0 && !error", line: 259 },
+      { kind: "branch", condition: "items !== null && items.length > 0", line: 266 },
+      { kind: "branch", condition: "!parsed.ok", line: 302 },
+      { kind: "branch", condition: "prompt.description", line: 340 },
+      { kind: "branch", condition: "hasArgs", line: 345 },
+      { kind: "branch", condition: "output !== null", line: 360 },
+      { kind: "branch", condition: "resource.description", line: 440 },
+      { kind: "branch", condition: "output !== null", line: 445 },
+      { kind: "branch", condition: "!parsed.ok", line: 501 },
+      { kind: "branch", condition: "canManage", line: 531 },
+      { kind: "branch", condition: "tool.description", line: 554 },
+      { kind: "branch", condition: "canManage", line: 559 },
+      { kind: "branch", condition: "output !== null", line: 572 },
     ],
   },
   "modules/mcp/components/common/McpToolApprovalsTab": {
@@ -3080,21 +3133,10 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     requiredStates: [],
     signals: [
       { kind: "branch", condition: "!guide", line: 81 },
-      { kind: "branch", condition: "!guide", line: 108 },
-      { kind: "branch", condition: "isCompleted", line: 186 },
-      { kind: "branch", condition: "nextError", line: 220 },
-      { kind: "branch", condition: "StepComponent", line: 230 },
-    ],
-  },
-  "modules/onboarding/OnboardingRedirect": {
-    surface: "modules/onboarding/OnboardingRedirect",
-    requiredStates: ["delayed"],
-    signals: [
-      { kind: "loading", condition: "isInitializing", line: 47 },
-      { kind: "branch", condition: "!isAuthenticated || !user", line: 48 },
-      { kind: "branch", condition: "user.is_admin === true", line: 49 },
-      { kind: "branch", condition: "!loaded", line: 53 },
-      { kind: "branch", condition: "location.pathname.startsWith('/onboarding')", line: 54 },
+      { kind: "branch", condition: "!guide", line: 118 },
+      { kind: "branch", condition: "isCompleted", line: 196 },
+      { kind: "branch", condition: "nextError", line: 230 },
+      { kind: "branch", condition: "StepComponent", line: 240 },
     ],
   },
   "modules/onboarding/guides/getting-started/components/ApiKeysStep": {
@@ -3113,12 +3155,13 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     requiredStates: [],
     signals: [
       { kind: "branch", condition: "loadingServers", line: 42 },
-      { kind: "branch", condition: "serversError && canSeeAdminControls", line: 65 },
-      { kind: "branch", condition: "canManageSystemMcp && systemServers.length > 0", line: 69 },
-      { kind: "branch", condition: "server.description", line: 91 },
-      { kind: "branch", condition: "canInstallFromHub && hubServers.length > 0", line: 104 },
-      { kind: "branch", condition: "alreadyInstalled", line: 142 },
-      { kind: "branch", condition: "server.description", line: 144 },
+      { kind: "branch", condition: "applyErrors.length > 0 && canSeeAdminControls", line: 65 },
+      { kind: "branch", condition: "serversError && canSeeAdminControls", line: 86 },
+      { kind: "branch", condition: "canManageSystemMcp && systemServers.length > 0", line: 90 },
+      { kind: "branch", condition: "server.description", line: 112 },
+      { kind: "branch", condition: "canInstallFromHub && hubServers.length > 0", line: 125 },
+      { kind: "branch", condition: "alreadyInstalled", line: 163 },
+      { kind: "branch", condition: "server.description", line: 165 },
     ],
   },
   "modules/onboarding/guides/getting-started/components/MemorySetupStep": {
@@ -4006,22 +4049,25 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/workflow/components/WorkflowDetailDrawer",
     requiredStates: ["open"],
     signals: [
-      { kind: "branch", condition: "!workflow", line: 74 },
-      { kind: "overlay", condition: "<Drawer open>", line: 76 },
-      { kind: "overlay", condition: "<Drawer open>", line: 107 },
-      { kind: "branch", condition: "editable || editableDefinition", line: 125 },
-      { kind: "branch", condition: "editableDefinition", line: 127 },
-      { kind: "branch", condition: "editable", line: 141 },
-      { kind: "overlay", condition: "<Dialog open>", line: 146 },
-      { kind: "branch", condition: "workflow.description", line: 181 },
-      { kind: "branch", condition: "canExecute", line: 192 },
-      { kind: "branch", condition: "workflow.is_dev", line: 210 },
-      { kind: "branch", condition: "steps.length > 0", line: 226 },
-      { kind: "branch", condition: "s.kind", line: 232 },
-      { kind: "branch", condition: "s.dependsOn && s.dependsOn.length > 0", line: 234 },
-      { kind: "branch", condition: "activeRunId", line: 254 },
-      { kind: "overlay", condition: "<WorkflowRunDialog open>", line: 278 },
-      { kind: "overlay", condition: "<DryRunPreviewDialog open>", line: 288 },
+      { kind: "branch", condition: "!workflow", line: 77 },
+      { kind: "overlay", condition: "<Drawer open>", line: 79 },
+      { kind: "overlay", condition: "<Drawer open>", line: 114 },
+      { kind: "branch", condition: "editable || editableDefinition || editableMetadata", line: 132 },
+      { kind: "branch", condition: "editableMetadata", line: 134 },
+      { kind: "branch", condition: "editableDefinition", line: 145 },
+      { kind: "branch", condition: "editable", line: 159 },
+      { kind: "overlay", condition: "<Dialog open>", line: 164 },
+      { kind: "branch", condition: "workflow.description", line: 199 },
+      { kind: "branch", condition: "canExecute", line: 225 },
+      { kind: "branch", condition: "workflow.is_dev", line: 243 },
+      { kind: "branch", condition: "steps.length > 0", line: 259 },
+      { kind: "branch", condition: "s.kind", line: 265 },
+      { kind: "branch", condition: "s.dependsOn && s.dependsOn.length > 0", line: 267 },
+      { kind: "branch", condition: "activeRunId", line: 287 },
+      { kind: "overlay", condition: "<WorkflowRunDialog open>", line: 311 },
+      { kind: "overlay", condition: "<DryRunPreviewDialog open>", line: 321 },
+      { kind: "branch", condition: "editableMetadata", line: 326 },
+      { kind: "overlay", condition: "<WorkflowMetadataDialog open>", line: 327 },
     ],
   },
   "modules/workflow/components/WorkflowElicitForm": {
@@ -4041,6 +4087,14 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
       { kind: "branch", condition: "!isValid", line: 436 },
       { kind: "branch", condition: "err", line: 451 },
       { kind: "error", condition: "error", line: 485 },
+    ],
+  },
+  "modules/workflow/components/WorkflowMetadataDialog": {
+    surface: "modules/workflow/components/WorkflowMetadataDialog",
+    requiredStates: ["empty","open"],
+    signals: [
+      { kind: "empty", condition: "Object.keys(patch).length === 0", line: 89 },
+      { kind: "overlay", condition: "<Dialog open>", line: 103 },
     ],
   },
   "modules/workflow/components/WorkflowRunDialog": {
@@ -4323,7 +4377,7 @@ export type StateMatrixSurface = keyof typeof STATE_MATRIX
  * `STATE_COVERAGE satisfies Record<RequiredState, StateCoverageEntry>`, so a
  * newly-extracted state with no entry is a compile error (mirrors how
  * galleryCoverage.generated.ts's `GallerySurface` gates coverage.ts).
- * 380 keys.
+ * 385 keys.
  */
 export type RequiredState =
   | "modules/agent/components/AgentSettingsSection:delayed"
@@ -4394,6 +4448,8 @@ export type RequiredState =
   | "modules/chat/pages/ConversationPage:error"
   | "modules/chat/widgets/RecentConversationsWidget:empty"
   | "modules/chat/widgets/RecentConversationsWidget:open"
+  | "modules/citations/components/AttachCitationsDialog:empty"
+  | "modules/citations/components/AttachCitationsDialog:open"
   | "modules/citations/components/ImportCitationsModal:empty"
   | "modules/citations/components/ImportCitationsModal:open"
   | "modules/citations/pages/CitationsSettingsPage:delayed"
@@ -4507,6 +4563,7 @@ export type RequiredState =
   | "modules/llm-local-runtime/components/LiveLogsPanel:empty"
   | "modules/llm-local-runtime/components/RuntimeConfigCard:error"
   | "modules/llm-local-runtime/components/VersionModelsBlock:empty"
+  | "modules/llm-local-runtime/components/VersionModelsBlock:error"
   | "modules/llm-local-runtime/components/drawers/RuntimeDownloadDrawer:open"
   | "modules/llm-provider/components/GroupLlmProvidersAssignmentDrawer:delayed"
   | "modules/llm-provider/components/GroupLlmProvidersAssignmentDrawer:empty"
@@ -4544,6 +4601,7 @@ export type RequiredState =
   | "modules/mcp/components/common/KeyValueSecretEditor:empty"
   | "modules/mcp/components/common/McpServerDrawer:error"
   | "modules/mcp/components/common/McpServerDrawer:open"
+  | "modules/mcp/components/common/McpServerRuntimeTab:error"
   | "modules/mcp/components/common/McpToolApprovalsTab:error"
   | "modules/mcp/components/common/McpToolCallsTab:error"
   | "modules/mcp/components/system/GroupSystemMcpServersAssignmentDrawer:delayed"
@@ -4582,7 +4640,6 @@ export type RequiredState =
   | "modules/notification/pages/AgentInboxPage:delayed"
   | "modules/notification/pages/AgentInboxPage:empty"
   | "modules/notification/pages/AgentInboxPage:error"
-  | "modules/onboarding/OnboardingRedirect:delayed"
   | "modules/onboarding/guides/getting-started/components/ApiKeysStep:delayed"
   | "modules/onboarding/guides/getting-started/components/ApiKeysStep:empty"
   | "modules/onboarding/guides/getting-started/components/ApiKeysStep:error"
@@ -4685,6 +4742,8 @@ export type RequiredState =
   | "modules/workflow/components/StepOutputExpander:error"
   | "modules/workflow/components/WorkflowDetailDrawer:open"
   | "modules/workflow/components/WorkflowElicitForm:error"
+  | "modules/workflow/components/WorkflowMetadataDialog:empty"
+  | "modules/workflow/components/WorkflowMetadataDialog:open"
   | "modules/workflow/components/WorkflowRunDialog:open"
   | "modules/workflow/components/WorkflowRunProgressView:empty"
   | "modules/workflow/components/WorkflowRunProgressView:error"
@@ -4777,6 +4836,8 @@ export const REQUIRED_STATE_KEYS = [
   "modules/chat/pages/ConversationPage:error",
   "modules/chat/widgets/RecentConversationsWidget:empty",
   "modules/chat/widgets/RecentConversationsWidget:open",
+  "modules/citations/components/AttachCitationsDialog:empty",
+  "modules/citations/components/AttachCitationsDialog:open",
   "modules/citations/components/ImportCitationsModal:empty",
   "modules/citations/components/ImportCitationsModal:open",
   "modules/citations/pages/CitationsSettingsPage:delayed",
@@ -4890,6 +4951,7 @@ export const REQUIRED_STATE_KEYS = [
   "modules/llm-local-runtime/components/LiveLogsPanel:empty",
   "modules/llm-local-runtime/components/RuntimeConfigCard:error",
   "modules/llm-local-runtime/components/VersionModelsBlock:empty",
+  "modules/llm-local-runtime/components/VersionModelsBlock:error",
   "modules/llm-local-runtime/components/drawers/RuntimeDownloadDrawer:open",
   "modules/llm-provider/components/GroupLlmProvidersAssignmentDrawer:delayed",
   "modules/llm-provider/components/GroupLlmProvidersAssignmentDrawer:empty",
@@ -4927,6 +4989,7 @@ export const REQUIRED_STATE_KEYS = [
   "modules/mcp/components/common/KeyValueSecretEditor:empty",
   "modules/mcp/components/common/McpServerDrawer:error",
   "modules/mcp/components/common/McpServerDrawer:open",
+  "modules/mcp/components/common/McpServerRuntimeTab:error",
   "modules/mcp/components/common/McpToolApprovalsTab:error",
   "modules/mcp/components/common/McpToolCallsTab:error",
   "modules/mcp/components/system/GroupSystemMcpServersAssignmentDrawer:delayed",
@@ -4965,7 +5028,6 @@ export const REQUIRED_STATE_KEYS = [
   "modules/notification/pages/AgentInboxPage:delayed",
   "modules/notification/pages/AgentInboxPage:empty",
   "modules/notification/pages/AgentInboxPage:error",
-  "modules/onboarding/OnboardingRedirect:delayed",
   "modules/onboarding/guides/getting-started/components/ApiKeysStep:delayed",
   "modules/onboarding/guides/getting-started/components/ApiKeysStep:empty",
   "modules/onboarding/guides/getting-started/components/ApiKeysStep:error",
@@ -5068,6 +5130,8 @@ export const REQUIRED_STATE_KEYS = [
   "modules/workflow/components/StepOutputExpander:error",
   "modules/workflow/components/WorkflowDetailDrawer:open",
   "modules/workflow/components/WorkflowElicitForm:error",
+  "modules/workflow/components/WorkflowMetadataDialog:empty",
+  "modules/workflow/components/WorkflowMetadataDialog:open",
   "modules/workflow/components/WorkflowRunDialog:open",
   "modules/workflow/components/WorkflowRunProgressView:empty",
   "modules/workflow/components/WorkflowRunProgressView:error",

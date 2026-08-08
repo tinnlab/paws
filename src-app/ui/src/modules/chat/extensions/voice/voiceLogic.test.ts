@@ -1,19 +1,201 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import * as voiceLogic from './voiceLogic.ts'
 import {
   appendTranscript,
-  composeInterimCaption,
+  insertTranscript,
   isSuperseded,
   micErrorMessage,
+  normalizeInterimTranscript,
+  relocateSpan,
   resolveLivePref,
+  restoreSpan,
   shouldRunInterim,
+  spliceTranscript,
 } from './voiceLogic.ts'
 
-// ── "insert, don't send": a transcript APPENDS to the composer, never replaces ─
-// The full store flow (record → transcribe → this append; and that sendMessage
-// is never called) is covered by the 14-voice Playwright specs; this locks the
-// pure append rule the store delegates to.
+// ── "insert AT THE CARET, don't send" ─────────────────────────────────────────
+// Dictated text lands at the composer's insertion point, replacing a selection
+// if there is one, and appends at the end ONLY when there is no insertion point
+// at all. The full store flow (record → stream → transcribe → this insert; and
+// that sendMessage is never called) is covered by the 14-voice Playwright specs;
+// these lock the pure rules the store delegates to.
+// Contract: ui/docs/VOICE_DICTATION_COMPOSER.md §3/§4.
 
+// TEST-1 — spliceTranscript replaces the span; caret lands after the transcript.
+test('spliceTranscript replaces the span and reports a padding-inclusive written span', () => {
+  const edit = spliceTranscript('Please book for Tuesday.', { start: 12, end: 12 }, 'a table')
+  assert.equal(edit.value, 'Please book a table for Tuesday.')
+  // Caret sits right after "a table", NOT at the end of the value.
+  assert.equal(edit.value.slice(0, edit.caret), 'Please book a table')
+  // The written span includes the trailing join space, so removing exactly
+  // [start, end) restores the original string byte-for-byte.
+  assert.equal(edit.value.slice(edit.start, edit.end), 'a table ')
+  assert.equal(
+    edit.value.slice(0, edit.start) + edit.value.slice(edit.end),
+    'Please book for Tuesday.',
+  )
+})
+
+test('spliceTranscript replaces a SELECTED range, not just a caret', () => {
+  const edit = spliceTranscript('call Bob tomorrow', { start: 5, end: 8 }, 'Alice')
+  assert.equal(edit.value, 'call Alice tomorrow')
+  assert.equal(edit.value.includes('Bob'), false, 'the selected text is gone')
+})
+
+// TEST-2 — seam spacing: no doubled space, no glued words, no space before
+// closing punctuation, none after an opening bracket, newline counts as space.
+test('spliceTranscript joins like a human: no doubled spaces, no glued words', () => {
+  const at = (value: string, i: number, text: string) =>
+    spliceTranscript(value, { start: i, end: i }, text).value
+
+  assert.equal(at('a ', 2, 'b'), 'a b', 'existing trailing space is not doubled')
+  assert.equal(at('a', 1, 'b'), 'a b', 'two words are never glued together')
+  assert.equal(at(' b', 0, 'a'), 'a b', 'existing leading space is not doubled')
+  assert.equal(at('ab', 1, 'X'), 'a X b', 'both sides padded when both need it')
+  // The reproduced case: caret between the two spaces of "book  for".
+  assert.equal(
+    at('Please book  for next Tuesday.', 12, 'a table'),
+    'Please book a table for next Tuesday.',
+  )
+})
+
+test('spliceTranscript never wedges a space before closing punctuation', () => {
+  const at = (value: string, i: number, text: string) =>
+    spliceTranscript(value, { start: i, end: i }, text).value
+
+  for (const close of ['.', ',', ';', ':', '!', '?', ')', ']', '}']) {
+    assert.equal(at(close, 0, 'hi'), `hi${close}`, `no space before "${close}"`)
+  }
+  for (const open of ['(', '[', '{', '"']) {
+    assert.equal(at(open, 1, 'hi'), `${open}hi`, `no space after "${open}"`)
+  }
+})
+
+test('spliceTranscript treats a newline as whitespace (no pad added)', () => {
+  const edit = spliceTranscript('line one\n\nrest', { start: 9, end: 9 }, 'two')
+  assert.equal(edit.value, 'line one\ntwo\nrest')
+})
+
+// TEST-3 — a blank transcript REMOVES the span (the interim-shrink case).
+test('spliceTranscript with a blank transcript removes the span and collapses the seam', () => {
+  const edit = spliceTranscript('keep provisional words here', { start: 5, end: 22 }, '')
+  assert.equal(edit.value, 'keep here')
+  assert.equal(edit.start, edit.end, 'the written span is now empty')
+  assert.equal(edit.caret, edit.start)
+})
+
+// TEST-4 [acceptance, INV-1] — the transcript lands AT THE CARET, and the caret
+// is left after it. Append-at-end (the shipped defect) cannot satisfy this.
+test('insertTranscript writes at the caret, NOT at the end of the value', () => {
+  const value = 'Please book  for next Tuesday.'
+  const edit = insertTranscript(value, { start: 12, end: 12 }, 'a table')
+  assert.equal(edit.value, 'Please book a table for next Tuesday.')
+  assert.equal(
+    edit.value.endsWith('a table'),
+    false,
+    'INV-1: the transcript must NOT be appended at the end',
+  )
+  assert.equal(edit.value.slice(0, edit.caret), 'Please book a table')
+})
+
+// TEST-5 — a selection is REPLACED.
+test('insertTranscript replaces an existing selection', () => {
+  const edit = insertTranscript('call Bob tomorrow', { start: 5, end: 8 }, 'Alice')
+  assert.equal(edit.value, 'call Alice tomorrow')
+  assert.equal(edit.value.slice(0, edit.caret), 'call Alice')
+})
+
+// TEST-6 [acceptance, INV-5] — no insertion point → append at the end, exactly
+// as before, WITH a negative control proving the two paths really differ.
+test('insertTranscript with NO caret appends at the end (INV-5), and the caret path does not', () => {
+  const value = 'Please book  for next Tuesday.'
+  const transcript = 'a table'
+
+  const appended = insertTranscript(value, null, transcript)
+  assert.equal(
+    appended.value,
+    appendTranscript(value, transcript),
+    'the no-caret path IS the historical append path',
+  )
+  assert.equal(appended.value, 'Please book  for next Tuesday. a table')
+  assert.equal(appended.caret, appended.value.length, 'caret at the end')
+
+  // NEGATIVE CONTROL: if insert-at-caret ever silently degrades back to
+  // append-at-end, these two become equal and this fails.
+  const atCaret = insertTranscript(value, { start: 12, end: 12 }, transcript)
+  assert.notEqual(
+    atCaret.value,
+    appended.value,
+    'insert-at-caret must not produce the append-at-end result',
+  )
+})
+
+// TEST-7 — a blank decode is a true no-op and must not eat a selection.
+test('insertTranscript is a no-op for blank speech and never eats a selection', () => {
+  const value = 'keep my selected draft'
+  const selection = { start: 5, end: 16 } // "my selected"
+  for (const blank of ['', '   ', '\n\t ']) {
+    const edit = insertTranscript(value, selection, blank)
+    assert.equal(edit.value, value, `blank transcript ${JSON.stringify(blank)} changes nothing`)
+    assert.equal(edit.start, selection.start, 'the selection is preserved')
+    assert.equal(edit.end, selection.end)
+  }
+  assert.equal(insertTranscript(value, null, '  ').value, value)
+})
+
+// TEST-8 — relocate / detach.
+test('relocateSpan keeps, relocates, or detaches the span the session owns', () => {
+  // Exact hit → unchanged.
+  const value = 'Hello provisional words end'
+  assert.deepEqual(relocateSpan(value, { start: 6, end: 23 }, 'provisional words'), {
+    start: 6,
+    end: 23,
+  })
+  // The user typed BEFORE the span → re-adopt the shifted offsets.
+  const shifted = 'Hi! Hello provisional words end'
+  assert.deepEqual(relocateSpan(shifted, { start: 6, end: 23 }, 'provisional words'), {
+    start: 10,
+    end: 27,
+  })
+  // The user edited our text away → detach.
+  assert.equal(relocateSpan('Hello edited-by-user end', { start: 6, end: 23 }, 'provisional words'), null)
+  // An EXACT hit at the recorded offsets wins even if the same text also
+  // appears elsewhere — those offsets are the strongest evidence it is ours.
+  assert.deepEqual(relocateSpan('ab ab', { start: 0, end: 2 }, 'ab'), { start: 0, end: 2 })
+  // But once the offsets no longer hold it, an ambiguous search detaches rather
+  // than guessing which occurrence was ours.
+  assert.equal(relocateSpan('ab ab', { start: 6, end: 8 }, 'ab'), null)
+  // Nothing written yet → only an in-bounds zero-length span is locatable.
+  assert.deepEqual(relocateSpan('abc', { start: 3, end: 3 }, ''), { start: 3, end: 3 })
+  assert.equal(relocateSpan('abc', { start: 0, end: 2 }, ''), null, 'non-empty span, nothing written')
+  assert.equal(relocateSpan('abc', { start: 9, end: 9 }, ''), null, 'out of bounds')
+})
+
+// TEST-9 — cancel restores byte-exactly (INV-4's pure half).
+test('restoreSpan reproduces the pre-dictation string byte-for-byte', () => {
+  // A session that replaced the selection "Bob" and added a trailing join pad.
+  const before = 'call Bob tomorrow'
+  const written = spliceTranscript(before, { start: 5, end: 8 }, 'Alice Smith')
+  assert.equal(written.value, 'call Alice Smith tomorrow')
+
+  const restored = restoreSpan(written.value, { start: written.start, end: written.end }, 'Bob')
+  assert.equal(restored.value, before, 'byte-for-byte back to the original draft')
+  // …and the originally-selected text is re-selected.
+  assert.equal(restored.value.slice(restored.start, restored.end), 'Bob')
+})
+
+test('restoreSpan also unwinds an insertion made at a bare caret', () => {
+  const before = 'Please book  for next Tuesday.'
+  const written = spliceTranscript(before, { start: 12, end: 12 }, 'a table')
+  const restored = restoreSpan(written.value, { start: written.start, end: written.end }, '')
+  assert.equal(restored.value, before)
+  assert.equal(restored.start, restored.end, 'a bare caret is restored, not a selection')
+})
+
+// TEST-10 — appendTranscript's four historical contracts, UNCHANGED. These are
+// the tests that previously certified the append-at-end defect; they are kept as
+// the specification of the NO-CARET path (INV-5), not deleted.
 test('appendTranscript appends onto existing composer text, space-joined', () => {
   assert.equal(appendTranscript('Hello', 'world'), 'Hello world')
 })
@@ -32,6 +214,34 @@ test('appendTranscript trims the transcript and is a no-op for blank speech', ()
   assert.equal(appendTranscript('kept', '   '), 'kept', 'blank transcript leaves text unchanged')
   assert.equal(appendTranscript('kept', ''), 'kept')
   assert.equal(appendTranscript('a', '  b  '), 'a b', 'surrounding whitespace is trimmed')
+  // Additionally correct now that the join is seam-aware: a draft that already
+  // ends in whitespace no longer gets a doubled space.
+  assert.equal(appendTranscript('a ', 'b'), 'a b', 'no doubled space')
+})
+
+// TEST-11 — the module's exported surface matches the contract its header
+// documents, so a renamed/removed helper cannot leave a stale doc-comment
+// describing a contract the code no longer has. (The companion half — that the
+// voice STORE no longer carries an `interimText` field — asserts against the
+// live store instance in `components/DictationComposer.test.tsx`, because this
+// node:test runner cannot resolve the store's `@/api-client` import graph.)
+test('voiceLogic exports exactly the surface its header documents', () => {
+  assert.deepEqual(
+    Object.keys(voiceLogic).sort(),
+    [
+      'appendTranscript',
+      'insertTranscript',
+      'isSuperseded',
+      'micErrorMessage',
+      'normalizeInterimTranscript',
+      'relocateSpan',
+      'resolveLivePref',
+      'restoreSpan',
+      'shouldRunInterim',
+      'spliceTranscript',
+    ],
+    'a renamed/removed helper must be reflected in the module doc-comment too',
+  )
 })
 
 // ── generation-token guard: a superseded result is dropped ────────────────────
@@ -92,9 +302,10 @@ test('resolveLivePref honors a stored value and otherwise follows streaming_enab
   assert.equal(resolveLivePref('yes', true), true, 'garbage stored → default')
 })
 
-test('composeInterimCaption trims and clears blanks', () => {
-  assert.equal(composeInterimCaption('  hello world  '), 'hello world')
-  assert.equal(composeInterimCaption('   '), '', 'blank decode clears the caption')
-  assert.equal(composeInterimCaption(null), '')
-  assert.equal(composeInterimCaption(undefined), '')
+test('normalizeInterimTranscript trims, and a blank decode normalizes to empty', () => {
+  assert.equal(normalizeInterimTranscript('  hello world  '), 'hello world')
+  // Empty is what `spliceTranscript` reads as "take the provisional words away".
+  assert.equal(normalizeInterimTranscript('   '), '')
+  assert.equal(normalizeInterimTranscript(null), '')
+  assert.equal(normalizeInterimTranscript(undefined), '')
 })

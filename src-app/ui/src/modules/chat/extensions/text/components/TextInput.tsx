@@ -7,6 +7,7 @@ import {
   setDraft,
   makeDraftKey,
 } from '@/modules/chat/extensions/text/chatDrafts'
+import { createComposerAccess } from '@/modules/chat/extensions/text/composerAccess'
 import { Auth } from '@/modules/auth/Auth.store'
 import { Chat } from '@/modules/chat/core/stores/chatBridge'
 
@@ -37,7 +38,14 @@ export function TextInput() {
   // `isStreaming` is read alongside `sending` so the Enter guard matches the
   // Send button's `disabled` condition (ChatInput.tsx) — see handleKeyDown.
   const { sending, isStreaming } = chatStore
-  const { setGetMessage, setSetMessage, setClearMessage } = chatStore.TextStore
+  const {
+    setGetMessage,
+    setSetMessage,
+    setClearMessage,
+    setGetSelection,
+    setApplyEdit,
+    setFocusInput,
+  } = chatStore.TextStore
 
   // The draft bucket for the composer's CURRENT conversation. `new` when there
   // is no conversation yet (new-chat page). Read reactively so it follows an
@@ -57,16 +65,26 @@ export function TextInput() {
   draftKeyRef.current = draftKey
   isEditingRef.current = isEditing
 
-  // Register getter/setter/clearer functions with TextStore on mount.
+  // Register the composer-element access closures with TextStore on mount.
+  // Their bodies live in `createComposerAccess` so the component harness can
+  // drive the SAME production code against a real textarea; see that file for
+  // why none of them may reach the element by `data-testid`.
   useEffect(() => {
-    setGetMessage(() => ref.current?.value ?? '')
-    setSetMessage((text: string) => {
-      if (ref.current) ref.current.value = text
-    })
-    setClearMessage(() => {
-      if (ref.current) ref.current.value = ''
-    })
-  }, [setGetMessage, setSetMessage, setClearMessage])
+    const access = createComposerAccess(() => ref.current)
+    setGetMessage(access.getMessage)
+    setSetMessage(access.setMessage)
+    setClearMessage(access.clearMessage)
+    setGetSelection(access.readSelection)
+    setApplyEdit(access.applyComposerEdit)
+    setFocusInput(access.focusMessage)
+  }, [
+    setGetMessage,
+    setSetMessage,
+    setClearMessage,
+    setGetSelection,
+    setApplyEdit,
+    setFocusInput,
+  ])
 
   // Restore the saved draft when the composer binds to a NEW conversation key.
   // ConversationPage/TextInput are reused (not remounted) across an in-app

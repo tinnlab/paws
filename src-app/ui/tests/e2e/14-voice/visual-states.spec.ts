@@ -122,12 +122,15 @@ test.describe('Voice — runtime health of key states (TEST-31)', () => {
       await hintDismiss.click()
     }
 
-    // Record → the new live-caption strip renders from the interim loop.
+    // Record → the interim loop writes the live transcript into the COMPOSER
+    // (not into a toolbar strip — see ui/docs/VOICE_DICTATION_COMPOSER.md §2).
     await byTestId(page, 'voice-mic-button').first().click()
     await expect(byTestId(page, 'voice-elapsed')).toBeVisible({ timeout: 10000 })
-    await expect(byTestId(page, 'voice-live-caption')).toContainText('live caption words', {
-      timeout: 15000,
-    })
+    await expect(byTestId(page, 'chat-message-textarea')).toHaveValue(
+      'live caption words',
+      { timeout: 15000 },
+    )
+    await expect(byTestId(page, 'voice-live-caption')).toHaveCount(0)
 
     // The whole recording-with-live-caption state produced zero runtime findings.
     expect(probe.findings, probe.findings.join('\n')).toEqual([])

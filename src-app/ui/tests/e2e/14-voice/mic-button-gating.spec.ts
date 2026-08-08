@@ -111,13 +111,14 @@ test.describe('Voice — mic-button gating (TEST-27)', () => {
     // The composer renders (the /chat route is ungated), but the mic affordance
     // is ENTIRELY absent — not the active mic, and not the muted "not set up"
     // state either. An unpermitted user sees no voice affordance at all — including
-    // the streaming surfaces (live-captions toggle + live caption strip).
+    // the streaming surface (the live-captions toggle).
     await expect(byTestId(page, 'chat-message-textarea')).toBeVisible()
     await expect(byTestId(page, 'voice-mic-button')).toHaveCount(0)
     await expect(byTestId(page, 'voice-elapsed')).toHaveCount(0)
     await expect(byTestId(page, 'voice-live-region')).toHaveCount(0)
     await expect(byTestId(page, 'voice-live-toggle')).toHaveCount(0)
-    await expect(byTestId(page, 'voice-live-caption')).toHaveCount(0)
+    // …and nothing dictation-shaped reached the composer either.
+    await expect(byTestId(page, 'chat-message-textarea')).toHaveValue('')
   })
 
   test('getUserMedia denied → error toast', async ({ page, testInfra }) => {

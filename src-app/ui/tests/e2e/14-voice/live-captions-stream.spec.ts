@@ -5,21 +5,30 @@ import {
   installVoiceBrowserMocks,
   routeVoice,
   defaultVoiceState,
+  readyCapability,
   gotoComposer,
 } from './voice-helpers'
 
 /**
- * TEST-10 — live captions stream while recording, and the final authoritative
- * transcript (not the interim) lands in the composer, never auto-sent.
+ * TEST-24 (was TEST-10) — live captions stream INTO THE COMPOSER while
+ * recording, and the final authoritative transcript supersedes them.
  *
- * With streaming available + the per-device pref ON (the default), recording
- * fires the interim loop against `/api/voice/transcribe/stream`; the returned
- * full transcript renders in the transient live-caption strip. On Stop, the
- * `/api/voice/transcribe` text is appended to the composer, the caption clears,
- * and nothing is sent.
+ * ## This spec previously certified the defect
+ *
+ * Its earlier form asserted that the interim transcript rendered in the
+ * `voice-live-caption` strip — an `aria-hidden`, `max-w-48`, `dir="rtl"`-clipped
+ * `<span>` living INSIDE THE COMPOSER TOOLBAR — and that the composer stayed
+ * EMPTY until Stop. That is precisely the behaviour the product owner reported
+ * as a defect ("it should be appending in chat input …, not on the tools"), so
+ * the spec was green on the shipped bug. See
+ * `ui/docs/VOICE_DICTATION_COMPOSER.md` §1/§2 for the reproduction.
+ *
+ * It is REWRITTEN, not deleted: the same flow is still covered, now asserting
+ * the correct contract — the words appear in the chat input as they are spoken,
+ * and no transcript text is rendered in the toolbar in ANY recording state.
  */
-test.describe('Voice — live captions stream (TEST-10)', () => {
-  test('interim caption updates while recording; final transcript inserted, not sent', async ({
+test.describe('Voice — live captions stream into the composer (TEST-24)', () => {
+  test('interim transcripts land in the composer; the final one supersedes them; nothing is sent', async ({
     page,
     testInfra,
   }) => {
@@ -28,8 +37,17 @@ test.describe('Voice — live captions stream (TEST-10)', () => {
     const voice = await routeVoice(
       page,
       defaultVoiceState({
-        streamTranscribe: { text: 'live interim words so far', language: 'en', duration_ms: 90 },
-        transcribe: { text: 'the final authoritative sentence', language: 'en', duration_ms: 700 },
+        capability: readyCapability({ stream_interval_ms: 300 }),
+        streamTranscribe: {
+          text: 'live interim words so far',
+          language: 'en',
+          duration_ms: 90,
+        },
+        transcribe: {
+          text: 'the final authoritative sentence',
+          language: 'en',
+          duration_ms: 700,
+        },
       }),
     )
 
@@ -48,14 +66,17 @@ test.describe('Voice — live captions stream (TEST-10)', () => {
     await byTestId(page, 'voice-mic-button').first().click()
     await expect(byTestId(page, 'voice-elapsed')).toBeVisible({ timeout: 10000 })
 
-    // The interim loop fires and paints the live caption from the stream endpoint.
-    await expect(byTestId(page, 'voice-live-caption')).toContainText('live interim words so far', {
-      timeout: 15000,
-    })
+    // The interim loop writes into the CHAT INPUT while recording is still live.
+    await expect(textarea).toHaveValue('live interim words so far', { timeout: 15000 })
+    await expect(byTestId(page, 'voice-elapsed')).toBeVisible()
     expect(voice.state.streamCount).toBeGreaterThanOrEqual(1)
+    expect(voice.state.transcribeCount).toBe(0)
 
-    // Stop → the AUTHORITATIVE final transcript lands in the composer (not the
-    // interim text), and the caption is gone.
+    // There is NO transcript surface in the toolbar, in any recording state.
+    await expect(byTestId(page, 'voice-live-caption')).toHaveCount(0)
+
+    // Stop → the AUTHORITATIVE final transcript replaces the interim words
+    // (rather than being appended after them).
     await page.getByRole('button', { name: 'Stop recording and transcribe' }).click()
     await expect(textarea).toHaveValue('the final authoritative sentence', { timeout: 15000 })
     await expect(byTestId(page, 'voice-live-caption')).toHaveCount(0)
@@ -64,5 +85,42 @@ test.describe('Voice — live captions stream (TEST-10)', () => {
     expect(voice.state.transcribeCount).toBe(1)
     await expect(byTestId(page, 'chat-message')).toHaveCount(0)
     expect(new URL(page.url()).pathname).not.toMatch(/\/conversations\//)
+  })
+
+  test('with live captions OFF nothing lands until Stop', async ({ page, testInfra }) => {
+    const { baseURL } = testInfra
+    await installVoiceBrowserMocks(page)
+    const voice = await routeVoice(
+      page,
+      defaultVoiceState({
+        capability: readyCapability({ stream_interval_ms: 300 }),
+        streamTranscribe: { text: 'should never appear', language: 'en', duration_ms: 90 },
+        transcribe: { text: 'only this at the end', language: 'en', duration_ms: 700 },
+      }),
+    )
+
+    await loginAsAdmin(page, baseURL)
+    await gotoComposer(page, baseURL)
+
+    const textarea = byTestId(page, 'chat-message-textarea')
+    const hintDismiss = byTestId(page, 'voice-privacy-hint-dismiss')
+    if (await hintDismiss.isVisible().catch(() => false)) await hintDismiss.click()
+
+    // Turn the per-device preference off, then record.
+    await byTestId(page, 'voice-live-toggle').click()
+    await expect(byTestId(page, 'voice-live-toggle')).toHaveAttribute('aria-pressed', 'false')
+
+    await byTestId(page, 'voice-mic-button').first().click()
+    await expect(byTestId(page, 'voice-elapsed')).toBeVisible({ timeout: 10000 })
+
+    // The interim loop is not armed: the composer stays empty and no stream
+    // request is made at all. This is the positive control for the test above —
+    // it proves that spec's composer text really came from the interim loop.
+    await page.waitForTimeout(1200)
+    await expect(textarea).toHaveValue('')
+    expect(voice.state.streamCount).toBe(0)
+
+    await page.getByRole('button', { name: 'Stop recording and transcribe' }).click()
+    await expect(textarea).toHaveValue('only this at the end', { timeout: 15000 })
   })
 })

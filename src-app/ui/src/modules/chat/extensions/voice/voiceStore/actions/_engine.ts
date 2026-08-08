@@ -9,15 +9,18 @@ import {
 } from '../../voiceRecordingLock'
 import { recordedBlobToWav16k } from '../../audio/wav'
 import {
-  appendTranscript,
-  composeInterimCaption,
+  type ComposerSpan,
+  insertTranscript,
   isSuperseded,
   micErrorMessage,
+  normalizeInterimTranscript,
+  relocateSpan,
   resolveLivePref,
+  restoreSpan,
   shouldRunInterim,
+  spliceTranscript,
 } from '../../voiceLogic'
 import type { VoiceStoreGet, VoiceStoreSet } from '../state'
-import { SplitView } from '@/modules/chat/core/stores/splitView'
 import { Chat } from '@/modules/chat/core/stores/chatBridge'
 
 /**
@@ -109,59 +112,183 @@ function clearTimers(): void {
   }
 }
 
-// The composer textarea's testid + attribute, both built from variables so this
-// SELECTOR string contains no `data-testid="literal"` sequence — otherwise the
-// testid-registry / testid-unique tooling would scan it as a (duplicate)
-// declaration of TextInput's real `chat-message-textarea`. This is a query, not
-// a declaration.
-const COMPOSER_TESTID = 'chat-message-textarea'
-const TESTID_ATTR = 'data-testid'
-
-/** Focus the composer textarea of the OWNING pane, scoped to its `chat-pane-<idx>`
- *  subtree (ITEM-45) — the previous document-wide first-match stole focus to the
- *  leftmost pane. paneId null → single-pane document-wide (unchanged). */
-function focusComposer(paneId: string | null): void {
-  if (
-    typeof document === 'undefined' ||
-    typeof requestAnimationFrame === 'undefined'
-  )
-    return
-  requestAnimationFrame(() => {
-    let scope: ParentNode = document
-    if (paneId) {
-      const idx = SplitView.$.panes.findIndex(p => p.paneId === paneId)
-      if (idx >= 0) {
-        const paneEl = document.querySelector<HTMLElement>(
-          `[${TESTID_ATTR}="chat-pane-${idx}"]`,
-        )
-        if (paneEl) scope = paneEl
-      }
-    }
-    scope
-      .querySelector<HTMLTextAreaElement>(
-        `[${TESTID_ATTR}="${COMPOSER_TESTID}"]`,
-      )
-      ?.focus()
-  })
+/** The composer-access surface this engine needs off a pane's TextStore. */
+interface ComposerAccess {
+  getText(): string
+  setText(t: string): void
+  getSelection(): ComposerSpan | null
+  applyEdit(text: string, start: number, end?: number): void
+  focusInput(): void
 }
 
 /** The TextStore of the OWNING pane (ITEM-45) — the pane that recorded — so the
  *  transcript lands in ITS composer, not the focused pane's. paneId null → the
  *  focused/single-pane bridge (unchanged). */
-function ownerTextStore(
-  paneId: string | null,
-): { getText(): string; setText(t: string): void } {
+function ownerTextStore(paneId: string | null): ComposerAccess {
   if (paneId) {
     const handle = paneRegistry.get(paneId)
     if (handle) {
       return (
-        handle.api.getState() as unknown as {
-          TextStore: { getText(): string; setText(t: string): void }
-        }
+        handle.api.getState() as unknown as { TextStore: ComposerAccess }
       ).TextStore
     }
   }
-  return Chat.$.TextStore
+  return Chat.$.TextStore as unknown as ComposerAccess
+}
+
+/**
+ * Focus the OWNING pane's composer, optionally restoring a caret/selection.
+ *
+ * This goes through the pane's TextStore-registered closure over its own
+ * textarea ref — NOT a `document.querySelector('[data-testid=…]')`. The previous
+ * testid-based implementation was a **no-op in every production build**, because
+ * `ui/plugins/vite-plugin-remove-data-test.js` strips every `data-test*`
+ * attribute from non-dev/non-test builds (`vite.config.ts`). It only ever worked
+ * in dev + e2e, where the attribute survives. See
+ * `ui/docs/VOICE_DICTATION_COMPOSER.md` §2.1.
+ *
+ * Deferred a frame because callers focus as part of a state transition whose
+ * re-render may not have committed yet.
+ */
+function focusComposer(paneId: string | null, select?: ComposerSpan): void {
+  if (typeof requestAnimationFrame === 'undefined') return
+  requestAnimationFrame(() => {
+    const store = ownerTextStore(paneId)
+    store.focusInput()
+    if (select) store.applyEdit(store.getText(), select.start, select.end)
+  })
+}
+
+// ── the dictation session ────────────────────────────────────────────────────
+
+/**
+ * The composer span ONE recording owns, so interim decodes can revise their own
+ * words in place and a cancel can put the composer back byte-exactly.
+ *
+ * Module-scope beside `mediaRecorder`/`chunks`/`finalizing` for the same
+ * documented reason: the exclusive recording lock guarantees at most one pane is
+ * in the recording flow at a time, and this session has exactly the recorder's
+ * lifetime. (The per-instance counter-example, `errorRevertTimer`, exists
+ * because two panes CAN sit in the post-fail 'error' window at once — a state in
+ * which `fail()` has already cleared this session.)
+ */
+interface DictationSession {
+  /** Generation token at record start; a stale tick must never write. */
+  gen: number
+  /** The pane whose composer this session writes into. */
+  paneId: string | null
+  /** The caret/selection captured at record start; null → append at the end. */
+  anchor: ComposerSpan | null
+  /** The text the anchor selection covered, restored verbatim on cancel. */
+  anchorText: string
+  /** The span this session has written so far (join padding included). */
+  span: ComposerSpan | null
+  /** Exactly what was written into `span`, used to re-locate it. */
+  written: string
+  /**
+   * True once the user edited the provisional text out from under us. A
+   * detached session stops writing interims and restores nothing — that text
+   * belongs to the user now (DEC-5).
+   */
+  detached: boolean
+}
+
+let dictation: DictationSession | null = null
+
+/** Resolve the span the next write should replace, or null if we must detach. */
+function resolveWriteSpan(
+  session: DictationSession,
+  value: string,
+): ComposerSpan | null {
+  if (session.span) return relocateSpan(value, session.span, session.written)
+  // First write: replace the anchor selection (if any), else append at the end.
+  return session.anchor ?? { start: value.length, end: value.length }
+}
+
+/**
+ * Write `transcript` into the owning composer, replacing whatever this session
+ * wrote before it. A blank transcript takes the provisional words away.
+ *
+ * Returns false when the session detached (the user edited our text) — the
+ * caller then leaves the composer alone.
+ */
+function writeDictation(session: DictationSession, transcript: string): boolean {
+  if (session.detached) return false
+  const store = ownerTextStore(session.paneId)
+  const value = store.getText()
+  const span = resolveWriteSpan(session, value)
+  if (!span) {
+    session.detached = true
+    return false
+  }
+  const edit = spliceTranscript(value, span, transcript)
+  store.applyEdit(edit.value, edit.caret)
+  session.span = { start: edit.start, end: edit.end }
+  session.written = edit.value.slice(edit.start, edit.end)
+  return true
+}
+
+/**
+ * Put the composer back exactly as it was before this session wrote anything —
+ * the cancel / supersede path (INV-4). A session that never wrote, or that
+ * detached, restores nothing.
+ */
+function restoreDictation(session: DictationSession): void {
+  if (session.detached || !session.span) return
+  const store = ownerTextStore(session.paneId)
+  const value = store.getText()
+  const span = relocateSpan(value, session.span, session.written)
+  if (!span) return // the user has since edited it — leave their text alone
+  const edit = restoreSpan(value, span, session.anchorText)
+  store.applyEdit(edit.value, edit.start, edit.end)
+}
+
+/**
+ * Write the FINAL authoritative transcript into the owning composer and return
+ * the caret to leave behind.
+ *
+ * Three cases, in priority order:
+ *  1. a live session that streamed words in → the final transcript REPLACES
+ *     exactly those words, so the provisional wording never survives alongside
+ *     the authoritative one;
+ *  2. otherwise (live captions off, or the session detached because the user
+ *     edited our text) → insert at the composer's CURRENT insertion point,
+ *     which is where the user actually is now;
+ *  3. no insertion point at all → append at the end (INV-5).
+ */
+function commitTranscript(
+  paneId: string | null,
+  transcript: string,
+): ComposerSpan {
+  const store = ownerTextStore(paneId)
+  const session = dictation && !dictation.detached ? dictation : null
+
+  if (session?.span) {
+    // The session owns a span; `writeDictation` relocates it and, if the user
+    // has since edited it away, detaches instead of clobbering their text.
+    if (writeDictation(session, transcript)) {
+      const span = session.span
+      // Caret after the transcript itself, before any trailing join pad.
+      const end = span.end - (session.written.endsWith(' ') ? 1 : 0)
+      return { start: end, end }
+    }
+  }
+
+  const value = store.getText()
+  if (!transcript) return currentCaret(store, value)
+  const edit = insertTranscript(value, store.getSelection(), transcript)
+  store.applyEdit(edit.value, edit.caret)
+  return { start: edit.caret, end: edit.caret }
+}
+
+/** The composer's current caret, or the end of its text when it has none. */
+function currentCaret(store: ComposerAccess, value: string): ComposerSpan {
+  return store.getSelection() ?? { start: value.length, end: value.length }
+}
+
+/** Drop the session without touching the composer. */
+function endDictation(): void {
+  dictation = null
 }
 
 /**
@@ -217,6 +344,13 @@ export default function voiceEngine(
     requestGeneration++
     stopStream()
     chunks = []
+    // A failed recording must leave the composer exactly as it was (INV-4):
+    // take back any provisional words this session streamed in, so the user is
+    // left with their draft plus an error toast, never half a transcript.
+    if (dictation) {
+      restoreDictation(dictation)
+      endDictation()
+    }
     releaseRecordingLock(get().recordingPaneId) // ITEM-45: free the exclusive lock
     message.error(msg)
     set({
@@ -226,17 +360,20 @@ export default function voiceEngine(
       announcement: msg,
       elapsedMs: 0,
       stageText: '',
-      interimText: '',
     })
     revertToIdleSoon()
   }
 
   /**
-   * Self-rescheduling live-caption loop: while recording (and not superseded /
-   * finalizing), decode the WHOLE accumulating buffer and render the returned
-   * full transcript as the interim caption. Single-flight (the next tick is
-   * scheduled only after the previous settles) and interim-errors-non-fatal —
-   * a failed decode just skips one caption update, never the recording.
+   * Self-rescheduling live-dictation loop: while recording (and not superseded /
+   * finalizing), decode the WHOLE accumulating buffer and write the returned
+   * full transcript INTO THE COMPOSER, replacing what the previous tick wrote.
+   * This is what makes dictation real-time (INV-2) — the words appear in the
+   * chat input as the user speaks, not only at Stop.
+   *
+   * Single-flight (the next tick is scheduled only after the previous settles)
+   * and interim-errors-non-fatal — a failed decode just skips one update, never
+   * the recording.
    */
   const runInterimTick = (gen: number, intervalMs: number) => {
     interimTimer = setTimeout(async () => {
@@ -257,13 +394,17 @@ export default function voiceEngine(
           const formData = new FormData()
           formData.append('file', wav, 'interim.wav')
           const result = await ApiClient.Voice.transcribeStream(formData)
-          // Only paint the caption while still actively recording this session.
+          // Only write while still actively recording THIS session — the same
+          // triple guard the caption update used to sit behind. The extra
+          // `dictation.gen` check makes the session itself the unit of identity,
+          // so a tick from a previous recording can never write into a new one.
           if (
             !isSuperseded(gen, requestGeneration) &&
             get().status === 'recording' &&
-            !finalizing
+            !finalizing &&
+            dictation?.gen === gen
           ) {
-            set({ interimText: composeInterimCaption(result.text) })
+            writeDictation(dictation, normalizeInterimTranscript(result.text))
           }
         }
       } catch {
@@ -390,12 +531,33 @@ export default function voiceEngine(
       return
     }
     recordStartedAt = Date.now()
+    // Open the dictation session: capture WHERE the words will land (the
+    // composer's caret/selection) and WHAT that span currently holds, so an
+    // interim can revise its own words in place and a cancel can put the
+    // composer back byte-exactly. A textarea keeps its selection while blurred,
+    // so this still reads the user's insertion point after the mic button took
+    // focus; null means the composer was never focused → append at the end.
+    const composer = ownerTextStore(paneId)
+    const anchor = composer.getSelection()
+    const draft = composer.getText()
+    dictation = {
+      gen,
+      paneId,
+      anchor,
+      anchorText: anchor ? draft.slice(anchor.start, anchor.end) : '',
+      span: null,
+      written: '',
+      detached: false,
+    }
     set({
       status: 'recording',
       elapsedMs: 0,
-      interimText: '',
       announcement: 'Recording started',
     })
+    // Put the caret back where dictation will land and show it: the user must
+    // SEE the insertion point for "lands where I'm typing" to mean anything,
+    // and a focused textarea scrolls itself as the transcript streams in.
+    focusComposer(paneId, anchor ?? undefined)
     // Kick off the interim decode loop (guarded by the same generation token).
     if (live) runInterimTick(gen, intervalMs)
     const maxMs = (capability?.max_clip_seconds ?? 60) * 1000
@@ -456,9 +618,6 @@ export default function voiceEngine(
       status: 'transcribing',
       stageText: 'Starting voice engine…',
       announcement: 'Transcribing',
-      // The transient interim caption ends here; the authoritative transcript
-      // is what lands in the composer below.
-      interimText: '',
     })
     // The same `gen` token guards the transcribe POST below: a POST that
     // resolves AFTER a cancel/unmount is dropped instead of appending its
@@ -483,10 +642,8 @@ export default function voiceEngine(
       const text = result.text?.trim() ?? ''
       // Insert into the OWNING pane's composer (ITEM-45), not the focused pane.
       const ownerPaneId = get().recordingPaneId
-      if (text) {
-        const textStore = ownerTextStore(ownerPaneId)
-        textStore.setText(appendTranscript(textStore.getText(), text))
-      }
+      const caret = commitTranscript(ownerPaneId, text)
+      endDictation()
       releaseRecordingLock(ownerPaneId)
       set({
         status: 'idle',
@@ -496,7 +653,9 @@ export default function voiceEngine(
         errorMessage: null,
         announcement: text ? 'Transcript added' : 'No speech detected',
       })
-      focusComposer(ownerPaneId)
+      // Return focus to the composer with the caret AFTER the transcript, so
+      // the user keeps typing exactly where the words ended.
+      focusComposer(ownerPaneId, caret)
     } catch (err) {
       // Superseded by a cancel/unmount — swallow the (now irrelevant) error.
       if (isSuperseded(gen, requestGeneration)) return
@@ -525,12 +684,14 @@ export default function voiceEngine(
         clearTimeout(errorRevertTimer)
         errorRevertTimer = null
       }
+      // Deliberately does NOT touch `dictation` either — `fail()` already
+      // restored + cleared this pane's session, and any session alive now
+      // belongs to whichever pane took the lock during the error window.
       set({
         status: 'idle',
         errorMessage: null,
         elapsedMs: 0,
         stageText: '',
-        interimText: '',
         announcement: 'Recording cancelled',
       })
       return
@@ -552,6 +713,16 @@ export default function voiceEngine(
     stopStream()
     chunks = []
     const ownerPaneId = get().recordingPaneId
+    // A cancelled recording leaves the composer EXACTLY as it was (INV-4): take
+    // back every provisional word this session streamed in and re-select what
+    // the user had selected. A session the user has since edited restores
+    // nothing — that text is theirs now (DEC-5).
+    let restored: ComposerSpan | undefined
+    if (dictation) {
+      restoreDictation(dictation)
+      restored = dictation.anchor ?? undefined
+      endDictation()
+    }
     releaseRecordingLock(ownerPaneId) // ITEM-45: free the exclusive lock
     set({
       status: 'idle',
@@ -559,10 +730,9 @@ export default function voiceEngine(
       elapsedMs: 0,
       stageText: '',
       errorMessage: null,
-      interimText: '',
       announcement: 'Recording cancelled',
     })
-    focusComposer(ownerPaneId)
+    focusComposer(ownerPaneId, restored)
   }
 
   const engine: VoiceEngine = {

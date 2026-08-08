@@ -7,8 +7,8 @@
 
 ## Summary
 
-- **349** surfaces carry at least one renderable-state signal.
-- **2135** signals total: 1678 branch, 140 empty, 122 error, 94 loading, 96 overlay, 5 panel.
+- **352** surfaces carry at least one renderable-state signal.
+- **2171** signals total: 1703 branch, 143 empty, 126 error, 93 loading, 101 overlay, 5 panel.
 - **5** right-panel renderers registered (each a right-panel-open state).
 - **35** slot registrations (sidebar / settings / chat mount points).
 
@@ -16,10 +16,10 @@
 
 | state | surfaces |
 |---|---|
-| `delayed` | 84 |
-| `empty` | 114 |
-| `error` | 95 |
-| `open` | 82 |
+| `delayed` | 83 |
+| `empty` | 116 |
+| `error` | 97 |
+| `open` | 84 |
 | `panel-open` | 5 |
 
 ## Right-panel renderers (`registerPanelRenderer`)
@@ -925,11 +925,11 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!el` | 83 |
-| branch | `isEditing` | 84 |
-| branch | `restoredKeyRef.current === draftKey` | 92 |
-| branch | `isEditingRef.current` | 100 |
-| branch | `sending \|\| isStreaming \|\| inFlightRef.current` | 129 |
+| branch | `!el` | 101 |
+| branch | `isEditing` | 102 |
+| branch | `restoredKeyRef.current === draftKey` | 110 |
+| branch | `isEditingRef.current` | 118 |
+| branch | `sending \|\| isStreaming \|\| inFlightRef.current` | 147 |
 
 ### `modules/chat/extensions/text/components/ThinkingContent`
 
@@ -967,9 +967,8 @@ Required states: `open`
 | branch | `!isRecordingSupported()` | 80 |
 | branch | `streamingAvailable` | 101 |
 | branch | `liveCaptions` | 107 |
-| branch | `liveCaptions && interimText` | 191 |
-| branch | `isRequesting` | 245 |
-| overlay | `<Popover open>` | 263 |
+| branch | `isRequesting` | 235 |
+| overlay | `<Popover open>` | 253 |
 
 ### `modules/chat/pages/ChatHistoryPage`
 
@@ -1060,15 +1059,28 @@ Required states: `empty`, `open`
 | overlay | `<Dropdown open>` | 476 |
 | branch | `!open && keepMenuOpen` | 483 |
 
+### `modules/citations/components/AttachCitationsDialog`
+
+Required states: `empty`, `open`
+
+| kind | condition | line |
+|---|---|---|
+| branch | `attachedIds.has(e.id)` | 57 |
+| empty | `ids.length === 0` | 78 |
+| overlay | `<Dialog open>` | 91 |
+| empty | `candidates.length === 0` | 135 |
+
 ### `modules/citations/components/CitationCard`
 
 Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `canManage` | 71 |
-| branch | `meta` | 95 |
-| branch | `entry.doi` | 96 |
+| branch | `!projectId` | 60 |
+| branch | `canManage` | 100 |
+| branch | `scoped` | 126 |
+| branch | `meta` | 134 |
+| branch | `entry.doi` | 135 |
 
 ### `modules/citations/components/ImportCitationsModal`
 
@@ -1086,11 +1098,13 @@ Required states: `delayed`, `empty`, `error`, `open`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `canManage` | 65 |
-| loading | `loading` | 96 |
-| empty | `entries.length === 0` | 98 |
-| error | `error` | 99 |
-| overlay | `<ImportCitationsModal open>` | 119 |
+| branch | `format !== STYLED_FORMAT` | 84 |
+| branch | `canManage` | 99 |
+| loading | `loading` | 130 |
+| empty | `entries.length === 0` | 132 |
+| error | `error` | 133 |
+| overlay | `<ImportCitationsModal open>` | 153 |
+| overlay | `<Dialog open>` | 158 |
 
 ### `modules/citations/project-extension/components/ProjectBibliographyInlinePreview`
 
@@ -1107,12 +1121,14 @@ Required states: `delayed`, `empty`, `open`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!projectId` | 25 |
-| branch | `!projectId` | 49 |
-| branch | `canManage` | 62 |
-| loading | `loading` | 74 |
-| empty | `entries.length === 0` | 76 |
-| overlay | `<ImportCitationsModal open>` | 86 |
+| branch | `!projectId` | 32 |
+| branch | `!projectId` | 56 |
+| branch | `canManage` | 69 |
+| loading | `loading` | 95 |
+| empty | `entries.length === 0` | 97 |
+| overlay | `<ImportCitationsModal open>` | 116 |
+| branch | `canManage` | 125 |
+| overlay | `<AttachCitationsDialog open>` | 126 |
 
 ### `modules/code-sandbox/components/AvailableRootfsCard`
 
@@ -1541,26 +1557,26 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!projectId` | 73 |
-| empty | `!projectId \|\| selectedFileIds.size === 0` | 85 |
-| empty | `!projectId \|\| incoming.length === 0` | 109 |
-| branch | `atCap` | 110 |
-| empty | `accepted.length === 0` | 126 |
-| branch | `!canUpload` | 135 |
-| branch | `!body` | 139 |
-| branch | `!Array.from(e.dataTransfer?.types ?? []).includes('Files')` | 150 |
-| branch | `!Array.from(e.dataTransfer?.types ?? []).includes('Files')` | 156 |
-| branch | `!Array.from(e.dataTransfer?.types ?? []).includes('Files')` | 162 |
-| branch | `!Array.from(e.dataTransfer?.types ?? []).includes('Files')` | 166 |
-| branch | `!project` | 188 |
-| branch | `canUpload` | 200 |
-| branch | `selectedFileIds.size > 0` | 235 |
-| empty | `!(uploadingRows.length === 0)` | 261 |
-| branch | `initialLoading` | 283 |
-| empty | `files.length === 0` | 287 |
-| branch | `canEdit` | 317 |
-| branch | `atCap` | 363 |
-| branch | `isDragging && drawerBody` | 376 |
+| branch | `!projectId` | 78 |
+| empty | `!projectId \|\| selectedFileIds.size === 0` | 92 |
+| empty | `!projectId \|\| incoming.length === 0` | 120 |
+| branch | `atCap` | 121 |
+| empty | `accepted.length === 0` | 137 |
+| branch | `!canUpload` | 146 |
+| branch | `!body` | 150 |
+| branch | `!Array.from(e.dataTransfer?.types ?? []).includes('Files')` | 161 |
+| branch | `!Array.from(e.dataTransfer?.types ?? []).includes('Files')` | 167 |
+| branch | `!Array.from(e.dataTransfer?.types ?? []).includes('Files')` | 173 |
+| branch | `!Array.from(e.dataTransfer?.types ?? []).includes('Files')` | 177 |
+| branch | `!project` | 199 |
+| branch | `canUpload` | 211 |
+| branch | `selectedFileIds.size > 0` | 246 |
+| empty | `!(uploadingRows.length === 0)` | 275 |
+| branch | `initialLoading` | 297 |
+| empty | `files.length === 0` | 301 |
+| branch | `canEdit` | 331 |
+| branch | `atCap` | 376 |
+| branch | `isDragging && drawerBody` | 389 |
 
 ### `modules/file/viewers/image/body`
 
@@ -1931,13 +1947,15 @@ Required states: `delayed`, `empty`, `error`
 
 | kind | condition | line |
 |---|---|---|
-| loading | `loading && items.length === 0` | 212 |
-| error | `error && items.length === 0` | 220 |
-| empty | `rows.length === 0` | 254 |
-| branch | `i > 0` | 284 |
-| branch | `row.is_system` | 292 |
-| branch | `row.name && row.name !== row.hub_id` | 317 |
-| branch | `row.hub_category === 'model' \|\| ((row.hub_category === 'skill' \|\| row.hub_category === 'workflow') && row.is_system)` | 330 |
+| loading | `loading && items.length === 0` | 244 |
+| error | `error && items.length === 0` | 252 |
+| empty | `rows.length === 0` | 286 |
+| branch | `i > 0` | 328 |
+| branch | `row.is_system` | 336 |
+| branch | `row.name && row.name !== row.hub_id` | 361 |
+| branch | `row.hub_category === 'model' \|\| ((row.hub_category === 'skill' \|\| row.hub_category === 'workflow') && row.is_system)` | 374 |
+| branch | `removeTarget === null` | 407 |
+| branch | `canRemove` | 424 |
 
 ### `modules/hub/modules/llm-models/components/ModelDetailsDrawer`
 
@@ -2534,18 +2552,21 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 ### `modules/llm-local-runtime/components/VersionModelsBlock`
 
-Required states: `empty`
+Required states: `empty`, `error`
 
 | kind | condition | line |
 |---|---|---|
-| empty | `models.length === 0` | 79 |
-| branch | `!model.pinned` | 145 |
-| branch | `canManage` | 148 |
-| branch | `model.running` | 176 |
-| branch | `model.running && canViewLogs` | 220 |
-| branch | `expanded` | 224 |
-| branch | `expanded && model.running` | 239 |
-| branch | `instance` | 241 |
+| empty | `models.length === 0` | 89 |
+| branch | `!model.pinned` | 207 |
+| error | `failed` | 210 |
+| branch | `model.running && probe` | 219 |
+| branch | `canManage` | 230 |
+| branch | `model.running` | 258 |
+| error | `failed` | 301 |
+| branch | `model.running && canViewLogs` | 340 |
+| branch | `expanded` | 344 |
+| branch | `expanded && model.running` | 359 |
+| branch | `instance` | 361 |
 
 ### `modules/llm-local-runtime/components/drawers/RuntimeDownloadDrawer`
 
@@ -2577,31 +2598,32 @@ Required states: `delayed`, `empty`
 | kind | condition | line |
 |---|---|---|
 | branch | `!currentProvider` | 54 |
-| branch | `!currentProvider` | 112 |
-| branch | `!currentProvider \|\| currentProvider.provider_type !== 'local'` | 126 |
-| branch | `!currentProvider` | 150 |
-| branch | `!currentProvider` | 165 |
-| branch | `!currentProvider` | 172 |
-| branch | `!currentProvider` | 261 |
-| branch | `!canCreateModels` | 262 |
-| branch | `currentProvider.provider_type === 'local'` | 264 |
-| branch | `!currentProvider \|\| currentProvider.provider_type === 'local'` | 327 |
-| branch | `!canEditModels` | 330 |
-| branch | `!currentProvider` | 358 |
-| loading | `loading` | 364 |
-| empty | `llmModels.length === 0` | 366 |
-| branch | `llmModel.is_deprecated` | 382 |
-| branch | `llmModel.is_active && llmModel.port` | 403 |
-| branch | `llmModel.description` | 415 |
-| branch | `llmModel.capabilities` | 420 |
-| branch | `llmModel.capabilities.vision` | 422 |
-| branch | `llmModel.capabilities.audio` | 427 |
-| branch | `llmModel.capabilities.tools` | 432 |
-| branch | `llmModel.capabilities.code_interpreter` | 437 |
-| branch | `llmModel.capabilities.chat` | 442 |
-| branch | `llmModel.capabilities.text_embedding` | 447 |
-| branch | `llmModel.capabilities.image_generator` | 452 |
-| branch | `index < llmModels.length - 1` | 462 |
+| branch | `!currentProvider` | 141 |
+| branch | `!currentProvider \|\| currentProvider.provider_type !== 'local'` | 155 |
+| branch | `!currentProvider` | 179 |
+| branch | `!currentProvider` | 194 |
+| branch | `!currentProvider` | 201 |
+| branch | `!currentProvider` | 309 |
+| branch | `!canCreateModels` | 310 |
+| branch | `currentProvider.provider_type === 'local'` | 312 |
+| branch | `!currentProvider \|\| currentProvider.provider_type === 'local'` | 375 |
+| branch | `!canEditModels` | 378 |
+| branch | `!currentProvider` | 406 |
+| loading | `loading` | 412 |
+| empty | `llmModels.length === 0` | 414 |
+| branch | `llmModel.is_deprecated` | 430 |
+| branch | `llmModel.validation_status` | 444 |
+| branch | `llmModel.is_active && llmModel.port` | 477 |
+| branch | `llmModel.description` | 489 |
+| branch | `llmModel.capabilities` | 494 |
+| branch | `llmModel.capabilities.vision` | 496 |
+| branch | `llmModel.capabilities.audio` | 501 |
+| branch | `llmModel.capabilities.tools` | 506 |
+| branch | `llmModel.capabilities.code_interpreter` | 511 |
+| branch | `llmModel.capabilities.chat` | 516 |
+| branch | `llmModel.capabilities.text_embedding` | 521 |
+| branch | `llmModel.capabilities.image_generator` | 526 |
+| branch | `index < llmModels.length - 1` | 536 |
 
 ### `modules/llm-provider/components/LlmProviderDrawer`
 
@@ -2634,8 +2656,8 @@ Required states: `delayed`
 
 | kind | condition | line |
 |---|---|---|
-| loading | `!currentProvider && (loading \|\| !isInitialized)` | 35 |
-| branch | `!currentProvider \|\| currentProvider.provider_type !== 'local'` | 40 |
+| loading | `!currentProvider && (loading \|\| !isInitialized)` | 36 |
+| branch | `!currentProvider \|\| currentProvider.provider_type !== 'local'` | 41 |
 
 ### `modules/llm-provider/components/ProviderGroupAssignmentCard`
 
@@ -2659,6 +2681,15 @@ Required states: _(branch-only — proven via dynamic coverage)_
 | branch | `canDelete && !currentProvider.built_in` | 174 |
 | branch | `canEdit` | 197 |
 | branch | `disabledReason && !currentProvider.enabled` | 213 |
+
+### `modules/llm-provider/components/ProxyTokenCard`
+
+Required states: _(branch-only — proven via dynamic coverage)_
+
+| kind | condition | line |
+|---|---|---|
+| branch | `!canEdit` | 28 |
+| branch | `token` | 68 |
 
 ### `modules/llm-provider/components/RemoteProviderSettings`
 
@@ -2990,20 +3021,21 @@ Required states: `empty`, `open`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!configModalVisible \|\| !isProjectScope` | 147 |
-| branch | `selectedServers.size > 0` | 150 |
-| branch | `!selection` | 198 |
-| branch | `!selection` | 220 |
-| branch | `!isProjectScope && !currentConversationId` | 251 |
-| empty | `tools.length === 0` | 343 |
-| branch | `approvalMode === 'manual_approve'` | 358 |
-| branch | `tool.description` | 372 |
-| branch | `!isPrimaryModal` | 385 |
-| branch | `!isProjectScope` | 394 |
-| empty | `enabledServers.length === 0` | 436 |
-| branch | `isMobile` | 562 |
-| overlay | `<Drawer open>` | 563 |
-| overlay | `<Dialog open>` | 575 |
+| branch | `!configModalVisible \|\| !isProjectScope` | 182 |
+| branch | `selectedServers.size > 0` | 185 |
+| branch | `!selection` | 241 |
+| branch | `!selection` | 263 |
+| branch | `!isProjectScope && !currentConversationId` | 294 |
+| branch | `toolError` | 387 |
+| empty | `tools.length === 0` | 394 |
+| branch | `approvalMode === 'manual_approve'` | 409 |
+| branch | `tool.description` | 423 |
+| branch | `!isPrimaryModal` | 436 |
+| branch | `!isProjectScope` | 445 |
+| empty | `enabledServers.length === 0` | 487 |
+| branch | `isMobile` | 613 |
+| overlay | `<Drawer open>` | 614 |
+| overlay | `<Dialog open>` | 626 |
 
 ### `modules/mcp/components/common/KeyValueSecretEditor`
 
@@ -3043,38 +3075,62 @@ Required states: `error`, `open`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `cancelled` | 194 |
-| branch | `!Array.isArray(parsed)` | 368 |
-| error | `hasError` | 480 |
-| branch | `args === null` | 483 |
-| branch | `clientId && !clientSecret && !hasExistingOAuth` | 611 |
-| branch | `!saved` | 642 |
-| branch | `!saved` | 707 |
-| branch | `!open` | 854 |
-| branch | `mode === 'create' \|\| mode === 'create-system'` | 896 |
-| branch | `v === false` | 897 |
-| branch | `missingRequired` | 912 |
-| branch | `!editingServer` | 969 |
-| branch | `v === false` | 973 |
-| branch | `!saved` | 998 |
-| branch | `(mode === 'edit' \|\| mode === 'edit-system') && editingServer?.last_health_check_status === 'unhealthy'` | 1068 |
-| branch | `(mode === 'create' \|\| mode === 'create-system')` | 1093 |
-| branch | `(!!editingServer \|\| mode === 'create' \|\| mode === 'create-system')` | 1116 |
-| branch | `prefillTransportSwapped` | 1148 |
-| branch | `transportType === 'stdio'` | 1183 |
-| branch | `(transportType === 'http' \|\| transportType === 'sse')` | 1229 |
-| branch | `transportType === 'http' && isUserMode` | 1255 |
-| branch | `oauthEnabled` | 1275 |
-| branch | `supportsSampling` | 1333 |
-| branch | `transportType === 'stdio' && (mode === 'create-system' \|\| mode === 'edit-system')` | 1364 |
-| branch | `runInSandbox` | 1385 |
-| branch | `isUserMode && transportType === 'stdio'` | 1399 |
-| overlay | `<Drawer open>` | 1429 |
-| branch | `canManage && !!transportType` | 1437 |
-| branch | `canManage` | 1453 |
-| branch | `isHistoryMode && editingServer` | 1467 |
-| branch | `isEditMode && editingServer` | 1471 |
-| branch | `isSystemMode` | 1485 |
+| branch | `cancelled` | 195 |
+| branch | `!Array.isArray(parsed)` | 369 |
+| error | `hasError` | 481 |
+| branch | `args === null` | 484 |
+| branch | `clientId && !clientSecret && !hasExistingOAuth` | 612 |
+| branch | `!saved` | 643 |
+| branch | `!saved` | 708 |
+| branch | `!open` | 855 |
+| branch | `mode === 'create' \|\| mode === 'create-system'` | 897 |
+| branch | `v === false` | 898 |
+| branch | `missingRequired` | 913 |
+| branch | `!editingServer` | 970 |
+| branch | `v === false` | 974 |
+| branch | `!saved` | 999 |
+| branch | `(mode === 'edit' \|\| mode === 'edit-system') && editingServer?.last_health_check_status === 'unhealthy'` | 1069 |
+| branch | `(mode === 'create' \|\| mode === 'create-system')` | 1094 |
+| branch | `(!!editingServer \|\| mode === 'create' \|\| mode === 'create-system')` | 1117 |
+| branch | `prefillTransportSwapped` | 1149 |
+| branch | `transportType === 'stdio'` | 1184 |
+| branch | `(transportType === 'http' \|\| transportType === 'sse')` | 1230 |
+| branch | `transportType === 'http' && isUserMode` | 1256 |
+| branch | `oauthEnabled` | 1276 |
+| branch | `supportsSampling` | 1334 |
+| branch | `transportType === 'stdio' && (mode === 'create-system' \|\| mode === 'edit-system')` | 1365 |
+| branch | `runInSandbox` | 1386 |
+| branch | `isUserMode && transportType === 'stdio'` | 1400 |
+| overlay | `<Drawer open>` | 1430 |
+| branch | `canManage && !!transportType` | 1438 |
+| branch | `canManage` | 1454 |
+| branch | `isHistoryMode && editingServer` | 1468 |
+| branch | `isEditMode && editingServer` | 1472 |
+| branch | `isSystemMode` | 1501 |
+
+### `modules/mcp/components/common/McpServerRuntimeTab`
+
+Required states: `error`
+
+| kind | condition | line |
+|---|---|---|
+| branch | `canManage` | 143 |
+| branch | `result` | 163 |
+| branch | `result.detail` | 175 |
+| error | `error` | 250 |
+| error | `items !== null && items.length === 0 && !error` | 259 |
+| branch | `items !== null && items.length > 0` | 266 |
+| branch | `!parsed.ok` | 302 |
+| branch | `prompt.description` | 340 |
+| branch | `hasArgs` | 345 |
+| branch | `output !== null` | 360 |
+| branch | `resource.description` | 440 |
+| branch | `output !== null` | 445 |
+| branch | `!parsed.ok` | 501 |
+| branch | `canManage` | 531 |
+| branch | `tool.description` | 554 |
+| branch | `canManage` | 559 |
+| branch | `output !== null` | 572 |
 
 ### `modules/mcp/components/common/McpToolApprovalsTab`
 
@@ -3376,22 +3432,10 @@ Required states: _(branch-only — proven via dynamic coverage)_
 | kind | condition | line |
 |---|---|---|
 | branch | `!guide` | 81 |
-| branch | `!guide` | 108 |
-| branch | `isCompleted` | 186 |
-| branch | `nextError` | 220 |
-| branch | `StepComponent` | 230 |
-
-### `modules/onboarding/OnboardingRedirect`
-
-Required states: `delayed`
-
-| kind | condition | line |
-|---|---|---|
-| loading | `isInitializing` | 47 |
-| branch | `!isAuthenticated \|\| !user` | 48 |
-| branch | `user.is_admin === true` | 49 |
-| branch | `!loaded` | 53 |
-| branch | `location.pathname.startsWith('/onboarding')` | 54 |
+| branch | `!guide` | 118 |
+| branch | `isCompleted` | 196 |
+| branch | `nextError` | 230 |
+| branch | `StepComponent` | 240 |
 
 ### `modules/onboarding/guides/getting-started/components/ApiKeysStep`
 
@@ -3412,12 +3456,13 @@ Required states: _(branch-only — proven via dynamic coverage)_
 | kind | condition | line |
 |---|---|---|
 | branch | `loadingServers` | 42 |
-| branch | `serversError && canSeeAdminControls` | 65 |
-| branch | `canManageSystemMcp && systemServers.length > 0` | 69 |
-| branch | `server.description` | 91 |
-| branch | `canInstallFromHub && hubServers.length > 0` | 104 |
-| branch | `alreadyInstalled` | 142 |
-| branch | `server.description` | 144 |
+| branch | `applyErrors.length > 0 && canSeeAdminControls` | 65 |
+| branch | `serversError && canSeeAdminControls` | 86 |
+| branch | `canManageSystemMcp && systemServers.length > 0` | 90 |
+| branch | `server.description` | 112 |
+| branch | `canInstallFromHub && hubServers.length > 0` | 125 |
+| branch | `alreadyInstalled` | 163 |
+| branch | `server.description` | 165 |
 
 ### `modules/onboarding/guides/getting-started/components/MemorySetupStep`
 
@@ -4379,22 +4424,25 @@ Required states: `open`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!workflow` | 74 |
-| overlay | `<Drawer open>` | 76 |
-| overlay | `<Drawer open>` | 107 |
-| branch | `editable \|\| editableDefinition` | 125 |
-| branch | `editableDefinition` | 127 |
-| branch | `editable` | 141 |
-| overlay | `<Dialog open>` | 146 |
-| branch | `workflow.description` | 181 |
-| branch | `canExecute` | 192 |
-| branch | `workflow.is_dev` | 210 |
-| branch | `steps.length > 0` | 226 |
-| branch | `s.kind` | 232 |
-| branch | `s.dependsOn && s.dependsOn.length > 0` | 234 |
-| branch | `activeRunId` | 254 |
-| overlay | `<WorkflowRunDialog open>` | 278 |
-| overlay | `<DryRunPreviewDialog open>` | 288 |
+| branch | `!workflow` | 77 |
+| overlay | `<Drawer open>` | 79 |
+| overlay | `<Drawer open>` | 114 |
+| branch | `editable \|\| editableDefinition \|\| editableMetadata` | 132 |
+| branch | `editableMetadata` | 134 |
+| branch | `editableDefinition` | 145 |
+| branch | `editable` | 159 |
+| overlay | `<Dialog open>` | 164 |
+| branch | `workflow.description` | 199 |
+| branch | `canExecute` | 225 |
+| branch | `workflow.is_dev` | 243 |
+| branch | `steps.length > 0` | 259 |
+| branch | `s.kind` | 265 |
+| branch | `s.dependsOn && s.dependsOn.length > 0` | 267 |
+| branch | `activeRunId` | 287 |
+| overlay | `<WorkflowRunDialog open>` | 311 |
+| overlay | `<DryRunPreviewDialog open>` | 321 |
+| branch | `editableMetadata` | 326 |
+| overlay | `<WorkflowMetadataDialog open>` | 327 |
 
 ### `modules/workflow/components/WorkflowElicitForm`
 
@@ -4415,6 +4463,15 @@ Required states: `error`
 | branch | `!isValid` | 436 |
 | branch | `err` | 451 |
 | error | `error` | 485 |
+
+### `modules/workflow/components/WorkflowMetadataDialog`
+
+Required states: `empty`, `open`
+
+| kind | condition | line |
+|---|---|---|
+| empty | `Object.keys(patch).length === 0` | 89 |
+| overlay | `<Dialog open>` | 103 |
 
 ### `modules/workflow/components/WorkflowRunDialog`
 

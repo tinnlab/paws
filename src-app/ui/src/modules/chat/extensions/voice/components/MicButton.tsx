@@ -48,7 +48,7 @@ export function MicButton() {
   const recordingOwner = useRecordingOwner()
   const blockedByOtherPane =
     !!pane?.paneId && !!recordingOwner && recordingOwner !== pane.paneId
-  const { status, elapsedMs, capability, capabilityLoaded, stageText, announcement, interimText, liveCaptions } =
+  const { status, elapsedMs, capability, capabilityLoaded, stageText, announcement, liveCaptions } =
     voice
   // PERMISSION gate (layer 4 — explicit, at the render site). Independent of the
   // feature/binary-availability gate below: a user whose group lacks
@@ -182,22 +182,12 @@ export function MicButton() {
         role="group"
         aria-label="Recording voice dictation"
       >
-        {/* Live-caption preview (transient, visual-only — the persistent live
-            region carries discrete announcements; a growing transcript must not
-            be re-announced every tick). Never written to the composer. `dir="rtl"`
-            on the clipping box keeps the END (newest words) visible when the full
-            stitched transcript overflows the strip, while the inner `<bdi dir="ltr">`
-            renders the text itself left-to-right. */}
-        {liveCaptions && interimText && (
-          <span
-            dir="rtl"
-            className="max-w-48 overflow-hidden whitespace-nowrap text-xs text-muted-foreground"
-            data-testid="voice-live-caption"
-            aria-hidden="true"
-          >
-            <bdi dir="ltr">{interimText}</bdi>
-          </span>
-        )}
+        {/* NO transcript is rendered here. The words the user is dictating go
+            into the COMPOSER, live, at their caret — not into a clipped strip in
+            the toolbar, which is the defect this replaced ("not on the tools",
+            `ui/docs/VOICE_DICTATION_COMPOSER.md` §1/§2). What stays here is
+            recording CHROME — the state indicator, the elapsed timer, and the
+            two controls — which genuinely belongs in the toolbar. */}
         <span
           className="size-2 rounded-full bg-destructive animate-pulse"
           aria-hidden="true"

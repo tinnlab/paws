@@ -7,10 +7,18 @@ import { MicButton } from './components/MicButton'
  *
  * Adds a microphone button to the composer toolbar for local voice dictation.
  * Recording is captured via MediaRecorder, converted to 16 kHz mono WAV, and
- * POSTed to `/voice/transcribe`; the returned text is APPENDED to the composer
- * (never auto-sent). All state lives in VoiceStore (`Chat.VoiceStore`),
- * whose `init` fetches the readiness capability so the button can hide/disable
- * itself appropriately.
+ * POSTed to `/voice/transcribe`; the returned text is INSERTED AT THE
+ * COMPOSER'S CARET (replacing a selection if there is one, appending at the end
+ * only when the composer has no insertion point) and — with live captions on —
+ * streamed in progressively while the user speaks. It is never auto-sent, and a
+ * cancelled recording leaves the composer exactly as it was. The full contract
+ * is `ui/docs/VOICE_DICTATION_COMPOSER.md`.
+ *
+ * Only recording CHROME lives in the toolbar (state dot, elapsed timer, Stop,
+ * Cancel, the live-captions toggle) — never transcript text.
+ *
+ * All state lives in VoiceStore (`Chat.VoiceStore`), whose `init` fetches the
+ * readiness capability so the button can hide/disable itself appropriately.
  */
 const voiceExtension: ChatExtension = createExtension({
   name: 'voice',

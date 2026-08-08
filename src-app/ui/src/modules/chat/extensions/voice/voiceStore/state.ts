@@ -28,12 +28,14 @@ export const voiceStoreState = {
   /** Last error message (surfaced to the user via the persistent live region). */
   errorMessage: null as string | null,
   /**
-   * The live interim caption (full stitched transcript-so-far) shown WHILE
-   * recording when live captions are on. Transient preview only — it is NEVER
-   * written to the composer; the authoritative transcript is inserted on stop.
+   * Per-device "Live captions" preference (opt-out to batch).
+   *
+   * ON → each interim decode is written straight into the composer while the
+   * user speaks (real-time dictation). OFF → nothing lands until Stop. There is
+   * deliberately no `interimText` state any more: the provisional transcript
+   * lives in the COMPOSER, which is the only place the user should have to look
+   * (`ui/docs/VOICE_DICTATION_COMPOSER.md` §3).
    */
-  interimText: '',
-  /** Per-device "Live captions" preference (opt-out to batch). */
   liveCaptions: false,
   /**
    * Discrete screen-reader announcement for the single persistent live region
