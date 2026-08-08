@@ -173,13 +173,28 @@ function ChatInputInner({
                 </Popover>
               </span>
             </Tooltip>
-            {/* NO `min-w-0` here either: this slot holds the `shrink-0` icon
-                buttons (mic / schedule / compact), so it must keep its automatic
-                content-derived minimum — with `min-w-0` it collapses to 0 and
-                those buttons overflow it, which is what made the mic
-                unclickable. The tips element inside contributes 0 (see the
-                keyboard extension), so this minimum is just the buttons. */}
-            <ExtensionSlot name="toolbar_actions" className="flex items-center gap-1" />
+            {/* STILL NO `min-w-0` here: this slot holds the `shrink-0` icon buttons
+                (mic / schedule / compact), so it must keep its automatic
+                content-derived minimum — with `min-w-0` it collapses to 0 and those
+                buttons overflow it, which is what made the mic unclickable. The tips
+                element inside contributes 0 (see the keyboard extension), so this
+                minimum is just the buttons.
+
+                `flex-1` (added here, and load-bearing) is what the tips need to be
+                visible AT ALL. They are `w-0 flex-1` — flex-BASIS 0, precisely so
+                they add nothing to that automatic minimum — and a zero-basis child
+                can only appear by GROWING into free space. A shrink-to-fit parent
+                has none: its content width is just the other children, so free space
+                is 0 and the child's `flex-1` grows into nothing. From bf1b0e9dd
+                (2026-07-27) until this fix the tips were therefore permanently 0px
+                and `chat-input-slots.spec.ts` was red the whole time.
+
+                `flex-1` alone is the right fix and `min-w-0` is NOT wanted: `flex-1`
+                is `flex: 1 1 0%`, which lets the slot grow into the group's free
+                space, while `min-width:auto` still floors it at the icon buttons'
+                min-content — so the mic stays clickable and the deficit still lands
+                on the model name, exactly as before. */}
+            <ExtensionSlot name="toolbar_actions" className="flex items-center gap-1 flex-1" />
           </div>
 
           {/* Right: model selector + send button. `shrink-0` sits on the SEND
