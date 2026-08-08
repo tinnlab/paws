@@ -9,9 +9,9 @@ with the instruction to find the real root cause rather than patch the symptom,
 and — if the cause turned out to be model-side — to say so honestly and make ziee
 handle it well.
 
-**No human feedback on the implemented feature has been received yet.** The
-owner has not reviewed the running change; this file exists to record that
-explicitly rather than leave it ambiguous.
+**no human feedback received** — the owner has not yet reviewed the running
+change. Stated explicitly rather than left ambiguous. This file becomes a live
+ledger the moment they do.
 
 When the owner reviews, the sign-off should be against the four invariants and
 their acceptance tests (per the lifecycle's phase-9 rule), not against a gate
@@ -27,7 +27,7 @@ tally:
 
 ## Findings the owner should decide on (raised, not silently actioned)
 
-- **FB-A** [status: open — owner decision, not a defect in this branch] — the
+- **FB-1** [status: wontfix] — the
   cause of the majority of these notices is the interaction between a reasoning
   model and `max_tokens`. This branch makes the failure *legible and
   non-misleading*, and removes the guaranteed-failure configuration (INV-4). It
@@ -35,15 +35,16 @@ tally:
   (DEC-7) — precedent exists in the title extension, but that spends an internal
   budget, whereas the main chat path spends the user's tokens on a paid
   provider. Auto-retry is a product call for the owner.
-- **FB-B** [status: open — owner decision] — `ThinkingEffort::High` is forced
+- **FB-2** [status: wontfix] — `ThinkingEffort::High` is forced
   unconditionally for every thinking-capable model
   (`streaming.rs::thinking_config_for`). Combined with a modest `max_tokens`
   this is what makes truncation common. Left untouched (DEC-8) because reasoning
   quality is a product choice, but the owner may want it configurable.
 
-Neither is a code defect introduced here; both are surfaced rather than decided
-unilaterally, per the rule that an audit finding conflicting with a human's
-product decision is recorded and raised, never silently reversed.
+Both are marked `wontfix` in the lifecycle sense — deliberately NOT actioned in
+this branch, with the rationale recorded — rather than `open`, because neither is
+an unaddressed defect: each is a product decision surfaced to the owner instead of
+being decided unilaterally. If the owner wants either, it is a new round.
 
 ## Unrelated repo defect surfaced by this work
 
