@@ -354,8 +354,11 @@ export interface ComposerPickerPopoverProps extends Omit<ComposerPickerPanelProp
    * CALLER rather than assembled from icon/label props here.
    *
    * Why the caller owns it: the generated static testid registry
-   * (`sdk/packages/kit/src/testIds.generated.ts`) only records literal
-   * `data-testid="…"` occurrences. Passing the id down as a prop would turn
+   * (`sdk/packages/kit/src/testIds.generated.ts`) only records testid
+   * attributes whose value is a literal string. (This sentence deliberately
+   * avoids spelling that attribute out with a quoted value: the registry
+   * scanner is a text scan, so an example written literally here would be
+   * harvested as a real id.) Passing the id down as a prop would turn
    * `assistant-menu-trigger` / `kb-menu-trigger` — the ids ~10 existing e2e specs
    * target — into template-derived ids and silently drop their compile-time
    * typo-check. Keeping the element at the call site keeps the literal where the

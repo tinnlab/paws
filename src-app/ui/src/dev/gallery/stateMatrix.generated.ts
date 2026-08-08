@@ -4,7 +4,7 @@
 // renders + overlay triggers + panel/slot registrations) that the reconciliation
 // gate (scripts/reconcile-state-matrix.mjs) checks the gallery entries against.
 //
-// 352 surfaces carry renderable-state signals; 2172 signals total.
+// 352 surfaces carry renderable-state signals; 2171 signals total.
 
 /** A signal is one mechanically-detected render fork (a state the surface can be in). */
 export interface StateSignal {
@@ -56,20 +56,10 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
   },
   "modules/assistant/chat-extension/components/AssistantMenuItem": {
     surface: "modules/assistant/chat-extension/components/AssistantMenuItem",
-    requiredStates: ["empty"],
+    requiredStates: [],
     signals: [
-      { kind: "branch", condition: "!canRead", line: 38 },
-      { kind: "branch", condition: "selectedAssistantId", line: 48 },
-      { kind: "empty", condition: "availableAssistants.length === 0", line: 57 },
-      { kind: "branch", condition: "dividerAfter", line: 147 },
-    ],
-  },
-  "modules/assistant/chat-extension/components/AssistantSelector": {
-    surface: "modules/assistant/chat-extension/components/AssistantSelector",
-    requiredStates: ["empty"],
-    signals: [
-      { kind: "branch", condition: "!canRead", line: 27 },
-      { kind: "empty", condition: "availableAssistants.length === 0", line: 41 },
+      { kind: "branch", condition: "!canRead", line: 44 },
+      { kind: "branch", condition: "selectedAssistantId", line: 54 },
     ],
   },
   "modules/assistant/chat-extension/components/AssistantStatusChip": {
@@ -362,6 +352,18 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
       { kind: "branch", condition: "collapsed", line: 197 },
     ],
   },
+  "modules/chat/components/ComposerPickerPopover": {
+    surface: "modules/chat/components/ComposerPickerPopover",
+    requiredStates: ["empty","open"],
+    signals: [
+      { kind: "branch", condition: "!item", line: 167 },
+      { kind: "branch", condition: "event.nativeEvent.isComposing", line: 178 },
+      { kind: "branch", condition: "!items.some(item => !item.pinned)", line: 229 },
+      { kind: "branch", condition: "items.length > 0", line: 233 },
+      { kind: "empty", condition: "filtered.length === 0", line: 280 },
+      { kind: "overlay", condition: "<Popover open>", line: 387 },
+    ],
+  },
   "modules/chat/components/ContentRenderer": {
     surface: "modules/chat/components/ContentRenderer",
     requiredStates: [],
@@ -508,7 +510,7 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/chat/components/PlusMenuItem",
     requiredStates: [],
     signals: [
-      { kind: "branch", condition: "trailing != null", line: 53 },
+      { kind: "branch", condition: "trailing != null", line: 55 },
     ],
   },
   "modules/chat/components/SplitChatView": {
@@ -2000,13 +2002,10 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
   },
   "modules/knowledge-base/chat-extension/components/KbMenuItem": {
     surface: "modules/knowledge-base/chat-extension/components/KbMenuItem",
-    requiredStates: ["empty"],
+    requiredStates: [],
     signals: [
-      { kind: "branch", condition: "!canUse", line: 47 },
-      { kind: "empty", condition: "kbs.length === 0", line: 65 },
-      { kind: "branch", condition: "kbs.length > 6", line: 84 },
-      { kind: "branch", condition: "status", line: 118 },
-      { kind: "empty", condition: "filtered.length === 0", line: 125 },
+      { kind: "branch", condition: "!canUse", line: 55 },
+      { kind: "branch", condition: "status", line: 80 },
     ],
   },
   "modules/knowledge-base/chat-extension/components/KbSourcePanel": {
@@ -4378,13 +4377,11 @@ export type StateMatrixSurface = keyof typeof STATE_MATRIX
  * `STATE_COVERAGE satisfies Record<RequiredState, StateCoverageEntry>`, so a
  * newly-extracted state with no entry is a compile error (mirrors how
  * galleryCoverage.generated.ts's `GallerySurface` gates coverage.ts).
- * 385 keys.
+ * 384 keys.
  */
 export type RequiredState =
   | "modules/agent/components/AgentSettingsSection:delayed"
   | "modules/agent/components/AgentSettingsSection:error"
-  | "modules/assistant/chat-extension/components/AssistantMenuItem:empty"
-  | "modules/assistant/chat-extension/components/AssistantSelector:empty"
   | "modules/assistant/components/AssistantFormDrawer:open"
   | "modules/assistant/pages/AssistantsSettings:delayed"
   | "modules/assistant/pages/AssistantsSettings:empty"
@@ -4416,6 +4413,8 @@ export type RequiredState =
   | "modules/background/components/BackgroundRunsPanel:error"
   | "modules/chat/components/ChatInput:open"
   | "modules/chat/components/ChatMessage:empty"
+  | "modules/chat/components/ComposerPickerPopover:empty"
+  | "modules/chat/components/ComposerPickerPopover:open"
   | "modules/chat/components/ConversationCard:open"
   | "modules/chat/components/ConversationFindBar:delayed"
   | "modules/chat/components/ConversationFindBar:empty"
@@ -4533,7 +4532,6 @@ export type RequiredState =
   | "modules/hub/modules/workflow/components/WorkflowsHubTab:empty"
   | "modules/js-tool/components/JsToolSettingsSection:delayed"
   | "modules/js-tool/components/JsToolSettingsSection:error"
-  | "modules/knowledge-base/chat-extension/components/KbMenuItem:empty"
   | "modules/knowledge-base/chat-extension/components/KbStatusRow:empty"
   | "modules/knowledge-base/chat-extension/components/SearchKnowledgeToolResultCard:empty"
   | "modules/knowledge-base/chat-extension/extension:panel-open"
@@ -4771,8 +4769,6 @@ export type RequiredState =
 export const REQUIRED_STATE_KEYS = [
   "modules/agent/components/AgentSettingsSection:delayed",
   "modules/agent/components/AgentSettingsSection:error",
-  "modules/assistant/chat-extension/components/AssistantMenuItem:empty",
-  "modules/assistant/chat-extension/components/AssistantSelector:empty",
   "modules/assistant/components/AssistantFormDrawer:open",
   "modules/assistant/pages/AssistantsSettings:delayed",
   "modules/assistant/pages/AssistantsSettings:empty",
@@ -4804,6 +4800,8 @@ export const REQUIRED_STATE_KEYS = [
   "modules/background/components/BackgroundRunsPanel:error",
   "modules/chat/components/ChatInput:open",
   "modules/chat/components/ChatMessage:empty",
+  "modules/chat/components/ComposerPickerPopover:empty",
+  "modules/chat/components/ComposerPickerPopover:open",
   "modules/chat/components/ConversationCard:open",
   "modules/chat/components/ConversationFindBar:delayed",
   "modules/chat/components/ConversationFindBar:empty",
@@ -4921,7 +4919,6 @@ export const REQUIRED_STATE_KEYS = [
   "modules/hub/modules/workflow/components/WorkflowsHubTab:empty",
   "modules/js-tool/components/JsToolSettingsSection:delayed",
   "modules/js-tool/components/JsToolSettingsSection:error",
-  "modules/knowledge-base/chat-extension/components/KbMenuItem:empty",
   "modules/knowledge-base/chat-extension/components/KbStatusRow:empty",
   "modules/knowledge-base/chat-extension/components/SearchKnowledgeToolResultCard:empty",
   "modules/knowledge-base/chat-extension/extension:panel-open",
