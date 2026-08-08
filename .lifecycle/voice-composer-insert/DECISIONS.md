@@ -43,8 +43,8 @@ one that would itself risk the "designed in isolation, fights its parent"
 finding class. Rejected as gold-plating.
 
 ### DEC-4: Does the "Live captions" toggle keep its name, icon and `aria-label` now that captions live in the composer?
-**Resolution (REVISED after the phase-6 audit):** the USER-FACING LABEL changes,
-the identity does not. Tooltip + `aria-label` become "Turn on/off live dictation
+**Resolution:** the USER-FACING LABEL changes, the identity does not — REVISED
+after the phase-6 audit. Tooltip + `aria-label` become "Turn on/off live dictation
 — show words in the message as you speak"; `data-testid="voice-live-toggle"`, the
 `Captions`/`CaptionsOff` icons, the `liveCaptions` state field and the
 `ziee.voice.liveCaptions` storage key all stay. The audit was right that a
@@ -110,9 +110,13 @@ rewrite. The genuinely operational voice tunables that DO exist
 admin-configurable rows in `voice_settings` and are untouched by this change.
 
 ### DEC-9: Should dictated text be written into the per-conversation draft store?
-**Resolution (REVISED after the phase-6 audit — both angles escalated it):**
-**Yes.** `applyComposerEdit` dispatches a native `input` event, so dictated text
-persists exactly as typed text does. The original resolution below was wrong on
+**Resolution:** **Yes** — REVISED after the phase-6 audit, which both angles
+escalated. `applyComposerEdit` writes through the textarea's PROTOTYPE value
+setter and dispatches a native `input` event, so dictated text persists exactly
+as typed text does. (A plain `el.value =` is not enough: it goes through React's
+own instance-level tracking setter, so the dispatched event is discarded as a
+no-op change. Verified on the running app — direct assign wrote no draft, the
+prototype setter wrote it. Covered by TEST-25.) The original resolution below was wrong on
 its own terms: it reasoned from "pre-existing, therefore not a regression", but
 this change makes dictation the composer's PRIMARY content producer, which turns
 "dictate a paragraph → switch conversation → come back → the draft-restore effect
