@@ -635,42 +635,151 @@ describe('TEST-18 — a blank first decode never resurrects deleted text', () =>
     // new draft, which is not what a real user's timing looks like.
     await settle(30)
     composerEl!.value = 'AAAAAAAAAAAAAAAAAAAA'
-    composerEl!.setSelectionRange(20, 20)
+    // Caret in the MIDDLE, not at the end: at the end it would coincide with
+    // the end-of-text fallback and the assertion could not tell the two apart.
+    composerEl!.setSelectionRange(10, 10)
     await settle(TICK * 2)
 
     // At the user's caret. Honouring the stale {5,8} would splice into the
-    // middle of text that has nothing to do with what they selected.
-    expect(composerEl!.value).toBe('AAAAAAAAAAAAAAAAAAAA Alice')
+    // middle of text that has nothing to do with what they selected; falling
+    // back to end-of-text would append.
+    expect(composerEl!.value).toBe('AAAAAAAAAA Alice AAAAAAAAAA')
   })
 })
 
 describe('TEST-20 — what a dropped transcript announces', () => {
-  test('a transcript discarded with its pane says so, and silence says "no speech"', async () => {
-    seedComposer('untouched draft', 0)
-    script.final = 'these words have nowhere to go'
-
+  const announceAfter = async (paneId: string | null, final: string) => {
+    script.final = final
     await act(async () => {
-      await engine.startRecording('pane-that-has-closed')
+      await engine.startRecording(paneId)
     })
     await act(async () => {
       await engine.stopRecording()
     })
     await settle(60)
-    expect(engineState.announcement).toBe(
+    return engineState.announcement
+  }
+
+  test('all three outcomes are announced distinctly', async () => {
+    seedComposer('untouched draft', 0)
+
+    // Pane OPEN, words → success. The positive control: without it, "discarded"
+    // could be the announcement for everything and this would still pass.
+    expect(await announceAfter(null, 'words that land')).toBe('Transcript added')
+
+    // Pane GONE, words → the words were dropped, and the user is told so.
+    expect(await announceAfter('pane-that-has-closed', 'nowhere to go')).toBe(
       'Transcript discarded — the conversation was closed',
     )
 
-    // …but a genuinely EMPTY transcript is "no speech", even when the pane is
-    // gone: there was nothing to discard.
-    script.final = ''
+    // Pane GONE, but NOTHING was said → "no speech", not "discarded". There was
+    // nothing to discard, and this is the leg that discriminates the ternary's
+    // ORDER rather than merely its branches.
+    expect(await announceAfter('pane-that-has-closed', '')).toBe(
+      'No speech detected',
+    )
+  })
+})
+
+describe('TEST-23 — a stale CARET anchor is never consulted', () => {
+  test('interim words go to the live caret after the draft is replaced', async () => {
+    // The case no "does the anchor still hold its text?" guard can catch: for a
+    // bare caret the captured text is '', and `value.slice(n, n) === ''` for
+    // ANY in-range n — so a wholly replaced draft still "holds". The only
+    // correct source for a caret is the composer itself.
+    seedComposer('one two three', 13) // caret at the end, nothing selected
+    script.interim = ['DICTATED']
+
     await act(async () => {
-      await engine.startRecording('pane-that-has-closed')
+      await engine.startRecording(null)
     })
+    await settle(30) // let record-start's deferred caret restore land
+    composerEl!.value = 'supercalifragilistic'
+    composerEl!.setSelectionRange(0, 0)
+    await settle(TICK * 2)
+
+    // At the user's caret. Consulting the stale caret anchor (13) would splice
+    // into the middle of a word that did not exist when recording started.
+    expect(composerEl!.value).toBe('DICTATED supercalifragilistic')
+  })
+})
+
+describe('TEST-21 — the FINAL transcript always lands where the user is', () => {
+  test('with live captions off, a replaced draft gets the words at the live caret', async () => {
+    // No span is ever created with captions off, so nothing this session
+    // remembers may override the composer's own selection. Reading a
+    // record-start anchor here spliced the transcript into the middle of an
+    // unrelated word.
+    await act(async () => {
+      await engine.setLiveCaptions(false)
+    })
+    seedComposer('one two three', 13)
+
+    await act(async () => {
+      await engine.startRecording(null)
+    })
+    await settle(30)
+    // The user selects all and retypes something completely different.
+    composerEl!.value = 'supercalifragilistic'
+    composerEl!.setSelectionRange(0, 0)
+
+    script.final = 'INSERTED'
     await act(async () => {
       await engine.stopRecording()
     })
     await settle(60)
-    expect(engineState.announcement).toBe('No speech detected')
+
+    expect(composerEl!.value).toBe('INSERTED supercalifragilistic')
+  })
+
+  test('the final transcript leaves the caret after the words, not where the user was', async () => {
+    // `final` exists so Stop overrides the mid-recording rule that the user's
+    // caret wins: after Stop they continue from the end of what was dictated.
+    seedComposer('draft here', 10)
+    script.interim = ['one']
+    script.final = 'one two'
+
+    await act(async () => {
+      await engine.startRecording(null)
+    })
+    await settle(TICK * 2)
+    // The user parks the caret at the very start while dictation runs, and Stop
+    // follows immediately — no settle in between, or an interim tick could move
+    // the caret and this would be measuring timing rather than the `final` rule.
+    composerEl!.setSelectionRange(0, 0)
+    await act(async () => {
+      await engine.stopRecording()
+    })
+    await settle(60)
+
+    expect(composerEl!.value).toBe('draft here one two')
+    expect(composerEl!.value.slice(0, composerEl!.selectionStart)).toBe(
+      'draft here one two',
+    )
+  })
+})
+
+describe('TEST-22 — a blank decode keeps cancel able to restore the selection', () => {
+  test('cancel after a blank decode still re-selects the original word', async () => {
+    seedComposer('call Bob tomorrow', 5, 8) // "Bob" selected
+    script.interim = ['Alice', '']
+
+    await act(async () => {
+      await engine.startRecording(null)
+    })
+    await settle(TICK)
+    expect(composerEl!.value).toBe('call Alice tomorrow')
+    await settle(TICK * 2)
+    expect(composerEl!.value).toBe('call Bob tomorrow')
+
+    await act(async () => {
+      engine.cancelRecording()
+    })
+    await settle(30)
+
+    expect(composerEl!.value).toBe('call Bob tomorrow')
+    const after = snapshot()
+    expect(after.value.slice(after.start, after.end)).toBe('Bob')
   })
 })
 

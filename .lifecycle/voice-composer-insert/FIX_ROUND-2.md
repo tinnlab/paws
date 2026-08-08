@@ -129,4 +129,4 @@ levels; beyond that it returns null and the caller fails loudly.
 | M11 — restore the cross-pane fallback | closed-pane test **RED** |
 | M9 — delete the non-finite guard | NaN-selection test **RED** |
 
-**New confirmed findings:** (round-3 blind re-audit pending)
+**New confirmed findings:** 6 — found by the round-3 blind re-audit (see FIX_ROUND-3.md): one HIGH regression this round introduced, plus untested live behaviour it added.

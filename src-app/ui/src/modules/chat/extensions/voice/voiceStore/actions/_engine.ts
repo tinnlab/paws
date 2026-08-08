@@ -222,13 +222,22 @@ let dictation: DictationSession | null = null
 /**
  * Resolve the span the next write should replace, or null if we must detach.
  *
- * Once the session owns a span, that span is RELOCATED (and detaches if the
- * user edited it away). Before the first write there is no such guard, and the
- * record-start anchor can be arbitrarily stale — the user may have edited or
- * cleared the draft while the first second of audio was decoding. So the anchor
- * is only honoured while it still holds exactly the text captured with it;
- * otherwise dictation goes where the user is NOW rather than splicing over
- * whatever happens to occupy those offsets.
+ * Two cases, and deliberately only two:
+ *
+ *  - the session OWNS a span (it has written words into the composer) → relocate
+ *    it, detaching if the user edited those words away;
+ *  - it owns nothing → write at the composer's LIVE caret/selection.
+ *
+ * There is deliberately NO third case reading the record-start anchor. Four
+ * consecutive audit rounds each found a defect in exactly that third case, in
+ * the same shape every time: an anchor captured seconds earlier goes stale, and
+ * every guard against staleness is either incomplete or — for a bare caret,
+ * where `value.slice(n, n) === ''` for any in-range `n` — outright vacuous. The
+ * anchor was never needed here anyway: nothing has overwritten the user's
+ * selection until dictation itself does, and once it has, `session.span` is the
+ * thing to relocate. The DOM already holds the live insertion point, and §3
+ * rule 7 says the user's current position wins. `session.anchor`/`anchorText`
+ * survive for exactly one purpose — knowing what to put BACK on cancel.
  */
 function resolveWriteSpan(
   session: DictationSession,
@@ -236,12 +245,6 @@ function resolveWriteSpan(
   store: ComposerAccess,
 ): ComposerSpan | null {
   if (session.span) return relocateSpan(value, session.span, session.written)
-  const anchor = session.anchor
-  const stillHolds =
-    anchor !== null &&
-    anchor.end <= value.length &&
-    value.slice(anchor.start, anchor.end) === session.anchorText
-  if (stillHolds) return anchor
   return store.getSelection() ?? { start: value.length, end: value.length }
 }
 
@@ -250,14 +253,14 @@ function resolveWriteSpan(
  * wrote before it. Returns the caret to leave behind, or null when nothing was
  * written (the session detached, or its pane closed).
  *
- * `final` places the caret after the transcript unconditionally — on Stop the
- * user continues from where the words ended; mid-recording the user's own caret
- * wins instead (§3 rule 7).
+ * The caret it APPLIES follows §3 rule 7 (the user's own caret wins if they are
+ * editing elsewhere); the caret it RETURNS is always the position after the
+ * transcript, which is what the terminal paths hand to `focusComposer` so the
+ * user continues from where the words ended.
  */
 function writeDictation(
   session: DictationSession,
   transcript: string,
-  opts: { final?: boolean } = {},
 ): ComposerSpan | null {
   if (session.detached) return null
   const store = ownerTextStore(session.paneId)
@@ -272,7 +275,7 @@ function writeDictation(
     // anchor's text over whatever now occupies those offsets: select a word,
     // start recording, clear the composer, and the common empty first decode
     // would resurrect the word the user just deleted.
-    if (!session.span) return session.anchor ?? currentCaret(store, value)
+    if (!session.span) return currentCaret(store, value)
 
     const span = relocateSpan(value, session.span, session.written)
     if (!span) {
@@ -282,13 +285,23 @@ function writeDictation(
     const before = store.getSelection()
     const edit = restoreSpan(value, span, session.anchorText)
     store.applyEdit(edit.value, ...nextSelection(before, span, edit))
-    // Back to "nothing written". Re-anchor to where the restored text actually
-    // sits (the user may have typed before it), and DROP the span so the
-    // session stops claiming the user's own restored word as its own — which
-    // would otherwise let a duplicate of that word detach the session.
+    // The composer now holds the anchor's original text again.
+    //
+    // Keep TRACKING it when it is a real selection: that is what lets a later
+    // cancel re-select exactly what the user had selected, and what lets the
+    // next decode replace it rather than appending beside it. A bare caret
+    // leaves nothing to track — there is no text to relocate, and a
+    // zero-length span would "relocate" successfully to stale offsets forever,
+    // which is the vacuous-guard trap this module keeps falling into. So drop
+    // it and let the live caret speak.
     session.anchor = { start: edit.start, end: edit.end }
-    session.span = null
-    session.written = ''
+    if (session.anchorText) {
+      session.span = { start: edit.start, end: edit.end }
+      session.written = session.anchorText
+    } else {
+      session.span = null
+      session.written = ''
+    }
     return { start: edit.end, end: edit.end }
   }
 
@@ -297,21 +310,17 @@ function writeDictation(
     session.detached = true
     return null
   }
-  // No clamping needed, and deliberately none: `resolveWriteSpan` returns only
-  // in-range spans — a relocated span was found IN this value, an honoured
-  // anchor was bounds-checked, and the fallbacks are the live selection or the
-  // end of the text. A defensive clamp here would be unreachable (§15), and
-  // worse, it would silently diverge from the normalization `spliceTranscript`
-  // applies (which also orders the span and widens it off surrogate
-  // boundaries), so `nextSelection` would compare against a third, different
-  // span. One source of truth instead.
+  // No clamping, deliberately: `resolveWriteSpan` returns only in-range spans —
+  // a relocated span was found IN this value, and the fallbacks are the live
+  // selection or the end of the text. A defensive clamp would be unreachable
+  // (§15). Note `spliceTranscript` still applies its own `normalizeSpan`
+  // (ordering + surrogate widening) internally, so on an astral character the
+  // span `nextSelection` compares against can differ from the spliced one by a
+  // code unit; that is a caret-placement nicety, never a correctness issue.
   const span = raw
   const before = store.getSelection()
   const edit = spliceTranscript(value, span, transcript)
-  const caret: [number, number] = opts.final
-    ? [edit.caret, edit.caret]
-    : nextSelection(before, span, edit)
-  store.applyEdit(edit.value, ...caret)
+  store.applyEdit(edit.value, ...nextSelection(before, span, edit))
   session.span = { start: edit.start, end: edit.end }
   session.written = edit.value.slice(edit.start, edit.end)
   return { start: edit.caret, end: edit.caret }
@@ -385,9 +394,10 @@ function restoreDictation(session: DictationSession): ComposerSpan | null {
  *  1. a live session that streamed words in → the final transcript REPLACES
  *     exactly those words, so the provisional wording never survives alongside
  *     the authoritative one;
- *  2. otherwise (live captions off, or the session detached because the user
- *     edited our text) → insert at the composer's CURRENT insertion point,
- *     which is where the user actually is now;
+ *  2. otherwise (live captions off, so nothing was ever streamed in; or the
+ *     session detached because the user edited our text) → insert at the
+ *     composer's CURRENT insertion point, replacing a live selection, which is
+ *     where the user actually is now;
  *  3. no insertion point at all → append at the end (INV-5).
  */
 function commitTranscript(
@@ -399,16 +409,18 @@ function commitTranscript(
   // splice absolute offsets into whatever composer happens to be focused.
   if (!store) return undefined
 
+  // Only a session that OWNS a span knows something the DOM does not — namely
+  // which characters are ITS provisional words, to be replaced rather than
+  // appended to. With live captions off no span is ever created, and the
+  // composer's own selection is then the authority (it still holds whatever the
+  // user selected, because nothing has overwritten it).
   const session = dictation && !dictation.detached ? dictation : null
-  if (session) {
-    // The session knows where the words belong: over the span it streamed in,
-    // or (if none) over its anchor — which `resolveWriteSpan` re-checks and
-    // abandons in favour of the user's current caret if they have moved on.
-    const caret = writeDictation(session, transcript, { final: true })
+  if (session?.span) {
+    const caret = writeDictation(session, transcript)
     if (caret) return caret
   }
 
-  // Detached, or no session: insert at wherever the user is now.
+  // No provisional span, or detached: insert at wherever the user is now.
   const value = store.getText()
   if (!transcript) return currentCaret(store, value)
   const edit = insertTranscript(value, store.getSelection(), transcript)
