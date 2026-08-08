@@ -1,0 +1,9 @@
+# DRIFT-1 — implementation vs plan (authored live during phase 5)
+
+- **DRIFT-1.1** — verdict: impl-wins — TESTS.md enumerated the e2e specs under `src-app/ui/tests/e2e/02-chat/`. The real chat e2e directory in this tree is `src-app/ui/tests/e2e/chat/` (verified by `ls`; `02-chat` does not exist — the numbered prefixes in `tests/e2e/` are used for some suites, e.g. `07-mcp`, but chat is unnumbered). PLAN/TESTS amended to the real path for TEST-4 and TEST-11. No behavioural change; the plan was simply wrong about the location.
+
+- **DRIFT-1.2** — verdict: impl-wins — TESTS.md/PLAN scoped the persisted completion-state vocabulary (DEC-2) to two values (`budget_truncated`, `empty`), but TEST-3 was enumerated as distinguishing three causes including *aborted*. The measured corpus makes the third value load-bearing: 320 of the 680 affected messages (47%) persisted zero blocks, and **315 of those 320 are the last message in their branch** — i.e. aborted/abandoned streams. The server already emits `finish_reason: "cancelled"` on the wire for these (`streaming.rs:983`) but persists nothing, so the frontend's `interrupted` suppression works live and then FAILS after reload (`lastTurnInterrupted` resets to `false` in `state.ts:18` / `loadConversation.ts:75`), which is exactly how an aborted turn comes to render "the model returned an empty response". Vocabulary extended to three values (`budget_truncated | empty | aborted`); DEC-2 amended.
+
+- **DRIFT-1.3** — verdict: impl-wins — TESTS.md assumed the e2e budget-truncated turn could be driven through the existing `OaiStubServer` helper. That helper is purpose-built for a scripted TOOL CALL (`tests/e2e/helpers/oai-stub-server.ts`) and is consumed by another spec, so bending it into a reasoning/truncation shape would be a shared-harness edit (rule B3). A NEW sibling helper is added instead, leaving the existing one untouched.
+
+**Unresolved drifts:** 0

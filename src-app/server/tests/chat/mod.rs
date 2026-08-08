@@ -36,6 +36,12 @@ mod stream_tool_timing_test;
 // Tier-2 ai-providers consumer-wiring tests on the request-capturing,
 // scriptable in-process OpenAI stub (`common::stub_chat`).
 mod stub_chat_tier2_test;
+// TEST-2 + TEST-10 (empty-model-response): an answerless turn's CAUSE survives
+// to the client (the provider's `length` is no longer overwritten) and across a
+// reload (it is persisted on `messages.completion_state`); an answered turn
+// persists nothing. Carries its own finish-reason-forcing OpenAI stub — see the
+// file header for why neither shared harness can drive a main-path `length`.
+mod empty_completion_cause_test;
 // Assistant chat-extension injects the assistant's `instructions` into the LLM
 // request as a labeled system message (asserted on the captured wire request),
 // + the cross-user private-assistant scoping guard.

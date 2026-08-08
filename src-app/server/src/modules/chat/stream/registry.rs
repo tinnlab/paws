@@ -558,6 +558,7 @@ mod tests {
             conv,
             SSEChatStreamEvent::Complete(SSEChatStreamCompleteData {
                 finish_reason: "stop".into(),
+                completion_state: None,
                 usage: None,
             }),
         )

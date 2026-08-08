@@ -541,6 +541,10 @@ pub async fn start_generation_agent_core(
                                 finish_reason:
                                     crate::modules::chat::agent_host::event_sink::ChatEventSink::finish_reason(reason)
                                         .to_string(),
+                                // The opt-in agent-core loop does not classify
+                                // answerless turns yet; the legacy streaming path
+                                // owns that signal (ITEM-1).
+                                completion_state: None,
                                 usage: crate::modules::chat::agent_host::event_sink::ChatEventSink::fold_usage(acc),
                             },
                         ),

@@ -1,0 +1,42 @@
+-- Persist WHY an assistant turn ended with no user-visible answer (ITEM-2).
+--
+-- A "answerless" turn — one that persisted only a `thinking` block, or no
+-- blocks at all — is rendered by the frontend as an inline notice. Until now the
+-- CAUSE was destroyed: the streaming service OVERWROTE the provider's terminal
+-- finish reason with the literal "empty", and nothing about the turn's
+-- termination was ever persisted. On reload the UI re-derived "empty" from the
+-- content blocks alone, so a budget-truncated turn (the model spent its whole
+-- completion budget on reasoning and was cut off) and a genuinely-empty turn
+-- (the model had nothing to say) were indistinguishable even in principle.
+--
+-- `completion_state` records the classification, written in the SAME transaction
+-- that persists the turn's content blocks so the blocks and the state can never
+-- disagree. The vocabulary is a CLOSED set, written only by the server:
+--
+--   'budget_truncated' — the provider ended on a length/budget exhaustion
+--                        (OpenAI `length`, Anthropic `max_tokens`,
+--                        Gemini `MAX_TOKENS`) AND the turn produced no
+--                        user-visible answer. An identical retry re-truncates
+--                        deterministically; the corrective action is to raise
+--                        the model's max_tokens or lower reasoning effort.
+--   'aborted'          — the stream was CANCELLED / abandoned before the turn
+--                        produced a user-visible answer. The client suppresses
+--                        the notice live via a transient in-memory flag, but
+--                        that flag resets on reload — which is why the fact
+--                        must be persisted. ~47% of the measured notices.
+--   'empty'            — the turn terminated normally AND produced no
+--                        user-visible answer. The model genuinely had nothing
+--                        to say; a retry is reasonable.
+--
+-- NULL means "healthy turn" (or a row written before this column existed).
+-- Deliberately NO backfill (DEC-3): the cause is not recoverable for historical
+-- rows — the provider reason was overwritten and never stored — so any backfill
+-- would be a guess. Pre-existing answerless rows keep NULL and render the
+-- generic copy.
+--
+-- Read back with a from_str-style parse that DEFAULTS on an unrecognized value
+-- (CODING_GUIDELINES §4: never unwrap() on a DB enum string), so widening the
+-- vocabulary later cannot panic an older reader.
+
+ALTER TABLE public.messages
+    ADD COLUMN completion_state text;

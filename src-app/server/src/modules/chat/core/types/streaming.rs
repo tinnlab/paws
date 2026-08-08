@@ -30,8 +30,21 @@ pub struct ChatStreamChunk {
     pub branch_id: Option<Uuid>,
 
     /// Finish reason (when stream completes)
+    ///
+    /// This is the PROVIDER's terminal reason, canonicalized through
+    /// `ai_providers::FinishReason` (`stop` / `length` / `tool_calls` /
+    /// `content_filter` / …). It is never overwritten to describe the turn's
+    /// *outcome* — INV-2. "This turn produced no user-visible answer" travels
+    /// separately, on `completion_state`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finish_reason: Option<String>,
+
+    /// Why the turn ended with NO user-visible answer, when it did (ITEM-1 /
+    /// DEC-1). `None` on every healthy turn and on every non-terminal chunk.
+    /// Set ALONGSIDE `finish_reason`, never in place of it, so the truncation
+    /// cause and the provider's reason both survive to the client.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_state: Option<crate::modules::chat::core::models::CompletionState>,
 
     /// Usage metadata (when stream completes)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -156,8 +169,16 @@ pub struct SSEChatStreamStartedData {
 /// Data for the Complete SSE event
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct SSEChatStreamCompleteData {
-    /// Finish reason
+    /// Finish reason — the PROVIDER's canonicalized terminal reason
+    /// (`stop` / `length` / …), or `cancelled` when the client stopped the
+    /// turn. Never overwritten to describe the outcome (INV-2).
     pub finish_reason: String,
+
+    /// Why the turn ended with NO user-visible answer, when it did. Carried
+    /// alongside `finish_reason` rather than replacing it (ITEM-1 / DEC-1);
+    /// `None` on every healthy turn.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_state: Option<crate::modules::chat::core::models::CompletionState>,
 
     /// Usage metadata
     #[serde(skip_serializing_if = "Option::is_none")]

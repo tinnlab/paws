@@ -3153,6 +3153,9 @@
           "204": {
             "description": "Provider assigned to group successfully"
           },
+          "400": {
+            "description": "Bad request — unknown group id"
+          },
           "401": {
             "description": "Unauthorized"
           }
@@ -15034,7 +15037,7 @@
             "description": "Server assigned successfully"
           },
           "400": {
-            "description": "Bad request - only system servers can be assigned to groups"
+            "description": "Bad request - only system servers can be assigned to groups, or an unknown group id"
           },
           "401": {
             "description": "Unauthorized"
@@ -20032,7 +20035,7 @@
             "description": "Assignments updated"
           },
           "400": {
-            "description": "Bad request — non-system scope"
+            "description": "Bad request — non-system scope, or an unknown group id"
           },
           "401": {
             "description": "Unauthorized"
@@ -22273,7 +22276,7 @@
             "description": "Assignments updated"
           },
           "400": {
-            "description": "Bad request — non-system scope"
+            "description": "Bad request — non-system scope, or an unknown group id"
           },
           "401": {
             "description": "Unauthorized"
@@ -28028,6 +28031,17 @@
             ],
             "format": "uuid"
           },
+          "completion_state": {
+            "description": "Why the turn ended with NO user-visible answer, when it did (ITEM-1 /\n DEC-1). `None` on every healthy turn and on every non-terminal chunk.\n Set ALONGSIDE `finish_reason`, never in place of it, so the truncation\n cause and the provider's reason both survive to the client.",
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CompletionState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "content": {
             "description": "Content block deltas",
             "type": "array",
@@ -28055,7 +28069,7 @@
             ]
           },
           "finish_reason": {
-            "description": "Finish reason (when stream completes)",
+            "description": "Finish reason (when stream completes)\n\n This is the PROVIDER's terminal reason, canonicalized through\n `ai_providers::FinishReason` (`stop` / `length` / `tool_calls` /\n `content_filter` / …). It is never overwritten to describe the turn's\n *outcome* — INV-2. \"This turn produced no user-visible answer\" travels\n separately, on `completion_state`.",
             "type": [
               "string",
               "null"
@@ -28434,6 +28448,26 @@
             "default": null
           }
         }
+      },
+      "CompletionState": {
+        "description": "Why an assistant turn ended with NO user-visible answer (ITEM-2 / DEC-2).\n\n A closed, server-written vocabulary persisted on `messages.completion_state`\n and echoed on the terminal stream frame. `None` (SQL NULL) is the healthy\n case — the overwhelming majority of turns — so the classification exists\n ONLY for a turn that produced no text, no tool call and no attachment.\n\n This is deliberately NOT the provider's finish reason: the provider\n vocabulary lives in `ai_providers::FinishReason` and travels intact\n alongside this field (INV-2). Classifying server-side keeps per-provider\n spellings out of the frontend.",
+        "oneOf": [
+          {
+            "description": "The provider ended on a length/budget exhaustion (OpenAI `length`,\n Anthropic `max_tokens`, Gemini `MAX_TOKENS`) AND the turn produced no\n user-visible answer — characteristically a reasoning model that spent\n its whole completion budget on hidden reasoning. An identical retry\n re-truncates deterministically.",
+            "type": "string",
+            "const": "budget_truncated"
+          },
+          {
+            "description": "The stream was CANCELLED / abandoned before the turn produced a\n user-visible answer (the consumer navigated away, or hit stop). Measured\n on the live rig this is ~47% of the notices: 315 of the 320 zero-block\n answerless messages are the LAST message in their branch. The frontend\n already suppresses the notice LIVE via a transient `lastTurnInterrupted`\n flag, but that flag resets on reload — which is exactly why the fact has\n to be persisted here.",
+            "type": "string",
+            "const": "aborted"
+          },
+          {
+            "description": "The turn terminated normally AND produced no user-visible answer — the\n model genuinely had nothing to say.",
+            "type": "string",
+            "const": "empty"
+          }
+        ]
       },
       "ConfigField": {
         "description": "A non-secret config field a provider needs — drives the generic admin UI.",
@@ -36672,6 +36706,13 @@
         "description": "Message entity - Represents a single message in a conversation\n Messages belong to branches via the branch_messages junction table",
         "type": "object",
         "properties": {
+          "completion_state": {
+            "description": "Why this assistant turn ended with no user-visible answer, or `None` for\n a healthy turn (see [`CompletionState`]). Stored as the raw column text\n — mirroring how `role` is carried as a `String` with a parsing accessor\n ([`Message::completion_state_enum`]) — so an unrecognized value degrades\n instead of failing the whole row's decode.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "created_at": {
             "type": "string",
             "format": "date-time"
@@ -37198,6 +37239,13 @@
         "description": "Message with its content blocks",
         "type": "object",
         "properties": {
+          "completion_state": {
+            "description": "Why this assistant turn ended with no user-visible answer, or `None` for\n a healthy turn (see [`CompletionState`]). Stored as the raw column text\n — mirroring how `role` is carried as a `String` with a parsing accessor\n ([`Message::completion_state_enum`]) — so an unrecognized value degrades\n instead of failing the whole row's decode.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "contents": {
             "type": "array",
             "items": {
@@ -40115,8 +40163,19 @@
         "description": "Data for the Complete SSE event",
         "type": "object",
         "properties": {
+          "completion_state": {
+            "description": "Why the turn ended with NO user-visible answer, when it did. Carried\n alongside `finish_reason` rather than replacing it (ITEM-1 / DEC-1);\n `None` on every healthy turn.",
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CompletionState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "finish_reason": {
-            "description": "Finish reason",
+            "description": "Finish reason — the PROVIDER's canonicalized terminal reason\n (`stop` / `length` / …), or `cancelled` when the client stopped the\n turn. Never overwritten to describe the outcome (INV-2).",
             "type": "string"
           },
           "usage": {

@@ -522,13 +522,28 @@ export interface ChangePasswordRequest {
 export interface ChatStreamChunk {
   /** Branch ID (sent in first chunk) */
   branch_id?: string
+  /**
+   * Why the turn ended with NO user-visible answer, when it did (ITEM-1 /
+   *  DEC-1). `None` on every healthy turn and on every non-terminal chunk.
+   *  Set ALONGSIDE `finish_reason`, never in place of it, so the truncation
+   *  cause and the provider's reason both survive to the client.
+   */
+  completion_state?: CompletionState
   /** Content block deltas */
   content?: ContentBlockDelta[]
   /** Conversation ID (sent in first chunk) */
   conversation_id?: string
   /** Error information */
   error?: StreamError
-  /** Finish reason (when stream completes) */
+  /**
+   * Finish reason (when stream completes)
+   *
+   *  This is the PROVIDER's terminal reason, canonicalized through
+   *  `ai_providers::FinishReason` (`stop` / `length` / `tool_calls` /
+   *  `content_filter` / …). It is never overwritten to describe the turn's
+   *  *outcome* — INV-2. "This turn produced no user-visible answer" travels
+   *  separately, on `completion_state`.
+   */
   finish_reason?: string
   /** Message ID (sent in first chunk) */
   message_id?: string
@@ -690,6 +705,21 @@ export interface CompactConversationRequest {
    */
   focus?: string
 }
+
+/**
+ * Why an assistant turn ended with NO user-visible answer (ITEM-2 / DEC-2).
+ *
+ *  A closed, server-written vocabulary persisted on `messages.completion_state`
+ *  and echoed on the terminal stream frame. `None` (SQL NULL) is the healthy
+ *  case — the overwhelming majority of turns — so the classification exists
+ *  ONLY for a turn that produced no text, no tool call and no attachment.
+ *
+ *  This is deliberately NOT the provider's finish reason: the provider
+ *  vocabulary lives in `ai_providers::FinishReason` and travels intact
+ *  alongside this field (INV-2). Classifying server-side keeps per-provider
+ *  spellings out of the frontend.
+ */
+export type CompletionState = 'budget_truncated' | 'aborted' | 'empty'
 
 /** A non-secret config field a provider needs — drives the generic admin UI. */
 export interface ConfigField {
@@ -3917,6 +3947,14 @@ export interface MemoryUsage {
  *  Messages belong to branches via the branch_messages junction table
  */
 export interface Message {
+  /**
+   * Why this assistant turn ended with no user-visible answer, or `None` for
+   *  a healthy turn (see [`CompletionState`]). Stored as the raw column text
+   *  — mirroring how `role` is carried as a `String` with a parsing accessor
+   *  ([`Message::completion_state_enum`]) — so an unrecognized value degrades
+   *  instead of failing the whole row's decode.
+   */
+  completion_state?: string
   created_at: string
   edit_count: number
   id: string
@@ -4108,6 +4146,14 @@ export interface MessageSearchResults {
 
 /** Message with its content blocks */
 export interface MessageWithContent {
+  /**
+   * Why this assistant turn ended with no user-visible answer, or `None` for
+   *  a healthy turn (see [`CompletionState`]). Stored as the raw column text
+   *  — mirroring how `role` is carried as a `String` with a parsing accessor
+   *  ([`Message::completion_state_enum`]) — so an unrecognized value degrades
+   *  instead of failing the whole row's decode.
+   */
+  completion_state?: string
   contents: MessageContent[]
   created_at: string
   edit_count: number
@@ -5245,7 +5291,17 @@ export interface SSEChatStreamArtifactCreatedData {
 
 /** Data for the Complete SSE event */
 export interface SSEChatStreamCompleteData {
-  /** Finish reason */
+  /**
+   * Why the turn ended with NO user-visible answer, when it did. Carried
+   *  alongside `finish_reason` rather than replacing it (ITEM-1 / DEC-1);
+   *  `None` on every healthy turn.
+   */
+  completion_state?: CompletionState
+  /**
+   * Finish reason — the PROVIDER's canonicalized terminal reason
+   *  (`stop` / `length` / …), or `cancelled` when the client stopped the
+   *  turn. Never overwritten to describe the outcome (INV-2).
+   */
   finish_reason: string
   /** Usage metadata */
   usage?: Usage

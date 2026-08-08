@@ -40,6 +40,7 @@ pub async fn create_message(
                   originated_from_id as "originated_from_id!",
                   edit_count,
                   model_id as "model_id: _",
+                  completion_state,
                   created_at as "created_at: _"
         "#,
         message_id,
@@ -77,6 +78,7 @@ pub async fn get_message(pool: &PgPool, id: Uuid) -> Result<Option<Message>, App
                originated_from_id as "originated_from_id!",
                edit_count,
                model_id as "model_id: _",
+               completion_state,
                created_at as "created_at: _"
         FROM messages
         WHERE id = $1
@@ -122,6 +124,7 @@ pub async fn list_messages_in_branch(
                m.originated_from_id as "originated_from_id!",
                m.edit_count,
                m.model_id as "model_id: _",
+               m.completion_state,
                m.created_at as "created_at: _"
         FROM messages m
         INNER JOIN branch_messages bm ON m.id = bm.message_id
@@ -216,6 +219,7 @@ async fn fetch_tail_desc(
                m.originated_from_id as "originated_from_id!",
                m.edit_count,
                m.model_id as "model_id: _",
+               m.completion_state,
                m.created_at as "created_at: _"
         FROM messages m
         INNER JOIN branch_messages bm ON m.id = bm.message_id
@@ -247,6 +251,7 @@ async fn fetch_before_desc(
                m.originated_from_id as "originated_from_id!",
                m.edit_count,
                m.model_id as "model_id: _",
+               m.completion_state,
                m.created_at as "created_at: _"
         FROM messages m
         INNER JOIN branch_messages bm ON m.id = bm.message_id
@@ -281,6 +286,7 @@ async fn fetch_after_asc(
                m.originated_from_id as "originated_from_id!",
                m.edit_count,
                m.model_id as "model_id: _",
+               m.completion_state,
                m.created_at as "created_at: _"
         FROM messages m
         INNER JOIN branch_messages bm ON m.id = bm.message_id
@@ -611,6 +617,7 @@ pub async fn edit_message(
                originated_from_id as "originated_from_id!",
                edit_count,
                model_id as "model_id: _",
+               completion_state,
                created_at as "created_at: _"
         FROM messages
         WHERE id = $1
@@ -681,6 +688,7 @@ pub async fn edit_message(
                   originated_from_id as "originated_from_id!",
                   edit_count,
                   model_id as "model_id: _",
+                  completion_state,
                   created_at as "created_at: _"
         "#,
         new_message_id,

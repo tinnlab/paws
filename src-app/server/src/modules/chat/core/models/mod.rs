@@ -10,5 +10,5 @@ pub mod streaming; // Empty module, kept for organization
 pub use branch::Branch;
 pub use content::{MessageContent, MessageContentData};
 pub use conversation::Conversation;
-pub use message::{Message, MessageRole};
+pub use message::{CompletionState, Message, MessageRole};
 // StreamContext is in extension module, not here

@@ -767,6 +767,7 @@ mod after_llm_call_tests {
             originated_from_id: uuid::Uuid::new_v4(),
             edit_count: 0,
             model_id: None,
+            completion_state: None,
             created_at: chrono::Utc::now(),
         }
     }

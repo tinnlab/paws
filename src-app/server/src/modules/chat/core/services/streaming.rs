@@ -223,6 +223,7 @@ impl StreamingService {
                         conversation_id: Some(conversation_id),
                         branch_id: Some(branch_id),
                         finish_reason: Some("max_iterations".to_string()),
+                        completion_state: None,
                         usage: None,
                         error: Some(crate::modules::chat::core::types::StreamError {
                             message: "Maximum tool calling iterations exceeded".to_string(),
@@ -381,11 +382,16 @@ impl StreamingService {
                 // source of the parameter contract. The adapter falls back to the
                 // curated catalog + provider model-family policy when a field is unset.
                 chat_request.model_caps = Some(model_caps.to_param_contract());
-                // Thinking resolved from the row → catalog → family policy.
+                // Thinking resolved from the row → catalog → family policy, with
+                // its budget clamped strictly below the completion budget
+                // `apply_model_params` just resolved (INV-4) — otherwise a
+                // reasoning model can spend the ENTIRE budget on hidden
+                // reasoning and terminate `length` with no answer.
                 chat_request.thinking = thinking_config_for(
                     provider_for_task.provider_type(),
                     &model_name,
                     &model_caps,
+                    chat_request.max_tokens,
                 );
                 // OpenAI prompt-cache routing key (ignored by other providers).
                 chat_request.prompt_cache_key = Some(conversation_id.to_string());
@@ -421,6 +427,7 @@ impl StreamingService {
                                 conversation_id: Some(conversation_id),
                                 branch_id: Some(branch_id),
                                 finish_reason: Some("extension_complete".to_string()),
+                                completion_state: None,
                                 usage: None,
                                 error: None,
                             }));
@@ -446,6 +453,7 @@ impl StreamingService {
                                 conversation_id: Some(conversation_id),
                                 branch_id: Some(branch_id),
                                 finish_reason: None,
+                                completion_state: None,
                                 usage: None,
                                 error: None,
                             };
@@ -467,6 +475,7 @@ impl StreamingService {
                                 conversation_id: Some(conversation_id),
                                 branch_id: Some(branch_id),
                                 finish_reason: Some("stop".to_string()),
+                                completion_state: None,
                                 usage: None,
                                 error: None,
                             };
@@ -547,6 +556,8 @@ impl StreamingService {
                     extension_tx: Some(ext_tx.clone()),
                     finalized: false,
                     produced_visible_content: false,
+                    turn_produced_visible_content_before: turn_produced_visible_content,
+                    cancelled: false,
                 }));
 
                 // Stream chunks through accumulator
@@ -571,6 +582,15 @@ impl StreamingService {
                                         // accumulated so the message isn't saved empty;
                                         // `finalize()` is idempotent via its `finalized`
                                         // flag, so this never double-writes.
+                                        //
+                                        // Record that this was an ABORT, not a model
+                                        // that had nothing to say: the frontend's live
+                                        // `lastTurnInterrupted` suppression resets on
+                                        // reload, so without the persisted state an
+                                        // abandoned turn re-renders as "the model
+                                        // returned an empty response" (~47% of the
+                                        // measured notices).
+                                        acc.cancelled = true;
                                         let _ = acc.finalize().await;
                                         return;
                                     }
@@ -649,6 +669,7 @@ impl StreamingService {
                             conversation_id: Some(conversation_id),
                             branch_id: Some(branch_id),
                             finish_reason: None,
+                            completion_state: None,
                             usage: None,
                             error: None,
                         };
@@ -661,6 +682,7 @@ impl StreamingService {
                             conversation_id: Some(conversation_id),
                             branch_id: Some(branch_id),
                             finish_reason: Some("stop".to_string()),
+                            completion_state: None,
                             usage: None,
                             error: None,
                         };
@@ -740,35 +762,45 @@ impl StreamingService {
                         // unified vocabulary (stop/length/tool_calls/…) for the
                         // client, or default to "stop" if not provided. MCP
                         // sampling reads the raw provider value on its own path.
-                        let mut final_finish_reason = finish_reason
+                        let final_finish_reason = finish_reason
+                            .as_deref()
                             .map(|r| {
                                 ai_providers::FinishReason::canonicalize(
                                     ai_providers::ProviderFamily::from_provider_type(
                                         provider_for_task.provider_type(),
                                     ),
-                                    &r,
+                                    r,
                                 )
                             })
                             .unwrap_or_else(|| "stop".to_string());
 
                         // Empty-completion guard: the turn terminated (no tool call to
                         // run) but produced NO user-visible answer across ANY iteration
-                        // — only reasoning, or nothing. Without this the client just
-                        // sees a bare `stop` and the chat appears to hang. Override the
-                        // terminal finish_reason to "empty" (an authoritative signal for
-                        // telemetry + the client) and log it. The frontend renders an
-                        // inline notice for such a turn; it does NOT branch on
-                        // finish_reason, so this is non-breaking. We deliberately do NOT
-                        // emit an Err here (that would render as a hard
-                        // conversation-level error banner).
-                        if !turn_produced_visible_content {
+                        // — only reasoning, or nothing. Without a signal the client just
+                        // sees a bare `stop` and the chat appears to hang.
+                        //
+                        // ITEM-1 / INV-2: the provider's terminal reason is NOT
+                        // overwritten. It used to be replaced with the literal "empty",
+                        // which destroyed the one piece of evidence that distinguishes a
+                        // budget-TRUNCATED turn (reasoning ate the whole completion
+                        // budget → `length`; an identical retry re-truncates
+                        // deterministically) from a genuinely empty one. The reason now
+                        // travels intact and the answerless fact rides alongside it on
+                        // `completion_state`. We deliberately do NOT emit an Err here
+                        // (that would render as a hard conversation-level error banner).
+                        let completion_state = classify_completion_state(
+                            finish_reason.as_deref(),
+                            turn_produced_visible_content,
+                            false, // this arm is the NORMAL terminal path, never a cancel
+                        );
+                        if let Some(state) = completion_state {
                             tracing::warn!(
                                 conversation_id = %conversation_id,
                                 message_id = %assistant_message_id,
                                 provider_finish_reason = %final_finish_reason,
+                                completion_state = %state,
                                 "chat turn completed with no user-visible content and no tool call (empty completion)"
                             );
-                            final_finish_reason = "empty".to_string();
                         }
 
                         // Send Complete event now that we're actually done
@@ -778,6 +810,7 @@ impl StreamingService {
                             conversation_id: Some(conversation_id),
                             branch_id: Some(branch_id),
                             finish_reason: Some(final_finish_reason),
+                            completion_state,
                             usage,
                             error: None,
                         };
@@ -912,6 +945,10 @@ impl StreamingService {
                             let event = if terminal {
                                 SSEChatStreamEvent::Complete(SSEChatStreamCompleteData {
                                     finish_reason: chunk.finish_reason.clone().unwrap_or_default(),
+                                    // Forward the answerless cause alongside the
+                                    // provider's reason (ITEM-1) — the client
+                                    // gets both, never one in place of the other.
+                                    completion_state: chunk.completion_state,
                                     usage: chunk.usage.clone(),
                                 })
                             } else {
@@ -977,13 +1014,24 @@ impl StreamingService {
             }
 
             if cancelled {
-                publish_frame(owner_id, ChatStreamFrame::new(
-                    conversation_id,
-                    SSEChatStreamEvent::Complete(SSEChatStreamCompleteData {
-                        finish_reason: "cancelled".into(),
-                        usage: None,
-                    }),
-                ));
+                publish_frame(
+                    owner_id,
+                    ChatStreamFrame::new(
+                        conversation_id,
+                        SSEChatStreamEvent::Complete(SSEChatStreamCompleteData {
+                            finish_reason: "cancelled".into(),
+                            // The cancel is observed HERE, but whether the turn
+                            // had already produced a visible answer is only known
+                            // inside the generation task — which records
+                            // `aborted` on the message itself from its abort
+                            // path. The persisted column is the reload-path
+                            // source of truth (the live client already suppresses
+                            // the notice on `cancelled`).
+                            completion_state: None,
+                            usage: None,
+                        }),
+                    ),
+                );
                 guard.done = true;
                 // Dropping the chunk stream closes the generation's output
                 // channel, stopping the still-running generation on its next send.
@@ -1165,17 +1213,106 @@ impl StreamingService {
 
         Ok(messages)
     }
+}
 
+/// True for the finish reasons meaning "the token budget ran out".
+///
+/// Accepts the RAW provider string, so every family's spelling matches: OpenAI
+/// `length`, Anthropic `max_tokens`, Gemini `MAX_TOKENS`. (The canonical form is
+/// `length`, which the first arm also covers.) Mirrors the established in-repo
+/// predicate `chat::extensions::title::title::is_budget_exhausted` — kept as a
+/// second, local copy rather than made cross-module `pub` so the title
+/// extension stays self-contained.
+fn is_budget_exhausted(finish_reason: &str) -> bool {
+    finish_reason.eq_ignore_ascii_case("length") || finish_reason.eq_ignore_ascii_case("max_tokens")
+}
+
+/// Classify a finished assistant turn into the persisted/wire answerless
+/// vocabulary (ITEM-2 / DEC-2). `None` = a healthy turn.
+///
+/// Pure, so the mapping is directly unit-testable and so BOTH writers — the
+/// terminal stream arm (wire) and `DeltaAccumulator::finalize` (DB) — derive the
+/// same value from the same inputs and can never disagree.
+///
+/// Precedence matters: a CANCELLED turn is classified `aborted` regardless of
+/// any partial provider reason (the stream was cut short, so whatever reason
+/// arrived describes nothing the user asked for).
+fn classify_completion_state(
+    provider_finish_reason: Option<&str>,
+    produced_visible_content: bool,
+    cancelled: bool,
+) -> Option<crate::modules::chat::core::models::CompletionState> {
+    use crate::modules::chat::core::models::CompletionState;
+
+    // The turn delivered text / a tool call / an attachment — nothing to record.
+    if produced_visible_content {
+        return None;
+    }
+    if cancelled {
+        return Some(CompletionState::Aborted);
+    }
+    match provider_finish_reason {
+        Some(reason) if is_budget_exhausted(reason) => Some(CompletionState::BudgetTruncated),
+        // Terminated normally (or the provider stated no reason) with nothing to
+        // show: the model genuinely had nothing to say.
+        _ => Some(CompletionState::Empty),
+    }
+}
+
+/// INV-4 — a configured thinking budget MUST stay strictly BELOW the request's
+/// completion budget, so answer tokens remain possible by construction.
+///
+/// The thinking budget is capped at `1/N` of the completion budget. Named
+/// (rather than an inline magic number) per DEC-6 so it can be promoted to a
+/// setting later without a rewrite; it is deliberately NOT operator-configurable
+/// today — it is a correctness floor, not a preference, and weakening it below
+/// "strictly less than the budget" re-creates the defect by construction.
+const THINKING_BUDGET_COMPLETION_DIVISOR: i32 = 2;
+
+/// Clamp a requested thinking budget against the request's completion budget.
+///
+/// With a 4096-token completion budget and the hardcoded 4096-token thinking
+/// budget below, a reasoning model could spend the ENTIRE budget on hidden
+/// reasoning and terminate `length` having emitted zero answer tokens — the
+/// measured production failure. After the clamp the thinking budget is at most
+/// half the completion budget (and always at least one token short of it), so an
+/// answer always remains possible.
+///
+/// A budget that already fits comfortably is returned UNCHANGED, so behaviour
+/// for every other model is byte-identical.
+fn clamp_thinking_budget(requested: i32, completion_budget: Option<u32>) -> i32 {
+    // No stated completion budget (the provider's own default applies) —
+    // nothing to clamp against, so leave the request untouched.
+    let Some(budget) = completion_budget else {
+        return requested;
+    };
+    // A budget above `i32::MAX` is orders of magnitude beyond any real
+    // completion budget and cannot constrain anything, so saturate rather than
+    // fail (`budget_tokens` is an `i32` on the provider request).
+    let budget = i32::try_from(budget).unwrap_or(i32::MAX);
+    let cap = (budget / THINKING_BUDGET_COMPLETION_DIVISOR)
+        // Belt-and-braces: whatever the divisor, never allow a thinking budget
+        // that consumes the whole completion budget…
+        .min(budget.saturating_sub(1))
+        // …and never a negative one (a degenerate budget of 0/1 leaves no room
+        // to think at all, which is the honest answer).
+        .max(0);
+    requested.min(cap)
 }
 
 /// Build a thinking config, or `None` when the model doesn't support thinking.
 /// The thinking style is resolved dynamically: the editable DB model row →
 /// curated catalog → provider model-family policy (so a user can enable thinking
 /// on an uncatalogued model, and new models in a known family are auto-covered).
+///
+/// `completion_budget` is the request's resolved `max_tokens` (apply the model
+/// params FIRST). It is a REQUIRED parameter rather than a separate follow-up
+/// clamp so INV-4 cannot be bypassed by a future caller that forgets to apply it.
 fn thinking_config_for(
     provider_type: &str,
     model_id: &str,
     caps: &crate::modules::llm_model::models::ModelCapabilities,
+    completion_budget: Option<u32>,
 ) -> Option<ai_providers::ThinkingConfig> {
     use ai_providers::{ThinkingConfig, ThinkingEffort, ThinkingMode};
     let family = ai_providers::ProviderFamily::from_provider_type(provider_type);
@@ -1184,11 +1321,16 @@ fn thinking_config_for(
     let cfg = if style == "budget" {
         ThinkingConfig {
             mode: ThinkingMode::Enabled,
-            budget_tokens: Some(4096),
+            budget_tokens: Some(clamp_thinking_budget(
+                DEFAULT_THINKING_BUDGET_TOKENS,
+                completion_budget,
+            )),
             effort: Some(ThinkingEffort::High),
             include_thinking: true,
         }
     } else {
+        // Adaptive thinking states no explicit budget, so there is nothing to
+        // clamp — the provider allocates within its own completion budget.
         ThinkingConfig {
             mode: ThinkingMode::Adaptive,
             budget_tokens: None,
@@ -1198,6 +1340,10 @@ fn thinking_config_for(
     };
     Some(cfg)
 }
+
+/// The thinking budget requested for `budget`-style thinking models, BEFORE the
+/// INV-4 clamp against the request's completion budget.
+const DEFAULT_THINKING_BUDGET_TOKENS: i32 = 4096;
 
 /// Map model-level generation parameters onto a `ChatRequest`. `temperature` is
 /// forwarded ONLY when the user configured it — never force-injected — so a model
@@ -1303,6 +1449,17 @@ struct DeltaAccumulator {
     /// Stays false for a reasoning-only or empty turn — the terminal arm uses it
     /// to surface an "empty completion" notice instead of a silent `stop`.
     produced_visible_content: bool,
+    /// Whether an EARLIER iteration of this same turn already produced a
+    /// user-visible answer. The accumulator is recreated per tool-loop
+    /// iteration, so its own `produced_visible_content` sees only the latest LLM
+    /// response; the persisted `completion_state` must describe the WHOLE
+    /// assistant message (which is what the frontend inspects), so `finalize`
+    /// ORs the two.
+    turn_produced_visible_content_before: bool,
+    /// Set on the abort path (the consumer dropped the stream — stop-generation
+    /// or navigating away) immediately before the idempotent `finalize`, so the
+    /// persisted state records `aborted` rather than a misleading `empty`.
+    cancelled: bool,
 }
 
 impl DeltaAccumulator {
@@ -1325,8 +1482,9 @@ impl DeltaAccumulator {
             message_id: Some(self.assistant_message_id),
             conversation_id: Some(self.conversation_id),
             branch_id: Some(self.branch_id),
-            finish_reason: None,  // Don't include finish_reason in content chunks
-            usage: None,          // Don't include usage in content chunks
+            finish_reason: None, // Don't include finish_reason in content chunks
+            completion_state: None, // Terminal-only signal; never on a content chunk
+            usage: None,         // Don't include usage in content chunks
             error: None,
         };
 
@@ -1606,6 +1764,30 @@ impl DeltaAccumulator {
                 }
             }
         }
+
+        // ITEM-2: record WHY this turn ended answerless, in the SAME transaction
+        // that just persisted its content blocks — so the blocks and the recorded
+        // cause can never disagree, and so the cause survives a page reload (the
+        // notice is re-derived at render time from persisted state alone).
+        //
+        // Classification is turn-level, not iteration-level: an earlier tool-loop
+        // iteration may already have produced a visible answer. Writing on EVERY
+        // finalize (NULL included) is deliberate and self-correcting — a
+        // continued turn that later produces an answer clears any state an
+        // earlier answerless iteration wrote.
+        let completion_state = classify_completion_state(
+            self.finish_reason.as_deref(),
+            self.turn_produced_visible_content_before || self.produced_visible_content,
+            self.cancelled,
+        );
+        sqlx::query!(
+            r#"UPDATE messages SET completion_state = $1 WHERE id = $2"#,
+            completion_state.map(|s| s.as_str()),
+            self.assistant_message_id
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(AppError::database_error)?;
 
         tx.commit().await.map_err(AppError::database_error)?;
 
@@ -2846,28 +3028,147 @@ mod tests {
         use ai_providers::ThinkingMode;
         let none = ModelCapabilities::default();
         // Catalog: adaptive thinking model.
-        let cfg = thinking_config_for("anthropic", "claude-opus-4-7", &none).expect("thinking enabled");
+        let cfg = thinking_config_for("anthropic", "claude-opus-4-7", &none, None)
+            .expect("thinking enabled");
         assert_eq!(cfg.mode, ThinkingMode::Adaptive);
         assert!(cfg.effort.is_some());
         // Catalog: a non-thinking model (haiku is catalogued but not thinking-capable).
-        assert!(thinking_config_for("anthropic", "claude-haiku-4-5", &none).is_none());
-        assert!(thinking_config_for("openai", "gpt-4o", &none).is_none());
+        assert!(thinking_config_for("anthropic", "claude-haiku-4-5", &none, None).is_none());
+        assert!(thinking_config_for("openai", "gpt-4o", &none, None).is_none());
         // Family pattern: an uncatalogued o-series model still enables thinking.
-        assert!(thinking_config_for("openai", "o5-mini", &none).is_some());
+        assert!(thinking_config_for("openai", "o5-mini", &none, None).is_some());
         // Row override enables thinking on an otherwise-unknown model.
         let row = ModelCapabilities {
             supports_thinking: Some(true),
             ..Default::default()
         };
-        assert!(thinking_config_for("openai", "totally-unknown", &row).is_some());
+        assert!(thinking_config_for("openai", "totally-unknown", &row, None).is_some());
         // Row override disables thinking even for a thinking-capable family.
         let off = ModelCapabilities {
             supports_thinking: Some(false),
             ..Default::default()
         };
-        assert!(thinking_config_for("anthropic", "claude-opus-4-7", &off).is_none());
+        assert!(thinking_config_for("anthropic", "claude-opus-4-7", &off, None).is_none());
     }
 
+    // TEST-5 (INV-4): a `budget`-style thinking model's budget MUST come back
+    // strictly BELOW the request's completion budget, so answer tokens remain
+    // possible by construction. Before this fix `thinking_config_for` returned a
+    // hardcoded 4096 with no knowledge of `max_tokens`, so a model row carrying
+    // `max_tokens: 4096` (the live rig's Qwen configuration) allocated the ENTIRE
+    // completion budget to hidden reasoning and could only terminate `length`
+    // with zero answer tokens.
+    #[test]
+    fn thinking_budget_is_clamped_strictly_below_the_completion_budget() {
+        use crate::modules::llm_model::models::ModelCapabilities;
+
+        // Pin the `budget` thinking style explicitly via the row override, so
+        // this asserts the clamp rather than whatever the catalog happens to
+        // resolve today (the `adaptive` style states no budget to clamp).
+        let row = ModelCapabilities {
+            supports_thinking: Some(true),
+            thinking_style: Some("budget".to_string()),
+            ..Default::default()
+        };
+
+        // The live-rig configuration: a model row carrying `max_tokens: 4096`.
+        let cfg = thinking_config_for("custom", "qwen3.6-35b-a3b", &row, Some(4096))
+            .expect("row override enables thinking");
+        assert_eq!(cfg.mode, ai_providers::ThinkingMode::Enabled);
+        let budget = cfg
+            .budget_tokens
+            .expect("budget-style thinking states an explicit budget");
+        assert!(
+            budget < 4096,
+            "INV-4: a 4096-token completion budget must leave answer headroom, \
+             got thinking budget {budget}"
+        );
+
+        // A generous completion budget leaves the requested budget UNTOUCHED —
+        // behaviour for every already-fitting model is byte-identical.
+        let generous = thinking_config_for("custom", "qwen3.6-35b-a3b", &row, Some(64_000))
+            .and_then(|c| c.budget_tokens)
+            .expect("budget-style thinking states an explicit budget");
+        assert_eq!(
+            generous, DEFAULT_THINKING_BUDGET_TOKENS,
+            "a comfortably-fitting thinking budget must not be clamped"
+        );
+
+        // `ThinkingEffort::High` is deliberately untouched (DEC-8) — the clamp
+        // fixes the guaranteed-failure configuration without overriding the
+        // reasoning-quality product choice.
+        assert_eq!(cfg.effort, Some(ai_providers::ThinkingEffort::High));
+    }
+
+    // The clamp itself, exhaustively — the property INV-4 states is
+    // "strictly less than the completion budget", for EVERY budget.
+    #[test]
+    fn clamp_thinking_budget_is_always_strictly_below_the_completion_budget() {
+        for budget in [2u32, 3, 10, 512, 4096, 8192, 100_000] {
+            let budget_i32 = i32::try_from(budget).expect("test budgets fit in i32");
+            let clamped = clamp_thinking_budget(DEFAULT_THINKING_BUDGET_TOKENS, Some(budget));
+            assert!(
+                clamped < budget_i32,
+                "thinking budget {clamped} must be strictly below completion budget {budget}"
+            );
+            assert!(clamped >= 0, "a thinking budget is never negative");
+        }
+        // Unchanged when it already fits, and untouched with no stated budget.
+        assert_eq!(clamp_thinking_budget(1024, Some(64_000)), 1024);
+        assert_eq!(clamp_thinking_budget(4096, None), 4096);
+    }
+
+    // TEST-9: the answerless classifier — (provider reason, visible-content,
+    // cancelled) → the persisted/wire vocabulary.
+    #[test]
+    fn classify_completion_state_maps_cause_to_vocabulary() {
+        use crate::modules::chat::core::models::CompletionState;
+
+        // Budget exhaustion + nothing shown → budget_truncated, in EVERY
+        // provider's raw spelling (OpenAI / Anthropic / Gemini) and in the
+        // canonical form.
+        for raw in ["length", "max_tokens", "MAX_TOKENS", "Length"] {
+            assert_eq!(
+                classify_completion_state(Some(raw), false, false),
+                Some(CompletionState::BudgetTruncated),
+                "raw finish reason {raw:?} is a budget exhaustion"
+            );
+        }
+
+        // Terminated normally with nothing shown → empty. A provider that
+        // states no reason at all is indistinguishable from a plain stop.
+        assert_eq!(
+            classify_completion_state(Some("stop"), false, false),
+            Some(CompletionState::Empty)
+        );
+        assert_eq!(
+            classify_completion_state(None, false, false),
+            Some(CompletionState::Empty)
+        );
+        assert_eq!(
+            classify_completion_state(Some("content_filter"), false, false),
+            Some(CompletionState::Empty)
+        );
+
+        // Cancelled with nothing shown → aborted, and it OUTRANKS a partial
+        // provider reason (the stream was cut short, so that reason describes
+        // nothing the user asked for).
+        assert_eq!(
+            classify_completion_state(None, false, true),
+            Some(CompletionState::Aborted)
+        );
+        assert_eq!(
+            classify_completion_state(Some("length"), false, true),
+            Some(CompletionState::Aborted)
+        );
+
+        // A turn that produced a visible answer is healthy — no state at all,
+        // whatever the reason, and even if the client then cancelled.
+        for reason in [Some("stop"), Some("length"), Some("tool_calls"), None] {
+            assert_eq!(classify_completion_state(reason, true, false), None);
+            assert_eq!(classify_completion_state(reason, true, true), None);
+        }
+    }
 
     // TEST-15: temperature is forwarded only when set (no forced 0.7); max_tokens
     // keeps its required-field default.
