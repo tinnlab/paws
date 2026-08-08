@@ -57,7 +57,7 @@ export function AssistantMenuItem() {
             id: CLEAR_ID,
             label: 'No assistant',
             testId: 'assistant-option-none',
-            leading: <Check className="size-4 shrink-0 opacity-0" />,
+            leading: <Check aria-hidden className="size-4 shrink-0 opacity-0" />,
             separatorAfter: true,
             // An ACTION, not a choice: it must stay reachable while a query is
             // active, or a user who types to find an assistant can no longer clear
@@ -72,6 +72,7 @@ export function AssistantMenuItem() {
       testId: `assistant-option-${assistant.id}`,
       leading: (
         <Check
+          aria-hidden
           className={`size-4 shrink-0 ${assistant.id === selectedAssistantId ? 'opacity-100' : 'opacity-0'}`}
         />
       ),
@@ -87,7 +88,6 @@ export function AssistantMenuItem() {
         <PlusMenuItem
           data-testid="assistant-menu-trigger"
           aria-label="Select assistant"
-          aria-haspopup="listbox"
           icon={<Bot />}
           label={
             loading && availableAssistants.length === 0
@@ -105,6 +105,7 @@ export function AssistantMenuItem() {
       closeOnSelect
       searchLabel="Search assistants"
       searchPlaceholder="Filter assistants…"
+      noMatchesText="No matches."
       emptyContent={
         // Distinguish "still loading" from "you have none" — the trigger row above
         // already says "Loading assistants…", and a panel reading "No assistants

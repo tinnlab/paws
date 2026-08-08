@@ -173,6 +173,7 @@ const panel = (props: Partial<React.ComponentProps<typeof ComposerPickerPanel>> 
     onSelect={() => undefined}
     searchLabel="Search entries"
     searchPlaceholder="Filter entries…"
+    noMatchesText="No matches."
     emptyContent={<div data-testid={TID_CTA}>Nothing configured yet</div>}
     {...props}
   />
@@ -323,6 +324,7 @@ describe('popover open/close (TEST-4, TEST-7)', () => {
       onSelect={onSelect}
       searchLabel="Search entries"
       searchPlaceholder="Filter entries…"
+      noMatchesText="No matches."
       emptyContent={<div>none</div>}
       // The REAL production trigger, not a hand-rolled div: the trigger's own
       // keyboard handling composes with Base UI's, and a stand-in cannot exercise
@@ -379,6 +381,7 @@ describe('regressions found by the blind audit', () => {
       onSelect={onSelect}
       searchLabel="Search entries"
       searchPlaceholder="Filter entries…"
+      noMatchesText="No matches."
       emptyContent={<div>none</div>}
       trigger={
         <PlusMenuItem data-testid={TID_TRIGGER} aria-label="Open picker" icon={<Bot />} label="Open picker" />
@@ -479,6 +482,13 @@ const importsOf = (rel: string): string[] => [
 describe('both pickers are built from the ONE primitive (TEST-9, TEST-19)', () => {
   const ASSISTANT = 'modules/assistant/chat-extension/components/AssistantMenuItem.tsx'
   const KB = 'modules/knowledge-base/chat-extension/components/KbMenuItem.tsx'
+  const PRIMITIVE = 'modules/chat/components/ComposerPickerPopover.tsx'
+  /** Named specifiers a file imports from `@ziee/kit` (empty when it imports none). */
+  const kitNamedImports = (rel: string): string[] =>
+    (read(rel).match(/import\s*\{([^}]*)\}\s*from\s*'@ziee\/kit'/)?.[1] ?? '')
+      .split(',')
+      .map(x => x.trim())
+      .filter(Boolean)
 
   test('each caller imports the shared primitive and the shared trigger row', () => {
     for (const f of [ASSISTANT, KB]) {
@@ -493,20 +503,23 @@ describe('both pickers are built from the ONE primitive (TEST-9, TEST-19)', () =
   })
 
   test('neither caller still carries its own popover or scroll implementation', () => {
+    // POSITIVE CONTROL first: the extractor must actually find named kit imports
+    // somewhere, or the three `not.toContain` assertions below pass vacuously on an
+    // empty list — which is exactly what happened for AssistantMenuItem, whose kit
+    // import this change removed entirely (a blind audit caught it).
+    expect(kitNamedImports(KB), 'KbMenuItem still imports `message` from the kit').toContain(
+      'message',
+    )
+
     for (const f of [ASSISTANT, KB]) {
-      const kit = importsOf(f).filter(m => m === '@ziee/kit')
-      // KbMenuItem still imports `message` from the kit; what must be gone is any
-      // direct Popover/ScrollArea/Input usage — the shell now owns all three.
-      const src = read(f)
-      const kitImportLine = src.match(/import\s*\{([^}]*)\}\s*from\s*'@ziee\/kit'/)?.[1] ?? ''
-      const named = kitImportLine
-        .split(',')
-        .map(s => s.trim())
-        .filter(Boolean)
-      expect(named, `${f} must not import Popover from the kit any more`).not.toContain('Popover')
-      expect(named, `${f} must not import ScrollArea from the kit`).not.toContain('ScrollArea')
-      expect(named, `${f} must not import Input from the kit`).not.toContain('Input')
-      expect(kit.length, `${f} kit import count`).toBeLessThanOrEqual(1)
+      const named = kitNamedImports(f)
+      for (const banned of ['Popover', 'ScrollArea', 'Input']) {
+        expect(named, `${f} must not import ${banned} from the kit any more`).not.toContain(banned)
+      }
+      // …and the shell it delegates to is the one that DOES own them.
+      expect(kitNamedImports(PRIMITIVE)).toEqual(
+        expect.arrayContaining(['Input', 'Popover', 'ScrollArea']),
+      )
     }
   })
 

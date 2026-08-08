@@ -78,6 +78,23 @@ async function openPicker(page: Page, which: 'assistant' | 'kb') {
 const viewport = (panel: ReturnType<typeof byTestId>) =>
   panel.locator('[data-overlayscrollbars-viewport]')
 
+/**
+ * Is `row` geometrically inside the scroller's box?
+ *
+ * `toBeVisible()` is NOT this check — Playwright only requires a non-empty bounding
+ * box, which a row clipped inside an `overflow` scroller still has. A blind audit
+ * caught the earlier version asserting `toBeVisible()` after scrolling and staying
+ * green without the scroll; this is the geometry that actually distinguishes them.
+ */
+async function isInsideScroller(
+  vp: ReturnType<typeof viewport>,
+  row: ReturnType<typeof byTestId>,
+): Promise<boolean> {
+  const [vbox, rbox] = [await vp.boundingBox(), await row.boundingBox()]
+  if (!vbox || !rbox) return false
+  return rbox.y >= vbox.y - 1 && rbox.y + rbox.height <= vbox.y + vbox.height + 1
+}
+
 test.describe('Chat composer — picker popovers stay usable at scale', () => {
   // NOT serial: each test owns its own database + server, and a failure in one must
   // not SKIP the rest (that would hide every later result behind the first red).
@@ -118,12 +135,15 @@ test.describe('Chat composer — picker popovers stay usable at scale', () => {
       'the 26-row list must overflow a capped viewport',
     ).toBeGreaterThan(overflow.clientHeight)
 
-    // The last seeded assistant is reachable only by scrolling.
+    // The last seeded assistant is reachable ONLY by scrolling: outside the
+    // scroller's box before, inside it after.
     const last = panel.getByRole('option', { name: names[names.length - 1] })
+    expect(await isInsideScroller(vp, last), 'the 26th row must start out clipped').toBe(false)
     await vp.evaluate(el => {
       el.scrollTop = el.scrollHeight
     })
     await expect(last).toBeVisible()
+    expect(await isInsideScroller(vp, last), 'scrolling must bring it into the box').toBe(true)
   })
 
   test('KB picker: 26 entries stay inside the height cap and scroll via the overlay scrollbar (TEST-12)', async ({
@@ -158,10 +178,12 @@ test.describe('Chat composer — picker popovers stay usable at scale', () => {
     expect(overflow.scrollHeight).toBeGreaterThan(overflow.clientHeight)
 
     const last = panel.getByRole('option', { name: names[names.length - 1] })
+    expect(await isInsideScroller(vp, last), 'the 26th KB must start out clipped').toBe(false)
     await vp.evaluate(el => {
       el.scrollTop = el.scrollHeight
     })
     await expect(last).toBeVisible()
+    expect(await isInsideScroller(vp, last), 'scrolling must bring it into the box').toBe(true)
   })
 
   test('a very long name truncates instead of widening the panel (TEST-13)', async ({
@@ -369,6 +391,10 @@ test.describe('Chat composer — picker popovers stay usable at scale', () => {
           overlayViewport: el.querySelectorAll('[data-overlayscrollbars-viewport]').length,
           maxWidth: s.maxWidth,
           minWidth: s.minWidth,
+          listMaxHeight: (() => {
+            const host = el.querySelector('[data-overlayscrollbars]') ?? el.querySelector('[data-overlayscrollbars-viewport]')?.closest('[data-overlayscrollbars]')
+            return host ? getComputedStyle(host as Element).maxHeight : 'none'
+          })(),
         }
       })
     }
@@ -381,13 +407,18 @@ test.describe('Chat composer — picker popovers stay usable at scale', () => {
     await byTestId(page, 'kb-menu-trigger').click()
     const kb = await contractOf('kb')
 
-    // INV-4 — identical shell. A picker still carrying a bespoke popover would
-    // differ on at least one of these.
+    // INV-4 — identical shell. Equality alone is true BY CONSTRUCTION once both
+    // callers import the primitive (a blind audit caught that), so the caps are also
+    // asserted against ABSOLUTE values: delete `max-w-80` and this goes red even
+    // though the two panels would still match each other.
     expect(assistant).toEqual(kb)
     expect(assistant.combobox).toBe(1)
     expect(assistant.listbox).toBe(1)
     expect(assistant.overlayViewport).toBe(1)
     expect(assistant.options).toBe(true)
+    expect(assistant.maxWidth, 'the width cap must be a real value, not `none`').toBe('320px')
+    expect(assistant.minWidth).toBe('240px')
+    expect(assistant.listMaxHeight, 'the list height cap must be a real value').toBe('256px')
   })
 
   test('KB multi-select still works through the shared shell (TEST-17)', async ({
@@ -417,8 +448,14 @@ test.describe('Chat composer — picker popovers stay usable at scale', () => {
     await byTestId(page, `kb-option-${created[0]}`).click()
     await expect(byTestId(page, `kb-chip-${created[0]}`)).toBeVisible()
 
-    // Multi-select: the "+" dropdown must STAY open so a second KB can be added.
+    // Multi-select: the "+" DROPDOWN itself must stay open so a second KB can be
+    // added. Asserted on a SIBLING item of the parent menu, not on the submenu —
+    // the submenu staying visible says nothing about its parent.
     await expect(panel).toBeVisible()
+    await expect(
+      byTestId(page, 'assistant-menu-trigger'),
+      'the parent "+" dropdown must stay open after a multi-select toggle',
+    ).toBeVisible()
     await panel.getByRole('combobox').fill('Multi KB Two')
     await expect(panel.getByRole('option')).toHaveCount(1)
     await byTestId(page, `kb-option-${created[1]}`).click()
@@ -428,6 +465,34 @@ test.describe('Chat composer — picker popovers stay usable at scale', () => {
     await byTestId(page, `kb-option-${created[1]}`).click()
     await expect(byTestId(page, `kb-chip-${created[1]}`)).toHaveCount(0)
     await expect(byTestId(page, `kb-chip-${created[0]}`)).toBeVisible()
+  })
+
+  test('the picker stays inside a 390px viewport (TEST-22)', async ({ page, testInfra }) => {
+    test.setTimeout(180_000)
+    const { baseURL, apiURL } = testInfra
+    await loginAsAdmin(page, baseURL)
+    const token = await getAdminToken(apiURL)
+    await seedKbs(page, apiURL, token, numbered('Narrow KB', SEED_COUNT))
+
+    // A 240px-min panel opening side="right" from a nested popover is exactly the
+    // geometry that breaks at mobile width; a desktop-only picker is a defect.
+    await page.setViewportSize({ width: 390, height: 844 })
+    await openChat(page, baseURL)
+    const panel = await openPicker(page, 'kb')
+
+    const box = await panel.boundingBox()
+    expect(box).not.toBeNull()
+    expect(box!.x, 'the panel must not start off the left edge').toBeGreaterThanOrEqual(-1)
+    expect(box!.x + box!.width, 'the panel must not run off the right edge').toBeLessThanOrEqual(391)
+    expect(box!.height, 'the height cap still applies at mobile width').toBeLessThanOrEqual(
+      MAX_PANEL_HEIGHT,
+    )
+
+    // …and the page itself must not gain a horizontal scrollbar because of it.
+    const overflows = await page.evaluate(
+      () => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+    )
+    expect(overflows, 'the picker must not cause horizontal page scroll').toBe(false)
   })
 
   test('both trigger rows share the "+" menu row metrics (TEST-18)', async ({
@@ -447,9 +512,13 @@ test.describe('Chat composer — picker popovers stay usable at scale', () => {
     const metrics = (id: 'assistant-menu-trigger' | 'kb-menu-trigger' | 'chat-mcp-menu-item') =>
       byTestId(page, id).evaluate(el => {
         const s = getComputedStyle(el)
+        const icon = el.querySelector('svg')
         return {
           padding: `${s.paddingTop} ${s.paddingBottom}`,
           fontSize: getComputedStyle(el.querySelector('span:nth-of-type(2)') ?? el).fontSize,
+          iconSize: icon
+            ? `${getComputedStyle(icon).width}x${getComputedStyle(icon).height}`
+            : 'none',
           name: el.getAttribute('aria-label') ?? '',
         }
       })
@@ -459,15 +528,19 @@ test.describe('Chat composer — picker popovers stay usable at scale', () => {
 
     expect(assistant.padding, 'assistant row padding must match the KB row').toBe(kb.padding)
     expect(assistant.fontSize).toBe(kb.fontSize)
+    expect(assistant.iconSize, 'leading icons must share the shared row metric').toBe(kb.iconSize)
+    expect(assistant.iconSize).not.toBe('none')
     // Every trigger carries an accessible name.
     expect(assistant.name.length).toBeGreaterThan(0)
     expect(kb.name.length).toBeGreaterThan(0)
 
-    // …and they match the MCP item, which already used the shared PlusMenuItem row.
-    const mcp = byTestId(page, 'chat-mcp-menu-item')
-    if (await mcp.isVisible()) {
-      const shared = await metrics('chat-mcp-menu-item')
-      expect(assistant.padding, 'must match the pre-existing shared "+" row').toBe(shared.padding)
-    }
+    // …and they match the file-attach item, which is always present in the "+" menu
+    // and already used the shared row. NOT wrapped in an `if (isVisible())` — a
+    // conditional comparison silently asserts nothing when the condition is false.
+    const shared = await byTestId(page, 'file-attach-menu-upload').evaluate(el => {
+      const s = getComputedStyle(el)
+      return { padding: `${s.paddingTop} ${s.paddingBottom}` }
+    })
+    expect(assistant.padding, 'must match the pre-existing shared "+" row').toBe(shared.padding)
   })
 })

@@ -72,7 +72,9 @@ export function KbMenuItem() {
       id: kb.id,
       label: kb.name,
       testId: `kb-option-${kb.id}`,
-      leading: <Check className={`size-4 shrink-0 ${active ? 'opacity-100' : 'opacity-0'}`} />,
+      leading: (
+        <Check aria-hidden className={`size-4 shrink-0 ${active ? 'opacity-100' : 'opacity-0'}`} />
+      ),
       trailing: (
         <>
           {status && <span className={`shrink-0 text-xs ${status.className}`}>{status.text}</span>}
@@ -89,7 +91,6 @@ export function KbMenuItem() {
         <PlusMenuItem
           data-testid="kb-menu-trigger"
           aria-label="Knowledge bases"
-          aria-haspopup="listbox"
           icon={<BookOpen />}
           label="Knowledge bases"
           trailing={<ChevronRight className="size-3 opacity-45" />}
@@ -100,6 +101,8 @@ export function KbMenuItem() {
       onSelect={item => toggle(item.id)}
       searchLabel="Search knowledge bases"
       searchPlaceholder="Filter knowledge bases…"
+      noMatchesText="No matches."
+      multiSelect
       emptyContent={
         // Empty → link to management, instead of a dead end.
         <div

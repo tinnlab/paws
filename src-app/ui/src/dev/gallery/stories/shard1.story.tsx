@@ -46,6 +46,7 @@ const composerPickerStory: GalleryStory = {
           onSelect={noop}
           searchLabel="Search knowledge bases"
           searchPlaceholder="Filter knowledge bases…"
+          noMatchesText="No matches."
           emptyContent={null}
         />
       ),
@@ -61,6 +62,7 @@ const composerPickerStory: GalleryStory = {
           defaultQuery="base 1"
           searchLabel="Search knowledge bases"
           searchPlaceholder="Filter knowledge bases…"
+          noMatchesText="No matches."
           emptyContent={null}
         />
       ),
@@ -76,6 +78,7 @@ const composerPickerStory: GalleryStory = {
           defaultQuery="zzzzz-no-such-entry"
           searchLabel="Search knowledge bases"
           searchPlaceholder="Filter knowledge bases…"
+          noMatchesText="No matches."
           emptyContent={null}
         />
       ),
@@ -90,6 +93,7 @@ const composerPickerStory: GalleryStory = {
           onSelect={noop}
           searchLabel="Search knowledge bases"
           searchPlaceholder="Filter knowledge bases…"
+          noMatchesText="No matches."
           emptyContent={
             <div className="px-2 py-2 text-sm text-muted-foreground">
               No knowledge bases yet — create one →

@@ -152,6 +152,50 @@ export const gallery: ModuleGallery = {
           onSelect: () => undefined,
           searchLabel: 'Search entries',
           searchPlaceholder: 'Filter entries…',
+          noMatchesText: 'No matches.',
+          emptyContent: null,
+        },
+      ),
+    },
+    // Filtered + no-matches are seeded through `defaultQuery` because they are
+    // reachable only by TYPING, which a mount-only gate pass cannot do. They are
+    // OVERLAY entries (not just story cases) because `runtime-health.mjs` enumerates
+    // pages/overlays/deep/seeded — stories are not a surface class, so a story-only
+    // state gets no runtime/axe pass.
+    {
+      slug: 'overlay-composer-picker-filtered',
+      surface: 'modules/chat/components/ComposerPickerPopover',
+      title: 'Composer picker — filtered by a live query',
+      component: lazyBound(
+        () => import('@/modules/chat/components/ComposerPickerPopover'),
+        'ComposerPickerPanel',
+        {
+          'data-testid': 'gallery-composer-picker-filtered',
+          items: PICKER_ITEMS,
+          onSelect: () => undefined,
+          defaultQuery: 'entry 1',
+          searchLabel: 'Search entries',
+          searchPlaceholder: 'Filter entries…',
+          noMatchesText: 'No matches.',
+          emptyContent: null,
+        },
+      ),
+    },
+    {
+      slug: 'overlay-composer-picker-no-matches',
+      surface: 'modules/chat/components/ComposerPickerPopover',
+      title: 'Composer picker — no matches',
+      component: lazyBound(
+        () => import('@/modules/chat/components/ComposerPickerPopover'),
+        'ComposerPickerPanel',
+        {
+          'data-testid': 'gallery-composer-picker-no-matches',
+          items: PICKER_ITEMS,
+          onSelect: () => undefined,
+          defaultQuery: 'zzzzz-no-such-entry',
+          searchLabel: 'Search entries',
+          searchPlaceholder: 'Filter entries…',
+          noMatchesText: 'No matches.',
           emptyContent: null,
         },
       ),
@@ -169,6 +213,7 @@ export const gallery: ModuleGallery = {
           onSelect: () => undefined,
           searchLabel: 'Search entries',
           searchPlaceholder: 'Filter entries…',
+          noMatchesText: 'No matches.',
           emptyContent: (
             <div className="px-2 py-2 text-sm text-muted-foreground">
               No knowledge bases yet — create one →

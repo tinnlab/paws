@@ -1,5 +1,4 @@
 import {
-  cloneElement,
   useCallback,
   useId,
   useMemo,
@@ -80,7 +79,6 @@ export interface ComposerPickerItem {
    * longer clear the selection without first clearing the query).
    */
   pinned?: boolean
-  disabled?: boolean
 }
 
 export interface ComposerPickerPanelProps {
@@ -93,6 +91,14 @@ export interface ComposerPickerPanelProps {
   /** Accessible name for the search box (required — the caller owns i18n). */
   searchLabel: string
   searchPlaceholder: string
+  /**
+   * Shown when the filter excludes everything (required — the caller owns i18n).
+   * This is the string a filtering UI shows most often; hardcoding it here would
+   * make it the one string the caller could not translate.
+   */
+  noMatchesText: string
+  /** Several rows may be selected at once (the KB picker). Drives `aria-multiselectable`. */
+  multiSelect?: boolean
   /** Rendered INSTEAD of the search box + list when `items` is empty. */
   emptyContent: ReactNode
   /**
@@ -118,6 +124,8 @@ export function ComposerPickerPanel({
   onDismiss,
   searchLabel,
   searchPlaceholder,
+  noMatchesText,
+  multiSelect,
   emptyContent,
   defaultQuery = '',
   'data-testid': testId,
@@ -156,7 +164,7 @@ export function ComposerPickerPanel({
 
   const activate = useCallback(
     (item: ComposerPickerItem | undefined) => {
-      if (!item || item.disabled) return
+      if (!item) return
       onSelect(item)
     },
     [onSelect],
@@ -170,30 +178,38 @@ export function ComposerPickerPanel({
     if (event.nativeEvent.isComposing) return
     const count = filtered.length
     switch (event.key) {
+      // Every list-navigation key behaves the same way when there is nothing to
+      // navigate: fall through to the input's own caret handling rather than
+      // swallowing it. (Arrows used to preventDefault unconditionally while
+      // Home/End did not — an inconsistency with no reason behind it.)
       case 'ArrowDown':
+        if (count === 0) break
         event.preventDefault()
-        if (count > 0) moveActive(active < 0 || active === count - 1 ? 0 : active + 1)
+        moveActive(active === count - 1 ? 0 : active + 1)
         break
       case 'ArrowUp':
+        if (count === 0) break
         event.preventDefault()
-        if (count > 0) moveActive(active <= 0 ? count - 1 : active - 1)
+        moveActive(active <= 0 ? count - 1 : active - 1)
         break
       case 'Home':
-        if (count > 0) {
-          event.preventDefault()
-          moveActive(0)
-        }
+        if (count === 0) break
+        event.preventDefault()
+        moveActive(0)
         break
       case 'End':
-        if (count > 0) {
-          event.preventDefault()
-          moveActive(count - 1)
-        }
-        break
-      case 'Enter':
+        if (count === 0) break
         event.preventDefault()
-        activate(filtered[active])
+        moveActive(count - 1)
         break
+      case 'Enter': {
+        // Only claim the key when there is actually a row to activate.
+        const target = active >= 0 ? filtered[active] : undefined
+        if (!target) break
+        event.preventDefault()
+        activate(target)
+        break
+      }
       case 'Escape':
         event.preventDefault()
         // Close THIS submenu only — the parent "+" dropdown must stay open.
@@ -205,10 +221,35 @@ export function ComposerPickerPanel({
     }
   }
 
-  if (items.length === 0) {
+  // "Nothing configured" is about CHOICES, not rows: a pinned action row (the
+  // assistant "No assistant" clear row) must not make an empty picker look populated.
+  // The old assistant picker showed its "No assistants available" line INDEPENDENTLY
+  // of the clear row, and both were visible when a selected assistant had been
+  // deleted — so the pinned rows are still rendered alongside the empty state.
+  if (!items.some(item => !item.pinned)) {
     return (
       <div data-testid={testId} className={PICKER_PANEL_CLASSES}>
         {emptyContent}
+        {items.length > 0 && (
+          <div role="listbox" aria-label={searchLabel}>
+            {items.map(item => (
+              <div
+                key={item.id}
+                data-testid={item.testId}
+                role="option"
+                aria-selected={false}
+                onMouseDown={event => event.preventDefault()}
+                onClick={() => activate(item)}
+                className="flex min-w-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm text-foreground hover:bg-accent"
+              >
+                {item.leading}
+                <span className="min-w-0 flex-1 truncate" title={item.label}>
+                  {item.label}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     )
   }
@@ -242,11 +283,20 @@ export function ComposerPickerPanel({
           data-testid={`${testId}-no-matches`}
           className="px-2 py-2 text-sm text-muted-foreground"
         >
-          No matches.
+          {noMatchesText}
         </div>
       ) : (
         <ScrollArea axis="y" autoHide="leave" className={cn(PICKER_LIST_MAX_H, '-mx-1 px-1')}>
-          <div ref={listRef} id={listId} role="listbox" aria-label={searchLabel}>
+          <div
+            ref={listRef}
+            id={listId}
+            role="listbox"
+            aria-label={searchLabel}
+            // Without this, several rows carrying aria-selected=true is unexplained
+            // to AT — the KB picker is a multi-select toggle (its predecessor said so
+            // with aria-pressed, which the listbox model replaced).
+            aria-multiselectable={multiSelect || undefined}
+          >
             {/* Every `option` MUST be a DIRECT child of the `listbox`: ARIA's
                 required-children relationship (and axe's `aria-required-children`)
                 does not see through a wrapper element, and a screen reader stops
@@ -263,7 +313,6 @@ export function ComposerPickerPanel({
                   data-testid={item.testId}
                   role="option"
                   aria-selected={selected}
-                  aria-disabled={item.disabled || undefined}
                   data-active={index === active || undefined}
                   // Keep DOM focus in the search input: the Base UI popup is
                   // tabIndex=-1, so a plain mousedown on a non-focusable row moves
@@ -278,7 +327,6 @@ export function ComposerPickerPanel({
                   className={cn(
                     'flex min-w-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm',
                     'data-[active]:bg-accent data-[active]:text-accent-foreground',
-                    'aria-disabled:pointer-events-none aria-disabled:opacity-50',
                     selected ? 'text-primary' : 'text-foreground',
                     item.separatorAfter && 'mb-1 rounded-b-none border-b border-border pb-2',
                   )}
@@ -314,7 +362,7 @@ export interface ComposerPickerPopoverProps extends Omit<ComposerPickerPanelProp
    * scanner can see it. `aria-expanded` is injected here so the caller cannot
    * forget it.
    */
-  trigger: ReactElement<{ 'aria-expanded'?: boolean }>
+  trigger: ReactElement
   /** Whether activating an item should close the picker (single-select) or not. */
   closeOnSelect?: boolean
 }
@@ -347,7 +395,7 @@ export function ComposerPickerPopover({
         />
       }
     >
-      {cloneElement(trigger, { 'aria-expanded': open })}
+      {trigger}
     </Popover>
   )
 }
