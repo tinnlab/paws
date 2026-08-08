@@ -24,9 +24,25 @@
 --                        the notice live via a transient in-memory flag, but
 --                        that flag resets on reload — which is why the fact
 --                        must be persisted. ~47% of the measured notices.
+--   'failed'           — the turn ended in an ERROR before producing a
+--                        user-visible answer (the provider stream failed
+--                        mid-generation, or chunk processing failed). NOT the
+--                        same as 'empty': an errored turn is not a model that
+--                        had nothing to say.
+--   'content_filtered' — the provider terminated on its CONTENT POLICY (OpenAI
+--                        `content_filter`, Anthropic `refusal`, Gemini
+--                        `SAFETY`/`RECITATION`/`PROHIBITED_CONTENT`/`BLOCKLIST`)
+--                        before any user-visible answer. Like
+--                        'budget_truncated' an identical retry reproduces it,
+--                        so the copy must not advise a bare retry.
 --   'empty'            — the turn terminated normally AND produced no
 --                        user-visible answer. The model genuinely had nothing
 --                        to say; a retry is reasonable.
+--
+-- An answerless turn whose provider reason is NOT one of the above (an
+-- unrecognized/unenumerated token) records NULL rather than being asserted as
+-- 'empty' — "a reason we did not enumerate" is not evidence the model had
+-- nothing to say, and NULL renders the honest "reason not recorded" copy.
 --
 -- NULL means "healthy turn" (or a row written before this column existed).
 -- Deliberately NO backfill (DEC-3): the cause is not recoverable for historical

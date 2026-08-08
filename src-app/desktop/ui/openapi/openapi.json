@@ -29587,6 +29587,16 @@
             "const": "aborted"
           },
           {
+            "description": "The turn ended in an ERROR before producing a user-visible answer: the\n provider stream failed mid-generation, or persisting/processing a chunk\n failed. Distinct from `Empty` because an errored turn is not a model that\n \"had nothing to say\" — asserting that would be a confident wrong\n diagnosis on a path where the model may well have been about to answer.",
+            "type": "string",
+            "const": "failed"
+          },
+          {
+            "description": "The provider terminated the turn on its CONTENT POLICY — a safety filter\n (`content_filter`, Gemini `SAFETY`/`RECITATION`/`PROHIBITED_CONTENT`/\n `BLOCKLIST`) or an explicit model `refusal` — before any user-visible\n answer. Answerless by construction, and an identical retry reproduces it\n deterministically, so (like `BudgetTruncated`) it must never carry bare\n retry advice (INV-3).",
+            "type": "string",
+            "const": "content_filtered"
+          },
+          {
             "description": "The turn terminated normally AND produced no user-visible answer — the\n model genuinely had nothing to say.",
             "type": "string",
             "const": "empty"

@@ -18,16 +18,21 @@ import {
 } from '../helpers/sse-mock-helpers'
 
 /**
- * Empty-completion notice spec (TEST-4).
+ * Empty-completion notice spec (TEST-4) — the notice FIRES at all.
  *
  * When a turn finalises with only reasoning (or nothing) and no tool call, the
  * persisted assistant message has no user-visible answer. `ChatMessage.tsx`
- * detects that from the message CONTENT at render time (it does NOT consume the
- * stream's `finish_reason`; the backend's `finish_reason: "empty"` is an
- * independent telemetry signal asserted separately in the backend test) and
- * shows an inline notice so the chat never appears to silently hang. Because the
- * detection is render-time it must also survive a page reload — this spec
- * asserts the notice appears after `complete` and again after a reload.
+ * detects that from the message CONTENT at render time and shows an inline
+ * notice so the chat never appears to silently hang. Because the detection is
+ * render-time it must also survive a page reload — this spec asserts the notice
+ * appears after `complete` and again after a reload.
+ *
+ * The turn's terminal reason is NOT what triggers it: the server no longer
+ * overwrites `finish_reason` with the literal `"empty"` (INV-2 — the provider's
+ * reason travels intact, and WHY the turn was answerless rides alongside it on
+ * `completion_state`), so this spec streams an ordinary `stop`. Which CAUSE the
+ * notice names, and that the cause survives a reload, is asserted against the
+ * real stack in `empty-completion-cause.spec.ts`.
  */
 
 // An assistant message whose only content is a thinking block — the reported
@@ -62,12 +67,13 @@ test.describe('Empty-completion notice', () => {
     page,
     testInfra,
   }) => {
-    // Stream ends with only reasoning + a terminal `empty` finish_reason, then
-    // the post-complete reload returns the persisted thinking-only message.
+    // Stream ends with no content at all and an ordinary terminal reason (the
+    // server can no longer emit `finish_reason: "empty"`), then the
+    // post-complete reload returns the persisted thinking-only message.
     await mockChatStream(page, [
       [
         startedEvent({ userMessageId: 'umsg_empty_1' }),
-        completeEvent({ finishReason: 'empty' }),
+        completeEvent({ finishReason: 'stop' }),
       ],
     ])
     await mockGetMessages(page, [

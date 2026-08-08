@@ -146,21 +146,54 @@ function answerless(completion_state?: string): MessageWithContent {
   } as unknown as MessageWithContent
 }
 
-test('TEST-3 [acceptance/INV-1]: truncated vs empty vs aborted are DISTINCT presentations', () => {
-  const truncated = emptyCompletionNotice(emptyCompletionCause(answerless('budget_truncated')))
-  const empty = emptyCompletionNotice(emptyCompletionCause(answerless('empty')))
-  const aborted = emptyCompletionNotice(emptyCompletionCause(answerless('aborted')))
+test('TEST-3 [acceptance/INV-1]: every recorded cause is a DISTINCT presentation', () => {
+  const causes = [
+    'budget_truncated',
+    'empty',
+    'aborted',
+    'failed',
+    'content_filtered',
+    undefined, // no cause recorded
+  ] as const
+  const descriptions = causes.map(c => emptyCompletionNotice(emptyCompletionCause(answerless(c))).description)
 
   // The invariant, asserted directly: identical blocks, different presentation.
-  assert.notEqual(truncated.description, empty.description)
-  assert.notEqual(truncated.description, aborted.description)
-  assert.notEqual(empty.description, aborted.description)
+  assert.equal(
+    new Set(descriptions).size,
+    descriptions.length,
+    `each cause must present differently, got: ${JSON.stringify(descriptions, null, 2)}`,
+  )
 
+  const notice = (c?: string) => emptyCompletionNotice(emptyCompletionCause(answerless(c))).description
   // …and each names its own cause rather than being generically different.
-  assert.match(truncated.description, /token budget/i)
-  assert.match(truncated.description, /max tokens|reasoning effort/i)
-  assert.match(aborted.description, /stopped/i)
-  assert.match(empty.description, /empty response/i)
+  assert.match(notice('budget_truncated'), /token budget/i)
+  assert.match(notice('budget_truncated'), /max tokens|reasoning effort/i)
+  assert.match(notice('aborted'), /stopped/i)
+  assert.match(notice('empty'), /empty response/i)
+  assert.match(notice('failed'), /error/i)
+  assert.match(notice('content_filtered'), /content policy|safety|refus/i)
+})
+
+// An ERRORED turn and a CONTENT-FILTERED turn must never be told "the model
+// returned an empty response" — that is a confident wrong diagnosis, and it is
+// the exact string the whole change exists to stop showing for causes it does
+// not describe.
+test('TEST-3 [acceptance/INV-3]: failed / content_filtered never claim an empty response', () => {
+  for (const cause of ['failed', 'content_filtered', 'aborted'] as const) {
+    const description = emptyCompletionNotice(emptyCompletionCause(answerless(cause))).description
+    assert.ok(
+      !/empty response/i.test(description),
+      `${cause} must not claim the model returned an empty response: ${description}`,
+    )
+  }
+  // A content filter reproduces deterministically on an identical retry, so the
+  // copy must ask for a REPHRASE rather than a bare "try again".
+  const filtered = emptyCompletionNotice(emptyCompletionCause(answerless('content_filtered'))).description
+  assert.ok(
+    !/please try again/i.test(filtered),
+    `content_filtered must not advise a bare retry: ${filtered}`,
+  )
+  assert.match(filtered, /rephrase|different model/i)
 })
 
 test('TEST-3 [acceptance/INV-3]: the truncated turn does NOT advise a bare retry', () => {
@@ -181,17 +214,25 @@ test('TEST-3 [acceptance/INV-3]: the truncated turn does NOT advise a bare retry
 test('emptyCompletionCause: parses the closed vocabulary and degrades safely', () => {
   assert.equal(emptyCompletionCause(answerless('budget_truncated')), 'budget_truncated')
   assert.equal(emptyCompletionCause(answerless('aborted')), 'aborted')
+  assert.equal(emptyCompletionCause(answerless('failed')), 'failed')
+  assert.equal(emptyCompletionCause(answerless('content_filtered')), 'content_filtered')
   assert.equal(emptyCompletionCause(answerless('empty')), 'empty')
   // A row written before the column existed (deliberately not backfilled).
   assert.equal(emptyCompletionCause(answerless(undefined)), 'unknown')
   // A value a newer server added that this client doesn't know yet — must not
   // throw and must not be presented as a confident diagnosis.
   assert.equal(emptyCompletionCause(answerless('some_future_state')), 'unknown')
-  // …and an unknown cause falls back to the original generic copy.
-  assert.match(
-    emptyCompletionNotice('unknown').description,
-    /empty response and made no tool call/i,
+  // …and an unknown cause must SAY it doesn't know: asserting "the model
+  // returned an empty response" for a turn whose cause was never recorded is a
+  // cause the client cannot possibly know.
+  const unknown = emptyCompletionNotice('unknown').description
+  assert.ok(
+    !/empty response/i.test(unknown),
+    `the no-recorded-cause copy must not assert an empty response: ${unknown}`,
   )
+  assert.match(unknown, /not recorded/i)
+  // INV-3 still wants an action, even when the cause is unknown.
+  assert.match(unknown, /send the message again/i)
 })
 
 // TEST-6 — the correct-behaviour cases must STAY correct. A cause-aware notice

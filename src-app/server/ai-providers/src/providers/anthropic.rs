@@ -643,8 +643,16 @@ impl AnthropicProvider {
                     }
                 }
                 ThinkingMode::Enabled => {
-                    let budget = thinking.budget_tokens.unwrap_or(10000).max(1024);
-                    body["thinking"] = json!({ "type": "enabled", "budget_tokens": budget });
+                    // INV-4 on the WIRE: the adapter must never raise a caller's
+                    // budget back to / above the request's completion budget.
+                    // `None` = no budget can satisfy both Anthropic's 1024 floor
+                    // and the completion budget, so thinking is omitted rather
+                    // than sent in a shape that guarantees no answer tokens.
+                    if let Some(budget) =
+                        Self::enabled_thinking_budget(thinking.budget_tokens, request.max_tokens)
+                    {
+                        body["thinking"] = json!({ "type": "enabled", "budget_tokens": budget });
+                    }
                 }
             }
         }
@@ -657,6 +665,42 @@ impl AnthropicProvider {
         body
     }
 
+    /// Resolve the `thinking.budget_tokens` for the legacy `Enabled` mode.
+    ///
+    /// Anthropic requires `1024 <= budget_tokens < max_tokens`. The previous
+    /// `budget_tokens.unwrap_or(10000).max(1024)` honoured only the FLOOR, so a
+    /// caller that had deliberately clamped its budget under a small completion
+    /// budget (INV-4 — an answer must remain possible by construction) had it
+    /// silently raised back up: completion 1000 → caller clamp 500 → wire 1024,
+    /// i.e. a request in which reasoning may consume the entire budget.
+    ///
+    /// Returns `None` when the completion budget is too small for ANY valid
+    /// budget (`max_tokens <= 1024`); the caller then omits the thinking block
+    /// entirely — an honest "no thinking" beats an invalid request or a
+    /// guaranteed-answerless one.
+    fn enabled_thinking_budget(requested: Option<i32>, max_tokens: Option<u32>) -> Option<i32> {
+        /// Anthropic's documented minimum for `thinking.budget_tokens`.
+        const MIN_BUDGET_TOKENS: i32 = 1024;
+        /// Used when the caller states no budget at all (unchanged default).
+        const DEFAULT_BUDGET_TOKENS: i32 = 10000;
+
+        let requested = requested.unwrap_or(DEFAULT_BUDGET_TOKENS);
+        match max_tokens {
+            // No stated completion budget — nothing to stay below; only the
+            // provider floor applies (previous behaviour).
+            None => Some(requested.max(MIN_BUDGET_TOKENS)),
+            Some(max) => {
+                // Saturate rather than fail: a budget beyond i32 cannot constrain.
+                let max = i32::try_from(max).unwrap_or(i32::MAX);
+                // Strictly BELOW the completion budget.
+                let cap = max.saturating_sub(1);
+                if cap < MIN_BUDGET_TOKENS {
+                    return None;
+                }
+                Some(requested.clamp(MIN_BUDGET_TOKENS, cap))
+            }
+        }
+    }
 }
 
 /// Anthropic SSE response adapter — maps Anthropic's `message_start` /
@@ -1108,6 +1152,48 @@ mod tests {
             let body = AnthropicProvider::build_request_body(&r, true);
             assert_eq!(body["thinking"]["type"], "enabled");
             assert_eq!(body["thinking"]["budget_tokens"], 4096);
+        }
+
+        // INV-4, asserted on the REQUEST BODY rather than on a pure helper: the
+        // adapter must never raise a clamped thinking budget back to or above
+        // the request's completion budget. The pure-function clamp two layers up
+        // stayed green while this arm re-raised 500 → 1024 against a 1000-token
+        // completion budget, so the property has to be checked where it is
+        // actually sent.
+        #[test]
+        fn enabled_thinking_budget_never_reaches_the_completion_budget() {
+            // The re-raise case: caller clamped to 500 under a 1000 max_tokens.
+            let mut r = req("claude-3-5-sonnet");
+            r.max_tokens = Some(1000);
+            r.thinking = Some(ThinkingConfig::with_budget(500));
+            let body = AnthropicProvider::build_request_body(&r, true);
+            assert_eq!(body["max_tokens"], 1000);
+            assert!(
+                body.get("thinking").is_none(),
+                "no budget can satisfy both the 1024 floor and a 1000-token completion \
+                 budget, so thinking must be omitted, got: {body}"
+            );
+
+            // A budget that would exactly consume the completion budget is cut
+            // strictly below it (the measured 4096/4096 configuration).
+            let mut r = req("claude-3-5-sonnet");
+            r.max_tokens = Some(4096);
+            r.thinking = Some(ThinkingConfig::with_budget(4096));
+            let body = AnthropicProvider::build_request_body(&r, true);
+            let budget = body["thinking"]["budget_tokens"]
+                .as_i64()
+                .expect("budget_tokens present");
+            let max = body["max_tokens"].as_i64().expect("max_tokens present");
+            assert!(
+                budget < max,
+                "thinking budget {budget} must stay strictly below max_tokens {max}"
+            );
+
+            // A comfortably-fitting budget is untouched (no behaviour change).
+            let mut r = req("claude-3-5-sonnet"); // req() carries max_tokens 8192
+            r.thinking = Some(ThinkingConfig::with_budget(2048));
+            let body = AnthropicProvider::build_request_body(&r, true);
+            assert_eq!(body["thinking"]["budget_tokens"], 2048);
         }
 
         #[test]

@@ -52,6 +52,27 @@ struct Script {
     text: &'static str,
     /// The terminal `finish_reason` (verbatim OpenAI wire value).
     finish_reason: &'static str,
+    /// Pause (ms) between the deltas and the TERMINAL chunk, streamed
+    /// incrementally rather than as one buffered body. Non-zero opens a real
+    /// window in which the turn is genuinely in flight — what the cancellation
+    /// test needs, since a stop request can only hit a running generation.
+    stall_ms: u64,
+}
+
+impl Script {
+    /// The common case: everything in one buffered response, no stall.
+    const fn immediate(
+        reasoning: Option<&'static str>,
+        text: &'static str,
+        finish_reason: &'static str,
+    ) -> Script {
+        Script {
+            reasoning,
+            text,
+            finish_reason,
+            stall_ms: 0,
+        }
+    }
 }
 
 struct StubState {
@@ -108,7 +129,11 @@ async fn chat_completions(
     axum::extract::State(state): axum::extract::State<Arc<StubState>>,
     axum::Json(_body): axum::Json<Value>,
 ) -> Response {
-    let s = &state.script;
+    let s = state.script.clone();
+    if s.stall_ms > 0 {
+        return stalling_completion(s);
+    }
+    let s = &s;
     let mut out = String::new();
 
     if let Some(r) = s.reasoning {
@@ -151,6 +176,47 @@ async fn chat_completions(
         out,
     )
         .into_response()
+}
+
+/// The same script, but streamed in stages with a real pause before the terminal
+/// chunk — so the turn is observably IN FLIGHT while the test cancels it.
+fn stalling_completion(s: Script) -> Response {
+    let stream = async_stream::stream! {
+        if let Some(r) = s.reasoning {
+            let mut first = String::new();
+            push_event(
+                &mut first,
+                &json!({
+                    "id": "stub",
+                    "object": "chat.completion.chunk",
+                    "choices": [{
+                        "index": 0,
+                        "delta": { "reasoning_content": r },
+                        "finish_reason": null
+                    }]
+                }),
+            );
+            yield Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(first));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(s.stall_ms)).await;
+        let mut tail = String::new();
+        push_event(
+            &mut tail,
+            &json!({
+                "id": "stub",
+                "object": "chat.completion.chunk",
+                "choices": [{ "index": 0, "delta": {}, "finish_reason": s.finish_reason }],
+                "usage": { "prompt_tokens": 1, "completion_tokens": 10, "total_tokens": 11 }
+            }),
+        );
+        tail.push_str("data: [DONE]\n\n");
+        yield Ok(axum::body::Bytes::from(tail));
+    };
+
+    Response::builder()
+        .header(axum::http::header::CONTENT_TYPE, "text/event-stream")
+        .body(axum::body::Body::from_stream(stream))
+        .expect("build stalling SSE response")
 }
 
 fn push_event(out: &mut String, v: &Value) {
@@ -286,17 +352,38 @@ async fn run_scripted_turn(
     (server, user.token, conv_id, turn)
 }
 
+/// Re-read a message until its `completion_state` is non-NULL (or time runs
+/// out). The cancel path finalizes AFTER the client-visible frame, so the write
+/// is not ordered against the HTTP response the way the normal path's is.
+async fn await_completion_state(
+    server: &TestServer,
+    token: &str,
+    conv_id: Uuid,
+    message_id: Uuid,
+) -> Value {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let mut last = Value::Null;
+    while std::time::Instant::now() < deadline {
+        last = refetch_message(server, token, conv_id, message_id).await;
+        if last.get("completion_state").is_some_and(|v| !v.is_null()) {
+            return last;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+    last
+}
+
 // ── TEST-2: a budget-truncated turn keeps its reason AND records the cause ──
 
 #[tokio::test]
 async fn budget_truncated_turn_keeps_length_and_persists_the_cause() {
     // The production shape: all output went to `reasoning_content`, the budget
     // ran out, and the stream ended `length` with zero content deltas.
-    let script = Script {
-        reasoning: Some("a very long chain of thought that never reaches an answer"),
-        text: "",
-        finish_reason: "length",
-    };
+    let script = Script::immediate(
+        Some("a very long chain of thought that never reaches an answer"),
+        "",
+        "length",
+    );
     let (server, token, conv_id, turn) = run_scripted_turn("budget_truncated_user", script).await;
 
     let complete = turn
@@ -354,11 +441,7 @@ async fn answered_turn_persists_no_completion_state() {
     // The control. A turn that produced an answer must leave `completion_state`
     // NULL — the column exists only to explain answerless turns, so a healthy
     // turn that acquired a state would make the notice fire on a good answer.
-    let script = Script {
-        reasoning: Some("brief thought"),
-        text: "here is the answer",
-        finish_reason: "stop",
-    };
+    let script = Script::immediate(Some("brief thought"), "here is the answer", "stop");
     let (server, token, conv_id, turn) = run_scripted_turn("answered_user", script).await;
 
     let complete = turn
@@ -394,11 +477,11 @@ async fn truncated_turn_that_still_answered_persists_no_completion_state() {
     // perfectly useful (if incomplete) answer. Only `length` AND no visible
     // answer is the reported failure, so the classifier must not fire on the
     // reason alone.
-    let script = Script {
-        reasoning: Some("thinking"),
-        text: "a partial answer that got cut o",
-        finish_reason: "length",
-    };
+    let script = Script::immediate(
+        Some("thinking"),
+        "a partial answer that got cut o",
+        "length",
+    );
     let (server, token, conv_id, turn) =
         run_scripted_turn("truncated_but_answered_user", script).await;
 
@@ -420,4 +503,140 @@ async fn truncated_turn_that_still_answered_persists_no_completion_state() {
         message.get("completion_state").is_none() || message["completion_state"].is_null(),
         "a truncated turn that ANSWERED must persist NULL, got: {message}"
     );
+}
+
+// ── A normal `stop` with no answer IS the genuinely-empty case ──────────────
+
+#[tokio::test]
+async fn stop_with_no_answer_persists_empty() {
+    // The matrix's missing cell: `length`+no-answer, `stop`+answer and
+    // `length`+answer were covered, but not the one case for which "the model
+    // returned an empty response … please try again" is actually TRUE. Without
+    // it, deleting that copy entirely would still pass.
+    let script = Script::immediate(Some("brief thought"), "", "stop");
+    let (server, token, conv_id, turn) = run_scripted_turn("stop_no_answer_user", script).await;
+
+    let complete = turn
+        .frames
+        .iter()
+        .find(|f| f.event_type == "complete")
+        .expect("a complete frame");
+    assert_eq!(complete.data["finish_reason"], "stop");
+    assert_eq!(
+        complete.data["completion_state"], "empty",
+        "a normally-terminated answerless turn is `empty`, got: {}",
+        complete.data
+    );
+
+    let message = refetch_message(&server, &token, conv_id, turn.assistant_message_id).await;
+    assert_eq!(
+        message["completion_state"], "empty",
+        "the re-read message must carry `empty`, got: {message}"
+    );
+}
+
+// ── A content-policy termination is NOT "the model had nothing to say" ──────
+
+#[tokio::test]
+async fn content_filtered_turn_is_not_classified_empty() {
+    // The defect: the classifier's catch-all turned every unenumerated terminal
+    // reason into `empty`, so a safety-filtered turn told the user "the model
+    // returned an empty response … Please try again" — a positive claim about a
+    // cause it did not have, and retry advice for something an identical retry
+    // reproduces deterministically (INV-3).
+    let script = Script::immediate(Some("considering the request"), "", "content_filter");
+    let (server, token, conv_id, turn) = run_scripted_turn("content_filter_user", script).await;
+
+    let complete = turn
+        .frames
+        .iter()
+        .find(|f| f.event_type == "complete")
+        .expect("a complete frame");
+    // INV-2: the provider's own reason still survives intact…
+    assert_eq!(
+        complete.data["finish_reason"], "content_filter",
+        "the provider's content_filter must survive to the client, got: {}",
+        complete.data
+    );
+    // …and the answerless cause names the content policy, never `empty`.
+    assert_eq!(
+        complete.data["completion_state"], "content_filtered",
+        "a content-filtered answerless turn must not be `empty`, got: {}",
+        complete.data
+    );
+
+    let message = refetch_message(&server, &token, conv_id, turn.assistant_message_id).await;
+    assert_eq!(
+        message["completion_state"], "content_filtered",
+        "the re-read message must carry `content_filtered`, got: {message}"
+    );
+}
+
+// ── A CANCELLED turn records `aborted`, end to end ──────────────────────────
+
+#[tokio::test]
+async fn cancelled_turn_persists_aborted() {
+    // `aborted` is ~47% of the measured notices, and until now the single line
+    // of real wiring that records it (`mark_turn_end(Cancelled)`) was executed by
+    // no test at all — only the pure classifier was covered. This drives the REAL
+    // stop path: a genuinely in-flight turn, cancelled over the public stop
+    // endpoint, then re-read exactly as the frontend re-reads it after a reload.
+    let server = TestServer::start().await;
+    let user = create_user_with_permissions(&server, "cancelled_turn_user", chat_perms()).await;
+    let stub = FinishStub::start(Script {
+        reasoning: Some("a long chain of thought the user does not wait for"),
+        text: "",
+        finish_reason: "stop",
+        // Long enough that the stop request lands while the turn is running.
+        stall_ms: 4000,
+    })
+    .await;
+    let model = create_model(&server, &user.user_id, &stub.base_url()).await;
+    let model_id = parse_uuid(&model["id"]);
+
+    let conversation =
+        create_conversation(&server, &user.token, Some(model_id), Some("preset")).await;
+    let conv_id = parse_uuid(&conversation["id"]);
+    let branch_id = parse_uuid(&conversation["active_branch_id"]);
+
+    let response = helpers::send_message_simple(
+        &server,
+        &user.token,
+        conv_id,
+        model_id,
+        branch_id,
+        "start something long",
+    )
+    .await;
+    let status = response.status();
+    let body: Value = response.json().await.expect("send response json");
+    assert_eq!(status, StatusCode::OK, "send failed: {body}");
+    let assistant_message_id = parse_uuid(&body["assistant_message_id"]);
+
+    // Let the reasoning delta land, then stop the turn mid-flight.
+    tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+    let stop = reqwest::Client::new()
+        .post(server.api_url(&format!(
+            "/conversations/{conv_id}/messages/{assistant_message_id}/stop"
+        )))
+        .header("Authorization", format!("Bearer {}", user.token))
+        .send()
+        .await
+        .expect("stop request");
+    assert_eq!(
+        stop.status(),
+        StatusCode::NO_CONTENT,
+        "stop must find an in-flight generation (409 = the turn already finished; \
+         raise the stub stall if this ever becomes flaky)"
+    );
+
+    // The persisted state is the RELOAD path's source of truth: the frontend's
+    // live "interrupted" flag resets on reload, so without this the abandoned
+    // turn re-renders as "the model returned an empty response".
+    let message = await_completion_state(&server, &user.token, conv_id, assistant_message_id).await;
+    assert_eq!(
+        message["completion_state"], "aborted",
+        "a cancelled turn must persist `aborted`, never `empty`, got: {message}"
+    );
+    drop(stub);
 }

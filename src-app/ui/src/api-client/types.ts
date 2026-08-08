@@ -719,7 +719,7 @@ export interface CompactConversationRequest {
  *  alongside this field (INV-2). Classifying server-side keeps per-provider
  *  spellings out of the frontend.
  */
-export type CompletionState = 'budget_truncated' | 'aborted' | 'empty'
+export type CompletionState = 'budget_truncated' | 'aborted' | 'failed' | 'content_filtered' | 'empty'
 
 /** A non-secret config field a provider needs — drives the generic admin UI. */
 export interface ConfigField {

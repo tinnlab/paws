@@ -73,6 +73,19 @@ pub enum CompletionState {
     /// flag, but that flag resets on reload — which is exactly why the fact has
     /// to be persisted here.
     Aborted,
+    /// The turn ended in an ERROR before producing a user-visible answer: the
+    /// provider stream failed mid-generation, or persisting/processing a chunk
+    /// failed. Distinct from `Empty` because an errored turn is not a model that
+    /// "had nothing to say" — asserting that would be a confident wrong
+    /// diagnosis on a path where the model may well have been about to answer.
+    Failed,
+    /// The provider terminated the turn on its CONTENT POLICY — a safety filter
+    /// (`content_filter`, Gemini `SAFETY`/`RECITATION`/`PROHIBITED_CONTENT`/
+    /// `BLOCKLIST`) or an explicit model `refusal` — before any user-visible
+    /// answer. Answerless by construction, and an identical retry reproduces it
+    /// deterministically, so (like `BudgetTruncated`) it must never carry bare
+    /// retry advice (INV-3).
+    ContentFiltered,
     /// The turn terminated normally AND produced no user-visible answer — the
     /// model genuinely had nothing to say.
     Empty,
@@ -84,6 +97,8 @@ impl CompletionState {
         match self {
             Self::BudgetTruncated => "budget_truncated",
             Self::Aborted => "aborted",
+            Self::Failed => "failed",
+            Self::ContentFiltered => "content_filtered",
             Self::Empty => "empty",
         }
     }
@@ -98,6 +113,8 @@ impl CompletionState {
         match s {
             "budget_truncated" => Some(Self::BudgetTruncated),
             "aborted" => Some(Self::Aborted),
+            "failed" => Some(Self::Failed),
+            "content_filtered" => Some(Self::ContentFiltered),
             "empty" => Some(Self::Empty),
             other => {
                 tracing::warn!(
@@ -123,6 +140,8 @@ impl std::str::FromStr for CompletionState {
         match s {
             "budget_truncated" => Ok(Self::BudgetTruncated),
             "aborted" => Ok(Self::Aborted),
+            "failed" => Ok(Self::Failed),
+            "content_filtered" => Ok(Self::ContentFiltered),
             "empty" => Ok(Self::Empty),
             _ => Err(format!("Invalid completion state: {}", s)),
         }
@@ -182,6 +201,8 @@ mod tests {
         for state in [
             CompletionState::BudgetTruncated,
             CompletionState::Aborted,
+            CompletionState::Failed,
+            CompletionState::ContentFiltered,
             CompletionState::Empty,
         ] {
             assert_eq!(CompletionState::from_db_str(state.as_str()), Some(state));

@@ -78,13 +78,36 @@ survives only in a server log line. Nothing about *why* a turn was answerless is
 persisted (there is no `finish_reason` column), so on reload the UI re-derives
 "empty" from the blocks alone and cannot tell the cases apart even in principle.
 
-### A contributing ziee-side defect
+### A latent ziee-side defect — NOT reachable in the reported configuration
 
-`thinking_config_for` sets `effort: ThinkingEffort::High` unconditionally, and in
-the `budget` arm sets `budget_tokens: Some(4096)` — a hardcoded thinking budget
-**equal to the rig's entire completion budget**. A thinking budget that is not
-bounded below the completion budget guarantees a configuration in which no answer
-tokens can exist.
+**Corrected 2026-08-08 after a blind audit.** An earlier draft of this document
+claimed the hardcoded thinking budget was a *contributing cause* of the reported
+bug. That is **wrong**, and the correction matters:
+
+- The rig's model row for `qwen3.6-35b-a3b` declares capabilities
+  `{vision, tools, chat}` — **no thinking capability** (verified against the live
+  API). So `resolved_thinking_style` returns `None`, `thinking_config_for` returns
+  `None`, and ziee sends **no thinking config, no `reasoning_effort`, and no
+  `budget_tokens`** on this path.
+- Independently, `providers/openai.rs` never serializes `budget_tokens` at all —
+  the OpenAI-compatible adapter only ever sends `reasoning_effort`.
+
+Qwen3.6 reasons **natively**, of its own accord, with no prompting from ziee. So
+ziee contributes nothing to the reasoning length here. The reported failure is
+entirely: *a natively-reasoning model + a 4096-token completion cap*.
+
+The defect below is real but **latent**, affecting only the budget-style families
+(Anthropic / Gemini) that actually consume `budget_tokens`:
+
+`thinking_config_for`'s `budget` arm hardcodes `budget_tokens: Some(4096)`,
+unrelated to the request's completion budget, so a small `max_tokens` can leave
+zero answer headroom. Additionally `providers/anthropic.rs` applies
+`.unwrap_or(10000).max(1024)`, which can raise a clamped budget back **above** a
+small completion budget.
+
+**INV-4 therefore hardens a different, latent path — it is NOT a mitigation for
+the reported bug.** The mitigations that do apply to the reported case are raising
+the model's `max_tokens` and making the failure legible (INV-1..INV-3).
 
 ## Why the current message is wrong
 
@@ -110,6 +133,9 @@ case: the model returned a great deal, and was cut off mid-flight.
   cause that an identical retry reproduces.
 - **INV-4**: A configured thinking budget MUST be strictly less than the
   completion budget, so an answer remains possible by construction.
+  *(Scope, per the correction above: this binds the budget-style families that
+  actually consume `budget_tokens`. It is latent hardening, NOT a fix for the
+  reported OpenAI-compatible case, and must not be presented as one.)*
 
 ## Out of scope (recorded, not built here)
 

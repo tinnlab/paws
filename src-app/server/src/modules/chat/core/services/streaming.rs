@@ -557,7 +557,7 @@ impl StreamingService {
                     finalized: false,
                     produced_visible_content: false,
                     turn_produced_visible_content_before: turn_produced_visible_content,
-                    cancelled: false,
+                    end: TurnEnd::Normal,
                 }));
 
                 // Stream chunks through accumulator
@@ -574,6 +574,17 @@ impl StreamingService {
                             );
 
                             let mut acc = accumulator.lock().await;
+                            // Observe a departed consumer BEFORE processing: the
+                            // provider's terminal chunk finalizes inline, so a
+                            // drop first noticed on the send below would arrive
+                            // after the row was already written as a normal
+                            // (answerless ⇒ "empty") turn. Checking here means the
+                            // classification is right the first time; the
+                            // `mark_turn_end` after a failed send is the backstop
+                            // for a drop that happens between the two.
+                            if tx.is_closed() {
+                                acc.mark_turn_end(TurnEnd::Cancelled).await;
+                            }
                             match acc.process_chunk(ai_chunk).await {
                                 Ok(output_chunk) => {
                                     if tx.send(Ok(output_chunk)).is_err() {
@@ -589,8 +600,10 @@ impl StreamingService {
                                         // reload, so without the persisted state an
                                         // abandoned turn re-renders as "the model
                                         // returned an empty response" (~47% of the
-                                        // measured notices).
-                                        acc.cancelled = true;
+                                        // measured notices). `mark_turn_end` rewrites
+                                        // the persisted state when the turn was already
+                                        // finalized by this very chunk.
+                                        acc.mark_turn_end(TurnEnd::Cancelled).await;
                                         let _ = acc.finalize().await;
                                         return;
                                     }
@@ -601,7 +614,10 @@ impl StreamingService {
                                     // idempotent, so this mirrors the
                                     // receiver-dropped path and stops a
                                     // mid-stream failure from discarding the
-                                    // partial assistant message.
+                                    // partial assistant message. The turn ENDED
+                                    // IN AN ERROR, so it must not be recorded as
+                                    // a model that had nothing to say.
+                                    acc.mark_turn_end(TurnEnd::Failed).await;
                                     let _ = acc.finalize().await;
                                     let _ = tx.send(Err(e));
                                     return;
@@ -611,9 +627,12 @@ impl StreamingService {
                         Err(e) => {
                             // Provider stream errored mid-generation: persist
                             // the partial message (idempotent finalize) before
-                            // reporting the error, same as the cancel path.
+                            // reporting the error, same as the cancel path —
+                            // recorded as `failed`, because a turn that ERRORED
+                            // is not a turn the model had nothing to say on.
                             {
                                 let mut acc = accumulator.lock().await;
+                                acc.mark_turn_end(TurnEnd::Failed).await;
                                 let _ = acc.finalize().await;
                             }
                             let _ = tx.send(Err(AppError::internal_error(format!(
@@ -791,14 +810,22 @@ impl StreamingService {
                         let completion_state = classify_completion_state(
                             finish_reason.as_deref(),
                             turn_produced_visible_content,
-                            false, // this arm is the NORMAL terminal path, never a cancel
+                            // this arm is the NORMAL terminal path — never a
+                            // cancel, never an error (both return earlier).
+                            TurnEnd::Normal,
                         );
-                        if let Some(state) = completion_state {
+                        // Log on the answerless FACT, not on the classification:
+                        // an unenumerated terminal reason records no state (we
+                        // will not assert a cause we cannot name), and that is
+                        // precisely the case worth seeing in the log.
+                        if !turn_produced_visible_content {
                             tracing::warn!(
                                 conversation_id = %conversation_id,
                                 message_id = %assistant_message_id,
                                 provider_finish_reason = %final_finish_reason,
-                                completion_state = %state,
+                                completion_state = completion_state
+                                    .map(|s| s.as_str())
+                                    .unwrap_or("unrecorded"),
                                 "chat turn completed with no user-visible content and no tool call (empty completion)"
                             );
                         }
@@ -1227,6 +1254,58 @@ fn is_budget_exhausted(finish_reason: &str) -> bool {
     finish_reason.eq_ignore_ascii_case("length") || finish_reason.eq_ignore_ascii_case("max_tokens")
 }
 
+/// True for the finish reasons meaning "the provider stopped this on its content
+/// policy" — a safety filter or an explicit model refusal.
+///
+/// Accepts the RAW provider string (the classifier runs before canonicalization)
+/// so every family's spelling matches: OpenAI `content_filter`, Anthropic
+/// `refusal`, Gemini `SAFETY` / `RECITATION` / `PROHIBITED_CONTENT` / `BLOCKLIST`.
+/// The canonical forms (`content_filter`, `refusal`) are covered by the first two
+/// arms, so a canonicalized value classifies identically.
+///
+/// Kept in lockstep with `ai_providers::FinishReason::from_provider`'s
+/// `ContentFilter` / `Refusal` arms (`ai-providers/src/models/chat.rs`).
+fn is_content_blocked(finish_reason: &str) -> bool {
+    [
+        "content_filter",
+        "refusal",
+        "safety",
+        "recitation",
+        "prohibited_content",
+        "blocklist",
+    ]
+    .iter()
+    .any(|known| finish_reason.eq_ignore_ascii_case(known))
+}
+
+/// True for the finish reasons meaning "the turn ended normally".
+///
+/// Raw spellings across families: OpenAI `stop`, Anthropic `end_turn` /
+/// `stop_sequence`, Gemini `STOP`. A turn that ends on one of these with nothing
+/// to show is the ONLY case in which "the model had nothing to say" is a
+/// truthful claim.
+fn is_normal_stop(finish_reason: &str) -> bool {
+    ["stop", "end_turn", "stop_sequence"]
+        .iter()
+        .any(|known| finish_reason.eq_ignore_ascii_case(known))
+}
+
+/// How a streamed assistant turn ENDED, as observed by the stream driver —
+/// orthogonal to the provider's finish reason.
+///
+/// Replaces a bare `cancelled: bool`: an ERRORED turn and a CANCELLED turn are
+/// different facts, and collapsing "not cancelled" into "normal" is what made an
+/// errored turn persist the confident (and wrong) `empty` diagnosis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TurnEnd {
+    /// Ran to the provider's own terminal chunk.
+    Normal,
+    /// The consumer went away (stop-generation, navigation, disconnect).
+    Cancelled,
+    /// The provider stream errored, or processing a chunk failed.
+    Failed,
+}
+
 /// Classify a finished assistant turn into the persisted/wire answerless
 /// vocabulary (ITEM-2 / DEC-2). `None` = a healthy turn.
 ///
@@ -1234,13 +1313,20 @@ fn is_budget_exhausted(finish_reason: &str) -> bool {
 /// terminal stream arm (wire) and `DeltaAccumulator::finalize` (DB) — derive the
 /// same value from the same inputs and can never disagree.
 ///
-/// Precedence matters: a CANCELLED turn is classified `aborted` regardless of
-/// any partial provider reason (the stream was cut short, so whatever reason
-/// arrived describes nothing the user asked for).
+/// Precedence matters: a CANCELLED or FAILED turn is classified from HOW it
+/// ended regardless of any partial provider reason (the stream was cut short, so
+/// whatever reason arrived describes nothing the user asked for).
+///
+/// The mapping is deliberately CLOSED, not a catch-all. Every arm below is a
+/// reason we can name; anything else records `None` — "a terminal token we did
+/// not enumerate" is not evidence that the model had nothing to say, and the
+/// frontend's no-recorded-state copy says exactly that instead of guessing. The
+/// previous `_ => Empty` catch-all is what put "the model returned an empty
+/// response … Please try again" on content-filtered and refused turns.
 fn classify_completion_state(
     provider_finish_reason: Option<&str>,
     produced_visible_content: bool,
-    cancelled: bool,
+    end: TurnEnd,
 ) -> Option<crate::modules::chat::core::models::CompletionState> {
     use crate::modules::chat::core::models::CompletionState;
 
@@ -1248,14 +1334,25 @@ fn classify_completion_state(
     if produced_visible_content {
         return None;
     }
-    if cancelled {
-        return Some(CompletionState::Aborted);
+    match end {
+        TurnEnd::Cancelled => return Some(CompletionState::Aborted),
+        TurnEnd::Failed => return Some(CompletionState::Failed),
+        TurnEnd::Normal => {}
     }
     match provider_finish_reason {
         Some(reason) if is_budget_exhausted(reason) => Some(CompletionState::BudgetTruncated),
-        // Terminated normally (or the provider stated no reason) with nothing to
-        // show: the model genuinely had nothing to say.
-        _ => Some(CompletionState::Empty),
+        // A safety filter or an explicit refusal: answerless by construction and
+        // deterministic on retry, so it gets its own cause + copy (INV-3).
+        Some(reason) if is_content_blocked(reason) => Some(CompletionState::ContentFiltered),
+        // Terminated normally with nothing to show: the model genuinely had
+        // nothing to say. A provider that stated NO reason at all is treated the
+        // same — a clean end of stream is a normal stop.
+        Some(reason) if is_normal_stop(reason) => Some(CompletionState::Empty),
+        None => Some(CompletionState::Empty),
+        // An unenumerated terminal token. We know the turn was answerless (the
+        // caller only reaches here when it was) but NOT why, so record nothing
+        // rather than assert a cause. The caller logs the raw reason.
+        Some(_) => None,
     }
 }
 
@@ -1456,13 +1553,61 @@ struct DeltaAccumulator {
     /// assistant message (which is what the frontend inspects), so `finalize`
     /// ORs the two.
     turn_produced_visible_content_before: bool,
-    /// Set on the abort path (the consumer dropped the stream — stop-generation
-    /// or navigating away) immediately before the idempotent `finalize`, so the
-    /// persisted state records `aborted` rather than a misleading `empty`.
-    cancelled: bool,
+    /// HOW this turn ended, as observed by the stream driver (normal / consumer
+    /// went away / errored). Set via [`DeltaAccumulator::mark_turn_end`] so the
+    /// persisted state records `aborted` / `failed` rather than a misleading
+    /// `empty`.
+    end: TurnEnd,
 }
 
 impl DeltaAccumulator {
+    /// Record HOW this turn ended, and make sure that fact reaches the database
+    /// even when it is only observed AFTER the turn was finalized.
+    ///
+    /// The subtle case this exists for: `process_chunk` finalizes INLINE on the
+    /// provider's terminal chunk, so if the consumer's disappearance is first
+    /// observed on that same chunk (the send of the terminal frame is the one
+    /// that fails), the turn has already been written with `TurnEnd::Normal` and
+    /// `finalize`'s idempotence would silently swallow the abort. Setting the
+    /// flag alone was therefore not enough — after finalization the persisted
+    /// classification is RE-DERIVED and rewritten here.
+    ///
+    /// An abnormal end is never downgraded: the first one observed wins (a
+    /// cancel that then produces a send error stays `aborted`, which is the
+    /// truthful cause).
+    async fn mark_turn_end(&mut self, end: TurnEnd) {
+        if end == TurnEnd::Normal || self.end != TurnEnd::Normal {
+            return;
+        }
+        self.end = end;
+        if !self.finalized {
+            // `finalize` has not run yet — it will classify with the new value.
+            return;
+        }
+        let state = classify_completion_state(
+            self.finish_reason.as_deref(),
+            self.turn_produced_visible_content_before || self.produced_visible_content,
+            self.end,
+        );
+        if let Err(e) = sqlx::query!(
+            r#"UPDATE messages SET completion_state = $1 WHERE id = $2"#,
+            state.map(|s| s.as_str()),
+            self.assistant_message_id
+        )
+        .execute(&self.pool)
+        .await
+        {
+            // Non-fatal: the turn's content is already committed. Log loudly —
+            // a lost cause means the notice degrades to "reason not recorded",
+            // never a wrong diagnosis.
+            tracing::error!(
+                message_id = %self.assistant_message_id,
+                error = %e,
+                "failed to record the post-finalize completion state"
+            );
+        }
+    }
+
     /// Process an AI provider chunk and accumulate deltas in memory
     async fn process_chunk(
         &mut self,
@@ -1778,7 +1923,7 @@ impl DeltaAccumulator {
         let completion_state = classify_completion_state(
             self.finish_reason.as_deref(),
             self.turn_produced_visible_content_before || self.produced_visible_content,
-            self.cancelled,
+            self.end,
         );
         sqlx::query!(
             r#"UPDATE messages SET completion_state = $1 WHERE id = $2"#,
@@ -3119,7 +3264,7 @@ mod tests {
     }
 
     // TEST-9: the answerless classifier — (provider reason, visible-content,
-    // cancelled) → the persisted/wire vocabulary.
+    // how the turn ended) → the persisted/wire vocabulary.
     #[test]
     fn classify_completion_state_maps_cause_to_vocabulary() {
         use crate::modules::chat::core::models::CompletionState;
@@ -3129,44 +3274,89 @@ mod tests {
         // canonical form.
         for raw in ["length", "max_tokens", "MAX_TOKENS", "Length"] {
             assert_eq!(
-                classify_completion_state(Some(raw), false, false),
+                classify_completion_state(Some(raw), false, TurnEnd::Normal),
                 Some(CompletionState::BudgetTruncated),
                 "raw finish reason {raw:?} is a budget exhaustion"
             );
         }
 
-        // Terminated normally with nothing shown → empty. A provider that
-        // states no reason at all is indistinguishable from a plain stop.
+        // Terminated normally with nothing shown → empty, in every family's raw
+        // spelling for a plain stop. A provider that states no reason at all is
+        // indistinguishable from a clean end of stream.
+        for raw in ["stop", "end_turn", "stop_sequence", "STOP"] {
+            assert_eq!(
+                classify_completion_state(Some(raw), false, TurnEnd::Normal),
+                Some(CompletionState::Empty),
+                "raw finish reason {raw:?} is a normal stop"
+            );
+        }
         assert_eq!(
-            classify_completion_state(Some("stop"), false, false),
+            classify_completion_state(None, false, TurnEnd::Normal),
             Some(CompletionState::Empty)
         );
-        assert_eq!(
-            classify_completion_state(None, false, false),
-            Some(CompletionState::Empty)
-        );
-        assert_eq!(
-            classify_completion_state(Some("content_filter"), false, false),
-            Some(CompletionState::Empty)
-        );
+
+        // A content filter / refusal is NOT "the model had nothing to say": it
+        // is answerless for a named, deterministic reason, so it carries its own
+        // state (and its own copy, which must not advise a bare retry — INV-3).
+        // The previous catch-all classified all of these as `Empty`, and a unit
+        // test asserted that; the assertion has been INVERTED here.
+        for raw in [
+            "content_filter",
+            "refusal",
+            "SAFETY",
+            "RECITATION",
+            "PROHIBITED_CONTENT",
+            "BLOCKLIST",
+        ] {
+            assert_eq!(
+                classify_completion_state(Some(raw), false, TurnEnd::Normal),
+                Some(CompletionState::ContentFiltered),
+                "raw finish reason {raw:?} is a content-policy termination, never `empty`"
+            );
+        }
+
+        // An unenumerated terminal token records NOTHING rather than asserting
+        // "the model had nothing to say" about a reason we cannot name.
+        for raw in ["weird", "some_future_reason"] {
+            assert_eq!(
+                classify_completion_state(Some(raw), false, TurnEnd::Normal),
+                None,
+                "an unenumerated reason {raw:?} must not be asserted as a cause"
+            );
+        }
 
         // Cancelled with nothing shown → aborted, and it OUTRANKS a partial
         // provider reason (the stream was cut short, so that reason describes
         // nothing the user asked for).
         assert_eq!(
-            classify_completion_state(None, false, true),
+            classify_completion_state(None, false, TurnEnd::Cancelled),
             Some(CompletionState::Aborted)
         );
         assert_eq!(
-            classify_completion_state(Some("length"), false, true),
+            classify_completion_state(Some("length"), false, TurnEnd::Cancelled),
             Some(CompletionState::Aborted)
         );
 
+        // An ERRORED turn is `failed`, never `empty` — the wrong-diagnosis case:
+        // both error arms finalize with no finish reason, which the old
+        // `(None, false, cancelled=false)` call classified as a model that had
+        // nothing to say, i.e. the exact "Please try again" string this change
+        // exists to remove.
+        assert_eq!(
+            classify_completion_state(None, false, TurnEnd::Failed),
+            Some(CompletionState::Failed)
+        );
+        assert_eq!(
+            classify_completion_state(Some("stop"), false, TurnEnd::Failed),
+            Some(CompletionState::Failed)
+        );
+
         // A turn that produced a visible answer is healthy — no state at all,
-        // whatever the reason, and even if the client then cancelled.
-        for reason in [Some("stop"), Some("length"), Some("tool_calls"), None] {
-            assert_eq!(classify_completion_state(reason, true, false), None);
-            assert_eq!(classify_completion_state(reason, true, true), None);
+        // whatever the reason, and however it ended.
+        for reason in [Some("stop"), Some("length"), Some("content_filter"), None] {
+            for end in [TurnEnd::Normal, TurnEnd::Cancelled, TurnEnd::Failed] {
+                assert_eq!(classify_completion_state(reason, true, end), None);
+            }
         }
     }
 
