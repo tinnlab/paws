@@ -104,14 +104,27 @@ exactly one id and must be regenerated. No spec references `kb-menu-search`
 regen is handled.
 
 ### DEC-11: How is the `sdk`-owned `testIds.generated.ts` regen handled?
-**Resolution:** run `npm run gen:testid-registry` from `src-app/ui`, commit the resulting
-one-line change **inside the `sdk` submodule** on its pinned `chat` branch, and bump the
-submodule pointer in this branch. The submodule commit is NOT pushed by this session —
-it is reported to the owner as a required pre-merge step, because pushing a shared SDK
-branch is the owner's call and other worktrees regenerate the same file.
-**Basis:** codebase + prior incident — the repo's own rule for this file is "regenerate on
-top of the latest branch tip, push the sdk before the pointer, never leave it detached";
-concurrent branches all regenerate it, so a blind push races them.
+**Resolution:** SUPERSEDED by the owner — not handled in this branch at all. The
+submodule pointer stays at `origin/main`'s `70576db7` and the branch touches no SDK
+file. The regen commit that existed briefly (`8d13778`) was dropped via `git rebase --onto`
+and then DISCARDED entirely at the owner's direction — the local `chat` branch is reset
+to `origin/chat`, no local sdk branch survives, and the submodule was never pushed.
+**Basis:** user — the owner verified main's staleness independently, is fixing it on
+main, and asked that this branch carry only its own changes and that ONE person
+sequence any submodule push. The branch's own registry delta is just two RETIRED ids
+(`assistant-selector`, from the deleted component, and `kb-menu-search`, now derived
+inside the primitive); both are reproduced by a single `npm run gen:testid-registry`
+after rebasing onto the fixed main, so nothing is lost by dropping it.
+**Sequencing (owner-directed):** a separate agent is landing a regen-parity fix on main
+that regenerates BOTH `testIds.generated.ts` and `stateMatrix.generated.ts` and maps the
+six `stateCoverage` keys properly. This branch then REBASES onto it (never merges) and
+regenerates on top: the two retired ids come back from one `gen:testid-registry`, and the
+state-matrix regen will carry only THIS feature's surfaces because main's four will
+already be reconciled upstream.
+**Accepted consequence until then:** `check:testid-registry` — and therefore
+`npm run check` — is RED on this branch. It is red on base for the same reason, so
+the branch is no worse than its base; this is recorded as-is in TEST_RESULTS.md
+rather than being made green by re-absorbing the drift.
 
 ### DEC-12: How are the picker rows marked up — `role="button"` divs (as today) or a listbox?
 **Resolution:** `role="listbox"` container with `role="option"` rows carrying
