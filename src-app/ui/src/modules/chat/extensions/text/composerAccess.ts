@@ -23,6 +23,33 @@ export interface ComposerAccessClosures {
   focusMessage: () => void
 }
 
+/**
+ * Set a textarea's value in a way React will actually notice.
+ *
+ * React installs its own `value` setter on the element instance to track the
+ * last value it saw. A plain `el.value = text` goes THROUGH that setter, so the
+ * tracker is updated too — and when the `input` event then fires, React compares
+ * tracker-to-current, sees no difference, and skips `onChange` entirely. The
+ * result is a value the user can see but that React (and therefore the composer's
+ * draft persistence) never hears about.
+ *
+ * Verified on the running app: direct assign + dispatch wrote NO draft; going
+ * through the prototype setter wrote it. So write via the PROTOTYPE setter,
+ * which bypasses the instance tracker and leaves it stale — exactly the
+ * condition React's change detection looks for.
+ */
+function setValueBypassingReactTracker(
+  el: HTMLTextAreaElement,
+  text: string,
+): void {
+  const nativeSetter = Object.getOwnPropertyDescriptor(
+    HTMLTextAreaElement.prototype,
+    'value',
+  )?.set
+  if (nativeSetter) nativeSetter.call(el, text)
+  else el.value = text
+}
+
 export function createComposerAccess(
   element: () => HTMLTextAreaElement | null,
 ): ComposerAccessClosures {
@@ -68,7 +95,7 @@ export function createComposerAccess(
     applyComposerEdit: (text: string, start: number, end: number) => {
       const el = element()
       if (!el) return
-      el.value = text
+      setValueBypassingReactTracker(el, text)
       const max = text.length
       const from = Number.isFinite(start) ? Math.min(Math.max(start, 0), max) : max
       const to = Number.isFinite(end) ? Math.min(Math.max(end, from), max) : from

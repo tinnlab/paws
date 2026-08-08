@@ -61,11 +61,13 @@ and its registration bodies are shared with the harness anyway (DRIFT-1.3).
 - **TEST-21** (tier: e2e) [acceptance] [invariant: INV-4] [covers: ITEM-10] file: `src-app/ui/tests/e2e/14-voice/dictation-caret-insert.spec.ts` — asserts: cancelling AFTER interim text has visibly landed in the composer restores the composer exactly (value + caret) and issues zero final-transcribe calls.
 - **TEST-22** (tier: e2e) [acceptance] [invariant: INV-3] [covers: ITEM-9] file: `src-app/ui/tests/e2e/14-voice/dictation-caret-insert.spec.ts` — asserts: a full dictate→stream→stop cycle sends NOTHING — the message list stays empty and the URL never navigates to a conversation — proving dictation has no send path even now that it writes continuously into the composer.
 - **TEST-23** (tier: e2e) [covers: ITEM-11] file: `src-app/ui/tests/e2e/14-voice/dictation-caret-insert.spec.ts` — asserts: after dictation ends the composer textarea is `document.activeElement` with the caret after the inserted text, located WITHOUT any `data-testid` (by accessible name), which is the selector class that survives the production `data-test*` strip that made the old `focusComposer` a shipped no-op.
+- **TEST-25** (tier: e2e) [covers: ITEM-5, ITEM-6] file: `src-app/ui/tests/e2e/14-voice/dictation-caret-insert.spec.ts` — asserts: dictated text SURVIVES leaving the composer and coming back. This is the regression test for a fix that was inert when first written: an imperative `el.value =` fires no React `onChange`, and React's own value tracker swallows even a dispatched `input` event unless the write goes through the prototype setter — so the draft was never persisted and the draft-restore effect overwrote the whole transcript on the way back. No unit or jsdom test caught it (jsdom has no React tracker on that path); only driving the real app did.
+
 - **TEST-24** (tier: e2e) [covers: ITEM-12, ITEM-15] file: `src-app/ui/tests/e2e/14-voice/live-captions-stream.spec.ts` — asserts: rewritten from the spec that certified the defect — with live captions ON the interim transcripts land in the COMPOSER, the toolbar caption element is absent in every recording state, and the final authoritative transcript — not the last interim — is what remains. The sibling assertions in `mic-button-gating.spec.ts` and `visual-states.spec.ts` are updated in the same change.
 
 ## Static gates
 
-- **TEST-25** (tier: unit) [covers: ITEM-16] file: `src-app/ui/package.json` (`npm run check`) — asserts: the regenerated derived artifacts match their generators — `check:store-actions` (the new TextStore actions appear in `actions.gen.ts`), `check:state-matrix` (the removed `liveCaptions && interimText` branch), `check:testid-registry` (the removed `voice-live-caption` literal), `check:gallery-coverage` — plus `tsc` and every lint guardrail. A missed regen fails here rather than silently.
+- **TEST-26** (tier: unit) [covers: ITEM-16] file: `src-app/ui/package.json` (`npm run check`) — asserts: the regenerated derived artifacts match their generators — `check:store-actions` (the new TextStore actions appear in `actions.gen.ts`), `check:state-matrix` (the removed `liveCaptions && interimText` branch), `check:testid-registry` (the removed `voice-live-caption` literal), `check:gallery-coverage` — plus `tsc` and every lint guardrail. A missed regen fails here rather than silently.
 
 ---
 
@@ -79,8 +81,8 @@ and its registration bodies are shared with the harness anyway (DRIFT-1.3).
 | ITEM-2 | TEST-4, TEST-5, TEST-6, TEST-7, TEST-19 |
 | ITEM-3 | TEST-8, TEST-16 |
 | ITEM-4 | TEST-9, TEST-14 |
-| ITEM-5 | TEST-12 |
-| ITEM-6 | TEST-12 |
+| ITEM-5 | TEST-12, TEST-25 |
+| ITEM-6 | TEST-12, TEST-25 |
 | ITEM-7 | TEST-17, TEST-23 |
 | ITEM-8 | TEST-13, TEST-16, TEST-20 |
 | ITEM-9 | TEST-15, TEST-17, TEST-18, TEST-22 |
@@ -90,7 +92,7 @@ and its registration bodies are shared with the harness anyway (DRIFT-1.3).
 | ITEM-13 | TEST-11 |
 | ITEM-14 | TEST-6, TEST-10 |
 | ITEM-15 | TEST-24 |
-| ITEM-16 | TEST-25 |
+| ITEM-16 | TEST-26 |
 
 **Every INV is pinned by an `[acceptance]` test:**
 

@@ -348,6 +348,48 @@ test.describe('Voice — dictation inserts at the caret (TEST-17..TEST-23)', () 
     expect(new URL(page.url()).pathname).not.toMatch(/\/conversations\//)
   })
 
+  // TEST-25 — dictated text is a real composer edit, so it PERSISTS.
+  test('dictated text survives leaving the page and coming back', async ({
+    page,
+    testInfra,
+  }) => {
+    const { baseURL } = testInfra
+    await installVoiceBrowserMocks(page)
+    await routeVoice(
+      page,
+      defaultVoiceState({
+        transcribe: { text: 'a table for four', language: 'en', duration_ms: 500 },
+        capability: readyCapability({ streaming_enabled: false }),
+      }),
+    )
+    await loginAsAdmin(page, baseURL)
+    await gotoComposer(page, baseURL)
+
+    const textarea = byTestId(page, 'chat-message-textarea')
+    await textarea.click()
+    await placeCaret(page, 0)
+
+    await startDictation(page)
+    await stopDictation(page)
+    await expect(textarea).toHaveValue('a table for four', { timeout: 15000 })
+
+    // Leave the composer entirely, then come back to it.
+    await page.goto(`${baseURL}/knowledge`)
+    await page.waitForLoadState('load')
+    await gotoComposer(page, baseURL)
+
+    // The transcript is still there. This is NOT incidental: the composer
+    // persists its draft from React's `onChange`, and an imperative
+    // `el.value = …` fires nothing — React's own value tracker even swallows a
+    // dispatched `input` event unless the write goes through the prototype
+    // setter. Without that, the draft-restore effect writes the STALE draft
+    // (here: empty) over the whole transcript on the way back.
+    await expect(byTestId(page, 'chat-message-textarea')).toHaveValue(
+      'a table for four',
+      { timeout: 15000 },
+    )
+  })
+
   // TEST-23
   test('focus returns to the composer, found WITHOUT any testid', async ({
     page,
