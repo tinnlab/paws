@@ -135,4 +135,4 @@ generalizable rule: an audit sandbox must not inherit the repo's gitdir, and the
 index must be verified — not just the working tree — before any commit in a
 worktree an agent has touched.
 
-**New confirmed findings:** (round-4 blind re-audit pending)
+**New confirmed findings:** 9 — found by the round-4 blind re-audit (see FIX_ROUND-4.md): the HIGH regression this round introduced, plus untested live behaviour.
