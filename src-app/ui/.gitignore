@@ -41,6 +41,10 @@ visual-judge-report.json
 # `gate:ui`. The human-readable RUNTIME_FINDINGS.md IS committed (a stable,
 # normalized snapshot); the per-finding .jsonl is a generated feed for the gate.
 src/dev/gallery/RUNTIME_FINDINGS.jsonl
+# The run MANIFEST is the same kind of thing: a per-run attestation (runId,
+# cell counts, origin liveness, contamination, void verdict) whose whole job is
+# to be fresh. Committing it would be committing one machine's run.
+src/dev/gallery/RUNTIME_RUN.json
 
 # gallery branch-coverage raw merge (Part 2) — regenerated, not committed
 src/dev/gallery/coverage.raw.json

@@ -36,4 +36,6 @@ dist-ssr
 # URLs that leak the machine's checkout path into the report — not portable to
 # commit. The gate reads the .jsonl in-process; regenerate locally as needed.
 src/dev/gallery/RUNTIME_FINDINGS.jsonl
+# Per-run attestation — see the ui workspace's .gitignore for the rationale.
+src/dev/gallery/RUNTIME_RUN.json
 src/dev/gallery/RUNTIME_FINDINGS.md

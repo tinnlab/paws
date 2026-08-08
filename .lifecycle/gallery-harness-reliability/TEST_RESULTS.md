@@ -7,6 +7,7 @@ Logs: `/data/pbya/ziee/tmp/lifecycle-logs/`.
 
 ```
 npm run check (ui): PASS                     # exit 0
+npm run check (desktop/ui): PASS             # exit 0 (56 gallery-script tests)
 npm run check:harness-parity (desktop/ui): PASS   # exit 0
 npm run test:gallery-scripts (ui): PASS      # 99 tests, 99 pass, 0 fail — exit 0
 npm run test:gallery-scripts (desktop/ui): PASS   # 56 tests, 56 pass, 0 fail — exit 0
@@ -25,7 +26,23 @@ lifecycle artifact.
 
 ```
 gate:ui (ui): branch 1 vs base 3
+gate:ui (desktop/ui): PASS
 ```
+
+The **desktop** gate is the cleaner demonstration, because it PASSES outright:
+
+```
+  validity: 318/318 cells · origin alive (55 checks) · transport artifacts 0 (0% of findings)
+✅ runtime-health — 51 surfaces clean
+--- per-surface runtime verdict: 51/51 PASS ---
+✅ GATE PASSED — every desktop UI DONE criterion met            (exit 0)
+```
+
+manifest: `cellsCompleted 318/318`, `complete: true`, `void: false`,
+`gatingHigh: 0`, contamination `0`. 548 findings, **0 `net::ERR`**. It also
+exercised the host lock end-to-end from a SECOND workspace — its crawl registered
+as a worker under the same `/tmp/ziee-gate-ui-1000.lock` while the web gate's run
+had held it earlier.
 
 Both runs, same worktree, same box, `--skip-visual`, full 682-cell crawl:
 
@@ -70,15 +87,37 @@ artifacts, so no conclusion here rests on a contaminated measurement.
 
 ## Per-TEST results
 
-- **TEST-1**: PASS · **TEST-2**: PARTIAL (first clause only — see above)
-- **TEST-3**: PASS · **TEST-4**: PASS · **TEST-5**: PASS · **TEST-6**: PASS
-- **TEST-7**: PASS · **TEST-8**: PASS · **TEST-9**: PASS · **TEST-10**: PASS
-- **TEST-11**: PASS · **TEST-12**: PASS · **TEST-13**: PASS · **TEST-14**: PASS
-- **TEST-15**: PASS · **TEST-16**: PASS · **TEST-17**: PASS · **TEST-18**: PASS
-- **TEST-19**: PASS · **TEST-20**: PASS · **TEST-21**: PASS · **TEST-22**: PASS
-- **TEST-23**: PASS · **TEST-24**: PASS · **TEST-25**: PASS · **TEST-26**: PASS
-- **TEST-27**: PASS · **TEST-28**: PASS · **TEST-29**: PASS · **TEST-30**: PASS
-- **TEST-31**: PASS
+- **TEST-1**: PASS — lib/finding-classify.test.mjs 17/17 — the muting is narrow in BOTH directions
+- **TEST-2**: PARTIAL — PARTIAL — FLAKE_STUDY.md discharges INV-2's investigate-first clause; the reproduce-to-gate MECHANISM is NOT implemented (FB-5)
+- **TEST-3**: PASS — CONCURRENCY_PROOF.md — two real worktrees serialized; GATE_UI_LOCK=0 control overlapped
+- **TEST-4**: PASS — gate-ui.stale.e2e.mjs — spawns the REAL gate; mutation-verified
+- **TEST-5**: PASS — gen-testid-registry.test.mjs — 4 phantoms absent, 2 real ids present, same fixture
+- **TEST-6**: PASS — check-harness-parity.test.mjs 6/6 — guard goes RED on a mutated copy
+- **TEST-7**: PASS — run-validity.test.mjs TEST-7..7e — real http fixture; one blip does not void
+- **TEST-8**: PASS — run-validity.test.mjs TEST-1b..1e + the 1c2 calibration table
+- **TEST-9**: PASS — finding-classify.test.mjs TEST-9..9e — product url still gates
+- **TEST-10**: PASS — finding-classify.test.mjs TEST-10..10f — same-module corroboration required
+- **TEST-11**: PASS — run-validity.test.mjs TEST-11/11b + finding-classify TEST-11
+- **TEST-12**: PASS — FLAKE_STUDY.md — 2 VALID runs, 8 vs 2 gating HIGH, membership recorded
+- **TEST-13**: PASS — finding-classify.test.mjs TEST-11b + the decoy-substring case
+- **TEST-14**: PASS — the full branch gate:ui run — 682/682 cells, validity line reported
+- **TEST-15**: PASS — gate-ui.stale.e2e.mjs control leg — a valid run still gets its table
+- **TEST-16**: PASS — host-lock.test.mjs TEST-16..16h
+- **TEST-17**: PASS — host-lock.test.mjs TEST-17/17b — token inheritance is load-bearing
+- **TEST-18**: PASS — host-lock.test.mjs TEST-18/18b/18c — incl. the orphaned-worker case
+- **TEST-19**: PASS — run-validity.test.mjs TEST-19 — each refusal names its own cause
+- **TEST-20**: PASS — run-validity.test.mjs TEST-20/20b — atomic write, no partial file
+- **TEST-21**: PASS — gen-testid-registry.test.mjs TEST-21 — golden set, 3 removed + 6 added by name
+- **TEST-22**: PASS — gen-testid-registry.test.mjs TEST-22..22e — value positions, both directions
+- **TEST-23**: PASS — gen-testid-registry.test.mjs TEST-23..23c — shape guard throws, names the id
+- **TEST-24**: PASS — check:testid-registry exit 0 from BOTH workspace cwds, 1778 ids each
+- **TEST-25**: PASS — gen-testid-registry.test.mjs TEST-25 — ts-morph declared
+- **TEST-26**: PASS — check:harness-parity exit 0 in both workspaces
+- **TEST-27**: PASS — tree-wide grep: no executor of the deleted ui-local copy remains
+- **TEST-28**: PASS — test:gallery-scripts exit 0 — ui 99 tests, desktop 56; the formerly-dead ones now run
+- **TEST-29**: PASS — CLAUDE.md + agent-kit doc paths all resolve after the deletion
+- **TEST-30**: PASS — npm run check exit 0 in both workspaces
+- **TEST-31**: PASS — branch 1 vs base 3 failing surfaces, 0 transport artifacts on both
 
 ## Red-then-green, verbatim
 
