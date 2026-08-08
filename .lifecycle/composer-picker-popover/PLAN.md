@@ -36,6 +36,7 @@ Lifted verbatim from `docs/design/composer-picker-popover.md` §3.
 - **ITEM-8**: Adopt the primitive in `KbMenuItem` (multi-select toggle). Preserves the per-conversation/per-pane key, the `knowledge_base::use` gate, attach/detach toggling, the per-row index-status suffix + document count, the `/knowledge` CTA, and the existing `kb-menu-trigger` / `kb-menu-options` / `kb-menu-search` / `kb-menu-empty` / `kb-option-*` testids.
 - **ITEM-9**: Both triggers use the existing shared `PlusMenuItem` row instead of the two hand-rolled copies, and the assistant rows' imperative `e.currentTarget.className` hover/focus mutation (AssistantMenuItem.tsx:130-143) is deleted in favour of Tailwind `hover:`/`data-` state classes owned by the primitive.
 - **ITEM-10**: Delete the dead third assistant picker `modules/assistant/chat-extension/components/AssistantSelector.tsx` (no production caller; referenced only by gallery-coverage manifests that falsely claim it renders within the assistant page), and update/regenerate the gallery coverage + state-matrix registries that name it.
+- **ITEM-12**: Reconcile the two generated registries that are ALREADY stale on `origin/main` — `sdk/packages/kit/src/testIds.generated.ts` (31 static ids from citations / llm-provider proxy-token / mcp-runtime that were never regenerated) and `src/dev/gallery/stateMatrix.generated.ts` (+ its `stateCoverage.ts` keys). Discovered at phase 5: `npm run check` fails on a pristine `origin/main` worktree at `check:testid-registry` and `check:state-matrix`, so the branch cannot record a green gate without absorbing it. Kept as its own commit so it can be split off.
 - **ITEM-11**: Gallery coverage for the primitive's conditional states so `check:state-matrix` and `gate:ui` actually exercise them: a populated many-item state (proves the height cap + scrollbar), a filtered state, a no-matches state, a zero-items state, and a narrow ~390px viewport render.
 
 ## Files to touch
@@ -49,7 +50,6 @@ Added:
 - `docs/design/composer-picker-popover.md` (design source; already written)
 - `src-app/ui/src/modules/chat/components/ComposerPickerPopover.tsx`
 - `src-app/ui/src/modules/chat/components/ComposerPickerPopover.test.tsx` (component harness)
-- `src-app/ui/src/modules/chat/components/composerPickerFilter.ts` + `.test.ts` counterpart is NOT used — the filter/active-index reducer is exercised through the mounted harness (see TESTS.md rationale)
 - `src-app/ui/tests/e2e/chat/composer-picker-popover.spec.ts`
 
 Edited:
@@ -59,7 +59,11 @@ Edited:
 - `src-app/ui/src/dev/gallery/stateCoverage.ts`
 - `src-app/ui/src/dev/gallery/galleryCoverage.generated.ts` (regenerated, not hand-edited)
 - `src-app/ui/src/dev/gallery/stateMatrix.generated.ts` (regenerated, not hand-edited)
-- a gallery story under `src-app/ui/src/dev/gallery/` for the primitive's states
+- `src-app/ui/src/dev/gallery/stories/shard1.story.tsx` (the primitive's visual states)
+- `src-app/ui/src/modules/chat/gallery.tsx` (two `OverlayEntry`s delivering the
+  `ComposerPickerPopover:open` / `:empty` RequiredStates)
+- `sdk/packages/kit/src/testIds.generated.ts` (regenerated; ITEM-12) + the `sdk`
+  submodule pointer
 
 Deleted:
 - `src-app/ui/src/modules/assistant/chat-extension/components/AssistantSelector.tsx`
@@ -139,4 +143,5 @@ generated files that DO change are the gallery registries
 - **ITEM-8** — verdict: CONCERN — `KnowledgeBases.items` is a `Map`; `Array.from(items.values())` inside render is fine, but the primitive must not re-sort or re-key it, and `KnowledgeBaseComposer.attachFor/detachFor` return promises whose rejection is surfaced with `message.error` today. Resolution: keep both behaviours verbatim in the caller's `onSelect`; the primitive never touches the promise.
 - **ITEM-9** — verdict: PASS — `PlusMenuItem` is `forwardRef` + prop-spreading specifically so it can serve as a Popover trigger (its docblock says so, and the Export item already does it). The kit `Popover` auto-detects `nativeButton` from the child type and will correctly pass `false` for a non-button component child.
 - **ITEM-10** — verdict: CONCERN — deleting the file makes `coverage.ts:84` / `stateCoverage.ts:129` dangle and the two `*.generated.ts` registries stale, which fails `check:gallery-coverage` + `check:state-matrix` inside `npm run check`. Resolution: delete the two hand-written entries in the same commit and regenerate both registries with `npm run gen:gallery-coverage` + `npm run gen:state-matrix`; phase 8's `npm run check` is the proof.
+- **ITEM-12** — verdict: CONCERN — this is main's drift, not the feature's, and it drags shared generated files (a merge-conflict surface) plus an `sdk` submodule commit into the diff. Resolution: keep it in a separate commit; reconcile the 6 orphaned stateCoverage keys with an explicit "pre-existing, reconciled only to unstick the gate" reason rather than inventing coverage for features I did not build; leave the sdk commit UNPUSHED and report `git -C sdk push origin chat` as a merge prerequisite (pushing a shared SDK branch is the owner's call, and the registry content is only correct once this branch's source is on main).
 - **ITEM-11** — verdict: CONCERN — `check:state-matrix` requires a gallery cell for every NEW conditional render state, so the no-matches / filtered / many-items / zero-items branches each need one or an allowlisted reason. Resolution: add a real gallery story with those states (that is also what makes the height cap visually reviewable at 390px) rather than allowlisting them away.

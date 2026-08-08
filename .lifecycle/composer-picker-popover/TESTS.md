@@ -41,6 +41,8 @@ exist in the fixture DB.
 - **TEST-19** (tier: unit) [covers: ITEM-10] file: `src-app/ui/src/modules/chat/components/ComposerPickerPopover.test.tsx` — asserts: no file under `src-app/ui/src` imports `AssistantSelector`, and the file is gone from disk. (The registry half is enforced independently: `coverage.ts` / `stateCoverage.ts` are `satisfies Record<GallerySurface|RequiredState, …>`, so a stale key is a tsc error — a green `npm run check` is the machine proof that every manifest reference was removed too.)
 - **TEST-20** (tier: e2e) [covers: ITEM-11] file: `src-app/ui/src/dev/gallery/stories/shard1.story.tsx` — asserts: the gallery story renders the picker panel in its populated (26-item), filtered, no-matches and zero-item cases, and `npm run gate:ui` reports zero HIGH runtime findings (console error / page error / failed request / AA-contrast) for that section, including at a narrow ~390px viewport. This is the populated-render + responsive coverage the UI build gate requires for a new surface.
 
+- **TEST-21** (tier: unit) [covers: ITEM-12] file: `src-app/ui/package.json` — asserts: `npm run check` (the 20-gate static chain, incl. `check:testid-registry`, `check:state-matrix`, `check:gallery-coverage`, `check:overlay-registry`) exits 0 in this workspace. It exits **1** on a pristine `origin/main` worktree, so this is a measured before/after, not an assumption: the gate itself is the executable check that every registry is consistent with the source tree.
+
 ## Coverage map (bipartite check)
 
 | ITEM | covering tests |
@@ -56,6 +58,7 @@ exist in the fixture DB.
 | ITEM-9 | TEST-9, TEST-18 |
 | ITEM-10 | TEST-19 |
 | ITEM-11 | TEST-20 |
+| ITEM-12 | TEST-21 |
 
 | INV | acceptance test |
 |---|---|
