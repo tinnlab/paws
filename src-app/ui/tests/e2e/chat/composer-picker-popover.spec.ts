@@ -135,10 +135,11 @@ test.describe('Chat composer — picker popovers stay usable at scale', () => {
       'the 26-row list must overflow a capped viewport',
     ).toBeGreaterThan(overflow.clientHeight)
 
-    // The last seeded assistant is reachable ONLY by scrolling: outside the
-    // scroller's box before, inside it after.
-    const last = panel.getByRole('option', { name: names[names.length - 1] })
-    expect(await isInsideScroller(vp, last), 'the 26th row must start out clipped').toBe(false)
+    // The LAST ROW IN THE DOM — not the last name I seeded. The store returns
+    // assistants newest-first, so `Picker Assistant 25` is actually the FIRST row;
+    // asserting on it silently tested a visible row (it did, and went red).
+    const last = panel.getByRole('option').last()
+    expect(await isInsideScroller(vp, last), 'the last row must start out clipped').toBe(false)
     await vp.evaluate(el => {
       el.scrollTop = el.scrollHeight
     })
@@ -177,8 +178,8 @@ test.describe('Chat composer — picker popovers stay usable at scale', () => {
     }))
     expect(overflow.scrollHeight).toBeGreaterThan(overflow.clientHeight)
 
-    const last = panel.getByRole('option', { name: names[names.length - 1] })
-    expect(await isInsideScroller(vp, last), 'the 26th KB must start out clipped').toBe(false)
+    const last = panel.getByRole('option').last()
+    expect(await isInsideScroller(vp, last), 'the last KB row must start out clipped').toBe(false)
     await vp.evaluate(el => {
       el.scrollTop = el.scrollHeight
     })
@@ -515,9 +516,10 @@ test.describe('Chat composer — picker popovers stay usable at scale', () => {
         const icon = el.querySelector('svg')
         return {
           padding: `${s.paddingTop} ${s.paddingBottom}`,
+          paddingInline: `${s.paddingLeft} ${s.paddingRight}`,
           fontSize: getComputedStyle(el.querySelector('span:nth-of-type(2)') ?? el).fontSize,
           iconSize: icon
-            ? `${getComputedStyle(icon).width}x${getComputedStyle(icon).height}`
+            ? `${getComputedStyle(icon).width} x ${getComputedStyle(icon).height}`
             : 'none',
           name: el.getAttribute('aria-label') ?? '',
         }
@@ -534,13 +536,21 @@ test.describe('Chat composer — picker popovers stay usable at scale', () => {
     expect(assistant.name.length).toBeGreaterThan(0)
     expect(kb.name.length).toBeGreaterThan(0)
 
-    // …and they match the file-attach item, which is always present in the "+" menu
-    // and already used the shared row. NOT wrapped in an `if (isVisible())` — a
-    // conditional comparison silently asserts nothing when the condition is false.
-    const shared = await byTestId(page, 'file-attach-menu-upload').evaluate(el => {
-      const s = getComputedStyle(el)
-      return { padding: `${s.paddingTop} ${s.paddingBottom}` }
-    })
-    expect(assistant.padding, 'must match the pre-existing shared "+" row').toBe(shared.padding)
+    // …and they match `PlusMenuItem`'s DECLARED metric absolutely (`px-3 py-1.5`
+    // = 12px/6px, `text-sm` = 14px, icons forced to `size-4` = 16px). Absolute
+    // rather than compared to a sibling: the assistant-vs-kb equality above is true
+    // by construction once both use the shared row, and the one always-present
+    // sibling ("+ Attach files") carries its testid on the kit Upload ROOT, whose
+    // padding is 0 — measuring it compared the wrong node. If either trigger is
+    // ever hand-rolled again with different metrics, these go red.
+    for (const [name, m] of [
+      ['assistant', assistant],
+      ['kb', kb],
+    ] as const) {
+      expect(m.padding, `${name} row must use the shared px-3 py-1.5 metric`).toBe('6px 6px')
+      expect(m.paddingInline, `${name} row inline padding`).toBe('12px 12px')
+      expect(m.fontSize, `${name} row label must be text-sm`).toBe('14px')
+      expect(m.iconSize, `${name} row icon must be size-4`).toBe('16px x 16px')
+    }
   })
 })
