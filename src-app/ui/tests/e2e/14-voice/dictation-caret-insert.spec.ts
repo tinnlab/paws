@@ -86,10 +86,24 @@ async function toolbarRowText(page: Page): Promise<string | null> {
   })
 }
 
-/** Dismiss the one-time privacy hint, then start recording. */
-async function startDictation(page: Page) {
+/**
+ * Dismiss the one-time privacy hint.
+ *
+ * MUST run before ANY interaction with the composer. The hint is a Popover
+ * anchored to the mic button, and its content sits in a portal that OVERLAPS
+ * the textarea — Playwright reports "…subtree intercepts pointer events" and
+ * `textarea.click()` / `.fill()` time out against it. Dismissing inside
+ * `startDictation` is too late for a test that types a draft first.
+ */
+async function dismissPrivacyHint(page: Page) {
   const hintDismiss = byTestId(page, 'voice-privacy-hint-dismiss')
   if (await hintDismiss.isVisible().catch(() => false)) await hintDismiss.click()
+  await expect(hintDismiss).toHaveCount(0)
+}
+
+/** Start recording (the privacy hint must already be dismissed). */
+async function startDictation(page: Page) {
+  await dismissPrivacyHint(page)
   await byTestId(page, 'voice-mic-button').first().click()
   await expect(byTestId(page, 'voice-elapsed')).toBeVisible({ timeout: 10000 })
 }
@@ -101,6 +115,27 @@ async function stopDictation(page: Page) {
 }
 
 test.describe('Voice — dictation inserts at the caret (TEST-17..TEST-23)', () => {
+  // Suppress the one-time privacy hint for EVERY navigation in this file.
+  //
+  // The hint is a Popover anchored to the mic button whose content portals over
+  // the textarea, so it intercepts pointer events and any `textarea.click()` /
+  // `.fill()` times out against it. Dismissing it by clicking is not reliable
+  // here: it only mounts once the capability fetch resolves, so a visibility
+  // check right after navigation can run BEFORE it exists, find nothing, and
+  // let it appear a moment later. Seeding the same localStorage key the
+  // component itself writes makes the state deterministic from first paint —
+  // this is the returning-user posture, and the hint's own behaviour is covered
+  // by the specs that exist for it.
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => {
+      try {
+        localStorage.setItem('ziee.voice.privacyHintDismissed', '1')
+      } catch {
+        /* storage blocked — the click-based fallback still applies */
+      }
+    })
+  })
+
   // TEST-17 [acceptance, INV-1]
   test('the literal repro: the transcript lands AT THE CARET, and never in the toolbar', async ({
     page,
@@ -117,6 +152,7 @@ test.describe('Voice — dictation inserts at the caret (TEST-17..TEST-23)', () 
     )
     await loginAsAdmin(page, baseURL)
     await gotoComposer(page, baseURL)
+    await dismissPrivacyHint(page)
 
     const textarea = byTestId(page, 'chat-message-textarea')
     await textarea.click()
@@ -172,6 +208,7 @@ test.describe('Voice — dictation inserts at the caret (TEST-17..TEST-23)', () 
     )
     await loginAsAdmin(page, baseURL)
     await gotoComposer(page, baseURL)
+    await dismissPrivacyHint(page)
 
     const textarea = byTestId(page, 'chat-message-textarea')
     await textarea.click()
@@ -211,6 +248,7 @@ test.describe('Voice — dictation inserts at the caret (TEST-17..TEST-23)', () 
     )
     await loginAsAdmin(page, baseURL)
     await gotoComposer(page, baseURL)
+    await dismissPrivacyHint(page)
 
     // Seed the draft the way the composer's own draft-restore effect does — an
     // imperative `el.value =` — and NEVER focus or click the textarea. This is
@@ -257,6 +295,7 @@ test.describe('Voice — dictation inserts at the caret (TEST-17..TEST-23)', () 
     )
     await loginAsAdmin(page, baseURL)
     await gotoComposer(page, baseURL)
+    await dismissPrivacyHint(page)
 
     const textarea = byTestId(page, 'chat-message-textarea')
     await textarea.click()
@@ -307,6 +346,7 @@ test.describe('Voice — dictation inserts at the caret (TEST-17..TEST-23)', () 
     )
     await loginAsAdmin(page, baseURL)
     await gotoComposer(page, baseURL)
+    await dismissPrivacyHint(page)
 
     const textarea = byTestId(page, 'chat-message-textarea')
     await textarea.click()
@@ -350,6 +390,7 @@ test.describe('Voice — dictation inserts at the caret (TEST-17..TEST-23)', () 
     )
     await loginAsAdmin(page, baseURL)
     await gotoComposer(page, baseURL)
+    await dismissPrivacyHint(page)
 
     const textarea = byTestId(page, 'chat-message-textarea')
     await textarea.click()
@@ -384,6 +425,7 @@ test.describe('Voice — dictation inserts at the caret (TEST-17..TEST-23)', () 
     )
     await loginAsAdmin(page, baseURL)
     await gotoComposer(page, baseURL)
+    await dismissPrivacyHint(page)
 
     const textarea = byTestId(page, 'chat-message-textarea')
     await textarea.click()
@@ -426,6 +468,7 @@ test.describe('Voice — dictation inserts at the caret (TEST-17..TEST-23)', () 
     )
     await loginAsAdmin(page, baseURL)
     await gotoComposer(page, baseURL)
+    await dismissPrivacyHint(page)
 
     const textarea = byTestId(page, 'chat-message-textarea')
     await textarea.click()

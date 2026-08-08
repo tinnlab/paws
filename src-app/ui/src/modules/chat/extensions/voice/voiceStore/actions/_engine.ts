@@ -219,57 +219,102 @@ interface DictationSession {
 
 let dictation: DictationSession | null = null
 
-/** Resolve the span the next write should replace, or null if we must detach. */
+/**
+ * Resolve the span the next write should replace, or null if we must detach.
+ *
+ * Once the session owns a span, that span is RELOCATED (and detaches if the
+ * user edited it away). Before the first write there is no such guard, and the
+ * record-start anchor can be arbitrarily stale — the user may have edited or
+ * cleared the draft while the first second of audio was decoding. So the anchor
+ * is only honoured while it still holds exactly the text captured with it;
+ * otherwise dictation goes where the user is NOW rather than splicing over
+ * whatever happens to occupy those offsets.
+ */
 function resolveWriteSpan(
   session: DictationSession,
   value: string,
+  store: ComposerAccess,
 ): ComposerSpan | null {
   if (session.span) return relocateSpan(value, session.span, session.written)
-  // First write: replace the anchor selection (if any), else append at the end.
-  return session.anchor ?? { start: value.length, end: value.length }
+  const anchor = session.anchor
+  const stillHolds =
+    anchor !== null &&
+    anchor.end <= value.length &&
+    value.slice(anchor.start, anchor.end) === session.anchorText
+  if (stillHolds) return anchor
+  return store.getSelection() ?? { start: value.length, end: value.length }
 }
 
 /**
  * Write `transcript` into the owning composer, replacing whatever this session
- * wrote before it. A blank transcript takes the provisional words away.
+ * wrote before it. Returns the caret to leave behind, or null when nothing was
+ * written (the session detached, or its pane closed).
  *
- * Returns false when the session detached (the user edited our text) — the
- * caller then leaves the composer alone.
+ * `final` places the caret after the transcript unconditionally — on Stop the
+ * user continues from where the words ended; mid-recording the user's own caret
+ * wins instead (§3 rule 7).
  */
-function writeDictation(session: DictationSession, transcript: string): boolean {
-  if (session.detached) return false
+function writeDictation(
+  session: DictationSession,
+  transcript: string,
+  opts: { final?: boolean } = {},
+): ComposerSpan | null {
+  if (session.detached) return null
   const store = ownerTextStore(session.paneId)
-  if (!store) return false // the owning pane closed mid-recording
+  if (!store) return null // the owning pane closed mid-recording
   const value = store.getText()
-  const raw = resolveWriteSpan(session, value)
+
+  // A blank decode means "nothing has been dictated yet".
+  if (!transcript) {
+    // If this session has written NOTHING yet, there is nothing to undo — and
+    // it must not "restore" either. Before the first write the span is the raw
+    // record-start anchor with no relocate guard, so restoring would INSERT the
+    // anchor's text over whatever now occupies those offsets: select a word,
+    // start recording, clear the composer, and the common empty first decode
+    // would resurrect the word the user just deleted.
+    if (!session.span) return session.anchor ?? currentCaret(store, value)
+
+    const span = relocateSpan(value, session.span, session.written)
+    if (!span) {
+      session.detached = true
+      return null
+    }
+    const before = store.getSelection()
+    const edit = restoreSpan(value, span, session.anchorText)
+    store.applyEdit(edit.value, ...nextSelection(before, span, edit))
+    // Back to "nothing written". Re-anchor to where the restored text actually
+    // sits (the user may have typed before it), and DROP the span so the
+    // session stops claiming the user's own restored word as its own — which
+    // would otherwise let a duplicate of that word detach the session.
+    session.anchor = { start: edit.start, end: edit.end }
+    session.span = null
+    session.written = ''
+    return { start: edit.end, end: edit.end }
+  }
+
+  const raw = resolveWriteSpan(session, value, store)
   if (!raw) {
     session.detached = true
-    return false
+    return null
   }
-  // Compare the user's caret against the span AS THE SPLICE WILL SEE IT: the
-  // splice clamps out-of-range offsets (a stale anchor after the user shortened
-  // the draft), and comparing against the unclamped one would misfile the caret.
-  const span = {
-    start: Math.min(Math.max(raw.start, 0), value.length),
-    end: Math.min(Math.max(raw.end, 0), value.length),
-  }
+  // No clamping needed, and deliberately none: `resolveWriteSpan` returns only
+  // in-range spans — a relocated span was found IN this value, an honoured
+  // anchor was bounds-checked, and the fallbacks are the live selection or the
+  // end of the text. A defensive clamp here would be unreachable (§15), and
+  // worse, it would silently diverge from the normalization `spliceTranscript`
+  // applies (which also orders the span and widens it off surrogate
+  // boundaries), so `nextSelection` would compare against a third, different
+  // span. One source of truth instead.
+  const span = raw
   const before = store.getSelection()
-
-  // A blank decode means "nothing has been dictated yet", so the composer must
-  // look exactly as it did before this session started — which is the same
-  // operation cancel performs, not a bare deletion of the span. Deleting the
-  // span is only equivalent when the anchor was a CARET; when the session
-  // replaced a SELECTION, the user's own word went with it and the two
-  // surrounding separators collapse together ("call Bob tomorrow" -> "call
-  //  tomorrow", a doubled space that violates §3 rule 4).
-  const edit = transcript
-    ? spliceTranscript(value, span, transcript)
-    : restoreSpan(value, span, session.anchorText)
-
-  store.applyEdit(edit.value, ...nextSelection(before, span, edit))
+  const edit = spliceTranscript(value, span, transcript)
+  const caret: [number, number] = opts.final
+    ? [edit.caret, edit.caret]
+    : nextSelection(before, span, edit)
+  store.applyEdit(edit.value, ...caret)
   session.span = { start: edit.start, end: edit.end }
   session.written = edit.value.slice(edit.start, edit.end)
-  return true
+  return { start: edit.caret, end: edit.caret }
 }
 
 /**
@@ -353,19 +398,17 @@ function commitTranscript(
   // The owning pane closed while transcribing — drop the transcript rather than
   // splice absolute offsets into whatever composer happens to be focused.
   if (!store) return undefined
-  const session = dictation && !dictation.detached ? dictation : null
 
-  if (session?.span) {
-    // The session owns a span; `writeDictation` relocates it and, if the user
-    // has since edited it away, detaches instead of clobbering their text.
-    if (writeDictation(session, transcript)) {
-      const span = session.span
-      // Caret after the transcript itself, before any trailing join pad.
-      const end = span.end - (session.written.endsWith(' ') ? 1 : 0)
-      return { start: end, end }
-    }
+  const session = dictation && !dictation.detached ? dictation : null
+  if (session) {
+    // The session knows where the words belong: over the span it streamed in,
+    // or (if none) over its anchor — which `resolveWriteSpan` re-checks and
+    // abandons in favour of the user's current caret if they have moved on.
+    const caret = writeDictation(session, transcript, { final: true })
+    if (caret) return caret
   }
 
+  // Detached, or no session: insert at wherever the user is now.
   const value = store.getText()
   if (!transcript) return currentCaret(store, value)
   const edit = insertTranscript(value, store.getSelection(), transcript)
@@ -752,11 +795,11 @@ export default function voiceEngine(
         elapsedMs: 0,
         stageText: '',
         errorMessage: null,
-        announcement: !delivered
-          ? 'Transcript discarded — the conversation was closed'
-          : text
+        announcement: !text
+          ? 'No speech detected'
+          : delivered
             ? 'Transcript added'
-            : 'No speech detected',
+            : 'Transcript discarded — the conversation was closed',
       })
       // Return focus to the composer with the caret AFTER the transcript, so
       // the user keeps typing exactly where the words ended.

@@ -174,6 +174,8 @@ let container: HTMLDivElement
 let root: Root
 type Engine = import('../voiceStore/actions/_engine').VoiceEngine
 let engine: Engine
+/** The engine's live state, so tests can assert what it ANNOUNCES. */
+let engineState: Record<string, unknown>
 
 /**
  * One interim tick, with headroom. The engine clamps the admin cadence to a
@@ -258,9 +260,11 @@ beforeEach(async () => {
           ? (patch as (s: unknown) => Record<string, unknown>)(state)
           : (patch as Record<string, unknown>)),
       }
+      engineState = state
     },
     (() => state) as never,
   )
+  engineState = state
 })
 
 afterEach(async () => {
@@ -590,6 +594,83 @@ describe('TEST-15 — the authoritative transcript supersedes the interim (ITEM-
     })
     await settle(30)
     expect(composerEl!.value).toBe('Please book a table for next Tuesday.')
+  })
+})
+
+// ── TEST-18 — round-3 regressions ────────────────────────────────────────────
+
+describe('TEST-18 — a blank first decode never resurrects deleted text', () => {
+  test('clearing the draft during the first decode leaves it cleared', async () => {
+    // The first ~1s of audio commonly decodes to nothing. Before the first
+    // write the session's span is the raw record-start anchor with NO relocate
+    // guard, so treating a blank decode as a "restore" would INSERT the
+    // anchor's text back — resurrecting a word the user had just deleted.
+    seedComposer('call Bob tomorrow', 5, 8) // "Bob" selected
+    script.interim = ['']
+
+    await act(async () => {
+      await engine.startRecording(null)
+    })
+    await settle(30) // let record-start's deferred caret restore land first
+    // The user clears the composer while the first decode is in flight.
+    composerEl!.value = ''
+    composerEl!.setSelectionRange(0, 0)
+    await settle(TICK * 2)
+
+    expect(composerEl!.value).toBe('')
+  })
+
+  test('a stale anchor is abandoned in favour of where the user actually is', async () => {
+    // The replacement draft is LONGER than the anchor's offsets, so the stale
+    // anchor is still perfectly in range — a bounds check alone would not catch
+    // it. Only verifying that the anchor still HOLDS its captured text does.
+    seedComposer('call Bob tomorrow', 5, 8) // "Bob" selected
+    script.interim = ['Alice']
+
+    await act(async () => {
+      await engine.startRecording(null)
+    })
+    // Let record-start's deferred focus/caret restore land FIRST — otherwise
+    // this edit races it and the rAF re-applies the anchor selection over the
+    // new draft, which is not what a real user's timing looks like.
+    await settle(30)
+    composerEl!.value = 'AAAAAAAAAAAAAAAAAAAA'
+    composerEl!.setSelectionRange(20, 20)
+    await settle(TICK * 2)
+
+    // At the user's caret. Honouring the stale {5,8} would splice into the
+    // middle of text that has nothing to do with what they selected.
+    expect(composerEl!.value).toBe('AAAAAAAAAAAAAAAAAAAA Alice')
+  })
+})
+
+describe('TEST-20 — what a dropped transcript announces', () => {
+  test('a transcript discarded with its pane says so, and silence says "no speech"', async () => {
+    seedComposer('untouched draft', 0)
+    script.final = 'these words have nowhere to go'
+
+    await act(async () => {
+      await engine.startRecording('pane-that-has-closed')
+    })
+    await act(async () => {
+      await engine.stopRecording()
+    })
+    await settle(60)
+    expect(engineState.announcement).toBe(
+      'Transcript discarded — the conversation was closed',
+    )
+
+    // …but a genuinely EMPTY transcript is "no speech", even when the pane is
+    // gone: there was nothing to discard.
+    script.final = ''
+    await act(async () => {
+      await engine.startRecording('pane-that-has-closed')
+    })
+    await act(async () => {
+      await engine.stopRecording()
+    })
+    await settle(60)
+    expect(engineState.announcement).toBe('No speech detected')
   })
 })
 
