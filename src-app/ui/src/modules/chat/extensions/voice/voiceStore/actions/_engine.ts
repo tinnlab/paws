@@ -201,9 +201,17 @@ interface DictationSession {
   gen: number
   /** The pane whose composer this session writes into. */
   paneId: string | null
-  /** The caret/selection captured at record start; null → append at the end. */
-  anchor: ComposerSpan | null
-  /** The text the anchor selection covered, restored verbatim on cancel. */
+  /**
+   * The text this session REPLACED when it first wrote, restored verbatim on
+   * cancel.
+   *
+   * Captured at FIRST-WRITE time, from the span actually being replaced — NOT
+   * at record start. That pairing is the whole invariant `restoreSpan` depends
+   * on ("this span once contained this text"), and it must hold by
+   * construction: a payload captured seconds earlier describes a span that may
+   * no longer exist, and cancel would then splice stale text over whatever the
+   * user has since put there. Empty until the first write.
+   */
   anchorText: string
   /** The span this session has written so far (join padding included). */
   span: ComposerSpan | null
@@ -294,7 +302,6 @@ function writeDictation(
     // zero-length span would "relocate" successfully to stale offsets forever,
     // which is the vacuous-guard trap this module keeps falling into. So drop
     // it and let the live caret speak.
-    session.anchor = { start: edit.start, end: edit.end }
     if (session.anchorText) {
       session.span = { start: edit.start, end: edit.end }
       session.written = session.anchorText
@@ -309,6 +316,15 @@ function writeDictation(
   if (!raw) {
     session.detached = true
     return null
+  }
+  // FIRST write of this session: remember what we are about to replace, so
+  // cancel can put exactly that back. Captured here — not at record start —
+  // because this is the moment the span and its contents are known to agree.
+  if (!session.span) {
+    session.anchorText = value.slice(
+      Math.min(raw.start, raw.end),
+      Math.max(raw.start, raw.end),
+    )
   }
   // No clamping, deliberately: `resolveWriteSpan` returns only in-range spans —
   // a relocated span was found IN this value, and the fallbacks are the live
@@ -417,7 +433,17 @@ function commitTranscript(
   const session = dictation && !dictation.detached ? dictation : null
   if (session?.span) {
     const caret = writeDictation(session, transcript)
-    if (caret) return caret
+    if (caret) {
+      // Apply the post-Stop caret SYNCHRONOUSLY. `writeDictation` places it by
+      // the mid-recording rule (the user's own caret wins if they are editing
+      // elsewhere), which is wrong once recording is over — from here the user
+      // continues after the words. Relying on `focusComposer` to correct it a
+      // frame later is not enough: that apply is generation-guarded and is
+      // dropped if anything supersedes it in that frame, which would leave the
+      // caret permanently in the mid-recording position.
+      store.applyEdit(store.getText(), caret.start, caret.end)
+      return caret
+    }
   }
 
   // No provisional span, or detached: insert at wherever the user is now.
@@ -683,20 +709,18 @@ export default function voiceEngine(
       return
     }
     recordStartedAt = Date.now()
-    // Open the dictation session: capture WHERE the words will land (the
-    // composer's caret/selection) and WHAT that span currently holds, so an
-    // interim can revise its own words in place and a cancel can put the
-    // composer back byte-exactly. A textarea keeps its selection while blurred,
-    // so this still reads the user's insertion point after the mic button took
-    // focus; null means the composer was never focused → append at the end.
+    // Open the dictation session. It deliberately remembers NOTHING about where
+    // the caret is right now: where to write is decided at write time from the
+    // live composer, and what to restore is captured when the first write
+    // actually replaces something. The selection read here is used only to put
+    // the caret back on screen below, so the user can SEE where dictation will
+    // land.
     const composer = ownerTextStore(paneId)
     const anchor = composer?.getSelection() ?? null
-    const draft = composer?.getText() ?? ''
     dictation = {
       gen,
       paneId,
-      anchor,
-      anchorText: anchor ? draft.slice(anchor.start, anchor.end) : '',
+      anchorText: '',
       span: null,
       written: '',
       detached: false,

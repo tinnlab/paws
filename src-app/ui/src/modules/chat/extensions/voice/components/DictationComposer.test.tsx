@@ -681,6 +681,77 @@ describe('TEST-20 — what a dropped transcript announces', () => {
   })
 })
 
+describe('TEST-24 — what cancel restores is what dictation actually replaced', () => {
+  test('moving the selection after record start still cancels cleanly', async () => {
+    // The restore payload must describe the span dictation REPLACED, not
+    // wherever the caret happened to be at record start. Capturing it early
+    // makes the two diverge as soon as the user moves, and cancel then splices
+    // stale text over whatever is now there — destroying it.
+    seedComposer('call Bob tomorrow', 5, 8) // "Bob" selected at record start
+    script.interim = ['DICTATED']
+
+    await act(async () => {
+      await engine.startRecording(null)
+    })
+    await settle(30)
+    // The user changes their mind and selects a DIFFERENT word.
+    composerEl!.setSelectionRange(9, 17) // "tomorrow"
+    await settle(TICK * 2)
+    expect(composerEl!.value).toBe('call Bob DICTATED')
+
+    await act(async () => {
+      engine.cancelRecording()
+    })
+    await settle(30)
+
+    // "tomorrow" comes back — not a second copy of "Bob" pasted over it.
+    expect(composerEl!.value).toBe('call Bob tomorrow')
+  })
+
+  test('a caret-anchored session that replaces a selection restores that selection', async () => {
+    // Record start sees a bare caret (nothing selected), so an early capture
+    // would record ''. The user then selects a word, dictation replaces it, and
+    // cancel must put THAT word back rather than deleting it.
+    seedComposer('call Bob tomorrow', 17) // caret at the end, nothing selected
+    script.interim = ['DICTATED']
+
+    await act(async () => {
+      await engine.startRecording(null)
+    })
+    await settle(30)
+    composerEl!.setSelectionRange(5, 8) // the user selects "Bob"
+    await settle(TICK * 2)
+    expect(composerEl!.value).toBe('call DICTATED tomorrow')
+
+    await act(async () => {
+      engine.cancelRecording()
+    })
+    await settle(30)
+
+    expect(composerEl!.value).toBe('call Bob tomorrow')
+  })
+
+  test('a blank decode restores what was replaced, mid-recording, with no user action', async () => {
+    // The most common decode of all is silence. It must put back exactly what
+    // this session replaced — with an early-captured payload it instead pastes
+    // record-start text over the current span.
+    seedComposer('call Bob tomorrow', 5, 8)
+    script.interim = ['DICTATED']
+
+    await act(async () => {
+      await engine.startRecording(null)
+    })
+    await settle(30)
+    composerEl!.setSelectionRange(9, 17) // "tomorrow"
+    await settle(TICK * 2)
+    expect(composerEl!.value).toBe('call Bob DICTATED')
+
+    script.interim = ['']
+    await settle(TICK * 2)
+    expect(composerEl!.value).toBe('call Bob tomorrow')
+  })
+})
+
 describe('TEST-23 — a stale CARET anchor is never consulted', () => {
   test('interim words go to the live caret after the draft is replaced', async () => {
     // The case no "does the anchor still hold its text?" guard can catch: for a
@@ -750,9 +821,17 @@ describe('TEST-21 — the FINAL transcript always lands where the user is', () =
     await act(async () => {
       await engine.stopRecording()
     })
-    await settle(60)
 
+    // Asserted BEFORE any settle: the post-Stop caret must be applied
+    // synchronously, not left to the deferred focus pass. That pass is
+    // generation-guarded and is dropped if anything supersedes it in the same
+    // frame, which would strand the caret at the mid-recording position.
     expect(composerEl!.value).toBe('draft here one two')
+    expect(composerEl!.value.slice(0, composerEl!.selectionStart)).toBe(
+      'draft here one two',
+    )
+
+    await settle(60)
     expect(composerEl!.value.slice(0, composerEl!.selectionStart)).toBe(
       'draft here one two',
     )
