@@ -72,6 +72,32 @@ builds in `vite.config.ts:87`). So focus-return after dictation is a **no-op in
 every shipped build** — it only ever worked in dev/e2e. Any design that promises
 "the caret ends up where you keep typing" must not depend on a testid query.
 
+### §2.2 — The same run, after the change
+
+Identical harness, identical audio, identical rig backend (a dev server for the
+fixed frontend proxied at `/api` to the same running ziee, so whisper is the
+same real runtime). Log: `/data/pbya/ziee/tmp/voice-repro/after/REPRO.log`.
+
+```
+BEFORE  value="Please book  for next Tuesday." caret= 12
+== RECORDING ==
+  t+2.4s  composer="Please book  for next Tuesday."                                          | toolbarCaption=null
+  t+3.6s  composer="Please book And so my fellow America for next Tuesday."                   | toolbarCaption=null
+  t+4.8s  composer="Please book And so my fellow Americans ask for next Tuesday."             | toolbarCaption=null
+  t+7.2s  composer="Please book And so my fellow Americans ask not what you are coming from\n. for next Tuesday."
+== STOP ==
+AFTER   value="Please book And so my fellow Americans, ask not what your country can\n do for you. for next Tuesday."
+AFTER   caret= 82 (len 100)
+```
+
+Every promise in §3 is visible in that trace: the words appear in the CHAT INPUT
+while recording (INV-2), each interim revises the previous one in place rather
+than accumulating, the text lands at index 12 — where the caret was — with the
+draft's own words intact on both sides (INV-1), the final transcript supersedes
+the interim, and the caret ends at 82 of 100 rather than at the end.
+`toolbarCaption` is `null` at every sample: nothing transcript-shaped renders in
+the toolbar any more. Frames: `after/02-recording.png`, `after/03-after.png`.
+
 ## §3 — Intended behaviour
 
 **Dictation is an editor input, not a form submission.** It behaves the way the
