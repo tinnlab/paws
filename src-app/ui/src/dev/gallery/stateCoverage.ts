@@ -21,6 +21,8 @@
  *                          `?surface=&state=` mock-mode path (capture-gallery-states);
  *       'overlay'          an open-state overlay entry (overlays.tsx);
  *       'deep:<slug>'      a chat deep-state entry (deepStates.tsx);
+ *       'seeded:<slug>'    a seeded real-component entry whose `setup` drives the
+ *                          state through the REAL store (`?surface=<slug>`);
  *       'interaction:<slug>' an INTERACTION recipe (interactions.ts) drives a
  *                          post-mount user action (click-to-edit, expand, focus,
  *                          hover) via `?surface=<slug>&interact=<name>` — the
@@ -334,7 +336,6 @@ export const STATE_COVERAGE = {
   "modules/memory/components/sections/SemanticSearchSection:open": { skip: true, reason: "via surface — rendered within its page; 'open' branch proven by Part 2 runtime coverage" },
   "modules/memory/pages/MemoryAdminPage:delayed": { via: 'page-state-mode' },
   "modules/memory/pages/MemoryAdminPage:error": { via: 'page-state-mode' },
-  "modules/onboarding/OnboardingRedirect:delayed": { skip: true, reason: "via surface — rendered within its page; 'delayed' branch proven by Part 2 runtime coverage" },
   "modules/onboarding/guides/getting-started/components/ApiKeysStep:delayed": { skip: true, reason: "via surface — rendered within its page; 'delayed' branch proven by Part 2 runtime coverage" },
   "modules/onboarding/guides/getting-started/components/ApiKeysStep:empty": { skip: true, reason: "via surface — rendered within its page; 'empty' branch proven by Part 2 runtime coverage" },
   "modules/onboarding/guides/getting-started/components/ApiKeysStep:error": { skip: true, reason: "via surface — rendered within its page; 'error' branch proven by Part 2 runtime coverage" },
@@ -484,6 +485,40 @@ export const STATE_COVERAGE = {
   'modules/notification/pages/AgentInboxPage:empty': { skip: true, reason: 'agent-core surface merged from feat/agent-core; state-matrix state-coverage annotation deferred to a follow-up gallery pass' },
   'modules/notification/pages/AgentInboxPage:error': { skip: true, reason: 'agent-core surface merged from feat/agent-core; state-matrix state-coverage annotation deferred to a follow-up gallery pass' },
   'modules/router/components/RouterComponent:delayed': { skip: true, reason: 'agent-core surface merged from feat/agent-core; state-matrix state-coverage annotation deferred to a follow-up gallery pass' },
+  // ── The eight no-UI-path affordances (c94987cec) shipped their conditional
+  //    renders without the matching state-coverage mapping. Each key below got a
+  //    real decision, not a scaffold stamp.
+  //
+  // Delivered: two overlay cells, so the picker's populated arm and its
+  // `candidates.length === 0` arm each render for real (one cell with an empty
+  // library would show only ONE of the Empty's three messages).
+  'modules/citations/components/AttachCitationsDialog:open': { via: 'overlay' },
+  'modules/citations/components/AttachCitationsDialog:empty': { via: 'overlay' },
+  // Delivered: a prop-driven open cell alongside its dialog peers.
+  'modules/workflow/components/WorkflowMetadataDialog:open': { via: 'overlay' },
+  // NOT a render state. The flagged `Object.keys(patch).length === 0` is the
+  // no-op guard in the submit handler `onValid` ("nothing changed → just close"),
+  // not a conditional render — the extractor classifies any `.length === 0` as an
+  // empty state. There is nothing on screen to capture, so no gallery cell can
+  // exist; the guard itself is asserted by Workflow.store.test.ts (a no-change
+  // submit must not call the update endpoint). Same class as RawCodeView:empty.
+  'modules/workflow/components/WorkflowMetadataDialog:empty': {
+    skip: true,
+    reason:
+      "not a render branch — `Object.keys(patch).length === 0` is the no-op guard inside the submit handler onValid() (nothing changed → close without a PUT), which renders nothing; covered by the no-change assertion in Workflow.store.test.ts",
+  },
+  // Delivered: `failed` is `statuses.get(id)?.status === 'failed'`, written only
+  // by the on-demand Diagnose probe, so the cell seeds the probe RESULT through
+  // the real store and the failed tag + Clear-failed recovery button render.
+  'modules/llm-local-runtime/components/VersionModelsBlock:error': {
+    via: 'seeded:seeded-s3-version-models-failed',
+  },
+  // Delivered: `error` is ListCard's own useState, set only when an on-demand
+  // fetch rejects (the tab loads nothing on mount by design), so the cell drives
+  // the real user action — mock engine in error mode, then click Load.
+  'modules/mcp/components/common/McpServerRuntimeTab:error': {
+    via: 'interaction:load-prompts-error',
+  },
   // <<< state-scaffold-insert >>>
 } satisfies Record<RequiredState, StateCoverageEntry>
 

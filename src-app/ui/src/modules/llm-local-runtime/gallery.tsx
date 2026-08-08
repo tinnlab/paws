@@ -192,5 +192,52 @@ export const gallery: ModuleGallery = {
         },
       ),
     },
+    // ── VersionModelsBlock: a model auto-start LATCHED as failed → the `failed`
+    //    tag + the "Clear failed state" recovery button (:210, :301). `failed` is
+    //    `statuses.get(id)?.status === 'failed'`, and `statuses` is only ever
+    //    written by the on-demand Diagnose probe (nothing loads on mount), so the
+    //    state is reached by seeding the probe RESULT through the real store —
+    //    the same shape as the available-versions failed-download row above. ─────
+    {
+      slug: 'seeded-s3-version-models-failed',
+      title: 'Runtime version models — failed (latched) model',
+      note: 'a diagnosed model whose status is `failed` → the failed tag + Clear failed state',
+      path: '/',
+      initialPath: '/',
+      component: lazyProps(
+        () => import('@/modules/llm-local-runtime/components/VersionModelsBlock'),
+        'VersionModelsBlock',
+        {
+          engine: 'llamacpp',
+          versionId: 's3-v1',
+          models: [
+            {
+              id: 's3-model-failed',
+              display_name: 'Qwen3 4B (latched)',
+              running: false,
+              pinned: true,
+            },
+          ],
+          versionOptions: [{ value: 's3-v1', label: '1.0.0' }],
+          canManage: true,
+          canViewLogs: true,
+        },
+      ),
+      setup: async () => {
+        const { RuntimeModelUsageStore } = await import(
+          '@/modules/llm-local-runtime/stores/runtimeModelUsage'
+        )
+        await holdPatch(() => {
+          RuntimeModelUsageStore.setState({
+            statuses: new Map([
+              [
+                's3-model-failed',
+                { model_id: 's3-model-failed', status: 'failed' },
+              ],
+            ]),
+          } as any)
+        })
+      },
+    },
   ],
 }
