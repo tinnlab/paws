@@ -21,11 +21,13 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import fs from 'node:fs'
 import path from 'node:path'
+import { Bot } from 'lucide-react'
 import {
   ComposerPickerPanel,
   ComposerPickerPopover,
   type ComposerPickerItem,
 } from './ComposerPickerPopover'
+import { PlusMenuItem } from './PlusMenuItem'
 
 // React 19 wants this set before `act` is used outside a framework adapter.
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -322,10 +324,11 @@ describe('popover open/close (TEST-4, TEST-7)', () => {
       searchLabel="Search entries"
       searchPlaceholder="Filter entries…"
       emptyContent={<div>none</div>}
+      // The REAL production trigger, not a hand-rolled div: the trigger's own
+      // keyboard handling composes with Base UI's, and a stand-in cannot exercise
+      // that composition (a blind audit flagged exactly this blind spot).
       trigger={
-        <div data-testid={TID_TRIGGER} role="button" tabIndex={0}>
-          Open picker
-        </div>
+        <PlusMenuItem data-testid={TID_TRIGGER} aria-label="Open picker" icon={<Bot />} label="Open picker" />
       }
     />
   )
@@ -365,6 +368,102 @@ describe('popover open/close (TEST-4, TEST-7)', () => {
     } finally {
       document.removeEventListener('keydown', onDocKey)
     }
+  })
+})
+
+describe('regressions found by the blind audit', () => {
+  const popover = (onSelect: (i: ComposerPickerItem) => void = () => undefined) => (
+    <ComposerPickerPopover
+      data-testid={TID}
+      items={items(5)}
+      onSelect={onSelect}
+      searchLabel="Search entries"
+      searchPlaceholder="Filter entries…"
+      emptyContent={<div>none</div>}
+      trigger={
+        <PlusMenuItem data-testid={TID_TRIGGER} aria-label="Open picker" icon={<Bot />} label="Open picker" />
+      }
+    />
+  )
+
+  test('every option is a DIRECT child of the listbox (ARIA ownership)', async () => {
+    await mountNode(
+      panel({ items: [{ id: 'a', label: 'A', separatorAfter: true }, { id: 'b', label: 'B' }] }),
+    )
+    const list = document.querySelector('[role="listbox"]')
+    expect(list).not.toBeNull()
+    // A wrapper element between listbox and option breaks ARIA's required-children
+    // relationship (and axe's `aria-required-children`), and a screen reader stops
+    // announcing "item N of M". A separator must therefore be a BORDER, not a node.
+    expect(options().map(o => o.parentElement === list)).toEqual([true, true])
+    expect([...(list as HTMLElement).children].every(c => c.getAttribute('role') === 'option')).toBe(
+      true,
+    )
+  })
+
+  test('clicking a row keeps focus in the search box', async () => {
+    await mountNode(popover())
+    await click(byTid(TID_TRIGGER) as HTMLElement)
+    const input = searchBox()
+    expect(document.activeElement).toBe(input)
+
+    const row = options()[0]
+    await act(async () => {
+      row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+      row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    // The multi-select KB picker stays OPEN after a click, so losing focus here would
+    // strand every later keystroke and `aria-activedescendant`. Rows are not
+    // focusable and the Base UI popup is tabIndex=-1, so this needs an explicit
+    // mousedown preventDefault — which is what this asserts.
+    expect(document.activeElement, 'focus must stay in the search box').toBe(input)
+  })
+
+  test('Enter on the REAL trigger opens the picker (no double-toggle)', async () => {
+    await mountNode(popover())
+    const trigger = byTid(TID_TRIGGER) as HTMLElement
+    await act(async () => {
+      trigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+      trigger.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true, cancelable: true }))
+    })
+    expect(document.querySelector('[role="listbox"]'), 'Enter must OPEN, not open-and-close').not.toBeNull()
+  })
+
+  test('a pinned row survives a filter that excludes everything else', async () => {
+    await mountNode(
+      panel({
+        items: [
+          { id: 'clear', label: 'No assistant', pinned: true },
+          ...items(5),
+        ],
+      }),
+    )
+    await type('zzzz-no-such-entry')
+    // Pinned rows are actions, not choices — they must stay reachable under a query.
+    expect(labels()).toEqual(['No assistant'])
+    expect(document.querySelector(`[data-testid=${JSON.stringify(TID_NO_MATCHES)}]`)).toBeNull()
+  })
+
+  test('the no-matches state does not advertise a listbox that is not rendered', async () => {
+    await mountNode(panel())
+    await type('zzzz-no-such-entry')
+    const input = searchBox()
+    expect(document.querySelector('[role="listbox"]')).toBeNull()
+    expect(input.getAttribute('aria-expanded')).toBe('false')
+    expect(input.getAttribute('aria-controls')).toBeNull()
+  })
+
+  test('an IME composition keydown is not treated as a picker action', async () => {
+    const picked: string[] = []
+    await mountNode(panel({ onSelect: item => picked.push(item.id) }))
+    const input = searchBox()
+    await act(async () => {
+      const ev = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+      Object.defineProperty(ev, 'isComposing', { value: true })
+      input.dispatchEvent(ev)
+    })
+    // Enter COMMITS an IME candidate; it must not also select an option.
+    expect(picked).toEqual([])
   })
 })
 

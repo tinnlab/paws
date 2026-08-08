@@ -59,6 +59,10 @@ export function AssistantMenuItem() {
             testId: 'assistant-option-none',
             leading: <Check className="size-4 shrink-0 opacity-0" />,
             separatorAfter: true,
+            // An ACTION, not a choice: it must stay reachable while a query is
+            // active, or a user who types to find an assistant can no longer clear
+            // the current one without first clearing the query.
+            pinned: true,
           },
         ]
       : []),
@@ -102,7 +106,12 @@ export function AssistantMenuItem() {
       searchLabel="Search assistants"
       searchPlaceholder="Filter assistants…"
       emptyContent={
-        <div className="px-2 py-2 text-sm text-muted-foreground">No assistants available</div>
+        // Distinguish "still loading" from "you have none" — the trigger row above
+        // already says "Loading assistants…", and a panel reading "No assistants
+        // available" in the same frame contradicts it.
+        <div className="px-2 py-2 text-sm text-muted-foreground">
+          {loading ? 'Loading assistants…' : 'No assistants available'}
+        </div>
       }
     />
   )

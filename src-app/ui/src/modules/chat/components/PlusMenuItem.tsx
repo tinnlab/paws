@@ -23,9 +23,11 @@ type PlusMenuItemProps = {
  * - optional `trailing` slot (e.g. a submenu chevron), pinned right via `ml-auto`.
  *
  * forwardRef + prop spread so it can also serve as a Dropdown/Popover TRIGGER
- * (the Export item wraps it in the export-format Dropdown). Single-row items
- * (Skills / MCP / Export) render this directly; the list-style Assistant item
- * reuses the same wrapper classes on its trigger.
+ * (the Export item wraps it in the export-format Dropdown). EVERY "+" item renders
+ * this component — the single-row ones (Skills / MCP / Export) directly, and the
+ * list-style Assistant / Knowledge-base items as the trigger they hand to
+ * `ComposerPickerPopover`. (Those two used to COPY the class string instead of using
+ * the component, which is exactly the drift this row exists to prevent.)
  */
 export const PlusMenuItem = forwardRef<HTMLDivElement, PlusMenuItemProps>(
   function PlusMenuItem({ icon, label, trailing, onClick, onKeyDown, className, ...rest }, ref) {

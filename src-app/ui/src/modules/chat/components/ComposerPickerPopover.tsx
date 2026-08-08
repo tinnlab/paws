@@ -73,6 +73,13 @@ export interface ComposerPickerItem {
   trailing?: ReactNode
   /** Renders a divider under this row (used for the assistant "No assistant" row). */
   separatorAfter?: boolean
+  /**
+   * Never filtered out. For rows that are an ACTION rather than a choice — the
+   * assistant picker's "No assistant" clear row — which must stay reachable while a
+   * query is active (otherwise a user with 26 assistants who types to find one can no
+   * longer clear the selection without first clearing the query).
+   */
+  pinned?: boolean
   disabled?: boolean
 }
 
@@ -125,13 +132,14 @@ export function ComposerPickerPanel({
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
     if (!q) return items
-    return items.filter(item => item.label.toLowerCase().includes(q))
+    return items.filter(item => item.pinned || item.label.toLowerCase().includes(q))
   }, [items, query])
 
   // Derived, not stored: the filter can shrink the list under the stored index at any
   // keystroke, so clamping here keeps `aria-activedescendant` pointing at a row that
   // actually exists without an effect that lags a render behind.
   const active = filtered.length === 0 ? -1 : Math.min(activeIndex, filtered.length - 1)
+  const hasResults = filtered.length > 0
 
   const moveActive = useCallback(
     (next: number) => {
@@ -155,6 +163,11 @@ export function ComposerPickerPanel({
   )
 
   const onSearchKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    // While an IME candidate window is open, Escape dismisses the CANDIDATE and Enter
+    // COMMITS it — neither is a picker action. Base UI's own dismiss guards this the
+    // same way; since this handler stopPropagation()s Escape, that guard would never
+    // run, so it has to be repeated here.
+    if (event.nativeEvent.isComposing) return
     const count = filtered.length
     switch (event.key) {
       case 'ArrowDown':
@@ -206,8 +219,11 @@ export function ComposerPickerPanel({
         data-testid={`${testId}-search`}
         role="combobox"
         aria-label={searchLabel}
-        aria-expanded
-        aria-controls={listId}
+        // Only claim an expanded, controlled listbox while one is actually rendered —
+        // in the no-matches state the list is replaced, so a hardcoded aria-expanded
+        // + aria-controls would dangle.
+        aria-expanded={hasResults}
+        aria-controls={hasResults ? listId : undefined}
         aria-autocomplete="list"
         aria-activedescendant={active >= 0 ? optionId(active) : undefined}
         value={query}
@@ -231,37 +247,49 @@ export function ComposerPickerPanel({
       ) : (
         <ScrollArea axis="y" autoHide="leave" className={cn(PICKER_LIST_MAX_H, '-mx-1 px-1')}>
           <div ref={listRef} id={listId} role="listbox" aria-label={searchLabel}>
+            {/* Every `option` MUST be a DIRECT child of the `listbox`: ARIA's
+                required-children relationship (and axe's `aria-required-children`)
+                does not see through a wrapper element, and a screen reader stops
+                announcing "item N of M". So there is no per-item wrapper div, and a
+                separator is a BORDER on the row rather than a sibling node — a
+                role-less div between the options would break the same rule.
+                Locked by a test that asserts `option.parentElement === listbox`. */}
             {filtered.map((item, index) => {
               const selected = selectedIds?.has(item.id) ?? false
               return (
-                <div key={item.id}>
-                  <div
-                    id={optionId(index)}
-                    data-testid={item.testId}
-                    role="option"
-                    aria-selected={selected}
-                    aria-disabled={item.disabled || undefined}
-                    data-active={index === active || undefined}
-                    onClick={() => activate(item)}
-                    onMouseMove={() => {
-                      if (index !== activeIndex) setActiveIndex(index)
-                    }}
-                    className={cn(
-                      'flex min-w-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm',
-                      'data-[active]:bg-accent data-[active]:text-accent-foreground',
-                      'aria-disabled:pointer-events-none aria-disabled:opacity-50',
-                      selected ? 'text-primary' : 'text-foreground',
-                    )}
-                  >
-                    {item.leading}
-                    {/* min-w-0 + truncate is what keeps a long name from widening the
-                        panel; `title` keeps the elided text recoverable. */}
-                    <span className="min-w-0 flex-1 truncate" title={item.label}>
-                      {item.label}
-                    </span>
-                    {item.trailing}
-                  </div>
-                  {item.separatorAfter && <div className="my-1 h-px bg-border" />}
+                <div
+                  key={item.id}
+                  id={optionId(index)}
+                  data-testid={item.testId}
+                  role="option"
+                  aria-selected={selected}
+                  aria-disabled={item.disabled || undefined}
+                  data-active={index === active || undefined}
+                  // Keep DOM focus in the search input: the Base UI popup is
+                  // tabIndex=-1, so a plain mousedown on a non-focusable row moves
+                  // focus off the input and every later keystroke (and
+                  // aria-activedescendant) is stranded. That is the DEFAULT flow for
+                  // the multi-select KB picker, which stays open after a click.
+                  onMouseDown={event => event.preventDefault()}
+                  onClick={() => activate(item)}
+                  onMouseMove={() => {
+                    if (index !== activeIndex) setActiveIndex(index)
+                  }}
+                  className={cn(
+                    'flex min-w-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm',
+                    'data-[active]:bg-accent data-[active]:text-accent-foreground',
+                    'aria-disabled:pointer-events-none aria-disabled:opacity-50',
+                    selected ? 'text-primary' : 'text-foreground',
+                    item.separatorAfter && 'mb-1 rounded-b-none border-b border-border pb-2',
+                  )}
+                >
+                  {item.leading}
+                  {/* min-w-0 + truncate is what keeps a long name from widening the
+                      panel; `title` keeps the elided text recoverable. */}
+                  <span className="min-w-0 flex-1 truncate" title={item.label}>
+                    {item.label}
+                  </span>
+                  {item.trailing}
                 </div>
               )
             })}

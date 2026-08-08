@@ -96,6 +96,15 @@ test.describe('Chat composer — picker popovers stay usable at scale', () => {
     await openChat(page, baseURL)
     const panel = await openPicker(page, 'assistant')
 
+    // The SAME bound the KB picker is held to (TEST-12) — asserted for both, or the
+    // cap is only proven for one of the two pickers the design says are identical.
+    const box = await panel.boundingBox()
+    expect(box).not.toBeNull()
+    expect(
+      box?.height ?? Number.POSITIVE_INFINITY,
+      'the assistant panel must stay within its declared height cap',
+    ).toBeLessThanOrEqual(MAX_PANEL_HEIGHT)
+
     const vp = viewport(panel)
     await expect(vp).toHaveCount(1)
 
@@ -278,7 +287,19 @@ test.describe('Chat composer — picker popovers stay usable at scale', () => {
     await seedAssistants(page, apiURL, token, names)
 
     await openChat(page, baseURL)
-    const panel = await openPicker(page, 'assistant')
+
+    // Open with the KEYBOARD, on the real PlusMenuItem trigger. A blind audit
+    // predicted Enter would open-and-immediately-close here (the row's own Enter
+    // handler composing with Base UI's button emulation); the mouse-driven path
+    // cannot see that, so it is asserted in a real browser.
+    await byTestId(page, 'chat-input-add-btn').first().click()
+    await byTestId(page, 'assistant-menu-trigger').focus()
+    await page.keyboard.press('Enter')
+    await expect(
+      byTestId(page, 'assistant-menu-options'),
+      'Enter on the trigger must OPEN the picker, not toggle it twice',
+    ).toBeVisible()
+    const panel = byTestId(page, 'assistant-menu-options')
 
     // focus-on-open
     const focused = await page.evaluate(
