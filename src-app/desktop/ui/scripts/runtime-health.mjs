@@ -37,7 +37,19 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isRuntimeBaselined } from '../src/dev/gallery/runtime-baseline.js'
 import { enumerateSurfaces } from './lib/gallery-surfaces.mjs'
-import { resolveGalleryPort } from '@ziee/gallery/scripts/lib/run-key.mjs'
+import { resolveGalleryPort, resolveWorktreeRoot } from '@ziee/gallery/scripts/lib/run-key.mjs'
+import { withHostLock } from '@ziee/gallery/scripts/lib/host-lock.mjs'
+import {
+  CONSOLE_TRANSPORT_MIRROR,
+  DYN_IMPORT_FAILURE,
+  TRANSPORT_DEAD,
+  assessRun,
+  clearRunArtifacts,
+  newRunId,
+  originAlive,
+  watchOrigin,
+  writeRunManifest,
+} from '@ziee/gallery/scripts/lib/run-validity.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const GALLERY_DIR = path.resolve(__dirname, '../src/dev/gallery')
@@ -133,9 +145,20 @@ const isViteDevAsset = url =>
  * gating, but kept visible). A `crash` (ErrorBoundary) is intentionally excluded
  * — a render crash gates no matter what triggered it.
  */
-function isHarnessNoise(f) {
+function isHarnessNoise(f, cell) {
   const d = f.detail || ''
-  if (f.category === 'console-error' && matchesAny(d, HARNESS_CONSOLE)) return true
+  if (f.category === 'console-error') {
+    if (matchesAny(d, HARNESS_CONSOLE)) return true
+    // PAIRED transport-mirror arm — kept identical to the sdk copy (see
+    // `@ziee/gallery/scripts/runtime-health.mjs`). Chromium reports one transport
+    // failure on BOTH the request and the console channel; muting only the
+    // request twin left the same event half-gating. Keyed on the console
+    // message's OWN resource URL, so a `net::ERR_*` against a PRODUCT url is
+    // untouched and still gates.
+    if (CONSOLE_TRANSPORT_MIRROR.test(d) && f.resourceUrl)
+      return isViteDevAsset(f.resourceUrl)
+    return false
+  }
   if (f.category === 'request-failed') {
     // A browser-ABORTED request (net::ERR_ABORTED) is a full-page-reload race in
     // the per-cell harness (a dev fixture/module import still in flight when the
@@ -145,7 +168,40 @@ function isHarnessNoise(f) {
     const m = /(?:GET|POST|PUT|DELETE|PATCH|HEAD)\s+(\S+)/.exec(d)
     return isViteDevAsset(m ? m[1] : d)
   }
+  // A dynamic import that never arrived rejects and trips the ErrorBoundary, so
+  // a dead origin FABRICATES render crashes. Muted ONLY with corroboration: the
+  // same cell must also have recorded a dev-asset transport failure.
+  if (f.category === 'crash' || f.category === 'page-error') {
+    if (!DYN_IMPORT_FAILURE.test(d)) return false
+    const url = /imported module:\s*(\S+)/.exec(d)?.[1]
+    if (!url || !isViteDevAsset(url)) return false
+    return Boolean(cell?.sawDevAssetTransportFailure)
+  }
   return false
+}
+
+/** Stamp baselined/harness ONCE, after the crawl — the crash arm needs to know
+ *  what else the same cell saw. Mirrors the sdk copy exactly. */
+function classifyAll(findings) {
+  const cells = new Map()
+  const keyOf = f => `${f.surface}|${f.state}|${f.theme}`
+  for (const f of findings) {
+    const k = keyOf(f)
+    const c = cells.get(k) || { sawDevAssetTransportFailure: false }
+    if (
+      f.category === 'request-failed' &&
+      TRANSPORT_DEAD.test(f.detail || '') &&
+      isViteDevAsset(f.detail || '')
+    )
+      c.sawDevAssetTransportFailure = true
+    cells.set(k, c)
+  }
+  for (const f of findings) {
+    if (f.severity !== 'HIGH') continue
+    if (isRuntimeBaselined(f)) f.baselined = true
+    else if (isHarnessNoise(f, cells.get(keyOf(f)))) f.harness = true
+  }
+  return findings
 }
 
 // An ErrorBoundary catch is a genuine render CRASH in ANY state (the surface
@@ -408,6 +464,18 @@ function inPageAudit() {
 
 // ---------------------------------------------------------------------------
 async function main() {
+  const startedAtMs = Date.now()
+  const RUN_ID = process.env.GALLERY_RUN_ID || newRunId()
+  // Clear any PRIOR run's artifacts so a crawl that dies leaves nothing to inherit.
+  clearRunArtifacts(OUT)
+  if (!(await originAlive(BASE))) {
+    console.error(
+      `runtime-health: refusing to run — the gallery origin ${BASE} is not answering. ` +
+        `Every request would fail and the findings would describe the harness, not the product.`,
+    )
+    process.exit(2)
+  }
+
   const browser = await chromium.launch()
 
   // 1. Enumerate EVERY surface class from the single source (browse render).
@@ -472,18 +540,10 @@ async function main() {
     typeof d === 'string'
       ? d.replace(/localhost:\d+/g, 'localhost').replace(/\?t=\d+/g, '')
       : d
+  // Recorded RAW; classifyAll() stamps baselined/harness after the crawl.
   const record = (cell, theme, f) => {
     if (f.detail) f.detail = normalizeDetail(f.detail)
-    const finding = { ...cell, theme, ...f }
-    // A documented pre-existing item (runtime-baseline.js) is still emitted, but
-    // flagged so it does NOT count toward the gating HIGH total.
-    if (finding.severity === 'HIGH' && isRuntimeBaselined(finding))
-      finding.baselined = true
-    // Documented gallery-harness noise (mock-cassette / dev-server artifacts) —
-    // also emitted + visible, also subtracted from gating. Never masks a crash.
-    else if (finding.severity === 'HIGH' && isHarnessNoise(finding))
-      finding.harness = true
-    findings.push(finding)
+    findings.push({ ...cell, theme, ...f })
   }
 
   // Flatten to (cell, theme) jobs, then drain with a fixed-size worker pool —
@@ -504,6 +564,9 @@ async function main() {
           category: ERRORBOUNDARY.test(t) ? 'crash' : 'console-error',
           severity: errSeverity(cell.state, t),
           selector: null,
+          // The transport-mirror console message does not name its resource in
+          // the text — only on the message location.
+          resourceUrl: m.location?.()?.url || null,
           detail: t.replace(/\s+/g, ' ').slice(0, 300),
         })
       else if (
@@ -565,6 +628,9 @@ async function main() {
       console.log(`  … ${done}/${total} cells`)
   }
 
+  // Watch the origin FOR THE DURATION of the crawl (see the sdk copy's rationale).
+  const originWatch = watchOrigin(BASE)
+
   // Fixed-size pool: N long-lived workers each pull the next job off the queue.
   let next = 0
   const worker = async () => {
@@ -576,7 +642,16 @@ async function main() {
   await Promise.all(
     Array.from({ length: Math.min(CONCURRENCY, jobs.length) }, worker),
   )
+  const origin = originWatch.stop()
   await browser.close()
+
+  classifyAll(findings)
+  const validity = assessRun({
+    findings,
+    origin,
+    cellsPlanned: total,
+    cellsCompleted: done,
+  })
 
   // 3. Write the outputs.
   fs.mkdirSync(OUT, { recursive: true })
@@ -732,10 +807,44 @@ async function main() {
   console.log(`  → ${path.relative(process.cwd(), mdPath)}`)
   console.log(`  → ${path.relative(process.cwd(), jsonlPath)}`)
 
+  writeRunManifest(OUT, {
+    runId: RUN_ID,
+    startedAt: new Date(startedAtMs).toISOString(),
+    finishedAt: new Date().toISOString(),
+    cellsPlanned: total,
+    cellsCompleted: done,
+    complete: done === total,
+    themes: THEMES,
+    findings: findings.length,
+    gatingHigh,
+    originEverDown: origin.everDown,
+    originChecks: origin.checks,
+    contamination: validity.contamination,
+    void: validity.void,
+    voidReasons: validity.reasons,
+  })
+
+  console.log(
+    `  validity: ${done}/${total} cells · origin ${origin.everDown ? 'WENT DOWN' : 'alive'} (${origin.checks} checks) · ` +
+      `transport artifacts ${validity.contamination.total} (${validity.contamination.pct}% of findings)`,
+  )
+
+  if (validity.void) {
+    console.error('\n❌ RUN VOID — these findings do not describe the product:')
+    for (const r of validity.reasons) console.error(`   · ${r}`)
+    process.exitCode = 2
+    return
+  }
+
   if (!REPORT_ONLY && gatingHigh > 0) process.exitCode = 1
 }
 
-main().catch(e => {
+// The crawl holds the HOST lock (see @ziee/gallery/scripts/lib/host-lock.mjs):
+// two concurrent crawls on one machine take each other's dev server away.
+withHostLock(
+  { owner: resolveWorktreeRoot(path.resolve(__dirname, '..')), log: m => console.log(m) },
+  () => main(),
+).catch(e => {
   console.error(e)
   process.exit(2)
 })

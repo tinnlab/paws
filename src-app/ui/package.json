@@ -127,7 +127,7 @@
     "test:unit": "node --import ./scripts/node-test-loader.mjs --test \"src/**/*.test.ts\"",
     "test:component": "vitest run .test.tsx",
     "test:component:mutations": "node scripts/mutate-approval-card.mjs",
-    "check": "tsc && npm run lint:guardrails && npm run lint:colors && npm run lint:settings-field && npm run lint:adjacent-inline && npm run lint:icon-action && npm run lint:hooks && npm run lint:logical-direction && npm run lint:tooltip-placement && npm run check:kit-manifest && npm run check:testid-registry && npm run check:design-spec && npm run check:gallery-coverage && npm run check:gallery-crawl && npm run gallery:check-fixtures && npm run check:state-matrix && npm run check:overlay-registry && npm run check:override-registry && npm run check:gallery-seed-registry && npm run check:store-actions",
+    "check": "tsc && npm run lint:guardrails && npm run lint:colors && npm run lint:settings-field && npm run lint:adjacent-inline && npm run lint:icon-action && npm run lint:hooks && npm run lint:logical-direction && npm run lint:tooltip-placement && npm run check:kit-manifest && npm run check:testid-registry && npm run check:design-spec && npm run check:gallery-coverage && npm run check:gallery-crawl && npm run gallery:check-fixtures && npm run check:state-matrix && npm run check:overlay-registry && npm run check:override-registry && npm run check:gallery-seed-registry && npm run check:store-actions && npm run check:harness-parity && npm run test:gallery-scripts",
     "lint:guardrails": "biome lint --only=style/noRestrictedImports src",
     "lint:colors": "node ../../sdk/packages/config/src/lint/hardcoded-colors.mjs --root=src --root=../desktop/ui/src",
     "lint:settings-field": "node ../../sdk/packages/config/src/lint/settings-field.mjs --root=src --root=../desktop/ui/src",
@@ -193,7 +193,9 @@
     "gallery:runtime": "node ../../sdk/packages/gallery/scripts/runtime-health.mjs",
     "gate:ui": "node ../../sdk/packages/gallery/scripts/gate-ui.mjs",
     "gen:store-actions": "node ../../sdk/packages/config/src/lint/store-actions.mjs --root=src --root=../desktop/ui/src",
-    "check:store-actions": "node ../../sdk/packages/config/src/lint/store-actions.mjs --root=src --root=../desktop/ui/src --check"
+    "check:store-actions": "node ../../sdk/packages/config/src/lint/store-actions.mjs --root=src --root=../desktop/ui/src --check",
+    "test:gallery-scripts": "node --test ../../sdk/packages/gallery/scripts/gen-testid-registry.test.mjs ../../sdk/packages/gallery/scripts/gen-gallery-seed-registry.test.mjs ../../sdk/packages/gallery/scripts/gen-overlay-registry.test.mjs ../../sdk/packages/gallery/scripts/check-harness-parity.test.mjs ../../sdk/packages/gallery/scripts/lib/run-key.test.mjs ../../sdk/packages/gallery/scripts/lib/host-lock.test.mjs ../../sdk/packages/gallery/scripts/lib/run-validity.test.mjs",
+    "check:harness-parity": "node ../../sdk/packages/gallery/scripts/check-harness-parity.mjs"
   },
   "type": "module",
   "types": "./dist/index.d.ts"

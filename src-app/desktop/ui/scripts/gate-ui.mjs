@@ -36,6 +36,13 @@ import {
   fetchSentinelRoot,
   serverIsThisWorktree,
 } from '@ziee/gallery/scripts/lib/run-key.mjs'
+import { withHostLock, TOKEN_ENV } from '@ziee/gallery/scripts/lib/host-lock.mjs'
+import {
+  clearRunArtifacts,
+  newRunId,
+  readRunManifest,
+  verifyRunManifest,
+} from '@ziee/gallery/scripts/lib/run-validity.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const UI_DIR = path.resolve(__dirname, '..')
@@ -92,6 +99,8 @@ async function waitForPort(port, timeoutMs) {
   }
   return false
 }
+
+let lockToken = null
 
 async function main() {
   console.log('=== desktop UI evaluator gate ===\n')
@@ -151,10 +160,33 @@ async function main() {
   try {
     // 3. runtime-health --------------------------------------------------------
     console.log('• runtime-health pass …')
+    // Delete the PREVIOUS run's artifacts FIRST so a killed crawl leaves nothing
+    // to inherit (see @ziee/gallery/scripts/lib/run-validity.mjs).
+    const runId = newRunId()
+    clearRunArtifacts(GALLERY_DIR)
     const rt = run('node', ['scripts/runtime-health.mjs', '--report-only'], {
-      env: { ...process.env, GALLERY_PORT: String(PORT) },
+      env: {
+        ...process.env,
+        GALLERY_PORT: String(PORT),
+        GALLERY_RUN_ID: runId,
+        [TOKEN_ENV]: lockToken || 'inherited',
+      },
     })
     console.log(rt.out.split('\n').slice(-8).join('\n'))
+    // The run must PROVE it completed and belongs to US before any output of it
+    // becomes a verdict — otherwise the table below is a PREVIOUS run's data.
+    const manifest = readRunManifest(GALLERY_DIR)
+    const usable = verifyRunManifest(manifest, runId)
+    if (!usable.ok) {
+      step('runtime-health', false, `run not usable — ${usable.reason}`)
+      console.log(
+        `\n   No per-surface verdict is available: the crawl did not produce a usable\n` +
+          `   result. A table here would be a previous run's data. Child exit: ${rt.code}.`,
+      )
+      finish()
+      return
+    }
+
     const surfaceVerdicts = readRuntimeSurfaceVerdicts()
     const runtimeFail = surfaceVerdicts.filter(s => !s.ok)
     step(
@@ -243,7 +275,20 @@ function finish() {
   process.exit(0)
 }
 
-main().catch(e => {
-  console.error(e)
+// The whole gate holds the HOST lock — concurrent gate:ui runs on one machine
+// take each other's dev server away, which corrupts both runs' findings.
+withHostLock(
+  {
+    owner: OWN_ROOT ?? UI_DIR,
+    wait: !process.argv.includes('--no-wait'),
+    waitMs: Number(process.env.GATE_UI_LOCK_WAIT_MS) || 15 * 60 * 1000,
+    log: m => console.log(m),
+  },
+  async lock => {
+    lockToken = lock.token ?? null
+    return main()
+  },
+).catch(e => {
+  console.error(e.message || e)
   process.exit(2)
 })
