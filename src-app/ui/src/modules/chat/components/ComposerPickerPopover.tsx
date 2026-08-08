@@ -359,8 +359,11 @@ export interface ComposerPickerPopoverProps extends Omit<ComposerPickerPanelProp
    * `assistant-menu-trigger` / `kb-menu-trigger` — the ids ~10 existing e2e specs
    * target — into template-derived ids and silently drop their compile-time
    * typo-check. Keeping the element at the call site keeps the literal where the
-   * scanner can see it. `aria-expanded` is injected here so the caller cannot
-   * forget it.
+   * scanner can see it.
+   *
+   * Nothing is injected into the element here: Base UI's own Trigger already emits
+   * `aria-expanded`, and a `cloneElement` override would only be a way for a caller
+   * prop to defeat it (render-element props win Base UI's merge).
    */
   trigger: ReactElement
   /** Whether activating an item should close the picker (single-select) or not. */
