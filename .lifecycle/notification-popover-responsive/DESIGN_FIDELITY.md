@@ -1,0 +1,6 @@
+# DESIGN_FIDELITY — plan vs DESIGN.md invariants
+
+- **INV-1** — fidelity: UPHELD — ITEM-1 replaces the fixed `width: 340` (measured to push `document.scrollWidth` to 358 at a 320px viewport) with a panel width of `min(21.25rem, viewport − gutters)`, so the panel can never exceed the viewport; ITEM-2 puts the only overflow inside the list's own `ScrollArea` container rather than on the document.
+- **INV-2** — fidelity: UPHELD — ITEM-1's width and ITEM-2's `--available-height` cap are both viewport-relative, and ITEM-7 pins the behaviour with an e2e that runs at a narrow viewport, so "works only at desktop" is refused by an executable test rather than by intent.
+- **INV-3** — fidelity: UPHELD — ITEM-5 converts the one physical utility (`pl-4`) in the changed files to `ps-4`; every class the plan adds is either logical or direction-neutral, and `npm run lint:logical-direction` (part of `npm run check`, run in Phase 8) is the enforcement.
+- **INV-4** — fidelity: UPHELD — ITEM-1 makes panel and content the same box (the child no longer carries its own width), ITEM-3 stops long content forcing the row wider, and ITEM-4 keeps the header/row controls inside; ITEM-7 asserts the mechanical form of the invariant (`scrollWidth === clientWidth` on the panel, panel rect within the viewport) so it cannot regress silently.
