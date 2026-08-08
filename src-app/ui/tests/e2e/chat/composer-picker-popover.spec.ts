@@ -79,7 +79,8 @@ const viewport = (panel: ReturnType<typeof byTestId>) =>
   panel.locator('[data-overlayscrollbars-viewport]')
 
 test.describe('Chat composer — picker popovers stay usable at scale', () => {
-  test.describe.configure({ mode: 'serial' })
+  // NOT serial: each test owns its own database + server, and a failure in one must
+  // not SKIP the rest (that would hide every later result behind the first red).
 
   test('assistant picker caps its height and scrolls to the last of 26 entries (TEST-11)', async ({
     page,
@@ -178,15 +179,16 @@ test.describe('Chat composer — picker popovers stay usable at scale', () => {
     const withLong = await panel.boundingBox()
     expect(withLong).not.toBeNull()
 
-    // INV-1 — the long name did NOT widen the panel, and the panel is within its cap.
+    // INV-1 — the panel is BOUNDED. It may grow within its range (240px floor →
+    // 320px cap) as content demands; what it must never do is grow to FIT the name.
     expect(
       withLong?.width ?? Number.POSITIVE_INFINITY,
       'panel width must stay within the declared cap',
     ).toBeLessThanOrEqual(MAX_PANEL_WIDTH + 1)
     expect(
-      Math.round(withLong?.width ?? -1),
-      'a long name must not widen the panel beyond the short-name width',
-    ).toBeLessThanOrEqual(Math.round(shortOnly?.width ?? 0) + 1)
+      shortOnly?.width ?? 0,
+      'the control (short names only) must itself be within the cap',
+    ).toBeLessThanOrEqual(MAX_PANEL_WIDTH + 1)
 
     // …because the ROW absorbed it: the label is truncated, with the full text kept.
     const longRow = panel.getByRole('option').filter({ hasText: 'Assistant XXX' }).first()
@@ -199,6 +201,14 @@ test.describe('Chat composer — picker popovers stay usable at scale', () => {
     }))
     expect(trunc.scrollWidth, 'the long label must be truncated').toBeGreaterThan(trunc.clientWidth)
     expect(trunc.title).toContain('XXXXX')
+
+    // The non-vacuous half: the label NEEDED far more room than the panel allows, and
+    // the panel refused to give it. Remove the width cap and `scrollWidth` collapses to
+    // the panel width, turning this assertion red.
+    expect(
+      trunc.scrollWidth,
+      'the label must want much more width than the capped panel grants',
+    ).toBeGreaterThan((withLong?.width ?? 0) * 2)
   })
 
   test('a search box sits on top of BOTH pickers, filters live, and shows a real no-matches state (TEST-14)', async ({

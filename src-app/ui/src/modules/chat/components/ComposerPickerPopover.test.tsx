@@ -63,6 +63,25 @@ interface Mounted {
   unmount(): Promise<void>
 }
 
+/**
+ * Test-only testids, held in constants rather than written as quoted attribute
+ * literals: the generated registry (`sdk/packages/kit/src/testIds.generated.ts`)
+ * scans every `src/**` file for literal test-id attribute occurrences, and a spec's
+ * fixture ids have no business in the app's production testid union.
+ */
+const TID = 'picker'
+const TID_CTA = `${TID}-cta`
+const TID_TRIGGER = `${TID}-trigger`
+const TID_NO_MATCHES = `${TID}-no-matches`
+
+/**
+ * Selector helper. The attribute value is interpolated via JSON.stringify so no quote
+ * ever directly follows the attribute name: the registry generator matches a quoted
+ * value right after the test-id attribute, so the obvious template form leaks the raw
+ * `${...}` placeholder text into the production id union (observed, then fixed).
+ */
+const byTid = (id: string) => document.querySelector<HTMLElement>(`[data-testid=${JSON.stringify(id)}]`)
+
 const live: Mounted[] = []
 
 async function mountNode(node: React.ReactElement): Promise<Mounted> {
@@ -147,12 +166,12 @@ async function click(el: HTMLElement): Promise<void> {
 
 const panel = (props: Partial<React.ComponentProps<typeof ComposerPickerPanel>> = {}) => (
   <ComposerPickerPanel
-    data-testid="picker"
+    data-testid={TID}
     items={items(12)}
     onSelect={() => undefined}
     searchLabel="Search entries"
     searchPlaceholder="Filter entries…"
-    emptyContent={<div data-testid="picker-cta">Nothing configured yet</div>}
+    emptyContent={<div data-testid={TID_CTA}>Nothing configured yet</div>}
     {...props}
   />
 )
@@ -184,7 +203,7 @@ describe('empty states (TEST-2, TEST-3)', () => {
     await type('zzzz-no-such-entry')
 
     expect(options()).toHaveLength(0)
-    const none = document.querySelector('[data-testid="picker-no-matches"]')
+    const none = byTid(TID_NO_MATCHES)
     expect(none).not.toBeNull()
     expect(none?.textContent?.trim()).toBe('No matches.')
   })
@@ -192,7 +211,7 @@ describe('empty states (TEST-2, TEST-3)', () => {
   test('zero items renders the caller CTA and NO search box', async () => {
     await mountNode(panel({ items: [] }))
 
-    expect(document.querySelector('[data-testid="picker-cta"]')).not.toBeNull()
+    expect(byTid(TID_CTA)).not.toBeNull()
     expect(document.querySelector('[role="combobox"]')).toBeNull()
     expect(options()).toHaveLength(0)
   })
@@ -297,14 +316,14 @@ describe('long labels (TEST-10)', () => {
 describe('popover open/close (TEST-4, TEST-7)', () => {
   const popover = (onSelect: (i: ComposerPickerItem) => void = () => undefined) => (
     <ComposerPickerPopover
-      data-testid="picker"
+      data-testid={TID}
       items={items(5)}
       onSelect={onSelect}
       searchLabel="Search entries"
       searchPlaceholder="Filter entries…"
       emptyContent={<div>none</div>}
       trigger={
-        <div data-testid="picker-trigger" role="button" tabIndex={0}>
+        <div data-testid={TID_TRIGGER} role="button" tabIndex={0}>
           Open picker
         </div>
       }
@@ -313,7 +332,7 @@ describe('popover open/close (TEST-4, TEST-7)', () => {
 
   test('opening the picker puts focus in the search box', async () => {
     await mountNode(popover())
-    const trigger = document.querySelector<HTMLElement>('[data-testid="picker-trigger"]')
+    const trigger = byTid(TID_TRIGGER)
     expect(trigger).not.toBeNull()
 
     await click(trigger as HTMLElement)
@@ -334,7 +353,7 @@ describe('popover open/close (TEST-4, TEST-7)', () => {
     document.addEventListener('keydown', onDocKey)
     try {
       await mountNode(popover())
-      await click(document.querySelector<HTMLElement>('[data-testid="picker-trigger"]') as HTMLElement)
+      await click(byTid(TID_TRIGGER) as HTMLElement)
       expect(document.querySelector('[role="listbox"]')).not.toBeNull()
 
       await press('Escape')
