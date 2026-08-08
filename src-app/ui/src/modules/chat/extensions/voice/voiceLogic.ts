@@ -9,6 +9,11 @@
  *    (replacing a selection if there is one), never replacing the whole draft
  *    and — by construction — never triggering a send. With no caret at all it
  *    appends at the end (`appendTranscript`).
+ *  - `normalizeSpan` — the ONE span normalization (ordering + widening off
+ *    UTF-16 surrogate boundaries). Exported so the engine's restore-payload
+ *    capture uses the same span the splice does; three different
+ *    normalizations would let the payload be sized differently from what was
+ *    actually replaced.
  *  - `relocateSpan` / `restoreSpan` — the dictation SESSION's span bookkeeping:
  *    what to do when the user types around (or into) the provisional text, and
  *    how to put the composer back byte-exactly when a recording is cancelled.
@@ -83,7 +88,7 @@ function splitsSurrogatePair(value: string, i: number): boolean {
  * real RANGE is widened outward to cover whichever pair it straddles, so a
  * replacement never cuts a character in half.
  */
-function normalizeSpan(value: string, span: ComposerSpan): ComposerSpan {
+export function normalizeSpan(value: string, span: ComposerSpan): ComposerSpan {
   const a = clampIndex(span.start, value.length)
   const b = clampIndex(span.end, value.length)
   let start = Math.min(a, b)

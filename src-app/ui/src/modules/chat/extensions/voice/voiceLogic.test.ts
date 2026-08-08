@@ -281,6 +281,7 @@ test('voiceLogic exports exactly the surface its header documents', () => {
       'isSuperseded',
       'micErrorMessage',
       'normalizeInterimTranscript',
+      'normalizeSpan',
       'relocateSpan',
       'resolveLivePref',
       'restoreSpan',

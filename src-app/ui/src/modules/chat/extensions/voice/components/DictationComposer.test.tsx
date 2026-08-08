@@ -682,6 +682,34 @@ describe('TEST-20 — what a dropped transcript announces', () => {
 })
 
 describe('TEST-24 — what cancel restores is what dictation actually replaced', () => {
+  test('cancel restores an astral character whole, never a lone surrogate', async () => {
+    // The restore payload is sliced from the span, and the splice normalizes
+    // that span (widening off surrogate boundaries). If the two use different
+    // spans, a selection that splits an emoji captures one UTF-16 code unit
+    // less than the splice removes — and cancel puts back a lone surrogate,
+    // corrupting the user's text. Both must use the same normalization.
+    seedComposer('a\u{1F600}b', 1, 2) // a selection that splits the emoji
+    script.interim = ['X']
+
+    await act(async () => {
+      await engine.startRecording(null)
+    })
+    await settle(TICK * 2)
+
+    await act(async () => {
+      engine.cancelRecording()
+    })
+    await settle(30)
+
+    expect(composerEl!.value).toBe('a\u{1F600}b')
+    // No unpaired surrogate survived anywhere in the composer.
+    const lone = [...composerEl!.value].some(ch => {
+      const c = ch.codePointAt(0)!
+      return c >= 0xd800 && c <= 0xdfff
+    })
+    expect(lone).toBe(false)
+  })
+
   test('moving the selection after record start still cancels cleanly', async () => {
     // The restore payload must describe the span dictation REPLACED, not
     // wherever the caret happened to be at record start. Capturing it early

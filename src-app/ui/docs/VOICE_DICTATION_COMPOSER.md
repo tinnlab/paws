@@ -98,6 +98,31 @@ the interim, and the caret ends at 82 of 100 rather than at the end.
 `toolbarCaption` is `null` at every sample: nothing transcript-shaped renders in
 the toolbar any more. Frames: `after/02-recording.png`, `after/03-after.png`.
 
+### §2.3 — What the audit loop cost, and what it bought
+
+Six blind audit rounds ran over this change. **Rounds 1-5 each found a defect
+introduced by the previous round's fix**, and every one of them was in the same
+mechanism: a caret/selection remembered at record start.
+
+| round | the defect that round's fix introduced |
+|---|---|
+| 1 → 2 | removing a seam-collapse fixed a caret anchor but produced a doubled space for a selection anchor |
+| 2 → 3 | routing a blank decode through "restore" was safe only once a span was owned; on the first write it re-inserted text the user had deleted |
+| 3 → 4 | the staleness guard was vacuous for a bare caret, so a replaced draft still "held" and the final transcript landed mid-word |
+| 4 → 5 | deleting the anchor as a WRITE target left its text as the RESTORE payload, decoupling a pair that had held by construction |
+| 5 → 6 | *(none — clean)* |
+
+Rounds 4 and 5 stopped adding guards and changed the structure instead: delete
+the mechanism, then restore the pairing. Round 6 found no new defect, which is
+what ended the loop.
+
+The lesson is recorded here rather than in a commit message because it is a
+property of the DESIGN, not of any one fix: **state remembered at time T and
+consulted at time T+n is a defect generator when the user can edit in between.**
+The composer already holds the live insertion point; reading it is always
+correct and never goes stale. Anything this feature must remember (what was
+replaced) is captured at the moment it is known to be true.
+
 ## §3 — Intended behaviour
 
 **Dictation is an editor input, not a form submission.** It behaves the way the
@@ -160,13 +185,30 @@ Three layers, each independently testable:
 | orchestration | `extensions/voice/voiceStore/actions/_engine.ts` | owns the per-recording **dictation session** and calls the two above. |
 
 **The dictation session** is the state that makes "revise in place" and "cancel
-restores exactly" possible. Captured at record start: the anchor selection and
-the text it covered. Maintained across interim ticks: the `[start, end)` span
-this session has WRITTEN (padding included) and the exact string written there.
+restores exactly" possible. It holds exactly two things: the `[start, end)` span
+this session has WRITTEN (padding included) with the exact string written there,
+and the text that span REPLACED, for cancel to put back.
 
-- **write** — splice the new transcript over the owned span (first write splices
-  over the anchor, replacing a selection if there was one), then adopt the new
-  span. The caret is placed after the transcript, before any trailing pad.
+**It deliberately remembers nothing from record start.** An earlier design
+captured the caret/selection when recording began and consulted it to decide
+where to write. Five successive audit rounds each found a defect in that one
+mechanism, always the same shape: the remembered position goes stale — the user
+types, deletes, or replaces the draft while the first second of audio decodes —
+and every guard against staleness is incomplete. For a bare caret a guard is not
+merely incomplete but *vacuous*: the captured text is `''`, and
+`value.slice(n, n) === ''` for any in-range `n`, so a wholly replaced draft
+still "holds". The anchor was never needed: nothing overwrites the user's
+selection until dictation itself does, and once it has, the written span is the
+thing to relocate. See §2.3.
+
+- **write** — resolve the target as either the span this session owns
+  (relocated) or, owning none, the composer's LIVE caret/selection. Splice the
+  transcript over it, then adopt the new span. The caret follows the words only
+  if the user was editing inside them; a caret elsewhere is left alone (rule 7).
+- **capture** — on the FIRST write, record what is being replaced, taken from
+  the same normalized span the splice uses. This pairing — *this span once held
+  this text* — is the invariant restore depends on, and capturing it at write
+  time makes it hold by construction rather than by a check.
 - **relocate** — before each write, verify the owned span still holds exactly
   what was written. If the user typed elsewhere and shifted it, find it and
   re-adopt its offsets.
@@ -174,9 +216,15 @@ this session has WRITTEN (padding included) and the exact string written there.
   what dictation wrote. Dictation gives it up: it stops writing interims, and
   the final transcript is inserted at the user's CURRENT caret instead. The
   user's edit is never overwritten.
-- **restore** — cancel/supersede puts the anchor's original text back into the
-  owned span and re-selects it. A detached session restores nothing (the text is
-  the user's now).
+- **restore** — cancel/supersede/blank-decode puts the captured text back into
+  the owned span and re-selects it. A blank decode is a restore, not a deletion:
+  deleting the span is only equivalent when a bare caret was replaced. A
+  detached session restores nothing (the text is the user's now); a FAILED
+  transcription also restores nothing, because the audio is gone and the
+  streamed words are the only record of what was said (DEC-13).
 
 Span bounds INCLUDE the join padding, so removing a span restores the
-surrounding text byte-for-byte.
+surrounding text byte-for-byte. Span normalization (ordering, and widening off
+UTF-16 surrogate boundaries) is applied ONCE and shared by the capture, the
+splice and the caret comparison — three different normalizations would let the
+restore payload be sized differently from what was replaced.

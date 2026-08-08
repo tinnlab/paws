@@ -15,6 +15,7 @@ import {
   isSuperseded,
   micErrorMessage,
   normalizeInterimTranscript,
+  normalizeSpan,
   relocateSpan,
   resolveLivePref,
   restoreSpan,
@@ -244,8 +245,8 @@ let dictation: DictationSession | null = null
  * anchor was never needed here anyway: nothing has overwritten the user's
  * selection until dictation itself does, and once it has, `session.span` is the
  * thing to relocate. The DOM already holds the live insertion point, and §3
- * rule 7 says the user's current position wins. `session.anchor`/`anchorText`
- * survive for exactly one purpose — knowing what to put BACK on cancel.
+ * rule 7 says the user's current position wins. `session.anchorText` survives for
+ * exactly one purpose — knowing what to put BACK on cancel.
  */
 function resolveWriteSpan(
   session: DictationSession,
@@ -317,23 +318,20 @@ function writeDictation(
     session.detached = true
     return null
   }
+  // ONE source of truth for the span, shared with the splice.
+  //
+  // `spliceTranscript` normalizes internally (ordering + widening off surrogate
+  // boundaries), so anything computed from the RAW span can disagree with what
+  // is actually replaced. That is not only a caret nicety: the restore payload
+  // below is sliced from this span, and a span that splits an astral character
+  // would capture one code unit less than the splice removes — cancel would then
+  // put back a lone surrogate. Normalizing here, with the same function, makes
+  // the capture, the splice and the caret comparison agree by construction.
+  const span = normalizeSpan(value, raw)
   // FIRST write of this session: remember what we are about to replace, so
   // cancel can put exactly that back. Captured here — not at record start —
   // because this is the moment the span and its contents are known to agree.
-  if (!session.span) {
-    session.anchorText = value.slice(
-      Math.min(raw.start, raw.end),
-      Math.max(raw.start, raw.end),
-    )
-  }
-  // No clamping, deliberately: `resolveWriteSpan` returns only in-range spans —
-  // a relocated span was found IN this value, and the fallbacks are the live
-  // selection or the end of the text. A defensive clamp would be unreachable
-  // (§15). Note `spliceTranscript` still applies its own `normalizeSpan`
-  // (ordering + surrogate widening) internally, so on an astral character the
-  // span `nextSelection` compares against can differ from the spliced one by a
-  // code unit; that is a caret-placement nicety, never a correctness issue.
-  const span = raw
+  if (!session.span) session.anchorText = value.slice(span.start, span.end)
   const before = store.getSelection()
   const edit = spliceTranscript(value, span, transcript)
   store.applyEdit(edit.value, ...nextSelection(before, span, edit))
