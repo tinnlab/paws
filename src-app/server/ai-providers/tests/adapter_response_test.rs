@@ -120,12 +120,86 @@ async fn openai_400_maps_to_typed_error() {
     }
 }
 
+// TEST-1 [acceptance, INV-2] — REAL captured bytes from the live Qwen3.6-35B
+// bridge (`qwen3.6-35b-a3b` served OpenAI-compatible at localhost:4000/v1,
+// requested with `max_tokens: 300`). The model spends its entire completion
+// budget in the `reasoning_content` channel and is cut off before emitting a
+// single `content` delta, terminating `finish_reason: "length"`.
+//
+// This is the exact shape behind the user-reported "The model returned an empty
+// response and made no tool call" notice: the turn is NOT an error and NOT a
+// parse failure — the answer genuinely never arrives because reasoning consumed
+// the budget. The fixture is verbatim provider output (head + tail of the 300
+// chunks; the elided middle is more of the same reasoning deltas), so this test
+// fails if the adapter ever starts collapsing `length` into `stop`/`empty`, or
+// starts routing `reasoning_content` into the visible text channel.
+const QWEN_REASONING_LENGTH_TRUNCATED: &str = concat!(
+    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n",
+    include_str!("fixtures/qwen3_reasoning_length_truncated.sse"),
+);
+
+#[tokio::test]
+async fn openai_reasoning_only_length_truncation_preserves_length_and_emits_no_text() {
+    let base = spawn_once(QWEN_REASONING_LENGTH_TRUNCATED);
+    let chunks = collect(
+        &ai_providers::OpenAIProvider,
+        &base,
+        user_req("qwen3.6-35b-a3b"),
+    )
+    .await
+    .expect("stream ok");
+
+    // Reasoning arrived, and arrived on the THINKING channel (not misrouted into
+    // text) — so hypothesis "the adapter swallows the answer into reasoning" is
+    // excluded by construction here.
+    let thinking: String = chunks
+        .iter()
+        .flat_map(|c| c.content.iter())
+        .filter_map(|d| match d {
+            ContentBlockDelta::ThinkingDelta { delta, .. } => Some(delta.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !thinking.is_empty(),
+        "fixture must carry reasoning_content deltas"
+    );
+
+    // The load-bearing assertion: the model produced NO visible answer at all.
+    let text: String = chunks
+        .iter()
+        .flat_map(|c| c.content.iter())
+        .filter_map(|d| match d {
+            ContentBlockDelta::TextDelta { delta, .. } => Some(delta.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        text, "",
+        "the captured turn emits zero content deltas; got {text:?}"
+    );
+
+    // INV-2: the provider's real terminal reason is `length` (budget exhausted),
+    // NOT `stop`. Downstream must be able to tell a truncated turn from a
+    // genuinely-empty one, and that is only possible if this survives here.
+    let finish = chunks.iter().find_map(|c| c.finish_reason.clone());
+    assert_eq!(
+        finish.as_deref(),
+        Some("length"),
+        "budget truncation must surface as `length`, not be collapsed"
+    );
+}
+
 #[tokio::test]
 async fn anthropic_200_yields_deltas_and_canonical_finish() {
     let base = spawn_once(ANTHROPIC_SSE_200);
-    let chunks = collect(&ai_providers::AnthropicProvider, &base, user_req("claude-sonnet-4-6"))
-        .await
-        .expect("stream ok");
+    let chunks = collect(
+        &ai_providers::AnthropicProvider,
+        &base,
+        user_req("claude-sonnet-4-6"),
+    )
+    .await
+    .expect("stream ok");
 
     let text: String = chunks
         .iter()

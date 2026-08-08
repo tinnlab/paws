@@ -7,7 +7,11 @@ import type {
 } from '@/api-client/types'
 import { ExtensionSlot, chatExtensionRegistry } from '@/modules/chat/core/extensions'
 import { ContentRenderer } from '@/modules/chat/components/ContentRenderer'
-import { shouldShowEmptyCompletionNotice } from '@/modules/chat/components/emptyCompletion'
+import {
+  emptyCompletionCause,
+  emptyCompletionNotice,
+  shouldShowEmptyCompletionNotice,
+} from '@/modules/chat/components/emptyCompletion'
 import { MessageContext } from '@/modules/chat/core/MessageContext'
 import { BranchNavigator } from '@/modules/chat/components/BranchNavigator'
 import { MessageActions } from '@/modules/chat/components/MessageActions'
@@ -87,6 +91,19 @@ export const ChatMessage = memo(function ChatMessage({
         message,
       }),
     [isUser, isStreaming, interrupted, finalizing, message],
+  )
+
+  // WHY the turn was answerless, read from the server-persisted
+  // `completion_state` so it survives a reload, and the cause-specific copy.
+  // A budget-truncated turn must never carry the generic "try again" advice —
+  // that retry deterministically re-truncates (INV-3).
+  const emptyCompletionCauseValue = useMemo(
+    () => emptyCompletionCause(message),
+    [message],
+  )
+  const emptyCompletionNoticeContent = useMemo(
+    () => emptyCompletionNotice(emptyCompletionCauseValue),
+    [emptyCompletionCauseValue],
   )
 
   // Check if message has any content to render. A finalised, empty assistant
@@ -348,10 +365,11 @@ export const ChatMessage = memo(function ChatMessage({
           so it also shows on reload. */}
       {showEmptyCompletionNotice && (
         <Alert
-          tone="warning"
+          tone={emptyCompletionNoticeContent.tone}
           data-testid="chat-empty-completion-notice"
+          data-empty-completion-cause={emptyCompletionCauseValue}
           className="w-full"
-          description="The model returned an empty response and made no tool call. Please try again."
+          description={emptyCompletionNoticeContent.description}
         />
       )}
 

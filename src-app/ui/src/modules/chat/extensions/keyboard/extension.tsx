@@ -135,6 +135,14 @@ function KeyboardShortcutsHelp() {
     // group's minimum is exactly its un-shrinkable icon buttons. `flex-1` then
     // lets the tips take whatever room is actually left, and `truncate`
     // ellipsizes. See the layout comment in ChatInput.tsx.
+    //
+    // That last sentence only holds because the `toolbar_actions` SLOT is itself
+    // `flex-1` (and deliberately NOT `min-w-0` — see the layout comment in
+    // ChatInput.tsx for why adding it there re-breaks the mic). The slot was not
+    // `flex-1` from bf1b0e9dd (2026-07-27) until this fix: it was shrink-to-fit,
+    // so it had no free space, this element's `flex-1` grew into nothing, and the
+    // tips rendered at 0px the whole time. Keep the two in sync — a zero-basis
+    // child is only ever visible inside a parent that has room to give.
     <div
       className="text-xs text-muted-foreground truncate w-0 flex-1 min-w-0"
       data-testid="chat-keyboard-tips"

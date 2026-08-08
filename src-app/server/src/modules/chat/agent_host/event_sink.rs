@@ -159,6 +159,7 @@ impl EventSink for ChatEventSink {
                         conversation_id: Some(self.conversation_id),
                         branch_id: Some(self.branch_id),
                         finish_reason: None,
+                        completion_state: None,
                         usage: None,
                         error: None,
                     }));

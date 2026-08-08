@@ -850,6 +850,19 @@ export const gallery: ModuleGallery = {
         { open: true, onClose: noop, workflow: workflowFixture },
       ),
     },
+    // ── WorkflowMetadataDialog: the only surface that can rename / re-tag /
+    //    DISABLE a user-scope workflow (the builder saves the definition and
+    //    never touches these fields). Prop-driven open, like its dialog peers.
+    {
+      slug: 'overlay-workflow-metadata-dialog',
+      surface: 'modules/workflow/components/WorkflowMetadataDialog',
+      title: 'Edit workflow details (dialog)',
+      component: lazyBound(
+        () => import('@/modules/workflow/components/WorkflowMetadataDialog'),
+        'WorkflowMetadataDialog',
+        { open: true, onClose: noop, workflow: workflowFixture },
+      ),
+    },
     {
       slug: 'overlay-workflow-tests-panel',
       surface: 'modules/workflow/components/WorkflowTestsPanel',

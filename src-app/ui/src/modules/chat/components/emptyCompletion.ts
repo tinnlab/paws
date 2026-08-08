@@ -57,3 +57,103 @@ export function shouldShowEmptyCompletionNotice(opts: {
     !hasVisibleAnswer(message)
   )
 }
+
+// WHY an answerless turn produced no answer. Mirrors the server-written closed
+// vocabulary persisted on `messages.completion_state` (see the Rust
+// `CompletionState`): the server classifies at finalize time and persists, so
+// this survives a reload — which is the whole point, because the notice is
+// derived at render time from persisted state.
+//
+// `unknown` is the honest fallback for a row written before the column existed
+// (deliberately NOT backfilled — the cause was unrecoverable for historical
+// rows), for a value a newer server added that this client doesn't know yet, or
+// for a terminal reason the server declined to guess at. Its copy SAYS the
+// reason was not recorded rather than asserting one.
+export type EmptyCompletionCause =
+  | 'budget_truncated'
+  | 'aborted'
+  | 'failed'
+  | 'content_filtered'
+  | 'empty'
+  | 'unknown'
+
+export function emptyCompletionCause(message: MessageWithContent): EmptyCompletionCause {
+  // Raw column text off the GENERATED type (never a local cast): if a backend
+  // rename ever drops the field, this must break `tsc` rather than silently
+  // degrade every notice to 'unknown'.
+  const state = message.completion_state
+  switch (state) {
+    case 'budget_truncated':
+    case 'aborted':
+    case 'failed':
+    case 'content_filtered':
+    case 'empty':
+      return state
+    default:
+      return 'unknown'
+  }
+}
+
+// The user-facing copy for each cause, and the Alert tone it carries.
+//
+// The rule this encodes (INV-3): NEVER advise a retry for a cause that an
+// identical retry reproduces, and NEVER name a cause that isn't known. A
+// budget-truncated turn is deterministic — the same request re-runs into the
+// same cap — so telling the user to "try again" sends them into a loop; it names
+// the two settings that actually resolve it instead. A content-policy
+// termination is deterministic in the same way, so it asks for a rephrase rather
+// than a resend. A genuinely-empty turn IS worth retrying, and an errored or
+// stopped turn can legitimately be re-sent, so there the retry advice stays.
+export function emptyCompletionNotice(cause: EmptyCompletionCause): {
+  tone: 'warning' | 'info'
+  description: string
+} {
+  switch (cause) {
+    case 'budget_truncated':
+      return {
+        tone: 'warning',
+        description:
+          'The model spent its entire token budget on reasoning and stopped before it produced an answer. ' +
+          "Raise this model's max tokens, or lower its reasoning effort, to give the answer room.",
+      }
+    case 'aborted':
+      return {
+        tone: 'info',
+        description:
+          'This turn was stopped before the model produced an answer. ' +
+          'Send the message again to let it finish.',
+      }
+    case 'failed':
+      return {
+        tone: 'warning',
+        description:
+          'This turn ended in an error before the model produced an answer. ' +
+          'Anything shown above is what arrived before the failure. ' +
+          'Send the message again — if it keeps failing, check the model provider and the server logs.',
+      }
+    case 'content_filtered':
+      return {
+        tone: 'warning',
+        description:
+          "The provider stopped this turn on its content policy — a safety filter, or the model refusing — so no answer was produced. " +
+          'Resending the same message is blocked the same way; rephrase the request, or use a different model.',
+      }
+    case 'empty':
+      return {
+        tone: 'warning',
+        description:
+          'The model returned an empty response and made no tool call. Please try again.',
+      }
+    default:
+      // No cause recorded: a row written before the column existed (deliberately
+      // not backfilled), a value a newer server added, or a terminal reason the
+      // server would not guess at. Say exactly that — naming a cause we do not
+      // know is the defect this whole change exists to remove.
+      return {
+        tone: 'warning',
+        description:
+          'This turn ended without an answer, and the reason was not recorded. ' +
+          'You can send the message again.',
+      }
+  }
+}

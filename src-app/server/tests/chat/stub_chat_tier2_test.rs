@@ -389,12 +389,22 @@ async fn cache_read_tokens_surface_on_complete_frame() {
 
 // ── Empty-completion guard ────────────────────────────────────────────────
 
+// TEST-8: these two tests used to assert the terminal frame's `finish_reason`
+// had been OVERWRITTEN to the literal "empty". That overwrite is the defect
+// (INV-2): it destroyed the provider's real reason, which is the only thing
+// distinguishing a budget-TRUNCATED turn from a genuinely empty one. The
+// answerless fact now travels as its own `completion_state` field, alongside an
+// UNMODIFIED provider reason — so both tests below still prove an empty
+// completion is REPORTED, and additionally pin that `stop` survives.
+// `empty_completion_cause_test.rs` covers the `length` counterpart.
+
 #[tokio::test]
-async fn empty_completion_reports_finish_reason_empty() {
+async fn empty_completion_reports_completion_state_empty() {
     // The model streams reasoning but NO answer text and NO tool call — the
     // "silent stop" case. The terminal `complete` frame must carry
-    // finish_reason "empty" (not a bare "stop"), and NO `error` frame is
-    // emitted (an empty completion is a benign notice, not a hard error).
+    // completion_state "empty" (not a bare, signal-free `stop`), the provider's
+    // own reason must survive untouched, and NO `error` frame is emitted (an
+    // empty completion is a benign notice, not a hard error).
     let plan = StubPlan::text("").with_reasoning("thinking, but I produced no answer", 5);
     let (_stub, turn) = run_turn("empty_completion_user", plan, "stub-model", None).await;
 
@@ -404,8 +414,13 @@ async fn empty_completion_reports_finish_reason_empty() {
         .find(|f| f.event_type == "complete")
         .expect("a complete frame");
     assert_eq!(
-        complete.data["finish_reason"], "empty",
-        "a reasoning-only / no-tool-call turn must report finish_reason \"empty\", got: {}",
+        complete.data["completion_state"], "empty",
+        "a reasoning-only / no-tool-call turn must report completion_state \"empty\", got: {}",
+        complete.data
+    );
+    assert_eq!(
+        complete.data["finish_reason"], "stop",
+        "the provider's terminal reason must survive intact (INV-2), got: {}",
         complete.data
     );
     assert!(
@@ -416,10 +431,11 @@ async fn empty_completion_reports_finish_reason_empty() {
 }
 
 #[tokio::test]
-async fn fully_empty_completion_reports_finish_reason_empty() {
+async fn fully_empty_completion_reports_completion_state_empty() {
     // Harsher variant: NO answer text, NO reasoning, NO tool call — the model
     // returned a completely empty completion. `finalize` persists zero content
-    // blocks; the guard must still report finish_reason "empty".
+    // blocks; the guard must still report completion_state "empty" while
+    // leaving the provider's `stop` intact.
     let plan = StubPlan::text("");
     let (_stub, turn) = run_turn("fully_empty_user", plan, "stub-model", None).await;
 
@@ -429,8 +445,13 @@ async fn fully_empty_completion_reports_finish_reason_empty() {
         .find(|f| f.event_type == "complete")
         .expect("a complete frame");
     assert_eq!(
-        complete.data["finish_reason"], "empty",
-        "a fully-empty completion must report finish_reason \"empty\", got: {}",
+        complete.data["completion_state"], "empty",
+        "a fully-empty completion must report completion_state \"empty\", got: {}",
+        complete.data
+    );
+    assert_eq!(
+        complete.data["finish_reason"], "stop",
+        "the provider's terminal reason must survive intact (INV-2), got: {}",
         complete.data
     );
 }

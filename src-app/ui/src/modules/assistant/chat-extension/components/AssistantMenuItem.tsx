@@ -1,17 +1,26 @@
-import { Popover } from '@ziee/kit'
-import { Bot, ChevronRight } from 'lucide-react'
+import { Bot, Check, ChevronRight } from 'lucide-react'
 import { Permissions } from '@/api-client/permissions'
 import { usePermission } from '@/core/permissions'
 import { newChatAssistantKey } from '@/modules/assistant/stores'
 import { useChatPaneOrNull } from '@/modules/chat/core/pane/ChatPaneContext'
 import { usePlusDropdown } from '@/modules/chat/components/PlusDropdownContext'
+import { PlusMenuItem } from '@/modules/chat/components/PlusMenuItem'
+import {
+  ComposerPickerPopover,
+  type ComposerPickerItem,
+} from '@/modules/chat/components/ComposerPickerPopover'
 import { AssistantPicker } from '@/modules/assistant/stores/assistantPicker'
 import { Chat } from '@/modules/chat/core/stores/chatBridge'
 
+/** Sentinel id for the "No assistant" clear row (never a real assistant id). */
+const CLEAR_ID = '__no_assistant__'
+
 /**
- * AssistantMenuItem Component
- * Menu item inside the + dropdown for selecting an assistant.
- * Opens a submenu to the right showing available assistants.
+ * AssistantMenuItem — the "+" dropdown row for choosing this conversation's assistant.
+ *
+ * Single-SELECT: activating a row selects it and closes the "+" dropdown. All of the
+ * popover shell — bounded width, the capped + overlay-scrolled list, the search box,
+ * the keyboard model — lives in `ComposerPickerPopover`; this file supplies data.
  */
 export function AssistantMenuItem() {
   // Permission gate (layer 4) — mirrors KbMenuItem. Without `assistants::read`
@@ -27,126 +36,84 @@ export function AssistantMenuItem() {
   const { close } = usePlusDropdown()
   // Key by THIS pane's conversation (bridge-resolved). (ITEM-5)
   const pane = useChatPaneOrNull()
-  const key =
-    Chat.conversation?.id ?? newChatAssistantKey(pane?.paneId)
+  const key = Chat.conversation?.id ?? newChatAssistantKey(pane?.paneId)
   const selectedAssistantId = selectedByConversation[key]
 
-  const selectedAssistant = availableAssistants.find(
-    (a: any) => a.id === selectedAssistantId,
-  )
+  const selectedAssistant = availableAssistants.find((a: any) => a.id === selectedAssistantId)
 
   if (!canRead) return null
 
-  const handleSelect = (id: string | null) => {
-    if (id) selectAssistant(key, id)
-    else clearAssistant(key)
+  const handleSelect = (item: ComposerPickerItem) => {
+    if (item.id === CLEAR_ID) clearAssistant(key)
+    else selectAssistant(key, item.id)
     close()
   }
 
-  const popoverContent = (
-    <div data-testid="assistant-menu-options" style={{ minWidth: 160, margin: -4 }}>
-      {selectedAssistantId && (
-        <AssistantOption
-          testid="assistant-option-none"
-          label="No assistant"
-          active={false}
-          onClick={() => handleSelect(null)}
-          dividerAfter
+  const items: ComposerPickerItem[] = [
+    // The clear row only exists once there is something to clear.
+    ...(selectedAssistantId
+      ? [
+          {
+            id: CLEAR_ID,
+            label: 'No assistant',
+            testId: 'assistant-option-none',
+            leading: <Check aria-hidden className="size-4 shrink-0 opacity-0" />,
+            separatorAfter: true,
+            // An ACTION, not a choice: it must stay reachable while a query is
+            // active, or a user who types to find an assistant can no longer clear
+            // the current one without first clearing the query.
+            pinned: true,
+          },
+        ]
+      : []),
+    ...availableAssistants.map((assistant: any) => ({
+      id: assistant.id as string,
+      label: assistant.name as string,
+      testId: `assistant-option-${assistant.id}`,
+      leading: (
+        <Check
+          aria-hidden
+          className={`size-4 shrink-0 ${assistant.id === selectedAssistantId ? 'opacity-100' : 'opacity-0'}`}
         />
-      )}
-      {availableAssistants.length === 0 && (
-        <div className="px-3 py-1.5 text-sm text-muted-foreground">
-          No assistants available
-        </div>
-      )}
-      {availableAssistants.map((assistant: any) => (
-        <AssistantOption
-          key={assistant.id}
-          testid={`assistant-option-${assistant.id}`}
-          label={assistant.name}
-          active={assistant.id === selectedAssistantId}
-          onClick={() => handleSelect(assistant.id)}
-        />
-      ))}
-    </div>
-  )
+      ),
+    })),
+  ]
+
+  const selectedIds = selectedAssistantId ? new Set([selectedAssistantId]) : undefined
 
   return (
-    <Popover
-      content={popoverContent}
-      side="right"
-      align="start"
-      className="w-auto"
-    >
-      <div
-        data-testid="assistant-menu-trigger"
-        className="flex items-center gap-2 px-3 py-1.5 rounded-md cursor-pointer text-foreground hover:bg-muted whitespace-nowrap"
-      >
-        <div className="flex min-w-0 items-center gap-2">
-          <Bot className="size-4 shrink-0" />
-          <span className="min-w-0 flex-1 truncate text-sm">
-            {loading && availableAssistants.length === 0
+    <ComposerPickerPopover
+      data-testid="assistant-menu-options"
+      trigger={
+        <PlusMenuItem
+          data-testid="assistant-menu-trigger"
+          aria-label="Select assistant"
+          icon={<Bot />}
+          label={
+            loading && availableAssistants.length === 0
               ? 'Loading assistants…'
               : selectedAssistant
                 ? selectedAssistant.name
-                : 'Select assistant'}
-          </span>
-        </div>
-        <ChevronRight className="size-3 shrink-0 opacity-45" />
-      </div>
-    </Popover>
-  )
-}
-
-function AssistantOption({
-  label,
-  active,
-  onClick,
-  dividerAfter,
-  testid,
-}: {
-  label: string
-  active: boolean
-  onClick: () => void
-  dividerAfter?: boolean
-  testid?: string
-}) {
-  return (
-    <>
-      <div
-        data-testid={testid}
-        role="button"
-        tabIndex={0}
-        aria-pressed={active}
-        aria-current={active || undefined}
-        onClick={onClick}
-        onKeyDown={e => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault()
-            onClick()
+                : 'Select assistant'
           }
-        }}
-        className={`cursor-pointer px-3 py-1.5 rounded-md text-sm focus-visible:outline focus-visible:outline-2 ${active ? 'bg-accent text-primary' : 'text-foreground'}`}
-        onMouseEnter={e => {
-          if (!active)
-            e.currentTarget.className = 'cursor-pointer px-3 py-1.5 rounded-md text-sm focus-visible:outline focus-visible:outline-2 text-foreground bg-muted'
-        }}
-        onMouseLeave={e => {
-          if (!active) e.currentTarget.className = 'cursor-pointer px-3 py-1.5 rounded-md text-sm focus-visible:outline focus-visible:outline-2 text-foreground'
-        }}
-        onFocus={e => {
-          if (!active)
-            e.currentTarget.className = 'cursor-pointer px-3 py-1.5 rounded-md text-sm focus-visible:outline focus-visible:outline-2 text-foreground bg-muted'
-        }}
-        onBlur={e => {
-          if (!active) e.currentTarget.className = 'cursor-pointer px-3 py-1.5 rounded-md text-sm focus-visible:outline focus-visible:outline-2 text-foreground'
-        }}
-      >
-        {label}
-      </div>
-      {dividerAfter && (
-        <div className="h-px bg-border my-1" />
-      )}
-    </>
+          trailing={<ChevronRight className="size-3 opacity-45" />}
+        />
+      }
+      items={items}
+      selectedIds={selectedIds}
+      onSelect={handleSelect}
+      closeOnSelect
+      searchLabel="Search assistants"
+      searchPlaceholder="Filter assistants…"
+      noMatchesText="No matches."
+      emptyContent={
+        // Distinguish "still loading" from "you have none" — the trigger row above
+        // already says "Loading assistants…", and a panel reading "No assistants
+        // available" in the same frame contradicts it.
+        <div className="px-2 py-2 text-sm text-muted-foreground">
+          {loading ? 'Loading assistants…' : 'No assistants available'}
+        </div>
+      }
+    />
   )
 }

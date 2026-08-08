@@ -8,7 +8,7 @@
  */
 import { lazy } from 'react'
 import type { ModuleGallery } from '@/dev/gallery/support'
-import { holdPatch, lazyNamed, lazyProps } from '@/dev/gallery/support'
+import { holdPatch, lazyNamed, lazyProps, setMockMode } from '@/dev/gallery/support'
 import { llmGroupsList } from '@/dev/gallery/fixtures/llm-providers'
 import { McpComposer } from '@/modules/mcp/stores/mcpComposer'
 import { McpServerDrawer as McpServerDrawerStore } from '@/modules/mcp/stores/mcpServerDrawer'
@@ -303,6 +303,39 @@ export const gallery: ModuleGallery = {
           } as any),
         )
       },
+    },
+    // ── McpServerRuntimeTab: the on-demand list ladder's ERROR arm.
+    //    The tab deliberately fetches NOTHING on mount (a `prompts/list` on a
+    //    stdio server SPAWNS it), and `error` is `ListCard`'s own useState, set
+    //    only when the fetch REJECTS — so neither a prop nor a store patch can
+    //    reach it. The cell therefore does what a user does: put the mock engine
+    //    in `error` mode, then CLICK Load. `mcp-runtime-prompts-error` is the
+    //    Alert that must render (the "silently renders nothing on failure" bug
+    //    the shared ListCard was extracted to prevent).
+    {
+      slug: 'seeded-mcp-runtime-tab',
+      title: 'MCP server runtime tab — on-demand probes',
+      note: 'nothing loads on mount; the `load-prompts-error` recipe drives the failed prompts/list',
+      path: '/',
+      initialPath: '/',
+      component: lazyProps(
+        () => import('@/modules/mcp/components/common/McpServerRuntimeTab'),
+        'McpServerRuntimeTab',
+        { serverId: 'mcp-s4-server', canManage: true },
+      ),
+      setup: async () => {
+        setMockMode('error')
+      },
+      interactions: [
+        {
+          name: 'load-prompts-error',
+          note: 'click the prompts card "Load" → the request fails → the error Alert (not a silent empty card)',
+          steps: async d => {
+            await d.click('mcp-runtime-prompts-load-btn')
+            await d.waitFor('mcp-runtime-prompts-error')
+          },
+        },
+      ],
     },
   ],
 }

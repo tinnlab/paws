@@ -541,6 +541,26 @@ pub async fn start_generation_agent_core(
                                 finish_reason:
                                     crate::modules::chat::agent_host::event_sink::ChatEventSink::finish_reason(reason)
                                         .to_string(),
+                                // TODO(answerless-cause): the opt-in agent-core
+                                // loop does not classify answerless turns, so a
+                                // turn that ends here with no visible answer
+                                // persists NULL and renders the honest
+                                // "reason not recorded" copy (never a wrong
+                                // diagnosis — that is why NULL is the correct
+                                // placeholder rather than a guessed value).
+                                //
+                                // Wiring it properly is NOT a one-line change and
+                                // is deliberately out of scope here: the cause has
+                                // to be derived from `agent_core::StopReason` +
+                                // the loop's own usage/termination data, and the
+                                // WRITE has to happen inside the agent host's
+                                // persistence path (`event_sink.rs`), which does
+                                // not share the legacy `DeltaAccumulator`
+                                // transaction that carries `completion_state`
+                                // today. Doing it here would emit a wire value the
+                                // database never receives — the exact reload
+                                // divergence INV-2 forbids.
+                                completion_state: None,
                                 usage: crate::modules::chat::agent_host::event_sink::ChatEventSink::fold_usage(acc),
                             },
                         ),

@@ -8,7 +8,7 @@
 ## Summary
 
 - **352** surfaces carry at least one renderable-state signal.
-- **2171** signals total: 1703 branch, 143 empty, 126 error, 93 loading, 101 overlay, 5 panel.
+- **2170** signals total: 1704 branch, 140 empty, 126 error, 93 loading, 102 overlay, 5 panel.
 - **5** right-panel renderers registered (each a right-panel-open state).
 - **35** slot registrations (sidebar / settings / chat mount points).
 
@@ -17,9 +17,9 @@
 | state | surfaces |
 |---|---|
 | `delayed` | 83 |
-| `empty` | 116 |
+| `empty` | 114 |
 | `error` | 97 |
-| `open` | 84 |
+| `open` | 85 |
 | `panel-open` | 5 |
 
 ## Right-panel renderers (`registerPanelRenderer`)
@@ -100,23 +100,12 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 ### `modules/assistant/chat-extension/components/AssistantMenuItem`
 
-Required states: `empty`
+Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!canRead` | 38 |
-| branch | `selectedAssistantId` | 48 |
-| empty | `availableAssistants.length === 0` | 57 |
-| branch | `dividerAfter` | 147 |
-
-### `modules/assistant/chat-extension/components/AssistantSelector`
-
-Required states: `empty`
-
-| kind | condition | line |
-|---|---|---|
-| branch | `!canRead` | 27 |
-| empty | `availableAssistants.length === 0` | 41 |
+| branch | `!canRead` | 44 |
+| branch | `selectedAssistantId` | 54 |
 
 ### `modules/assistant/chat-extension/components/AssistantStatusChip`
 
@@ -414,14 +403,14 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `isStreaming \|\| wasStreamingRef.current \|\| isActiveMatch` | 66 |
-| empty | `contents.length === 0 && !showEmptyCompletionNotice` | 94 |
-| branch | `!resolved` | 186 |
-| branch | `attachmentBlocks.length > 0` | 274 |
-| branch | `bubbleBlocks.length > 0` | 303 |
-| branch | `offerCollapse` | 329 |
-| branch | `showEmptyCompletionNotice` | 349 |
-| branch | `renderAsUser` | 368 |
+| branch | `isStreaming \|\| wasStreamingRef.current \|\| isActiveMatch` | 70 |
+| empty | `contents.length === 0 && !showEmptyCompletionNotice` | 111 |
+| branch | `!resolved` | 203 |
+| branch | `attachmentBlocks.length > 0` | 291 |
+| branch | `bubbleBlocks.length > 0` | 320 |
+| branch | `offerCollapse` | 346 |
+| branch | `showEmptyCompletionNotice` | 366 |
+| branch | `renderAsUser` | 386 |
 
 ### `modules/chat/components/CollapsibleBlock`
 
@@ -433,6 +422,19 @@ Required states: _(branch-only — proven via dynamic coverage)_
 | branch | `!el \|\| typeof ResizeObserver === 'undefined'` | 107 |
 | branch | `overflowing` | 189 |
 | branch | `collapsed` | 197 |
+
+### `modules/chat/components/ComposerPickerPopover`
+
+Required states: `empty`, `open`
+
+| kind | condition | line |
+|---|---|---|
+| branch | `!item` | 167 |
+| branch | `event.nativeEvent.isComposing` | 178 |
+| branch | `!items.some(item => !item.pinned)` | 229 |
+| branch | `items.length > 0` | 233 |
+| empty | `filtered.length === 0` | 280 |
+| overlay | `<Popover open>` | 387 |
 
 ### `modules/chat/components/ContentRenderer`
 
@@ -594,7 +596,7 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `trailing != null` | 53 |
+| branch | `trailing != null` | 55 |
 
 ### `modules/chat/components/SplitChatView`
 
@@ -2207,15 +2209,12 @@ Required states: `delayed`, `error`
 
 ### `modules/knowledge-base/chat-extension/components/KbMenuItem`
 
-Required states: `empty`
+Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!canUse` | 47 |
-| empty | `kbs.length === 0` | 65 |
-| branch | `kbs.length > 6` | 84 |
-| branch | `status` | 118 |
-| empty | `filtered.length === 0` | 125 |
+| branch | `!canUse` | 55 |
+| branch | `status` | 80 |
 
 ### `modules/knowledge-base/chat-extension/components/KbSourcePanel`
 
