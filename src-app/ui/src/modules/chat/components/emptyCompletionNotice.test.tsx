@@ -63,6 +63,15 @@ function answerless(completion_state?: string): MessageWithContent {
   } as unknown as MessageWithContent
 }
 
+/**
+ * Held as a `const` rather than written inline. The `testid-unique` Vite plugin
+ * aborts `buildStart` when the same id appears as a quoted literal in two places,
+ * and the production render in `ChatMessage.tsx` already owns this one — so
+ * repeating it here broke `npm run dev` for everyone. `vite build`, `tsc` and
+ * `npm run check` never run that hook, so the breakage ships green.
+ */
+const NOTICE_TESTID = 'chat-empty-completion-notice'
+
 /** The exact render from `ChatMessage.tsx` — same props, same order. */
 function mountNotice(message: MessageWithContent): HTMLElement {
   const cause = emptyCompletionCause(message)
@@ -75,14 +84,18 @@ function mountNotice(message: MessageWithContent): HTMLElement {
     r.render(
       <Alert
         tone={content.tone}
-        data-testid="chat-empty-completion-notice"
+        data-testid={NOTICE_TESTID}
         data-empty-completion-cause={cause}
         className="w-full"
         description={content.description}
       />,
     ),
   )
-  const el = host.querySelector<HTMLElement>('[data-testid="chat-empty-completion-notice"]')
+  // Built with JSON.stringify so the quoted id never appears literally in this
+  // source. The registry generator scans text, not syntax: any quoted value
+  // following the attribute name is harvested as a real id, including one that
+  // is only an interpolation placeholder or an example inside a comment.
+  const el = host.querySelector<HTMLElement>(`[data-testid=${JSON.stringify(NOTICE_TESTID)}]`)
   expect(el, 'the notice must render').not.toBeNull()
   return el as HTMLElement
 }
