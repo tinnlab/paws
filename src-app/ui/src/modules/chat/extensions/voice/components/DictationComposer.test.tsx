@@ -144,6 +144,8 @@ class FakeMediaRecorder {
 
 // ── mounting ─────────────────────────────────────────────────────────────────
 
+const HARNESS_TESTID = 'dictation-harness-composer'
+
 /**
  * A minimal host that renders a real `<textarea>` — the same element type and
  * the same access closures `TextInput` registers. Mounting `TextInput` itself
@@ -152,8 +154,12 @@ class FakeMediaRecorder {
  */
 function Composer({ elementRef }: { elementRef: (el: HTMLTextAreaElement | null) => void }) {
   return (
+    // The kit's Textarea requires a `data-testid`, but this harness locates the
+    // element by ref and never queries it. Passing the id through a VARIABLE
+    // keeps it out of the shared kit testid registry, which collects static
+    // literals only — a test-only id has no business shipping in it.
     <Textarea
-      data-testid="dictation-harness-textarea"
+      data-testid={HARNESS_TESTID}
       aria-label="Message"
       ref={elementRef}
       defaultValue=""
