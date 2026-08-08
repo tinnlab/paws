@@ -159,10 +159,14 @@ function ownerTextStore(paneId: string | null): ComposerAccess | null {
  * Deferred a frame because callers focus as part of a state transition whose
  * re-render may not have committed yet — but that frame is a window in which the
  * world can change, so the work is GUARDED by the generation token it was
- * scheduled under. Without that guard a conversation switch (TextInput is REUSED
- * across an in-app A->B switch and its draft-restore effect rewrites `el.value`
- * directly) would have this force a stale caret offset into the new draft and
- * steal focus for a recording that is over.
+ * scheduled under: a NEWER recording (or a cancel) started in that frame bumps
+ * the token, and this stale restore is dropped rather than forcing an old caret
+ * offset and stealing focus.
+ *
+ * Precise about what this does NOT cover: an in-app A->B conversation switch
+ * does not itself bump the token, so a frame-width race there is still possible
+ * in principle. It is bounded to one animation frame and cannot corrupt the
+ * value (the callback re-reads `getText()` and only moves the caret).
  */
 function focusComposer(paneId: string | null, select?: ComposerSpan): void {
   const gen = requestGeneration
@@ -237,13 +241,31 @@ function writeDictation(session: DictationSession, transcript: string): boolean 
   const store = ownerTextStore(session.paneId)
   if (!store) return false // the owning pane closed mid-recording
   const value = store.getText()
-  const span = resolveWriteSpan(session, value)
-  if (!span) {
+  const raw = resolveWriteSpan(session, value)
+  if (!raw) {
     session.detached = true
     return false
   }
+  // Compare the user's caret against the span AS THE SPLICE WILL SEE IT: the
+  // splice clamps out-of-range offsets (a stale anchor after the user shortened
+  // the draft), and comparing against the unclamped one would misfile the caret.
+  const span = {
+    start: Math.min(Math.max(raw.start, 0), value.length),
+    end: Math.min(Math.max(raw.end, 0), value.length),
+  }
   const before = store.getSelection()
-  const edit = spliceTranscript(value, span, transcript)
+
+  // A blank decode means "nothing has been dictated yet", so the composer must
+  // look exactly as it did before this session started — which is the same
+  // operation cancel performs, not a bare deletion of the span. Deleting the
+  // span is only equivalent when the anchor was a CARET; when the session
+  // replaced a SELECTION, the user's own word went with it and the two
+  // surrounding separators collapse together ("call Bob tomorrow" -> "call
+  //  tomorrow", a doubled space that violates §3 rule 4).
+  const edit = transcript
+    ? spliceTranscript(value, span, transcript)
+    : restoreSpan(value, span, session.anchorText)
+
   store.applyEdit(edit.value, ...nextSelection(before, span, edit))
   session.span = { start: edit.start, end: edit.end }
   session.written = edit.value.slice(edit.start, edit.end)
@@ -718,6 +740,10 @@ export default function voiceEngine(
       // Insert into the OWNING pane's composer (ITEM-45), not the focused pane.
       const ownerPaneId = get().recordingPaneId
       const caret = commitTranscript(ownerPaneId, text)
+      // `undefined` means the owning pane closed and the transcript was
+      // DROPPED. Announcing "Transcript added" there would tell a screen-reader
+      // user the words landed somewhere when nothing was written at all.
+      const delivered = caret !== undefined
       endDictation()
       releaseRecordingLock(ownerPaneId)
       set({
@@ -726,7 +752,11 @@ export default function voiceEngine(
         elapsedMs: 0,
         stageText: '',
         errorMessage: null,
-        announcement: text ? 'Transcript added' : 'No speech detected',
+        announcement: !delivered
+          ? 'Transcript discarded — the conversation was closed'
+          : text
+            ? 'Transcript added'
+            : 'No speech detected',
       })
       // Return focus to the composer with the caret AFTER the transcript, so
       // the user keeps typing exactly where the words ended.

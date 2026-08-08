@@ -82,8 +82,13 @@ test.describe('Voice — live captions stream into the composer (TEST-24)', () =
         'button[aria-label="Stop recording and transcribe"]',
       )
       if (!add || !stop) return null
+      // Bounded, for the same reason as `toolbarRowText` in the sibling spec:
+      // an unbounded climb would reach <html> and pass vacuously.
       let row: HTMLElement | null = add as HTMLElement
-      while (row && !row.contains(stop)) row = row.parentElement
+      for (let depth = 0; row && !row.contains(stop); depth++) {
+        if (depth > 6) return null
+        row = row.parentElement
+      }
       return row ? (row.textContent ?? '') : null
     })
     expect(toolbar, 'the composer toolbar row must be locatable').not.toBeNull()

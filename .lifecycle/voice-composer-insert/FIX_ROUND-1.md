@@ -189,4 +189,4 @@ Every fix was landed first, then measured once:
 | `restored = dictation.anchor` (old cancel) | detach + shifted-restore tests **RED** (2) |
 | reinstate the seam collapse | round-trip test **RED** |
 
-**New confirmed findings:** (round-2 blind re-audit pending — see FIX_ROUND-2.md)
+**New confirmed findings:** 4 — found by the round-2 blind re-audit (see FIX_ROUND-2.md): one regression this round introduced, and three fixes that shipped with no test that could fail on revert.

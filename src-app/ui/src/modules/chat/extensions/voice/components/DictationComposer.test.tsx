@@ -308,6 +308,21 @@ describe('TEST-12 — composer access closures (ITEM-5, ITEM-6)', () => {
     expect(composerEl!.selectionStart).toBe(0)
   })
 
+  test('a non-finite selection means "no insertion point", not position 0', () => {
+    // Defensive, but cheap to pin: a control reporting NaN must fall back to
+    // append-at-end, exactly like a null selection — never be treated as 0,
+    // which would silently dictate into the FRONT of the user's draft.
+    const stub = {
+      value: 'draft',
+      selectionStart: Number.NaN,
+      selectionEnd: Number.NaN,
+      focus: () => undefined,
+      setSelectionRange: () => undefined,
+    } as unknown as HTMLTextAreaElement
+    const access = createComposerAccess(() => stub)
+    expect(access.readSelection()).toBeNull()
+  })
+
   test('every closure no-ops safely when the element is gone', () => {
     const access = createComposerAccess(() => null)
     expect(access.getMessage()).toBe('')
@@ -320,9 +335,74 @@ describe('TEST-12 — composer access closures (ITEM-5, ITEM-6)', () => {
     }).not.toThrow()
   })
 
+  test('applyComposerEdit reaches React onChange, so the composer can persist it', async () => {
+    // The composer persists its draft from React's `onChange`. An imperative
+    // `el.value =` fires nothing, and React's own per-instance value tracker
+    // SWALLOWS a dispatched `input` event unless the write goes through the
+    // prototype setter — so this is the assertion that separates a real fix from
+    // a no-op one. (The first attempt at this fix was a no-op and every other
+    // test in this file stayed green.)
+    const seen: string[] = []
+    const localContainer = document.createElement('div')
+    document.body.appendChild(localContainer)
+    const localRoot = createRoot(localContainer)
+    let el: HTMLTextAreaElement | null = null
+    await act(async () => {
+      localRoot.render(
+        <Textarea
+          data-testid={HARNESS_TESTID}
+          aria-label="Message"
+          ref={(node: HTMLTextAreaElement | null) => {
+            el = node
+          }}
+          defaultValue=""
+          onChange={e => seen.push((e.target as HTMLTextAreaElement).value)}
+        />,
+      )
+    })
+
+    const access = createComposerAccess(() => el)
+    await act(async () => {
+      access.applyComposerEdit('dictated words', 14, 14)
+    })
+    expect(seen).toEqual(['dictated words'])
+
+    await act(async () => {
+      localRoot.unmount()
+    })
+    localContainer.remove()
+  })
+
   test('the voice store carries no interimText field (the toolbar channel is gone)', async () => {
     const { voiceStoreState } = await import('../voiceStore/state')
     expect('interimText' in voiceStoreState).toBe(false)
+  })
+})
+
+describe('TEST-12b — a closed owning pane is never written to (ITEM-45)', () => {
+  test('dictation for a pane whose handle is gone writes nothing anywhere', async () => {
+    // The engine resolves the OWNING pane through `paneRegistry`. When that pane
+    // has unmounted its handle is gone, and the old code fell back to the
+    // FOCUSED pane — which, now that writes are absolute-offset splices, would
+    // delete or overwrite a range of a DIFFERENT conversation's draft.
+    seedComposer('another pane UNRELATED draft', 0)
+    const untouched = snapshot()
+    script.interim = ['SHOULD NEVER APPEAR']
+    script.final = 'ALSO SHOULD NEVER APPEAR'
+
+    await act(async () => {
+      // `paneRegistry.get` is stubbed to return undefined for every id, which is
+      // exactly the "pane closed" condition.
+      await engine.startRecording('pane-that-has-closed')
+    })
+    await settle(TICK * 2)
+    expect(snapshot()).toEqual(untouched)
+
+    await act(async () => {
+      await engine.stopRecording()
+    })
+    await settle(60)
+    expect(snapshot()).toEqual(untouched)
   })
 })
 
@@ -368,6 +448,31 @@ describe('TEST-13 [acceptance INV-2] — real-time dictation lands in the compos
     expect(composerEl!.value).toBe('keep this provisional')
     await settle(TICK * 2)
     expect(composerEl!.value).toBe('keep this')
+  })
+
+  test('a blank interim over a SELECTION anchor puts the selected word back', async () => {
+    // A blank decode means "nothing dictated yet", so the composer must look as
+    // it did before recording. Merely DELETING the written span is only
+    // equivalent for a caret anchor: with a selection the user's own word went
+    // with it, and the two surrounding separators collapse into a doubled space.
+    seedComposer('call Bob tomorrow', 5, 8) // "Bob" selected
+    script.interim = ['Alice', '']
+
+    await act(async () => {
+      await engine.startRecording(null)
+    })
+    await settle(TICK)
+    expect(composerEl!.value).toBe('call Alice tomorrow')
+
+    await settle(TICK * 2)
+    expect(composerEl!.value).toBe('call Bob tomorrow')
+    expect(composerEl!.value).not.toMatch(/ {2}/)
+
+    // …and the session still owns that word, so the next decode replaces it
+    // rather than appending beside it.
+    script.interim = ['Alice Smith']
+    await settle(TICK * 2)
+    expect(composerEl!.value).toBe('call Alice Smith tomorrow')
   })
 })
 

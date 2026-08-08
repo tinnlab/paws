@@ -71,8 +71,17 @@ async function toolbarRowText(page: Page): Promise<string | null> {
       'button[aria-label="Stop recording and transcribe"]',
     )
     if (!add || !stop) return null
+    // BOUNDED walk-up. Without a bound, a future layout change that moves the
+    // mic out of the composer's action group would climb to <html> and return
+    // the whole page's text — and both `not.toContain` assertions would still
+    // pass (a textarea's live `.value` is not part of `textContent`), turning
+    // this back into the vacuous check it replaced. Six levels is comfortably
+    // more than the real nesting; beyond that we are no longer in the toolbar.
     let row: HTMLElement | null = add as HTMLElement
-    while (row && !row.contains(stop)) row = row.parentElement
+    for (let depth = 0; row && !row.contains(stop); depth++) {
+      if (depth > 6) return null
+      row = row.parentElement
+    }
     return row ? (row.textContent ?? '') : null
   })
 }
@@ -176,6 +185,17 @@ test.describe('Voice — dictation inserts at the caret (TEST-17..TEST-23)', () 
   })
 
   // TEST-19 [acceptance, INV-5]
+  //
+  // Precise about what this exercises. INV-5's user-facing promise is "with no
+  // insertion point, dictation appends at the end", and this drives exactly the
+  // state a real never-focused composer is in. That state is NOT a null
+  // selection: per the HTML spec, assigning `el.value` moves the text entry
+  // cursor to the END, so `readSelection()` reports {len,len} and the words land
+  // at the end through the ordinary caret path. The `selection === null` arm is
+  // DEFENSIVE only (no element / a control with no selection API) and is pinned
+  // by TEST-6 instead. An earlier version of this spec stubbed `selectionStart`
+  // to null — a value a mounted textarea never returns — and so proved nothing
+  // about production at all.
   test('a composer that was never focused still APPENDS at the end (no regression)', async ({
     page,
     testInfra,
