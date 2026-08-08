@@ -113,4 +113,12 @@ re-scope the ABORT rule prescribes, applied before the rule fired. A sixth round
 is running against round 5's diff; the skill's cap is six, so if it is not clean
 this escalates rather than continuing.
 
-**New confirmed findings:** (round-6 blind re-audit RUNNING — this number is not yet earned; the loop is NOT converged until it reports)
+**New confirmed findings:** 0 — earned. The round-6 blind re-audit found **no new
+defect** in the round-5 commit; it drove 18 probe scenarios through the shipped
+component harness across all four hunts and every one came back clean, with the
+mutation battery confirming the round-5 tests kill their defects (M2 — reverting
+to the round-4 record-start capture — reddens exactly the three new TEST-24
+tests, verifying the commit message's claim verbatim). Its six findings were all
+low: two documentation, three provably-inert/equivalent mutants, and one
+pre-existing surrogate issue that fails identically on the parent commit. The
+actionable ones are closed in `bd457e6ca`. **The loop is converged.**
