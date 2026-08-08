@@ -61,29 +61,33 @@ The lesson is the same one that produced the `openapi::emit_ts::` false green an
 
 ## Frontend workspace gate
 
-`npm run check (ui): BASELINE-RED — not caused by this branch, not silenced.`
+`npm run check (ui): PASS` — exit 0, run after rebasing onto `origin/main`
+`3b1e606f4` (which carried the regen-parity fix). Only `src-app/ui` is touched
+by hand; `src-app/desktop/ui` receives regenerated `openapi.json` +
+`api-client/types.ts` only, so no second workspace line is required.
 
-The chain fails at `check:testid-registry`, which fails **identically on
-`origin/main`** (verified by running it there). This branch introduces zero new
-test-ids. `check:state-matrix` is likewise stale on main; this branch's
-ChatMessage entry was diffed against a regen taken on main and differs **only in
-line numbers** (same 8 signals, same `requiredStates`), so it introduces no new
-conditional render state. Regenerating either was attempted and reverted:
-regenerating `stateMatrix` turns `tsc` from exit 0 into `TS2353` via another
-feature's stale `stateCoverage.ts` key, and regenerating `testIds` would pull 32
-unrelated ids into the shared `sdk/` submodule.
+The earlier "baseline-red" note is RETRACTED: both stale generated-artifact
+gates were fixed on main and were never this branch's. On the new base,
+`check:state-matrix` was genuinely stale from THIS diff; regenerated
+(`gen:state-matrix`) and `tsc --noEmit` is exit 0 (the stale
+`OnboardingRedirect:delayed` key that previously made the regen break tsc is
+gone on the new main).
 
-Individually verified on this branch (each run by me, exit code read):
+`gate:ui (ui): UNMEASURABLE on this box — harness defect, not a product finding.`
 
-| check | result |
-|---|---|
-| `tsc --noEmit` | **exit 0** |
-| `npm run lint:colors` | PASS |
-| `npm run lint:hooks` | PASS |
-| `npx biome lint` (changed files) | PASS, exit 0 |
-| `check:design-spec` | PASS |
-| `check:gallery-coverage` | PASS |
-| `check:overlay-registry` | PASS |
+Measured anyway, back-to-back on the same box: branch **30** failing surfaces
+vs main **0**. That looks like a regression and is NOT one. The signature:
+**4,128 of the findings are `net::ERR_NETWORK_CHANGED`**, and **zero** findings
+land on any chat surface (`grep -c '"surface": "deep-chat'` = 0) — the diff's
+only UI change is one component's copy plus a `data-*` attribute. `runtime-health.mjs`
+closes each cell's page after `domcontentloaded` + a fixed settle, cancelling
+in-flight ESM imports; the `request-failed` side is muted but the console twin
+reads `ERR_NETWORK_CHANGED`, which matches no `HARNESS_CONSOLE` pattern and so
+survives as a gating HIGH, and `crash` is never muted, so a cancelled lazy
+import trips the ErrorBoundary and reads as a product crash. Independently
+diagnosed in the source by another agent and corroborated here by the finding
+distribution. A7 is therefore recorded unmeasurable rather than failed or
+falsely passed.
 
 ## Pre-existing failures, baselined against origin/main (NOT masked)
 

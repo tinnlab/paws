@@ -414,14 +414,14 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `isStreaming \|\| wasStreamingRef.current \|\| isActiveMatch` | 66 |
-| empty | `contents.length === 0 && !showEmptyCompletionNotice` | 94 |
-| branch | `!resolved` | 186 |
-| branch | `attachmentBlocks.length > 0` | 274 |
-| branch | `bubbleBlocks.length > 0` | 303 |
-| branch | `offerCollapse` | 329 |
-| branch | `showEmptyCompletionNotice` | 349 |
-| branch | `renderAsUser` | 368 |
+| branch | `isStreaming \|\| wasStreamingRef.current \|\| isActiveMatch` | 70 |
+| empty | `contents.length === 0 && !showEmptyCompletionNotice` | 111 |
+| branch | `!resolved` | 203 |
+| branch | `attachmentBlocks.length > 0` | 291 |
+| branch | `bubbleBlocks.length > 0` | 320 |
+| branch | `offerCollapse` | 346 |
+| branch | `showEmptyCompletionNotice` | 366 |
+| branch | `renderAsUser` | 386 |
 
 ### `modules/chat/components/CollapsibleBlock`
 
