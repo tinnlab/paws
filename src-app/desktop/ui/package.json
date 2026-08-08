@@ -58,7 +58,7 @@
   "scripts": {
     "build": "tsc && vite build",
     "build:nocheck": "vite build",
-    "check": "tsc && npm run lint:guardrails && npm run lint:colors && npm run lint:settings-field && npm run lint:adjacent-inline && npm run lint:icon-action && npm run lint:hooks && npm run lint:logical-direction && npm run lint:tooltip-placement && npm run check:kit-manifest && npm run check:testid-registry && npm run check:design-spec && npm run check:gallery-coverage && npm run check:gallery-crawl && npm run gallery:check-fixtures && npm run check:state-matrix && npm run check:overlay-registry && npm run check:override-registry && npm run check:gallery-seed-registry && npm run check:harness-parity",
+    "check": "tsc && npm run lint:guardrails && npm run lint:colors && npm run lint:settings-field && npm run lint:adjacent-inline && npm run lint:icon-action && npm run lint:hooks && npm run lint:logical-direction && npm run lint:tooltip-placement && npm run check:kit-manifest && npm run check:testid-registry && npm run check:design-spec && npm run check:gallery-coverage && npm run check:gallery-crawl && npm run gallery:check-fixtures && npm run check:state-matrix && npm run check:overlay-registry && npm run check:override-registry && npm run check:gallery-seed-registry && npm run check:harness-parity && npm run test:gallery-scripts",
     "lint:guardrails": "biome lint --only=style/noRestrictedImports src",
     "lint:colors": "node ../../../sdk/packages/config/src/lint/hardcoded-colors.mjs",
     "lint:settings-field": "node ../../../sdk/packages/config/src/lint/settings-field.mjs",
@@ -107,7 +107,7 @@
     "test:unit:watch": "vitest --config vitest.config.ts",
     "check:gallery-seed-registry": "node ../../../sdk/packages/gallery/scripts/gen-gallery-seed-registry.mjs --src src --check",
     "gen:gallery-seed-registry": "node ../../../sdk/packages/gallery/scripts/gen-gallery-seed-registry.mjs --src src",
-    "test:gallery-scripts": "node --test ../../../sdk/packages/gallery/scripts/check-harness-parity.test.mjs ../../../sdk/packages/gallery/scripts/lib/host-lock.test.mjs ../../../sdk/packages/gallery/scripts/lib/run-validity.test.mjs",
+    "test:gallery-scripts": "node --test ../../../sdk/packages/gallery/scripts/check-harness-parity.test.mjs ../../../sdk/packages/gallery/scripts/lib/host-lock.test.mjs ../../../sdk/packages/gallery/scripts/lib/run-validity.test.mjs ../../../sdk/packages/gallery/scripts/lib/finding-classify.test.mjs",
     "check:harness-parity": "node ../../../sdk/packages/gallery/scripts/check-harness-parity.mjs"
   },
   "type": "module"

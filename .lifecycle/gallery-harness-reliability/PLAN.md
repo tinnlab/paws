@@ -31,12 +31,14 @@ Lifted VERBATIM from DESIGN.md.
 
 ### D1 — cancelled-import contamination
 
-- **ITEM-1**: [DESCOPED] quiesce the page's in-flight requests before `close()`.
-  The mechanism it targets is DISPROVED — see DRIFT-1.1: `page.close()` emits no
-  `requestfailed` and no console mirror in Playwright 1.60 (four probe variants,
-  0 events each). Replaced by ITEM-1b.
-- **ITEM-2**: [DESCOPED] a `quiesce-timeout` diagnostic finding. Falls with ITEM-1.
-  Replaced by ITEM-2b.
+> **ITEM-1 / ITEM-2 were REMOVED from this plan (not descoped).** They specified a
+> "quiesce before `page.close()`" fix for a mechanism that DOES NOT EXIST —
+> Playwright 1.60 emits no `requestfailed` and no console mirror for requests
+> outstanding at close, in four probe variants (DRIFT-1.1). Implementing them
+> would have been manufacturing a fix for a disproved defect. The plan is amended
+> per the phase-5 `impl-wins` rule; ITEM-1b/ITEM-2b carry the work, against the
+> mechanism that DOES reproduce (DRIFT-1.2).
+
 - **ITEM-1b**: Add an **origin-liveness validity gate** to `runtime-health.mjs`.
   The PROVEN mechanism (DRIFT-1.2, probe F) is that the gallery origin becomes
   unreachable mid-crawl — a concurrent run stealing/killing the Vite server, a

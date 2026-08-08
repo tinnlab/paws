@@ -77,3 +77,42 @@ ADDED (6) — REAL ids rendered in `??`/ternary value positions that the regex s
 ### DEC-14: Does the parity guard join `npm run check`?
 **Resolution:** **Yes** — `check:harness-parity` is added to the `check` chain in both UI workspaces, alongside `test:gallery-scripts`.
 **Basis:** convention — this is how every other drift guard in this repo is enforced (`check:testid-registry`, `check:state-matrix`, `check:overlay-registry`). It reads its expectations from `sdk/packages/gallery/scripts/`, a permanent committed product path, never from `.lifecycle/` (rule B6) — verified against a lifecycle-stripped tree before this branch is declared done.
+
+---
+
+## Descopes requiring OWNER sign-off (phase-3 FB-7 gate)
+
+These are recorded here so the cut is VISIBLE and gated, never a silent omission.
+**They deliberately carry no `[approved: …]` token**, because I do not have the
+owner's approval and writing one would be exactly the self-certification the gate
+exists to prevent. Phase 3 stays RED until the owner decides — that red is the
+correct state, not a defect in the artifacts.
+
+- DESCOPED: ITEM-7 — `--repeat=N` in `runtime-health.mjs`. [approval: PENDING — owner]
+- DESCOPED: ITEM-8 — reproduce-to-gate (`flaky` annotation, subtracted from gating). [approval: PENDING — owner]
+- DESCOPED: ITEM-9 — `gate-ui` roll-up awareness of the `flaky` flag. [approval: PENDING — owner]
+
+**Why they are cut, and why the reason CHANGED mid-branch.** They were originally
+deferred on a hypothesis: `run-key.mjs`'s own doc-comment attributes "failing
+surface sets that differ run to run" to the same cross-worktree port collision as
+D1/D3, so the lock might have made them redundant. **The flake study falsified
+that** (FLAKE_STUDY.md): two runs, both VALID by the new gate (248/248 cells,
+origin alive, **0 transport artifacts**), still disagreed — 8 vs 2 gating HIGH,
+`seeded-file-rag-error` present in one and absent in the other. So D2 is real,
+independent, and the mechanism IS needed.
+
+They remain cut for this round for two honest reasons, both for the owner to
+weigh:
+1. INV-2 orders "investigate before fixing"; the investigation only completed at
+   the end of this branch, and building the mechanism on top of it unreviewed
+   would make an already-large diff larger.
+2. The study also surfaced a likely CONFOUND that should be understood first: the
+   React key warning arrives on `console.error`, so it is classified HIGH even
+   though the harness's own taxonomy puts `unique "key" prop` at MEDIUM
+   (`REACT_WARNING` is only consulted for `msg.type() === 'warning'`, and React 19
+   emits warnings through `console.error`). Fixing that may remove a large share
+   of the unstable HIGHs outright, which would change what the reproduce-to-gate
+   mechanism has to handle.
+
+**If the owner prefers, the alternative is to keep this branch open and implement
+ITEM-7/8/9 now.** The measurement supporting them is done and recorded.

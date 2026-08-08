@@ -1847,10 +1847,34 @@ VISUAL_SNAPSHOTS=1 npm run gate:ui # also runs Layer B pixel regression
 npm run gate:ui -- --skip-visual   # fast: tsc + lint + runtime only
 ```
 
-`scripts/gate-ui.mjs` runs criteria 2–4, boots (or reuses) the gallery Vite
-server, prints a **per-surface PASS/FAIL table** (fail = any HIGH runtime
-finding), and exits non-zero on any failure. It is the UI analog of `just check`
-for the backend — run it before pushing UI work.
+`sdk/packages/gallery/scripts/gate-ui.mjs` (the `ui` workspace runs the sdk copy;
+`src-app/desktop/ui/scripts/gate-ui.mjs` is desktop's own) runs criteria 2–4,
+boots (or reuses) the gallery Vite server, prints a **per-surface PASS/FAIL
+table** (fail = any HIGH runtime finding), and exits non-zero on any failure. It
+is the UI analog of `just check` for the backend — run it before pushing UI work.
+
+**It takes a HOST-WIDE lock.** Two gate runs on one machine used to corrupt each
+other silently — one produced 95.5% contaminated findings while a serialized run
+of the same commit produced zero, because a concurrent run can take the gallery
+origin away mid-crawl. Per-worktree isolation does NOT protect against this, so
+the lock is machine-scoped (`$TMPDIR/ziee-gate-ui-<uid>.lock`). A second run
+**waits**, printing the holding worktree + pid; `--no-wait` refuses instead;
+`GATE_UI_LOCK=0` opts out; a lock whose holder pid is dead is reclaimed loudly.
+
+**A run that could not observe the product FAILS rather than reporting.** The
+crawl writes a run manifest only after it drains, and the gate deletes the
+previous run's artifacts before starting — so a crawl killed partway leaves
+nothing to inherit and the gate refuses with a reason instead of printing a
+per-surface table over stale data (it once printed a confident `103/106 PASS`
+from an earlier run's file). A crawl whose origin went unreachable, or whose
+findings are mostly transport artifacts, is declared **VOID** with reasons.
+
+**Do not edit files in the gallery's module graph while a crawl is running.** A
+source change triggers a Vite HMR full reload that aborts every ESM import in
+flight; one measured run produced 538 `net::ERR_ABORTED` findings this way (vs 0
+in the immediately preceding run on the same server) because a generated file was
+regenerated mid-crawl. The validity gate now VOIDs such a run rather than
+reporting the noise, but the run is still wasted.
 
 ### `npm run gallery:runtime` — the runtime-health pass (systematized)
 
@@ -1859,8 +1883,8 @@ npm run gallery:runtime            # writes RUNTIME_FINDINGS.{md,jsonl}
 node scripts/runtime-health.mjs --report-only   # never exits non-zero
 ```
 
-`scripts/runtime-health.mjs` is the automation of the manual "render every
-surface and watch the console" review that originally caught the
+`sdk/packages/gallery/scripts/runtime-health.mjs` is the automation of the manual
+"render every surface and watch the console" review that originally caught the
 `/settings/user-groups` array-crash. It drives every `gallery-page-<slug>` (in
 loaded/empty/error) plus every overlay open-state (from the runtime
 `window.__GALLERY_OVERLAYS__` manifest) × themes, as isolated full reloads, and
@@ -1876,7 +1900,28 @@ captures per cell:
 | `spacing-grid` | LOW (informational) | computed padding/margin/gap off the 4px grid (the kit uses 2px half-steps, so this is drift-tracking, never gating) |
 
 Output is `src/dev/gallery/RUNTIME_FINDINGS.jsonl` (one finding per line — the
-gate rolls this up per surface) + `RUNTIME_FINDINGS.md` (grouped human summary).
+gate rolls this up per surface) + `RUNTIME_FINDINGS.md` (grouped human summary)
++ **`RUNTIME_RUN.json`**, the run manifest (`runId`, cells planned/completed,
+`complete`, origin liveness, transport-artifact contamination, `void` +
+`voidReasons`). The manifest is what makes a findings file attributable to the
+run that produced it; `gate-ui` refuses to roll up findings without a matching,
+complete, non-void manifest.
+
+Every run prints a **validity line** — `validity: 682/682 cells · origin alive
+(140 checks) · transport artifacts 0 (0% of findings)` — so "was this run even
+able to observe the product?" is answered in the output rather than being
+something a reader has to think to ask. A healthy run reads `0 (0%)`; anything
+else means the harness moved under the crawl and the findings describe it, not
+the product.
+
+**Harness parity.** The crawl harness exists in two live copies (the sdk one the
+`ui` workspace runs, and `src-app/desktop/ui/scripts/`), and they have drifted
+before. `npm run check:harness-parity` (part of `npm run check`) refuses a tree
+where a behavioural core is present in one copy and missing from the other. The
+shared behaviour itself lives in `sdk/packages/gallery/scripts/lib/`
+(`host-lock.mjs`, `run-validity.mjs`) which both copies import, and is unit-tested
+by `npm run test:gallery-scripts`. A third, DEAD copy at
+`src-app/ui/scripts/runtime-health.mjs` was deleted — it had zero invokers.
 The visual-testing layers themselves (Layer A layout invariants + axe, Layer B
 screenshots) live in `tests/e2e/visual/` and run under
 `playwright.visual.config.ts`.

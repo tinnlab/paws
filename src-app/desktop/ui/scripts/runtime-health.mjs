@@ -40,9 +40,10 @@ import { enumerateSurfaces } from './lib/gallery-surfaces.mjs'
 import { resolveGalleryPort, resolveWorktreeRoot } from '@ziee/gallery/scripts/lib/run-key.mjs'
 import { withHostLock } from '@ziee/gallery/scripts/lib/host-lock.mjs'
 import {
-  CONSOLE_TRANSPORT_MIRROR,
-  DYN_IMPORT_FAILURE,
-  TRANSPORT_DEAD,
+  ERRORBOUNDARY,
+  classifyAll,
+} from '@ziee/gallery/scripts/lib/finding-classify.mjs'
+import {
   assessRun,
   clearRunArtifacts,
   newRunId,
@@ -99,114 +100,8 @@ const REACT_WARNING = [
   /findDOMNode/i,
 ]
 
-/**
- * HARNESS-NOISE classifier — documented, NARROW patterns for console/request
- * findings that are gallery-harness / dev-server / mock-cassette artifacts, NOT
- * product defects. These are subtracted from the gating HIGH total (exactly like
- * the runtime-baseline) but STILL EMITTED to the JSONL and listed in a dedicated
- * rollup section — so the filter is fully auditable, never a silent mute.
- *
- * This is deliberately a SHORT allowlist, not a blanket. Anything that does NOT
- * match one of these — a real React hydration/DOM-nesting error, a thrown app
- * TypeError, an ErrorBoundary `crash` (which is NEVER muted here, regardless of
- * trigger), a genuine broken PRODUCT fetch — still gates.
- *
- * Rationale per class (from the R3 runtime triage — see fix/runtime-triage):
- *  • Browser "Failed to load resource: the server responded with a status of N"
- *    — the console-channel MIRROR of an HTTP status, carrying no app stack. In
- *    the gallery every /api response is the mock cassette's deliberate output
- *    (the `error` state injects 500/403 on purpose). This is the request/HTTP
- *    layer, not application logic — the console twin of `request-failed`.
- *  • "Gallery forced error" — the cassette's own reject() sentinel that
- *    `*-err` / error-state surfaces use to exercise error UI, by design.
- *  • FileStore `…text is not a function` — the gallery mock returns a plain
- *    object for a file body, so File.store's `.text()` throws; production
- *    returns a real Blob. A mock-FIXTURE shape gap, not a product bug.
- *  • Vite dev-asset request failures — a full reload aborts in-flight ESM /
- *    font imports (`/@fs/…/node_modules/katex/…woff2 — net::ERR_ABORTED`).
- *    Dev-server transport, never a product fetch (product data goes to /api,
- *    which the mock intercepts before the network).
- */
-const HARNESS_CONSOLE = [
-  /^Failed to load resource: the server responded with a status of/i,
-  /Gallery forced error/i,
-  /\[FileStore\] Failed to load file text content:.*\.text is not a function/i,
-]
-/** A failed request to a Vite-served dev asset (source module, /@-internal,
- *  node_modules font/chunk) — dev-transport noise, never a product fetch. */
-const isViteDevAsset = url =>
-  /\/@(fs|id|vite|react-refresh)\b/.test(url) ||
-  /\/node_modules\//.test(url) ||
-  /\/(src|modules|core|api-client|dev|components|hooks|widgets|stores|events|utils|assets)\/[^?]*\.(tsx?|jsx?|mjs|css)(\?|$)/.test(
-    url,
-  )
-/**
- * True when a HIGH finding is documented gallery-harness noise (subtracted from
- * gating, but kept visible). A `crash` (ErrorBoundary) is intentionally excluded
- * — a render crash gates no matter what triggered it.
- */
-function isHarnessNoise(f, cell) {
-  const d = f.detail || ''
-  if (f.category === 'console-error') {
-    if (matchesAny(d, HARNESS_CONSOLE)) return true
-    // PAIRED transport-mirror arm — kept identical to the sdk copy (see
-    // `@ziee/gallery/scripts/runtime-health.mjs`). Chromium reports one transport
-    // failure on BOTH the request and the console channel; muting only the
-    // request twin left the same event half-gating. Keyed on the console
-    // message's OWN resource URL, so a `net::ERR_*` against a PRODUCT url is
-    // untouched and still gates.
-    if (CONSOLE_TRANSPORT_MIRROR.test(d) && f.resourceUrl)
-      return isViteDevAsset(f.resourceUrl)
-    return false
-  }
-  if (f.category === 'request-failed') {
-    // A browser-ABORTED request (net::ERR_ABORTED) is a full-page-reload race in
-    // the per-cell harness (a dev fixture/module import still in flight when the
-    // next cell reloads) — never a product fetch defect, which surfaces as a
-    // 4xx/5xx status or ERR_CONNECTION*/ERR_NAME_NOT_RESOLVED. Mute it.
-    if (/net::ERR_ABORTED/.test(d)) return true
-    const m = /(?:GET|POST|PUT|DELETE|PATCH|HEAD)\s+(\S+)/.exec(d)
-    return isViteDevAsset(m ? m[1] : d)
-  }
-  // A dynamic import that never arrived rejects and trips the ErrorBoundary, so
-  // a dead origin FABRICATES render crashes. Muted ONLY with corroboration: the
-  // same cell must also have recorded a dev-asset transport failure.
-  if (f.category === 'crash' || f.category === 'page-error') {
-    if (!DYN_IMPORT_FAILURE.test(d)) return false
-    const url = /imported module:\s*(\S+)/.exec(d)?.[1]
-    if (!url || !isViteDevAsset(url)) return false
-    return Boolean(cell?.sawDevAssetTransportFailure)
-  }
-  return false
-}
-
-/** Stamp baselined/harness ONCE, after the crawl — the crash arm needs to know
- *  what else the same cell saw. Mirrors the sdk copy exactly. */
-function classifyAll(findings) {
-  const cells = new Map()
-  const keyOf = f => `${f.surface}|${f.state}|${f.theme}`
-  for (const f of findings) {
-    const k = keyOf(f)
-    const c = cells.get(k) || { sawDevAssetTransportFailure: false }
-    if (
-      f.category === 'request-failed' &&
-      TRANSPORT_DEAD.test(f.detail || '') &&
-      isViteDevAsset(f.detail || '')
-    )
-      c.sawDevAssetTransportFailure = true
-    cells.set(k, c)
-  }
-  for (const f of findings) {
-    if (f.severity !== 'HIGH') continue
-    if (isRuntimeBaselined(f)) f.baselined = true
-    else if (isHarnessNoise(f, cells.get(keyOf(f)))) f.harness = true
-  }
-  return findings
-}
-
 // An ErrorBoundary catch is a genuine render CRASH in ANY state (the surface
 // failed to render, incl. its error UI) — always HIGH.
-const ERRORBOUNDARY = /\[AppErrorBoundary/
 
 /**
  * Severity of a raw console-error / uncaught exception, given the state it fired
@@ -645,7 +540,7 @@ async function main() {
   const origin = originWatch.stop()
   await browser.close()
 
-  classifyAll(findings)
+  classifyAll(findings, isRuntimeBaselined)
   const validity = assessRun({
     findings,
     origin,
@@ -689,6 +584,16 @@ async function main() {
 
   const md = []
   md.push('# Runtime-health findings\n')
+  if (validity.void) {
+    md.push('> ## ⚠️ THIS RUN IS **VOID** — do not read the findings below as product verdicts\n>')
+    for (const r of validity.reasons) md.push(`> - ${r}`)
+    md.push('>\n')
+  }
+  md.push(
+    `_Validity: ${done}/${total} cells · origin ${origin.everDown ? '**WENT DOWN**' : 'alive'} ` +
+      `(${origin.checks} probes) · transport artifacts ${validity.contamination.total} ` +
+      `(${validity.contamination.pct}%) · runId \`${RUN_ID}\`._\n`,
+  )
   md.push(
     `Generated by \`npm run gallery:runtime\` over ${cells.length} surface/state cells × ${THEMES.length} themes (${cells.length * THEMES.length} page loads). Each cell is a full reload of \`?surface=&state=&theme=\`; the browser's own diagnostics (console/pageerror/requestfailed) plus getComputedStyle contrast + a11y-name + 4px-grid checks are captured per cell.\n`,
   )

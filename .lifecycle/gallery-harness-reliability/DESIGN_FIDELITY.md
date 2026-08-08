@@ -1,25 +1,34 @@
 # DESIGN_FIDELITY — plan vs DESIGN.md invariants
 
-- **INV-1** — fidelity: UPHELD — ITEM-1 fixes the CAUSE (quiesce the page's
-  in-flight requests before `close()`, so the cancellation never happens); ITEM-3/4
-  add muting only as the explicitly PAIRED arm the invariant permits, and are
-  narrowed to `net::ERR_ABORTED|ERR_NETWORK_CHANGED` on a **dev-asset** URL so a
-  `net::ERR_*` on a product `/api` URL still gates — the "blind to genuine
-  transport failures" failure mode the invariant names is not introduced. ITEM-2
-  keeps a non-quiescing page visible instead of silently absorbed, and ITEM-5 makes
-  residual contamination self-reporting rather than something a human must notice.
-  The acceptance test (TEST-1) asserts the CAUSE fix directly by driving a real
-  lazy-import cell and asserting zero cancellation artifacts with the muting
-  classifier DISABLED — so a plan that shipped only the mute would fail it.
+- **INV-1** — fidelity: UPHELD, but by a DIFFERENT cause than the design names.
+  The design's stated cause — `page.close()` cancelling in-flight module imports —
+  **does not reproduce** (four probe variants, zero events; DRIFT-1.1), so the
+  quiesce fix it prescribes would have been a fix for nothing. The invariant's
+  actual demand is *"fix the cause, not the symptom … muting must be PAIRED with
+  the cause fix, never instead of it"*, and that is met against the mechanism that
+  DOES reproduce (DRIFT-1.2/1.4b — the harness moving under the crawl, via three
+  observed triggers): the **host lock** removes the concurrent-run trigger, the
+  **run-validity gate** VOIDs any run affected by any trigger, and the classifier
+  arms are the paired backstop only. The muting is proven narrow in BOTH
+  directions by TEST-1 (a `net::ERR_*` on a PRODUCT url still gates; a crash is
+  muted only with same-module corroboration), so the "blind to genuine transport
+  failures" outcome the invariant warns about is not introduced. **Reported to the
+  owner as a disproof rather than papered over** (HUMAN_FEEDBACK FB-1), which is
+  what they asked for.
 
-- **INV-2** — fidelity: UPHELD — ITEM-6 is measurement-first and blocks by
-  construction: it writes `FLAKE_STUDY.md` from N≥5 real runs before any D2 fix is
-  designed, and the plan's Non-goals section records that the measurement is
-  allowed to contradict the chosen branch. ITEM-7/8 then implement the invariant's
-  second named option ("require a finding to reproduce across runs before it
-  gates") rather than the first ("make cell mounting deterministic"), which the
-  invariant explicitly offers as an either/or. ITEM-9 delivers the invariant's
-  closing clause — the gate can now tell "new failure" from "flaky failure".
+- **INV-2** — fidelity: **AT-RISK — HALF MET, and deliberately so.** The
+  invariant has two clauses. The FIRST ("investigate before fixing … establish the
+  flake rate") is fully discharged and was decisive: the measurement
+  (FLAKE_STUDY.md) shows two runs, both VALID by the new gate (248/248 cells,
+  origin alive, **0 transport artifacts**), disagreeing 8 vs 2 gating HIGH — which
+  FALSIFIED the working hypothesis that D2 was the same root cause as D1/D3 and
+  would be fixed by the lock. The SECOND clause (the mechanism — "require a
+  finding to reproduce across runs before it gates") is **NOT implemented**:
+  ITEM-7/8/9 are descoped, the lifecycle gate is holding phase 3 RED for want of
+  the owner's sign-off, and no `[approved: …]` token was written because that
+  would be self-certification. This is recorded as an open item
+  (HUMAN_FEEDBACK FB-5), not as a silent cut — the owner can approve the descope
+  or ask for the mechanism on this branch.
 
 - **INV-3** — fidelity: UPHELD — ITEM-10 takes the invariant's first named option
   (a host-level lock) rather than the weaker second. The invariant's second

@@ -36,7 +36,7 @@ import {
   fetchSentinelRoot,
   serverIsThisWorktree,
 } from '@ziee/gallery/scripts/lib/run-key.mjs'
-import { withHostLock, TOKEN_ENV } from '@ziee/gallery/scripts/lib/host-lock.mjs'
+import { acquire, TOKEN_ENV } from '@ziee/gallery/scripts/lib/host-lock.mjs'
 import {
   clearRunArtifacts,
   newRunId,
@@ -130,6 +130,17 @@ async function main() {
   // NO-FOREIGN-REUSE, audit §2/§7: reuse a server on the base port only if its
   // /__worktree sentinel proves it is THIS worktree; else boot our own on a fresh
   // bindable port so we never test a sibling worktree's tree).
+  // Lock only the shared-resource part (server + crawl + visual), not tsc/lint —
+  // holding it through those needlessly extends every other run's wait.
+  const lock = await acquire({
+    owner: OWN_ROOT ?? UI_DIR,
+    wait: !process.argv.includes('--no-wait'),
+    waitMs: Number(process.env.GATE_UI_LOCK_WAIT_MS) || 45 * 60 * 1000,
+    log: m => console.log(m),
+  })
+  lockToken = lock.token ?? null
+  process.on('exit', () => lock.release())
+
   let vite = null
   const sentinelRoot = await fetchSentinelRoot(PORT_BASE)
   const isOurs = serverIsThisWorktree(sentinelRoot, OWN_ROOT) && (await galleryUp(PORT_BASE))
@@ -157,6 +168,7 @@ async function main() {
     }
   }
 
+  let runUsable = true
   try {
     // 3. runtime-health --------------------------------------------------------
     console.log('• runtime-health pass …')
@@ -183,19 +195,29 @@ async function main() {
         `\n   No per-surface verdict is available: the crawl did not produce a usable\n` +
           `   result. A table here would be a previous run's data. Child exit: ${rt.code}.`,
       )
-      finish()
-      return
+      // Fall through to the finally so the spawned Vite server is killed;
+      // finish() would process.exit() and orphan it (CODING_GUIDELINES §5).
+      runUsable = false
     }
 
-    const surfaceVerdicts = readRuntimeSurfaceVerdicts()
-    const runtimeFail = surfaceVerdicts.filter(s => !s.ok)
-    step(
-      'runtime-health',
-      rt.code === 0 && runtimeFail.length === 0,
-      runtimeFail.length
-        ? `${runtimeFail.length} surface(s) with HIGH findings`
-        : `${surfaceVerdicts.length} surfaces clean`,
-    )
+    let surfaceVerdicts = []
+    if (runUsable) {
+      surfaceVerdicts = readRuntimeSurfaceVerdicts()
+      const runtimeFail = surfaceVerdicts.filter(s => !s.ok)
+      const c = manifest.contamination || {}
+      console.log(
+        `   validity: ${manifest.cellsCompleted}/${manifest.cellsPlanned} cells · origin ` +
+          `${manifest.originEverDown ? 'WENT DOWN' : 'alive'} · transport artifacts ` +
+          `${c.total ?? 0} (${c.pct ?? 0}% of findings)`,
+      )
+      step(
+        'runtime-health',
+        rt.code === 0 && runtimeFail.length === 0,
+        runtimeFail.length
+          ? `${runtimeFail.length} surface(s) with HIGH findings`
+          : `${surfaceVerdicts.length} surfaces clean`,
+      )
+    }
 
     // 4. coverage manifest in sync --------------------------------------------
     if (SKIP_COVERAGE) {
@@ -220,6 +242,7 @@ async function main() {
         /* ignore */
       }
     }
+    lock.release()
   }
 
   finish()
@@ -275,20 +298,7 @@ function finish() {
   process.exit(0)
 }
 
-// The whole gate holds the HOST lock — concurrent gate:ui runs on one machine
-// take each other's dev server away, which corrupts both runs' findings.
-withHostLock(
-  {
-    owner: OWN_ROOT ?? UI_DIR,
-    wait: !process.argv.includes('--no-wait'),
-    waitMs: Number(process.env.GATE_UI_LOCK_WAIT_MS) || 15 * 60 * 1000,
-    log: m => console.log(m),
-  },
-  async lock => {
-    lockToken = lock.token ?? null
-    return main()
-  },
-).catch(e => {
+main().catch(e => {
   console.error(e.message || e)
   process.exit(2)
 })
