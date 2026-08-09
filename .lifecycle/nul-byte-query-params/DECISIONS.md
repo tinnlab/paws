@@ -55,6 +55,7 @@ behaviour to reproduce, not five. Pinned by TEST-2 (unit) and TEST-14 (the
 pre-existing project search suite kept unmodified as the regression control).
 
 ### DEC-6: `agent-kit` is a shared submodule — is documenting the rule there safe?
+**Resolution:** No — land the rule in the repo-root `CLAUDE.md` instead.
 **AMENDED in FIX_ROUND-1 — the fallback was taken.** An edit inside the
 `agent-kit` submodule does not ship: it is absent from the parent repo's diff and
 from every commit unless the submodule is committed AND pushed, which this branch
@@ -63,7 +64,7 @@ therefore landed in the repo-root `CLAUDE.md`, which this repo actually ships,
 and the submodule is reverted clean. This is the fallback DEC-6 recorded in
 advance — taken as a decided path, not improvised.
 
-**Original resolution:** Yes, and it is the right place: `agent-kit/docs/CODING_GUIDELINES.md`
+**Original (superseded) answer:** Yes, and it is the right place: `agent-kit/docs/CODING_GUIDELINES.md`
 §4 (DB correctness) is where this repo's DB-correctness rules live, and the rule
 is framework-general. The edit is documentation-only and append-shaped, so it
 cannot break a consumer. The rules forbid touching `sdk`, not `agent-kit`.
@@ -94,7 +95,8 @@ Postgres" is not a setting; Postgres would still refuse them).
 magic numbers; a boolean-valued correctness invariant has no magic number.
 
 ### DEC-9: Does the fix need an OpenAPI regen?
-**SUPERSEDED by FIX_ROUND-1 — the answer is YES.** The original "no" was correct
+**Resolution:** Yes — regenerate BOTH workspaces.
+**SUPERSEDED by FIX_ROUND-1 — the original answer of "no" was wrong.** The original "no" was correct
 only because no `*_docs` had been updated; the blind audit showed nine routes had
 gained a 400 without declaring it, which is a contract defect. Declaring it
 changes `openapi.json`, so the regen was run for BOTH workspaces (+27 lines each;
@@ -102,7 +104,7 @@ changes `openapi.json`, so the regen was run for BOTH workspaces (+27 lines each
 reasoning is kept below because it is exactly the circularity worth remembering:
 a verification that confirms an omission rather than a claim.
 
-**Original resolution:** No, and it is verified rather than asserted — the regen is run
+**Original (superseded) answer:** No, and it is verified rather than asserted — the regen is run
 at phase 8 and the diff confirmed empty in BOTH `src-app/ui/` and
 `src-app/desktop/ui/`.
 **Basis:** codebase — no `#[derive(JsonSchema)]` type gains, loses or retypes a
