@@ -485,14 +485,49 @@ const toolGroup: DeepBundle = {
 }
 
 // A COLLAPSED long turn whose bordered cards sit INSIDE the clamp — the issue-183
-// reproduction (collapse-border-overlay). Interleaves
-// thinking → text → tool → text → tool → long answer so that:
+// reproduction (collapse-border-overlay), and the permanent pin for the 2px inset
+// `CollapsibleBlock` applies so a `ring-1` survives the clamp's two border-box
+// clips (`overflow-hidden` + `mask-image`).
+//
+// ── why this fixture was rebuilt (2026-08) ───────────────────────────────────
+// It originally interleaved thinking → text → tool → text → tool, because at the
+// time each of those rendered as an inline kit <Card>. The ACTIVITY RAIL
+// (`cf5ef5fe2`, and `3dba5f735` for `thinking`) turned every one of them into a
+// timeline ROW instead — deliberately, and `RailStepDetail` refuses to render the
+// extension's card even when a step is expanded ("No nested disclosure"). So this
+// surface silently stopped containing a single `[data-slot="card"]`, and the spec
+// that pins the inset went red on main with `Expected: >= 3 / Received: 0`.
+//
+// The subject is now `elicitation_request` blocks. They are the RIGHT replacement
+// rather than a convenient one:
+//   - a BLOCKING step is a rail BREAKOUT, not a row (`ChatMessage.tsx` — "It
+//     renders through the ORDINARY content path"), so it is still a full kit
+//     <Card size="sm"> with the same `ring-1 ring-foreground/10` the defect erased;
+//   - RESOLVED (accepted/declined) elicitations are ordinary conversation history,
+//     so a long turn containing three of them is a state the product genuinely
+//     produces — not a shape invented to give a test something to measure;
+//   - the rail is KEPT (the trailing `tool_use`), so the surface represents a real
+//     modern turn: rail rows and breakout cards together inside one clamp.
+// Do NOT "fix" a future red here by pointing the spec at the rail's own buttons:
+// those use a real CSS `border`, painted INSIDE the border box, so they survive a
+// border-box clip and would pin nothing (measured — the inset can be reverted with
+// no visible change to them).
+//
+// Geometry, unchanged in intent from the original:
 //   - the cards are inside the clamped region, where `overflow-hidden` and
 //     `mask-image` each clip to the border box and together erased the cards'
 //     `ring-1 ring-foreground/10` hairline (painted OUTSIDE their own box);
 //   - one card sits above the mask ramp start (75% of the 384px clamp ≈ 288px)
 //     and one straddles it, so the surface exercises the ramp as well as the
-//     clip rather than only the clip.
+//     clip rather than only the clip;
+//   - the first card sits as close to the clamp's TOP edge as any inline card type
+//     now can — 10px (2px clamp inset + the elicitation wrapper's own `my-2`).
+//     The original thinking card had `mb-2` only and sat FLUSH at 2px, which is
+//     what made the VERTICAL half of the inset load-bearing; no card type on an
+//     assistant turn can reproduce that today, so the spec's bound was raised to
+//     the measured 12px and the lost coverage named there rather than hidden. The
+//     LEFT/RIGHT edges still measure exactly 2px of room — the inset and nothing
+//     else — so the pin as a whole still goes red when the inset is reverted.
 // The turn clears COLLAPSE_CHAR_THRESHOLD (1200) comfortably, so it clamps.
 const COLLAPSED_TOOL_BOXES_ID = 'dee90010-0000-4000-8000-000000000010'
 const COLLAPSED_ANSWER = [
@@ -500,10 +535,34 @@ const COLLAPSED_ANSWER = [
   'though the confidence intervals overlap enough that the effect should be read',
   'as suggestive rather than definitive.',
 ].join(' ')
+/**
+ * A RESOLVED elicitation block. Built by hand for the same reason the
+ * `elicitation` bundle above builds its own: `elicitation_request` is not in the
+ * `MessageContentData` union (the mcp extension likewise casts it).
+ */
+const resolvedElicitation = (
+  n: number,
+  status: 'accepted' | 'declined',
+  text: string,
+  responseContent?: Record<string, unknown>,
+): MessageContentData =>
+  ({
+    type: 'elicitation_request',
+    status,
+    elicitation_id: `elic-collapsed-000${n}`,
+    message_id: `${COLLAPSED_TOOL_BOXES_ID}-m2`,
+    message: text,
+    server: 'Code Sandbox',
+    requested_schema: {
+      type: 'object',
+      properties: { confirm: { type: 'boolean', title: 'Confirm' } },
+    },
+    ...(responseContent ? { response_content: responseContent } : {}),
+  }) as unknown as MessageContentData
 const collapsedToolBoxes: DeepBundle = {
   conversation: conversation(
     COLLAPSED_TOOL_BOXES_ID,
-    'Collapsed message — thinking + tool cards inside the clamp',
+    'Collapsed message — bordered cards inside the clamp',
   ),
   messages: [
     message(`${COLLAPSED_TOOL_BOXES_ID}-m1`, 'user', [
@@ -513,45 +572,45 @@ const collapsedToolBoxes: DeepBundle = {
       },
     ]),
     message(`${COLLAPSED_TOOL_BOXES_ID}-m2`, 'assistant', [
-      {
-        type: 'thinking',
-        thinking:
-          'The user wants a synthesis, not raw hits. I should query the corpus, ' +
-          'then narrow to the phase 3 readouts before summarising.',
-        metadata: null,
-      } as MessageContentData,
+      // Card 1 — as close to the clamp's top edge as an inline card gets (10px).
+      resolvedElicitation(1, 'accepted', 'Search the licensed corpus as well?', {
+        confirm: true,
+      }),
       {
         type: 'text',
         text: 'Let me search the corpus for the relevant readouts before I summarise them.',
       },
+      // Card 2 — wholly ABOVE the 288px mask ramp.
+      resolvedElicitation(2, 'accepted', 'Include the dose-finding programme?', {
+        confirm: true,
+      }),
       {
-        type: 'tool_use',
-        id: 'toolu_collapsed_1',
-        name: 'query_rag',
-        server_id: SANDBOX_SERVER,
-        input: { query: 'phase 3 readouts', top_k: 8 },
-      },
-      {
-        // Deliberately ~3 lines: it pushes the SECOND tool card down so it
-        // straddles the mask ramp start (288px = 75% of the 384px clamp). Without
-        // that the fixture only exercises the clip (Mechanism A) and would let a
-        // regression in the ramp behaviour (Mechanism B) pass unnoticed.
+        // Deliberately ~3 lines: it pushes the THIRD card down so it straddles the
+        // mask ramp start (288px = 75% of the 384px clamp). Without that the
+        // fixture only exercises the clip (Mechanism A) and would let a regression
+        // in the ramp behaviour (Mechanism B) pass unnoticed.
         type: 'text',
         text:
           'That returned a broad set spanning both the dose-finding and the ' +
           'confirmatory programmes, so I am narrowing it to just the confirmatory ' +
           'phase 3 trials with reported hazard ratios before I synthesise anything.',
       },
+      // Card 3 — straddles / sits past the ramp.
+      resolvedElicitation(3, 'declined', 'Also pull the unpublished preprints?'),
+      // A long trailing answer, so the turn overflows the 384px clamp well past
+      // the ramp and the fade cue is clearly visible on the prose.
+      { type: 'text', text: `${COLLAPSED_ANSWER} ${COLLAPSED_ANSWER.repeat(12)}` },
+      // Keeps the ACTIVITY RAIL on this surface: a real clamped turn has rail rows
+      // and breakout cards together, and a fixture that quietly dropped the rail
+      // would stop representing the thing it is named after. Sits past the fold,
+      // so it does not disturb the card geometry above.
       {
         type: 'tool_use',
-        id: 'toolu_collapsed_2',
+        id: 'toolu_collapsed_1',
         name: 'query_rag',
         server_id: SANDBOX_SERVER,
         input: { query: 'confirmatory phase 3 hazard ratio', top_k: 4 },
       },
-      // A long trailing answer, so the turn overflows the 384px clamp well past
-      // the ramp and the fade cue is clearly visible on the prose.
-      { type: 'text', text: `${COLLAPSED_ANSWER} ${COLLAPSED_ANSWER.repeat(12)}` },
     ]),
   ],
   branches: [],

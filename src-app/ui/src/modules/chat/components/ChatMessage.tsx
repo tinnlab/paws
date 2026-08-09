@@ -1,4 +1,4 @@
-import { memo, useMemo, useRef, type ReactNode } from 'react'
+import { memo, useMemo, useRef, useSyncExternalStore, type ReactNode } from 'react'
 import { Alert, ScrollArea } from '@ziee/kit'
 import { cn } from '@/lib/utils'
 import type {
@@ -165,6 +165,21 @@ export const ChatMessage = memo(function ChatMessage({
   //
   // Membership comes from CONTRIBUTIONS — core asks each extension "is this a
   // step of yours?" and never inspects a tool name itself.
+  //
+  // Which is exactly why this component must RE-RENDER when contributions change:
+  // `resolveRailStep` reads a mutable registry populated by lazily-imported
+  // extension modules, and this component is `memo`'d on props that do not change
+  // when one arrives. A message segmented before its extensions registered
+  // therefore recognised none of its blocks as rail steps, fell back to rendering
+  // them as raw tool CARDS, and stayed that way for the life of the message — the
+  // activity rail silently absent. Measured under concurrent gallery load, where
+  // module import is slow enough to lose the race. Same defect, and same fix, as
+  // `ContentRenderer` one level down.
+  useSyncExternalStore(
+    chatExtensionRegistry.subscribeToExtensions,
+    chatExtensionRegistry.getExtensionsVersion,
+    chatExtensionRegistry.getExtensionsVersion,
+  )
   const segments = segmentRail(
     bubbleBlocks,
     ctx => chatExtensionRegistry.resolveRailStep(ctx)?.step ?? null,
