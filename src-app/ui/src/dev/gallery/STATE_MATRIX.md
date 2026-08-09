@@ -405,12 +405,12 @@ Required states: `empty`
 |---|---|---|
 | branch | `isStreaming \|\| wasStreamingRef.current \|\| isActiveMatch` | 70 |
 | empty | `contents.length === 0 && !showEmptyCompletionNotice` | 111 |
-| branch | `!resolved` | 203 |
-| branch | `attachmentBlocks.length > 0` | 291 |
-| branch | `bubbleBlocks.length > 0` | 320 |
-| branch | `offerCollapse` | 346 |
-| branch | `showEmptyCompletionNotice` | 366 |
-| branch | `renderAsUser` | 386 |
+| branch | `!resolved` | 218 |
+| branch | `attachmentBlocks.length > 0` | 306 |
+| branch | `bubbleBlocks.length > 0` | 335 |
+| branch | `offerCollapse` | 361 |
+| branch | `showEmptyCompletionNotice` | 381 |
+| branch | `renderAsUser` | 401 |
 
 ### `modules/chat/components/CollapsibleBlock`
 
@@ -442,7 +442,7 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `extensionRenderer !== null` | 23 |
+| branch | `extensionRenderer !== null` | 42 |
 
 ### `modules/chat/components/ConversationCard`
 

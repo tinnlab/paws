@@ -409,12 +409,18 @@ export const gallery: ModuleGallery = {
       // the clipped zone, so the boxes rendered with no left/right border and
       // read as washed out. Only the collapsed state was affected, because both
       // clips are gated on `isClamped`.
-      // The turn interleaves thinking → text → tool → text → tool → answer so one
-      // card sits above the mask ramp (≈288px) and one straddles it.
+      // The turn interleaves card → text → card → text → card → answer so one card
+      // sits above the mask ramp (≈288px) and one straddles it, then closes with a
+      // tool call so the ACTIVITY RAIL is present too.
+      //
+      // Slug kept for continuity (it is a key in coverage.ts, the generated
+      // registries and the runtime-health surface list), though the cards are no
+      // longer tool boxes: the rail took those over, so the in-clamp cards are now
+      // resolved elicitation breakouts. See the fixture in `chat-deep.ts` for why.
       slug: 'deep-chat-collapsed-tool-boxes',
-      title: 'Conversation — collapsed message with thinking + tool cards',
+      title: 'Conversation — collapsed message with bordered cards inside the clamp',
       conversationId: CHAT_DEEP_CONVERSATION_IDS.collapsedToolBoxes,
-      note: 'a clamped long turn whose cards sit inside the fold — their borders must stay crisp collapsed AND expanded',
+      note: 'a clamped long turn mixing rail rows with bordered breakout cards inside the fold — the card borders must stay crisp collapsed AND expanded',
       setup: () => whenLoaded(CHAT_DEEP_CONVERSATION_IDS.collapsedToolBoxes),
       interactions: [
         {

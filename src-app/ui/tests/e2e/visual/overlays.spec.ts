@@ -12,11 +12,53 @@
  * Backend-free via the gallery Vite server. Animations are disabled (config), so
  * the open state is deterministic.
  */
-import { expect, test } from '@playwright/test'
+import { expect, test, type Locator, type Page } from '@playwright/test'
 import { assertLayoutSane } from '../helpers/layout'
 import { SNAPSHOTS_ENABLED, openGallery } from './_gallery'
 
 type OpenKind = 'click' | 'hover'
+
+/**
+ * Where an OPENED overlay lives, expressed as a selector rather than a page-wide
+ * role query.
+ *
+ * Every overlay primitive portals its content OUT of the gallery canvas — the
+ * open panel is a descendant of <body>, not of `[data-testid="gallery-root"]`.
+ * Gallery STORIES, by contrast, may legitimately render an overlay's panel
+ * INLINE inside the canvas: the composer-picker cases do exactly that (see
+ * `modules/chat/gallery.tsx` — "prop-driven, so it is rendered directly rather
+ * than through its Popover"), and they are permanently visible and carry
+ * `role="listbox"`.
+ *
+ * A bare `page.getByRole('listbox').first()` therefore resolved to the composer
+ * PICKER, not to the overlay under test, from the moment those cases landed. The
+ * damage was not primarily the eventual hang — it was that `select` and
+ * `combobox` silently stopped asserting anything: the picker is already visible,
+ * so the "wait for it to open" resolved in ~0.1s and `assertLayoutSane` audited
+ * the wrong element. Scoping to the portal layer makes that class of mistake
+ * unrepresentable rather than merely fixed once.
+ */
+const portalRole = (role: string) => `[role="${role}"]:not([data-testid="gallery-root"] *)`
+
+/**
+ * How long the best-effort close between cases may wait. Deliberately far below
+ * the 60s test budget: this wait exists to keep the NEXT case clean, so it must
+ * never be able to consume the budget the next case needs.
+ */
+const CLOSE_TIMEOUT_MS = 5_000
+
+/**
+ * The overlay content handle, restricted to what is actually VISIBLE.
+ *
+ * `filter({ visible: true })` matters on both branches: several role-addressed
+ * popups (other Selects elsewhere on the canvas) keep a zero-size portal node
+ * mounted while closed, so a count without it is not a count of open overlays.
+ */
+function contentLocator(page: Page, o: OverlayCase): Locator | null {
+  if (o.content) return page.getByTestId(o.content).filter({ visible: true })
+  if (o.waitRole) return page.locator(portalRole(o.waitRole)).filter({ visible: true })
+  return null
+}
 
 interface OverlayCase {
   name: string
@@ -62,19 +104,39 @@ for (const theme of ['light', 'dark'] as const) {
       await test.step(o.name, async () => {
         const trigger = page.getByTestId(o.trigger)
         await trigger.scrollIntoViewIfNeeded()
+
+        // Resolve a handle to the open content: the kit's forwarded content
+        // testid when available, else the portal's ARIA role (listbox/dialog),
+        // scoped to the portal layer (see `portalRole`).
+        const content = contentLocator(page, o)
+
+        // The handle must be ABSENT before the click. Without this, an element
+        // that merely HAPPENS to match — an inline story panel, a leftover
+        // portal — satisfies the "wait for visible" below instantly and the case
+        // degrades from "the overlay opened" to "something matched", which is
+        // precisely how `select` and `combobox` went vacuous for two days
+        // without turning the gate red. This is the negative control for the
+        // assertion that follows it.
+        if (content)
+          await expect(
+            content,
+            `${o.name}: something already matches this overlay's content selector ` +
+              `BEFORE the trigger was clicked, so "it opened" cannot be asserted`,
+          ).toHaveCount(0)
+
         if (o.kind === 'hover') await trigger.hover()
         else await trigger.click(o.openDelay ? { delay: o.openDelay } : {})
 
-        // Resolve a handle to the open content: the kit's forwarded content
-        // testid when available, else the portal's ARIA role (listbox/dialog).
-        const content = o.content
-          ? page.getByTestId(o.content)
-          : o.waitRole
-            ? page.getByRole(o.waitRole as 'dialog').first()
-            : null
         // Wait for it to settle — if the trigger failed to open, this times out
-        // and FAILS (no catch), so "opened" is genuinely asserted.
-        if (content) await content.waitFor({ state: 'visible' })
+        // and FAILS (no catch), so "opened" is genuinely asserted. EXACTLY one
+        // match, not `.first()`: an ambiguous resolution is a defect in the
+        // spec's ability to see the surface, and silently picking one is how
+        // that defect stays invisible.
+        if (content)
+          await expect(
+            content,
+            `${o.name}: expected exactly one visible portalled overlay after opening`,
+          ).toHaveCount(1)
 
         // Layer A — invariants on the open content for EVERY overlay (incl. the
         // role-resolved listbox/dialog cases). Overlays are dense layout surfaces;
@@ -89,10 +151,18 @@ for (const theme of ['light', 'dark'] as const) {
           await expect(shot).toHaveScreenshot(`overlay-${o.name}-${theme}.png`)
         }
 
-        // Close so the next overlay opens clean.
+        // Close so the next overlay opens clean. Best-effort BY DESIGN — but the
+        // bound is what makes it best-effort: `locator.waitFor` has no default
+        // timeout, so without one the `.catch()` below can never fire and an
+        // overlay that fails to close consumes the whole 60s test budget, then
+        // reports the timeout against the NEXT case's first action. That is how
+        // this file's real failure arrived disguised as
+        // `scrollIntoViewIfNeeded: ... browser has been closed`.
         await page.keyboard.press('Escape')
         if (content)
-          await content.waitFor({ state: 'hidden' }).catch(() => undefined)
+          await content
+            .waitFor({ state: 'hidden', timeout: CLOSE_TIMEOUT_MS })
+            .catch(() => undefined)
       })
     }
   })

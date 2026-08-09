@@ -1,7 +1,18 @@
 /**
- * collapse-border-overlay (issue #183) — the Thinking / tool-call cards' borders
- * were washed out whenever a long assistant turn was COLLAPSED, and crisp again
- * once expanded.
+ * collapse-border-overlay (issue #183) — bordered cards inside a COLLAPSED long
+ * assistant turn had their borders washed out, and crisp again once expanded.
+ *
+ * NOTE ON THE SUBJECT (changed 2026-08): the original cards were the Thinking and
+ * tool-call boxes. The ACTIVITY RAIL replaced both with timeline ROWS — by design
+ * (`RailStepDetail`: "No nested disclosure") — so this spec ran against a surface
+ * with zero `[data-slot="card"]` and went red on main with `Expected: >= 3 /
+ * Received: 0` for eleven days. The fixture now uses resolved `elicitation_request`
+ * blocks, which are rail BREAKOUTS and therefore still render the extension's full
+ * kit <Card> (same `ring-1 ring-foreground/10`) inline inside the clamp. The
+ * invariant under test is unchanged; only the content type carrying it moved.
+ * Do NOT re-point this at the rail's own buttons: they use a real CSS `border`
+ * painted INSIDE the border box, so they survive a border-box clip and would pin
+ * nothing.
  *
  * Root cause (measured — see .lifecycle/collapse-border-overlay/REPRO.md): a kit
  * `<Card>`'s border is `ring-1`, a box-shadow with 1px SPREAD and no offset, so
@@ -53,12 +64,151 @@ const RING_SPREAD_PX = 1
  */
 const RAMP_FRACTION = 0.75
 
+/**
+ * Minimum gap between the topmost card and the viewport top before the paint
+ * probes can run. `isEdgePainted` samples a strip 8px OUTSIDE a card's edge and
+ * throws (deliberately — fail closed) if that strip would fall off-screen, so the
+ * surface must be positioned with room to spare, not merely "scrolled".
+ */
+const SAMPLE_MARGIN_PX = 24
+
+/**
+ * How many bordered cards the fixture puts inside the clamp. Kept in lockstep with
+ * `chat-deep.ts`'s `collapsedToolBoxes`; the assertions below want "at least 3",
+ * but the readiness wait wants the EXACT end state, because "at least 3" is
+ * satisfied the moment the third of five has mounted.
+ */
+const EXPECTED_IN_CLAMP_CARDS = 3
+
+/** How long the turn's viewport position must hold still to count as settled. */
+const SCROLL_QUIET_MS = 250
+
+/**
+ * Block until the assistant turn's viewport position has STOPPED changing.
+ *
+ * Strictly read-only. The list mounts pinned to the bottom and performs a late
+ * auto-scroll, so a measurement taken too early is measuring a moving target —
+ * and `isEdgePainted` is measure-then-screenshot, so a scroll landing between
+ * those two steps makes it sample bare background at stale coordinates and report
+ * `LEFT border is not painted`, i.e. an issue-183 alarm for a defect that is not
+ * there. That race was always latent behind `waitForTimeout(350)`; a taller turn
+ * merely made it likely enough to see.
+ *
+ * (An earlier attempt polled AND nudged the scroller in the same predicate. Don't:
+ * a predicate that mutates what it measures fights whatever else is scrolling and
+ * never converges — it turned four passing tests into 60s timeouts.)
+ */
+async function waitForScrollQuiet(page: Page): Promise<void> {
+  await page.waitForFunction(
+    ms => {
+      const msg = document
+        .querySelector('[data-testid="collapsible-content"]')
+        ?.closest('[data-testid="chat-message"]')
+      if (!msg) return false
+      const top = msg.getBoundingClientRect().top
+      const w = window as unknown as { __clpProbe?: { top: number; since: number } }
+      const now = performance.now()
+      if (!w.__clpProbe || Math.abs(w.__clpProbe.top - top) > 0.5) {
+        w.__clpProbe = { top, since: now }
+        return false
+      }
+      return now - w.__clpProbe.since >= ms
+    },
+    SCROLL_QUIET_MS,
+    { polling: 50 },
+  )
+}
+
+/**
+ * Put the assistant turn where the paint probes can sample it: settled, then
+ * positioned ONCE, then settled again, then verified.
+ *
+ * `isEdgePainted` samples a strip 8px OUTSIDE a card's edge and throws (fail
+ * closed) if that strip would fall off-screen, so `scrollIntoView({block:'start'})`
+ * — which parks the turn's top edge exactly AT the viewport top — leaves the first
+ * card with nothing above it to sample. Backing off by `SAMPLE_MARGIN_PX` is what
+ * gives the probe room.
+ */
+async function settleForSampling(page: Page): Promise<void> {
+  let cardTop = Number.NaN
+  // A BOUNDED RETRY, not a polling predicate that mutates: each attempt waits for
+  // the surface to stop moving, positions it once, waits again, then MEASURES.
+  // Under parallel load a single attempt can lose to a reflow that lands right
+  // after the scroll (a lazily-imported extension mounting a block changes the
+  // turn's height), so re-running the whole settle is the honest repair. Trying
+  // to correct inside the wait predicate is what previously never converged.
+  for (let attempt = 0; attempt < 5; attempt++) {
+    await waitForScrollQuiet(page)
+    await page.evaluate(margin => {
+      const msg = document
+        .querySelector('[data-testid="collapsible-content"]')
+        ?.closest('[data-testid="chat-message"]')
+      if (!msg) return
+      msg.scrollIntoView({ block: 'start' })
+      const deficit = margin - msg.getBoundingClientRect().top
+      if (deficit <= 0) return
+      // `hidden` is excluded on purpose: the clamped container itself is
+      // `overflow-hidden` with content taller than its box, and treating that
+      // shape as "a scroller" picks an element whose scrollTop moves nothing.
+      let el: Element | null = msg.parentElement
+      while (el) {
+        const s = getComputedStyle(el)
+        if (el.scrollHeight > el.clientHeight + 1 && /auto|scroll/.test(s.overflowY)) {
+          el.scrollTop -= deficit
+          return
+        }
+        el = el.parentElement
+      }
+      window.scrollBy(0, -deficit)
+    }, SAMPLE_MARGIN_PX)
+    await waitForScrollQuiet(page)
+
+    cardTop = await page.evaluate(() => {
+      const msg = document
+        .querySelector('[data-testid="collapsible-content"]')
+        ?.closest('[data-testid="chat-message"]')
+      const cards = [...(msg?.querySelectorAll('[data-slot="card"]') ?? [])]
+      return cards.length
+        ? Math.min(...cards.map(c => c.getBoundingClientRect().top))
+        : Number.NaN
+    })
+    if (cardTop >= 8) return
+  }
+  expect(
+    cardTop,
+    'the turn could not be positioned with room above its topmost card after 5 ' +
+      'attempts, so the paint probes would sample off-screen — this is a ' +
+      'harness/positioning failure, NOT issue #183',
+  ).toBeGreaterThanOrEqual(8)
+}
+
 async function openSurface(page: Page, theme: string): Promise<void> {
   const q = new URLSearchParams({ surface: SURFACE, theme, accent: 'blue' })
   await page.goto(`${STANDALONE_PATH}?${q.toString()}`)
   await page.getByTestId('collapsible-content').first().waitFor({ state: 'visible' })
   await page.waitForFunction(t => document.documentElement.classList.contains(t), theme)
   await page.evaluate(() => document.fonts?.ready)
+  // WAIT FOR THE CARDS THEMSELVES, not just for the clamp to exist.
+  //
+  // A content block renders only once its extension's renderer is registered, and
+  // that registration is asynchronous — so `collapsible-content` becomes visible
+  // while the message still holds ZERO cards, and the turn is briefly shorter than
+  // it will end up. Measuring in that window produced the whole spread of flakes
+  // seen while rebuilding this fixture: `Received: 0` cards, a turn that had not
+  // yet grown past the clamp threshold (`collapsed` still false), and stale
+  // coordinates that made a painted ring look unpainted. One deterministic wait on
+  // the real end state removes all three.
+  //
+  // The timeout is deliberately far above the 10s `expect` default: the cards come
+  // from the mcp extension's renderer, which is registered by a lazily-imported
+  // module, and this suite runs `fullyParallel` — 30 browsers hitting one Vite dev
+  // server, on a shared box. Under that load the module import alone can outlast
+  // 10s. This is a READINESS wait on the end state, not a latency budget; nothing
+  // about the invariant is weakened by allowing the page longer to finish booting.
+  await expect(
+    page.locator('[data-testid="chat-message"][data-role="assistant"] [data-slot="card"]'),
+    'the fixture is built to put exactly this many bordered cards inside the clamp',
+  ).toHaveCount(EXPECTED_IN_CLAMP_CARDS, { timeout: 30_000 })
   // Scroll the assistant turn to the top of the viewport: the list is pinned to
   // the bottom, and the paint checks screenshot real pixels, which requires the
   // cards to be on screen.
@@ -66,10 +216,14 @@ async function openSurface(page: Page, theme: string): Promise<void> {
     const c = document.querySelector('[data-testid="collapsible-content"]')
     c?.closest('[data-testid="chat-message"]')?.scrollIntoView({ block: 'start' })
   })
-  await page.waitForTimeout(350)
+  await settleForSampling(page)
 }
 
 interface CardBox {
+  /** Position among the message's `[data-slot="card"]` elements, in DOM order.
+   *  It is the handle `isEdgePainted` uses to RE-MEASURE the card immediately
+   *  before screenshotting it, instead of trusting the rect captured earlier. */
+  index: number
   testid: string | null
   x: number
   y: number
@@ -152,7 +306,7 @@ async function readTurn(page: Page): Promise<Turn> {
       }
       return out
     }
-    const cards = [...msg.querySelectorAll('[data-slot="card"]')].map(el => {
+    const cards = [...msg.querySelectorAll('[data-slot="card"]')].map((el, index) => {
       const r = el.getBoundingClientRect()
       const clippers = allClippers(el)
       // Tightest gap across ALL clippers, so an ancestor that stops absorbing
@@ -189,6 +343,7 @@ async function readTurn(page: Page): Promise<Turn> {
       const label = (e: Element | null) =>
         e?.getAttribute('data-testid') ?? e?.tagName.toLowerCase() ?? null
       return {
+        index,
         testid: el.getAttribute('data-testid'),
         x: r.left,
         y: r.top,
@@ -279,12 +434,51 @@ function expectRingRoom(cards: CardBox[]): void {
  * image-decoding dependency.
  */
 async function isEdgePainted(page: Page, c: CardBox, side: 'left' | 'top'): Promise<boolean> {
+  // RE-MEASURE, don't trust the caller's rect.
+  //
+  // This function is measure-then-screenshot, and the geometry the caller holds
+  // was read at `readTurn` time — possibly several awaits ago. Anything that
+  // scrolls or reflows in between (a late list re-anchor, a font swap, a lazily
+  // registered extension mounting a block) leaves those coordinates pointing at
+  // background, both strips come back identical, and the result is a confident
+  // `LEFT border is not painted while collapsed (issue #183)` for a ring that is
+  // there. Observed exactly that way under parallel load. Waiting for the surface
+  // to hold still and then re-reading the card is what makes the sample and the
+  // measurement describe the same instant.
+  const measure = async () => {
+    await waitForScrollQuiet(page)
+    return page.evaluate(index => {
+      const msg = document
+        .querySelector('[data-testid="collapsible-content"]')
+        ?.closest('[data-testid="chat-message"]')
+      const el = msg?.querySelectorAll('[data-slot="card"]')[index]
+      if (!el) return null
+      const r = el.getBoundingClientRect()
+      return { x: r.left, y: r.top, w: r.width, h: r.height }
+    }, c.index)
+  }
+  let fresh = await measure()
+  // Quiet means "not moving NOW", which is also true of a surface that already
+  // scrolled somewhere useless — and the list does drift between the left-edge
+  // samples and the top-edge one. So RE-POSITION when the fresh rect is out of
+  // reach rather than reporting a positioning problem as a missing border. The
+  // fail-closed throw below still stands if repositioning does not help; this
+  // only removes the case where it would have.
+  if (fresh && fresh.y < SAMPLE_MARGIN_PX / 2) {
+    await settleForSampling(page)
+    fresh = await measure()
+  }
+  if (!fresh) {
+    throw new Error(
+      `card #${c.index} (${c.testid}) is no longer in the DOM at sampling time`,
+    )
+  }
   // NOTE: for a viewport screenshot Playwright's `clip` is in VIEWPORT
   // coordinates, the same space getBoundingClientRect reports — do NOT add
   // window.scrollX/Y here. (Doing so silently samples background and reports
   // every border as missing.)
-  const midY = Math.round(c.y + c.h / 2)
-  const midX = Math.round(c.x + c.w / 2)
+  const midY = Math.round(fresh.y + fresh.h / 2)
+  const midX = Math.round(fresh.x + fresh.w / 2)
   // Cover ONLY the 1px ring (painted just outside the border box) plus 1px of
   // background beside it — deliberately NOT the card's interior. Including the
   // interior would make this pass on any theme where `bg-card` differs from the
@@ -292,8 +486,8 @@ async function isEdgePainted(page: Page, c: CardBox, side: 'left' | 'top'): Prom
   // through in dark mode with a wider window).
   const edge =
     side === 'left'
-      ? { x: Math.round(c.x) - 2, y: midY, width: 2, height: 1 }
-      : { x: midX, y: Math.round(c.y) - 2, width: 1, height: 2 }
+      ? { x: Math.round(fresh.x) - 2, y: midY, width: 2, height: 1 }
+      : { x: midX, y: Math.round(fresh.y) - 2, width: 1, height: 2 }
   // Same size, shifted further OUT of the card into bare background.
   const bare = side === 'left' ? { ...edge, x: edge.x - 6 } : { ...edge, y: edge.y - 6 }
   // Fail CLOSED. Returning `true` here would silently vacate the assertion the
@@ -302,8 +496,9 @@ async function isEdgePainted(page: Page, c: CardBox, side: 'left' | 'top'): Prom
   if (edge.x < 0 || edge.y < 0 || bare.x < 0 || bare.y < 0) {
     throw new Error(
       `cannot sample the ${side} edge of ${c.testid}: it sits within 8px of the ` +
-        `viewport edge (card at ${Math.round(c.x)},${Math.round(c.y)}). Scroll the ` +
-        `surface further into view rather than letting this check pass vacuously.`,
+        `viewport edge (card at ${Math.round(fresh.x)},${Math.round(fresh.y)}). ` +
+        `Scroll the surface further into view rather than letting this check pass ` +
+        `vacuously.`,
     )
   }
   const [a, b] = [await page.screenshot({ clip: edge }), await page.screenshot({ clip: bare })]
@@ -336,9 +531,25 @@ test.describe('chat collapse — card borders (issue #183)', () => {
     expect(inside.some(c => c.bottomRelClamp < ramp)).toBe(true)
     expect(inside.some(c => c.bottomRelClamp > ramp)).toBe(true)
 
-    // A card also sits flush at the TOP of the clamp — the position whose top
+    // A card also sits NEAR the TOP of the clamp — the position whose top
     // hairline a horizontal-only inset left clipped.
-    expect(Math.min(...inside.map(c => c.topRelClamp))).toBeLessThanOrEqual(4)
+    //
+    // The bound was 4px while the first card was a Thinking card (`mb-2`, so a
+    // bottom margin only) and its top sat FLUSH at the clamp's 2px inset. Since
+    // the activity rail took that card over, the first in-clamp card is an
+    // elicitation breakout, whose wrapper carries `my-2` — 8px above as well.
+    // 12 is that measured position (2px clamp inset + 8px wrapper margin) plus
+    // rounding headroom; it is NOT a threshold loosened until the test passed.
+    //
+    // Be honest about what that costs: with 8px of its own margin, this card's
+    // top hairline survives even with the vertical half of the inset reverted,
+    // so the TOP edge is no longer the load-bearing half of this pin. The
+    // LEFT/RIGHT edges still are, tightly — every card measures exactly 2px of
+    // room there, i.e. the inset and nothing else (see CTRL-1, which reverts the
+    // inset and requires this spec to go red). Restoring a genuinely flush-top
+    // subject needs an inline card type without a top margin; none exists on an
+    // assistant turn today.
+    expect(Math.min(...inside.map(c => c.topRelClamp))).toBeLessThanOrEqual(12)
 
     // Interleaved order preserved, prose INCLUDED: the fixture is
     // card → text → card → text → card → text, so cards and prose must
@@ -446,6 +657,10 @@ test.describe('chat collapse — card borders (issue #183)', () => {
       await openSurface(page, theme)
       await page.getByTestId('collapsible-toggle').click()
       await expect(page.getByTestId('collapsible-toggle')).toHaveText(/Show less/i)
+      // Expanding grows the turn and the bottom-pinned list re-anchors, which can
+      // carry the cards back off the top of the viewport — re-settle before the
+      // paint probes below sample real pixels.
+      await settleForSampling(page)
 
       const turn = await readTurn(page)
       // Expanded is the CONTROL — it always rendered correctly, so the point is

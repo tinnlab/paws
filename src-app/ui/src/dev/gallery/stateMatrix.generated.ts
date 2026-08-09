@@ -334,12 +334,12 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     signals: [
       { kind: "branch", condition: "isStreaming || wasStreamingRef.current || isActiveMatch", line: 70 },
       { kind: "empty", condition: "contents.length === 0 && !showEmptyCompletionNotice", line: 111 },
-      { kind: "branch", condition: "!resolved", line: 203 },
-      { kind: "branch", condition: "attachmentBlocks.length > 0", line: 291 },
-      { kind: "branch", condition: "bubbleBlocks.length > 0", line: 320 },
-      { kind: "branch", condition: "offerCollapse", line: 346 },
-      { kind: "branch", condition: "showEmptyCompletionNotice", line: 366 },
-      { kind: "branch", condition: "renderAsUser", line: 386 },
+      { kind: "branch", condition: "!resolved", line: 218 },
+      { kind: "branch", condition: "attachmentBlocks.length > 0", line: 306 },
+      { kind: "branch", condition: "bubbleBlocks.length > 0", line: 335 },
+      { kind: "branch", condition: "offerCollapse", line: 361 },
+      { kind: "branch", condition: "showEmptyCompletionNotice", line: 381 },
+      { kind: "branch", condition: "renderAsUser", line: 401 },
     ],
   },
   "modules/chat/components/CollapsibleBlock": {
@@ -368,7 +368,7 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/chat/components/ContentRenderer",
     requiredStates: [],
     signals: [
-      { kind: "branch", condition: "extensionRenderer !== null", line: 23 },
+      { kind: "branch", condition: "extensionRenderer !== null", line: 42 },
     ],
   },
   "modules/chat/components/ConversationCard": {
