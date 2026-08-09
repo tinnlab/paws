@@ -1,23 +1,21 @@
 {
   "$comment": [
     "ZIEE's declaration of its LIVE gallery-harness copies, consumed by",
-    "@ziee/gallery's check-harness-parity guard (referenced from each ui",
-    "workspace's gallery.config.json as \"harnessCopies\").",
+    "@ziee/gallery's check-harness-parity guard (each ui workspace's",
+    "gallery.config.json points here via \"harnessCopies\").",
     "",
-    "It lives at the repo ROOT, and its `file` paths are relative to THIS file,",
-    "so both ui workspaces point at one declaration. Duplicating the list per",
-    "workspace would re-create exactly the drift the guard exists to catch.",
+    "There is now ONE implementation. src-app/desktop/ui used to carry its own",
+    "forks of runtime-health.mjs and gate-ui.mjs; they were deleted and desktop",
+    "now runs these same sdk scripts with its own gallery.config.json, exactly as",
+    "src-app/ui already did. Parity is therefore true BY CONSTRUCTION rather than",
+    "checked by a guard - which is the point: the guard could only ever prove",
+    "wiring, never logic (a copy could keep the call and hardcode its result).",
     "",
-    "A copy listed here is one some npm script actually EXECUTES. A dead copy is",
-    "not listed - it is deleted (CODING_GUIDELINES SS15).",
-    "",
-    "Declare only WHERE each copy is and WHAT it is. There is deliberately NO",
-    "per-copy `cores` list: which cores a copy must carry is derived from its",
-    "`role` by @ziee/gallery. A per-copy list let a core be dropped from ONE copy",
-    "and silently stop being checked - the very bug this guard exists to catch.",
+    "What remains worth checking is that a SECOND implementation has not",
+    "reappeared. That is the consumer test's discovery walk, not this list.",
     "",
     "`role`: runtime-health PRODUCES the run manifest/verdict; gate-ui CONSUMES",
-    "them, so each side is checked for the call IT must make."
+    "them. Required cores are derived from the role by @ziee/gallery."
   ],
   "copies": [
     {
@@ -28,16 +26,6 @@
     {
       "id": "sdk/gate-ui",
       "file": "sdk/packages/gallery/scripts/gate-ui.mjs",
-      "role": "consumer"
-    },
-    {
-      "id": "desktop/runtime-health",
-      "file": "src-app/desktop/ui/scripts/runtime-health.mjs",
-      "role": "producer"
-    },
-    {
-      "id": "desktop/gate-ui",
-      "file": "src-app/desktop/ui/scripts/gate-ui.mjs",
       "role": "consumer"
     }
   ]

@@ -191,6 +191,22 @@ Lifted VERBATIM from DESIGN.md.
   for). The package keeps the app-agnostic CORES + engine + config contract; the
   real-tree acceptance case moves consumer-side.
 
+- **ITEM-25**: **Re-scope after the phase-7 ABORT — delete the divergence instead of
+  guarding it.** Rounds 3/4/5 each found fresh evasions of the hand-written parity
+  guard, and the lifecycle validator's own tripwire ruled the loop non-converging
+  ("profile (0,0,0,10,8) is flat or rising"), naming the cause: a static-analysis
+  guard standing in for a behavioural test has an unbounded evasion space. The
+  auditor's M5 proved no predicate can finish it — a copy can keep
+  `verifyRunManifest(...)` and hardcode `const usable = { ok: true }`: green, and
+  failing OPEN. So: delete `src-app/desktop/ui/scripts/{runtime-health,gate-ui}.mjs`
+  and point desktop's npm scripts at the sdk implementation, exactly as
+  `src-app/ui` already does, each workspace driven by its own
+  `gallery.config.json`. One implementation ⇒ INV-6 is satisfied BY CONSTRUCTION.
+  The one genuine behavioural divergence (desktop runs a coverage stage; it has no
+  visual layer) becomes config — `visualConfig: null` + `gateExtraCmds`, the same
+  shape as the existing `lintCmds` — not a fork. The guard survives in reduced
+  form and states in its own output that it proves WIRING, not LOGIC.
+
 ## Files to touch
 
 - `sdk/packages/gallery/scripts/runtime-health.mjs` — ITEM-1..5, 7, 8, 12
@@ -423,3 +439,15 @@ not reasoned from the plan.
   artifact, so it survives the merge strip. Failure modes closed explicitly: an
   unreadable/malformed manifest THROWS and an unknown core id is an ERROR — a
   gate must never degrade to silently checking nothing.
+
+- **ITEM-25** — verdict: PASS — classified every divergence before touching
+  anything, per the owner's stop-condition. `runtime-health`: 130 changed lines,
+  ALL of them config anchors (`galleryDir`/`galleryUrl`/`port`/`portWhich`/
+  `runtimeBaselineModule`), import paths, or comments — and the desktop fork was
+  strictly WORSE, missing the sdk copy's port-validation guard, its
+  origin-reachable pre-check and its VOID-banner ordering. `gate-ui`: one real
+  behavioural difference (a coverage stage instead of the visual layer, which
+  desktop has no infrastructure for) — expressible as two config keys in the
+  package's existing config-driven-command idiom, so it does NOT meet the
+  "genuinely needs its own copy" bar that would have sent this back to option (b).
+  Verified by RUNNING both gates, not by reading.

@@ -16,5 +16,17 @@
     "../../../sdk/packages/shell/src"
   ],
   "testidOut": "../../../sdk/packages/kit/src/testIds.generated.ts",
-  "harnessCopies": "../../../gallery-harness-copies.json"
+  "harnessCopies": "../../../gallery-harness-copies.json",
+  "runtimeBaselineModule": "src/dev/gallery/runtime-baseline.js",
+  "visualConfig": null,
+  "gateExtraCmds": [
+    [
+      "coverage",
+      "npm",
+      [
+        "run",
+        "check:gallery-coverage"
+      ]
+    ]
+  ]
 }

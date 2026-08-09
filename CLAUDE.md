@@ -1848,7 +1848,6 @@ npm run gate:ui -- --skip-visual   # fast: tsc + lint + runtime only
 ```
 
 `sdk/packages/gallery/scripts/gate-ui.mjs` (the `ui` workspace runs the sdk copy;
-`src-app/desktop/ui/scripts/gate-ui.mjs` is desktop's own) runs criteria 2–4,
 boots (or reuses) the gallery Vite server, prints a **per-surface PASS/FAIL
 table** (fail = any HIGH runtime finding), and exits non-zero on any failure. It
 is the UI analog of `just check` for the backend — run it before pushing UI work.
@@ -1914,35 +1913,29 @@ something a reader has to think to ask. A healthy run reads `0 (0%)`; anything
 else means the harness moved under the crawl and the findings describe it, not
 the product.
 
-**Harness parity.** The crawl harness exists in two live copies (the sdk one the
-`ui` workspace runs, and `src-app/desktop/ui/scripts/`), and they have drifted
-before. `npm run check:harness-parity` (part of `npm run check`) refuses a tree
-where a behavioural core is present in one copy and missing from the other. The
-shared behaviour itself lives in `sdk/packages/gallery/scripts/lib/`
-(`host-lock.mjs`, `run-validity.mjs`, `finding-classify.mjs`) which both copies
-import, and is unit-tested by `npm run test:gallery-scripts`. A third, DEAD copy at
-`src-app/ui/scripts/runtime-health.mjs` was deleted — it had zero invokers.
+**One harness, not several.** The crawl harness used to exist in two independently
+maintained copies (the sdk one and `src-app/desktop/ui/scripts/`) and they had
+drifted; a third, dead copy was deleted earlier. Both desktop forks are now gone:
+**both** ui workspaces run the SAME
+`sdk/packages/gallery/scripts/{runtime-health,gate-ui}.mjs`, each driven by its own
+`gallery.config.json`. Parity is therefore true **by construction** — there is no
+second implementation for a fix to miss.
 
-**The copy list is ziee's, not the sdk's** — `@ziee/gallery` defines the CORES;
-which copies exist is supplied by the consumer, like every other gallery-script
-anchor (`srcDir`/`extraTrees`). Both ui workspaces set `"harnessCopies"` in their
-`gallery.config.json`, pointing at ONE committed root manifest,
-**`gallery-harness-copies.json`** — a per-workspace list would re-create, in the
-guard's own config, the duplication the guard exists to catch. **Adding a core, or
-a new live harness copy, means editing that manifest**; the guard fails on a core
-declared by no copy, an empty/unknown `cores` entry, an unknown `role`, and (via
-`check-harness-parity.consumer.test.mjs`) on any harness-shaped file on disk that
-the manifest does not declare. With no `harnessCopies` at all it says so and exits
-0 — that is the standalone-package case, not a pass.
+That replaced a `check:harness-parity` guard which could not converge: it checked
+call sites by regex, so each audit round found a new spelling that evaded it, and
+it could only ever prove **WIRING, never LOGIC** (a fork could keep
+`verifyRunManifest(...)` and hardcode `const usable = { ok: true }` — green, and
+failing OPEN). The guard survives in reduced form and says what it proves in its
+own output; the check that now carries the invariant is a test asserting **no
+workspace re-forks the harness** (`check-harness-parity.consumer.test.mjs`,
+TEST-6h + the content-based discovery walk).
 
-**Severity is decided by the message TEXT, never by the console channel.** React 19
-routes developer warnings through `console.error`, so a channel-derived severity
-gated every React warning as HIGH against the harness's own MEDIUM taxonomy.
-`classifyConsoleMessage` is the single source. Note the deliberate asymmetry: only
-the narrow `REACT_WARNING_STRICT` list is downgraded on the **error** channel,
-because there a false match is a gate hole (`/is deprecated/i` matches a real
-`410 Gone … is deprecated`); the looser historical list still applies on the
-**warning** channel, where over-matching costs nothing.
+Config-driven per app: an app with no visual layer sets `visualConfig: null` (the
+gate reports *not configured* rather than failing), and declares any extra stage it
+needs via `gateExtraCmds` — the same shape as `lintCmds`. Desktop uses both. If you
+find yourself wanting to fork one of these scripts, add a config key instead;
+forking is what this removed.
+
 The visual-testing layers themselves (Layer A layout invariants + axe, Layer B
 screenshots) live in `tests/e2e/visual/` and run under
 `playwright.visual.config.ts`.

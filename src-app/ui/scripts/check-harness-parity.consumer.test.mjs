@@ -53,7 +53,14 @@ test('TEST-6 [acceptance INV-6] ziee declares its live copies via config', () =>
       'is stripped at merge — B6)',
   )
   assert.ok(fs.existsSync(source), `${source} must exist`)
-  assert.ok(copies.length >= 4, `expected ziee's 4 live copies, got ${copies.length}`)
+  // Two, not four: the desktop forks were deleted and desktop now runs these
+  // same sdk scripts with its own gallery.config.json.
+  assert.equal(copies.length, 2, `expected ziee's 2 live copies, got ${copies.length}`)
+  assert.ok(
+    copies.every(c => rel(c.file).startsWith('sdk/packages/gallery/')),
+    'every live copy must be the SHARED implementation — a copy under an app ' +
+      'workspace is a fork, which is what this whole exercise removed',
+  )
 })
 
 test('TEST-6 [acceptance INV-6] the REAL tree passes (positive control)', () => {
@@ -65,40 +72,56 @@ test('TEST-6 [acceptance INV-6] the REAL tree passes (positive control)', () => 
   )
 })
 
-test('TEST-6b the guard goes RED when the DESKTOP copy loses a core', () => {
-  // The historical failure: the fix landed in the sdk copy and desktop was
-  // forgotten. Expectations are derived from the ROLE (like the guard itself) —
-  // deriving them from the manifest would shrink in lockstep with an
-  // under-declaration and could never detect one.
+test('TEST-6b the guard goes RED when a copy loses a core', () => {
+  // Formerly "when the DESKTOP copy loses a core". There is no desktop copy any
+  // more — that is the fix — so the mutation now targets the shared copies,
+  // which is what a future fork would be measured against.
   for (const module of ['host-lock.mjs', 'finding-classify.mjs']) {
     const mutated = abs => {
       const src = realRead(abs)
-      if (src == null) return null
-      return rel(abs).startsWith('src-app/desktop/')
-        ? src.replaceAll(module, 'REMOVED')
-        : src
+      return src == null ? null : src.replaceAll(module, 'REMOVED')
     }
     const violations = checkParity(mutated, copies)
     const expected = copies.flatMap(c =>
-      rel(c.file).startsWith('src-app/desktop/')
-        ? requiredCores(c).filter(core => core.module === module).map(core => [c.id, core.id])
-        : [],
+      requiredCores(c).filter(core => core.module === module).map(core => [c.id, core.id]),
     )
-    assert.ok(expected.length >= 1, `fixture must target a desktop copy for ${module}`)
+    assert.ok(expected.length >= 1, `fixture must target a copy for ${module}`)
     assert.equal(
       violations.length,
       expected.length,
-      `every desktop (copy, core) pair on ${module} must be flagged, and ONLY those. Got:\n${violations.join('\n')}`,
+      `every (copy, core) pair on ${module} must be flagged, and ONLY those. Got:\n${violations.join('\n')}`,
     )
     for (const [copyId, coreId] of expected)
       assert.ok(
         violations.some(v => v.startsWith(`${copyId} `) && v.includes(`"${coreId}"`)),
         `${copyId} must be flagged for core ${coreId}`,
       )
-    assert.ok(
-      violations.some(v => /lands in one harness copy and not the others/.test(v)),
-      'the message must explain WHY this matters',
-    )
+  }
+})
+
+test('TEST-6h there is exactly ONE implementation — no app workspace forks it', () => {
+  // THE invariant this branch ended on, and the reason the guard shrank: INV-6
+  // ("a fix must not land in one copy and not the others") is satisfied by
+  // construction when there are no other copies. A call-site guard could only
+  // ever prove WIRING — a fork could keep every call and hardcode its result —
+  // so the durable check is that no fork exists at all.
+  for (const ws of ['src-app/ui/scripts', 'src-app/desktop/ui/scripts'])
+    for (const name of ['runtime-health.mjs', 'gate-ui.mjs'])
+      assert.equal(
+        realRead(path.join(ROOT, ws, name)),
+        null,
+        `${ws}/${name} is a FORK of the shared harness. Both workspaces run ` +
+          `sdk/packages/gallery/scripts/${name} with their own gallery.config.json; ` +
+          `re-adding a local copy re-creates the drift this branch removed.`,
+      )
+  for (const ws of ['src-app/ui', 'src-app/desktop/ui']) {
+    const pkg = JSON.parse(realRead(path.join(ROOT, ws, 'package.json')))
+    for (const script of ['gallery:runtime', 'gate:ui'])
+      assert.match(
+        pkg.scripts[script] ?? '',
+        /sdk\/packages\/gallery\/scripts\//,
+        `${ws}'s "${script}" must invoke the SHARED script, not a local one`,
+      )
   }
 })
 
@@ -106,7 +129,7 @@ test('TEST-6c an IMPORT without a CALL is still a violation (dead wiring)', () =
   const mutated = abs => {
     const src = realRead(abs)
     if (src == null) return null
-    return rel(abs) === 'src-app/desktop/ui/scripts/runtime-health.mjs'
+    return rel(abs) === 'sdk/packages/gallery/scripts/runtime-health.mjs'
       ? src.replaceAll('withHostLock', 'notCalledAtAll')
       : src
   }
@@ -118,7 +141,7 @@ test('TEST-6c an IMPORT without a CALL is still a violation (dead wiring)', () =
 })
 
 test('TEST-6d a MISSING copy is reported, not silently skipped', () => {
-  const mutated = abs => (rel(abs).includes('desktop/ui/scripts/gate-ui') ? null : realRead(abs))
+  const mutated = abs => (rel(abs).endsWith('scripts/gate-ui.mjs') ? null : realRead(abs))
   assert.ok(checkParity(mutated, copies).some(v => /is MISSING at/.test(v)))
 })
 
