@@ -96,7 +96,7 @@ class Boundary extends React.Component<
   }
   render() {
     if (this.state.caught) {
-      return <div data-testid="test-error-boundary-crash">{this.state.caught.message}</div>
+      return <div data-testid="settings-container-test-boundary-crash">{this.state.caught.message}</div>
     }
     return this.props.children as React.ReactElement
   }
@@ -188,6 +188,6 @@ describe('SettingsPageContainer — hook count must not depend on seam registrat
       { crashes: crashes.map(c => c.message), hookErrorCount: hookErrors.length },
       `hook-order invariant violated:\n${hookErrors.join('\n')}`,
     ).toEqual({ crashes: [], hookErrorCount: 0 })
-    expect(host.querySelector('[data-testid="test-error-boundary-crash"]')).toBeNull()
+    expect(host.querySelector('[data-testid="settings-container-test-boundary-crash"]')).toBeNull()
   })
 })
