@@ -78,4 +78,6 @@ What ships here is the guard in its hardened form: materially better than it was
 (every evasion the three rounds found is closed, and the two silent-degradation
 classes are gone), with its limit documented rather than implied.
 
-**New confirmed findings:** 8
+**New confirmed findings:** 5
+
+(aligned to the LEDGER's confirmed count for round 5 (5); the other 3 rows are recorded `deferred`, not confirmed — a round's headline number must be the ledger's, not the narrative's.)

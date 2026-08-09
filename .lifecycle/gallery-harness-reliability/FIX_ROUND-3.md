@@ -78,4 +78,8 @@ Each mutation was applied to the real module and reverted; the control is clean.
 | add `runtime-health.v2.mjs` beside the desktop copy | TEST-6g **red** (was green) |
 | delete `harnessCopies` from the desktop config | TEST-6f **red** (was green) |
 
-**New confirmed findings:** 0
+**New confirmed findings:** 9
+
+(Corrected. This originally read `0` — asserted WITHOUT re-auditing the round's own
+fixes, and round 4's F3 proved that claim false. Recording the real count here so
+the convergence profile is not built on the one number I already know was wrong.)

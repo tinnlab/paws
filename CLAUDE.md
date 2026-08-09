@@ -1936,6 +1936,44 @@ needs via `gateExtraCmds` — the same shape as `lintCmds`. Desktop uses both. I
 find yourself wanting to fork one of these scripts, add a config key instead;
 forking is what this removed.
 
+### Known follow-ups (scoped, NOT done — pick these up next)
+
+Recorded HERE rather than in `.lifecycle/` on purpose: lifecycle artifacts are
+stripped at merge, so a follow-up written only there disappears the moment it
+lands.
+
+**1. `src-app/desktop/ui/scripts/` still forks six more generators.** The harness
+itself was unified; these were deliberately left alone to keep that change
+bounded. Measured state (`diff` against `sdk/packages/gallery/scripts/`):
+
+| file | state | fix |
+|---|---|---|
+| `gen-gallery-coverage.mjs` | drifted, 42 lines | **same config-inversion**: the desktop copy is the old `__dirname`-anchored version; the sdk copy already reads `resolveGalleryConfig()` |
+| `gen-overlay-registry.mjs` | drifted, 84 lines | same config-inversion |
+| `gen-state-matrix.mjs` | drifted, 48 lines | same config-inversion |
+| `lib/gallery-surfaces.mjs` | drifted, 19 lines | **desktop is missing a FEATURE** — the sdk copy has a whole `interactions` surface class (`window.__GALLERY_INTERACTIONS__`, `cls: 'interaction'`) the desktop copy cannot see |
+| `capture-gallery-states.mjs` | drifted, 24 lines | same missing `interactions` handling (waits on `body[data-gallery-interact-done]`) |
+| `capture-gallery-screenshots.mjs` | **byte-identical** | pure duplication — delete and point at the sdk copy |
+
+The first three are a drop-in repeat of what was already done for
+`runtime-health`/`gate-ui`: delete the fork, point the npm script at
+`../../../sdk/packages/gallery/scripts/<x>.mjs`, and let
+`gallery.config.json` supply the anchors. The `gallery-surfaces` pair is the
+interesting one — desktop's crawl now DOES see interaction surfaces (it runs the
+sdk script), but desktop's *other* scripts still import the stale local copy, so
+the workspace is internally inconsistent about what a surface is.
+
+**2. `mountGallery` does not await `cfg.loadModules()`.**
+`sdk/packages/gallery/src/runtime/mount.tsx:58` fires it without `await`, then
+renders at `:91`. `loadModules` is async and pulls module bodies in parallel, so
+whether a module's chunk has landed at first render is a RACE — and **no
+consumer-side fix can close it**. This is the leading candidate for the residual
+gallery nondeterminism that survived the `appLayoutSeam` hook-order fix (the
+hook-count test still failed ~1 in 5 on the merged tree). Independent
+corroboration: a valid crawl on this branch exhibited the hook crash while two
+other valid crawls of the same commit did not. It may be the remainder of the
+"unstable failing set" problem.
+
 The visual-testing layers themselves (Layer A layout invariants + axe, Layer B
 screenshots) live in `tests/e2e/visual/` and run under
 `playwright.visual.config.ts`.

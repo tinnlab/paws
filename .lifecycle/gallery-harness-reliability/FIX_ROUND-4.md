@@ -1,6 +1,8 @@
 # FIX_ROUND-4 — re-audit of round 3's FIXES, and what it overturned
 
-Round 3 ended by asserting `**New confirmed findings:** 10
+Round 3 ended by asserting `**New confirmed findings:** 9
+
+(aligned to the LEDGER's confirmed count for round 4 (9); the prose had said 10 by counting a deferred item — a round's headline number must be the ledger's, not the narrative's.)
 
 (Round 3 recorded `0` here *without re-auditing its own fixes*, and F3 proves that
 claim was false. So this round records what it actually found — 10 — and the loop
@@ -126,7 +128,9 @@ recording FB-8's lesson about exactly this. The audit's coverage claim is
 correspondingly weakened for those two files (neither is code the audit was
 scoped to, so no finding is believed lost). Recorded in HUMAN_FEEDBACK as FB-9.
 
-**New confirmed findings:** 10
+**New confirmed findings:** 9
+
+(aligned to the LEDGER's confirmed count for round 4 (9); the prose had said 10 by counting a deferred item — a round's headline number must be the ledger's, not the narrative's.)
 
 (Round 3 recorded `0` here *without re-auditing its own fixes*, and F3 proves that
 claim was false. So this round records what it actually found — 10 — and the loop

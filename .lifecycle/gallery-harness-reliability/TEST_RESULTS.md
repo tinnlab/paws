@@ -206,3 +206,59 @@ Real exit codes, captured with `set -o pipefail` (a recorded PASS taken from a
 
 - `npm run check (ui): PASS` — exit 0
 - `npm run check (desktop/ui): PASS` — exit 0
+
+---
+
+## Re-scope round — one implementation (ITEM-25), on the REBASED tree
+
+Rebased onto `origin/main e13ee2552` (carries the AppLayout-seam hook-order fix
+`62cb8b19b`) with sdk rebased onto `origin/chat 3fe72f3`.
+`testIds.generated.ts` regenerated ON TOP of the rebase (the documented remedy for
+that collision; the delta was the header count, 1778 → 1781).
+
+- **TEST-37**: PASS — TEST-6h: neither `src-app/ui/scripts/` nor
+  `src-app/desktop/ui/scripts/` contains `runtime-health.mjs`/`gate-ui.mjs`, and
+  both workspaces' `gallery:runtime` + `gate:ui` invoke
+  `sdk/packages/gallery/scripts/`. Mutation-verified by the blind auditor:
+  re-adding the actual deleted fork turns TEST-6h AND TEST-6g red; repointing a
+  package.json script at a local path turns TEST-6h red. A *renamed* fork
+  (`crawl-health.mjs`) is caught by TEST-6g's content walk, not 6h — the pair is
+  what carries the invariant, and that is now stated in the test.
+
+- **TEST-38**: PASS — **desktop `gate:ui`, post-unification, exit 0.** The
+  distinguishing evidence (F3 exists because this was previously claimed but never
+  written down, and the only transcript on file was the deleted fork's):
+  ```
+  === UI evaluator gate ===            ← shared script (the fork printed "desktop UI evaluator gate")
+  ✅ visual — not configured for this app   ← the new visualConfig:null path
+  • coverage …
+  ✅ coverage — ok                          ← the new gateExtraCmds path
+  validity: 318/318 cells · origin alive (63 checks) · transport artifacts 0 (0% of findings)
+  ✅ GATE PASSED — every UI DONE criterion met   ← shared string, NOT "every desktop UI DONE criterion met"
+  ```
+
+- **TEST-39**: PASS — **web `gate:ui` on the rebased tree, exit 0** (the gate's own
+  exit, not a pipeline's):
+  ```
+  === runtime-health: 371 findings (HIGH 0 gating + 2 harness-noise + 2 baselined / MEDIUM 84 / LOW 283) ===
+  --- per-surface runtime verdict: 149/149 PASS ---
+  validity: 682/682 cells · origin alive · transport artifacts 0 (0% of findings)
+  ✅ GATE PASSED — every UI DONE criterion met
+  ```
+  **This is the honest post-seam-fix baseline.** The pre-rebase run of the same
+  branch failed with 3 gating HIGH on `seeded-file-rag-error` (the hook-count
+  crash); that base predated `62cb8b19b`, and the diff touches no product render
+  code. With the seam fix present the crash did not fire and the failing set is
+  empty. Note what this does NOT show: residual nondeterminism is still expected
+  (~1 in 5 on the merged tree), so a single green run is a baseline, not proof of
+  determinism.
+
+- **TEST-40**: PASS — the reduced guard still refuses a declared copy that drops a
+  core, and the WIRING-not-LOGIC caveat in its output is now asserted (F7: it was
+  claimed but unbacked — the note prints only in the `isMain` block, which no unit
+  test executes, so the assertion is over the banner source).
+
+### Frontend gate lines (rebased tree, after the testid regen)
+
+- `npm run check (ui): PASS` — exit 0
+- `npm run check (desktop/ui): PASS` — exit 0
