@@ -58,6 +58,16 @@ interface PopoverMetrics {
   controlCount: number
   /** The overlayscrollbars viewport inside the list, if the list is a scroller. */
   list: { scrollHeight: number; clientHeight: number } | null
+  /**
+   * The rendered text box of the long-unbroken-token row, measured against the
+   * panel. This is the ONLY assertion that can see whether `wrap-anywhere`
+   * actually works: the panel's own `scrollWidth` cannot, because the list is a
+   * `ScrollArea axis="y"` whose viewport is `overflow-x: hidden` — a clipping
+   * scroll container, so a row overflowing sideways never propagates out to the
+   * panel. Nor can the control sweep, whose buttons are held in place by
+   * `min-w-0` + `shrink-0`, both of which predate this fix.
+   */
+  longToken: { width: number; right: number; overflows: boolean } | null
 }
 
 /**
@@ -74,13 +84,25 @@ async function readMetrics(page: import('@playwright/test').Page): Promise<Popov
     const hOutside = [...panel.querySelectorAll('button,[role="button"]')]
       .filter(el => {
         const b = el.getBoundingClientRect()
-        // Ignore a control scrolled out of the list viewport (zero-size).
+        // A control the popover hasn't laid out at all (display:none / not yet
+        // measured) has a zero-size rect and no meaningful position; a control
+        // merely scrolled out of the list viewport KEEPS its laid-out rect and
+        // is intentionally still checked on the x-axis.
         if (b.width === 0 && b.height === 0) return false
         return b.left < r.left - 0.5 || b.right > r.right + 0.5
       })
       .map(el => `${el.getAttribute('data-testid') ?? el.textContent?.slice(0, 24)}`)
     const listHost = panel.querySelector('[data-testid="notification-bell-list"]')
     const listViewport = listHost?.querySelector('[data-overlayscrollbars-viewport]')
+
+    // Find the element that actually renders the long unbroken token and measure
+    // its box. `wrap-anywhere` makes it wrap inside the row; without it the box
+    // is far wider than the panel and is simply clipped by the scroller.
+    const TOKEN = 'pmid:PMC10293847_supplementary_table_S3'
+    const tokenEl = [...panel.querySelectorAll('span,div,p')]
+      .filter(el => (el.textContent ?? '').includes(TOKEN))
+      .sort((a, b) => (a.textContent?.length ?? 0) - (b.textContent?.length ?? 0))[0]
+    const tokenRect = tokenEl?.getBoundingClientRect()
     return {
       panel: {
         left: +r.left.toFixed(1),
@@ -101,19 +123,35 @@ async function readMetrics(page: import('@playwright/test').Page): Promise<Popov
             clientHeight: listViewport.clientHeight,
           }
         : null,
+      longToken: tokenRect
+        ? {
+            width: +tokenRect.width.toFixed(1),
+            right: +tokenRect.right.toFixed(1),
+            overflows: tokenRect.right > r.right + 0.5 || tokenRect.width > r.width + 0.5,
+          }
+        : null,
     }
   })
 }
 
-/** Open the bell popover, opening the sidebar first at narrow widths. */
+/**
+ * Open the bell popover, opening the sidebar first at narrow widths.
+ *
+ * Below the layout breakpoint the sidebar is a Sheet (a Base-UI Dialog) that
+ * starts CLOSED, and the bell lives inside it — so on a narrow viewport the
+ * sidebar must be opened before the bell exists in the DOM at all. Waiting for
+ * `app-sidebar` to be hidden first is how `settings/mobile-sidebar-mask.spec.ts`
+ * establishes that the app has hydrated; clicking the toggle before that races
+ * the mount and silently no-ops.
+ */
 async function openBell(page: import('@playwright/test').Page, width: number) {
+  const sidebar = byTestId(page, 'app-sidebar')
   if (width < 768) {
-    // Below the layout breakpoint the sidebar is a collapsed drawer; the bell
-    // lives inside it, so it must be opened before the bell is reachable.
-    const toggle = byTestId(page, 'layout-sidebar-toggle-button')
-    if (await toggle.isVisible().catch(() => false)) {
-      await toggle.click()
-    }
+    await expect(sidebar).toBeHidden({ timeout: 30000 })
+    await byTestId(page, 'layout-sidebar-toggle-button').click()
+    await expect(sidebar).toBeVisible({ timeout: 15000 })
+  } else {
+    await expect(sidebar).toBeVisible({ timeout: 30000 })
   }
   const bell = byTestId(page, 'notification-bell-badge')
   await expect(bell).toBeVisible({ timeout: 30000 })
@@ -143,22 +181,25 @@ test.describe('notification bell popover — responsive containment', () => {
     const adminId = (await sql(`SELECT id FROM users WHERE username = 'admin' LIMIT 1`))
       .rows[0].id as string
 
-    await sql(
-      `INSERT INTO notifications (user_id, kind, title, body, interrupt, payload)
-       VALUES ($1, 'scheduled_task_result', $2, $3, true, '{}'::jsonb)`,
-      [adminId, LONG_TITLE, 'The sweep produced 148 reconciled variant records.'],
-    )
-    await sql(
-      `INSERT INTO notifications (user_id, kind, title, body, interrupt, payload)
-       VALUES ($1, 'scheduled_task_result', $2, $3, true, '{}'::jsonb)`,
-      [adminId, UNBROKEN_TOKEN, UNBROKEN_TOKEN],
-    )
-    for (let i = 2; i < SEED_COUNT; i++) {
-      await sql(
-        `INSERT INTO notifications (user_id, kind, title, body, interrupt, payload)
-         VALUES ($1, 'scheduled_task_result', $2, $3, true, '{}'::jsonb)`,
-        [adminId, `Seeded notification ${i}`, `Body of seeded notification ${i}.`],
+    // `created_at` is set EXPLICITLY, newest-first, because the bell renders only
+    // `items.slice(0, 8)` ordered by `created_at DESC`. Relying on the column
+    // default made the two adversarial rows the OLDEST of 12 and pushed them out
+    // of the visible eight — the long-token assertion then found nothing to
+    // measure and the spec was green while proving nothing about wrapping.
+    const seed = async (minutesAgo: number, title: string, body: string) =>
+      sql(
+        `INSERT INTO notifications (user_id, kind, title, body, interrupt, payload, created_at)
+         VALUES ($1, 'scheduled_task_result', $2, $3, true, '{}'::jsonb,
+                 now() - ($4 || ' minutes')::interval)`,
+        [adminId, title, body, String(minutesAgo)],
       )
+
+    // The two shapes that broke the layout go FIRST (newest ⇒ always rendered).
+    await seed(1, LONG_TITLE, 'The sweep produced 148 reconciled variant records.')
+    await seed(2, UNBROKEN_TOKEN, UNBROKEN_TOKEN)
+    // …then enough filler that the list genuinely overflows its bound.
+    for (let i = 2; i < SEED_COUNT; i++) {
+      await seed(i + 1, `Seeded notification ${i}`, `Body of seeded notification ${i}.`)
     }
 
     await page.reload()
@@ -201,7 +242,28 @@ test.describe('notification bell popover — responsive containment', () => {
       // over the page instead of inside the popover.
       expect(m.hOutside, `no control may escape the panel horizontally ${at}`).toEqual([])
 
+      // TEST-3 [acceptance, INV-4] — the ROW-LEVEL half, and the ONLY assertion
+      // in either spec that can fail when `wrap-anywhere` is removed. The two
+      // assertions above are structurally blind to it: the list is a
+      // `ScrollArea axis="y"` whose viewport is `overflow-x: hidden`, so a row
+      // overflowing sideways is CLIPPED there and never reaches the panel's
+      // `scrollWidth`; and the control sweep only measures buttons, which are
+      // held by `min-w-0` + `shrink-0` that both predate this fix. Measuring the
+      // long token's own text box is what proves the wrap actually happens.
+      expect(m.longToken, `the long-token row must render ${at}`).not.toBeNull()
+      expect(
+        m.longToken!.overflows,
+        `the long unbroken token must WRAP inside the panel, not overflow it ${at} ` +
+          `(token box ${m.longToken!.width}px wide, right edge ${m.longToken!.right} ` +
+          `vs panel right ${m.panel.right})`,
+      ).toBe(false)
+
       // TEST-2 [acceptance, INV-2] — the panel itself is within the viewport.
+      // NOTE these four rect checks are a REGRESSION GUARD, not the discriminator:
+      // base-ui's own shift/flip kept the panel on screen before this fix too
+      // (it measured 288px wide at every width). What actually makes TEST-2
+      // meaningful is that TEST-1 and TEST-3 above are re-run at 320 and 390,
+      // where they DO fail on origin/main — that is the "not desktop-only" proof.
       expect(m.panel.left, `panel left edge on screen ${at}`).toBeGreaterThanOrEqual(-0.5)
       expect(m.panel.right, `panel right edge on screen ${at}`).toBeLessThanOrEqual(
         m.viewport.width + 0.5,

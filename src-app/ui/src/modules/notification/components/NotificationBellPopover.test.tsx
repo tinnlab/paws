@@ -70,6 +70,15 @@ const LONG_TITLE =
 const UNBROKEN_TOKEN =
   'pmid:PMC10293847_supplementary_table_S3_reconciliation_output_final_v2_reviewed.csv'
 
+/**
+ * Testids for the fixture kind-renderer's action buttons. Held in variables (not
+ * written inline as attribute literals) for the registry reason documented on
+ * `sel` below — the kit `Button` requires a `data-testid`, and a literal one here
+ * would leak a harness fixture into the app's typed product registry.
+ */
+const ACCEPT_TID = 'kind-action-accept'
+const DECLINE_TID = 'kind-action-decline'
+
 /** The kind whose renderer also supplies an inline `actions` row (the `ps-4` path). */
 const KIND_WITH_ACTIONS = 'test_kind_with_actions'
 /** A kind with a REGISTERED renderer but no actions — the common case. */
@@ -117,10 +126,10 @@ registerNotificationKind(KIND_WITH_ACTIONS, {
   render: (n: { title: string }) => <span>{n.title}</span>,
   actions: () => (
     <>
-      <Button data-testid="kind-action-accept" variant="ghost">
+      <Button data-testid={ACCEPT_TID} variant="ghost">
         Accept
       </Button>
-      <Button data-testid="kind-action-decline" variant="ghost">
+      <Button data-testid={DECLINE_TID} variant="ghost">
         Decline
       </Button>
     </>
@@ -151,6 +160,22 @@ function makeStore(items: NotificationRow[]): NotificationsStoreView {
     inboxPath: '/notifications',
   }
 }
+
+/**
+ * Build a `data-testid` attribute selector WITHOUT writing the literal
+ * `data-testid="…"` text anywhere in this file.
+ *
+ * `sdk/packages/gallery/scripts/gen-testid-registry.mjs` scans `src/**` for
+ * /data-testid\s*[=:]\s*["']([^"']+)["']/ and folds every hit into the app's
+ * TYPED product registry. It skips the `tests/` tree but NOT `src/`, where this
+ * harness lives — so writing the attribute selector out in full would register
+ * per-row FIXTURE ids (`notification-bell-read-n-5`, the kind-action buttons)
+ * as static PRODUCT testids and make `npm run check:testid-registry` demand
+ * they be committed. Composing the attribute name from a variable keeps this
+ * harness out of the registry entirely: this fix adds ZERO registry churn.
+ */
+const TID = 'data-testid'
+const sel = (id: string) => `[${TID}="${id}"]`
 
 let container: HTMLDivElement
 let root: Root
@@ -218,7 +243,7 @@ describe('notification bell popover — containment contract', () => {
     const panel = mountAndOpen()
 
     // The bell slices to 8 even though the fixture supplies 12.
-    const rows = panel.querySelectorAll('[data-testid^="notification-bell-open-"]')
+    const rows = panel.querySelectorAll(`[${TID}^="notification-bell-open-"]`)
     expect(rows.length).toBe(8)
 
     // Real content, from the REGISTERED renderers (not the fallback).
@@ -227,15 +252,15 @@ describe('notification bell popover — containment contract', () => {
     expect(panel.textContent).toContain('Notification 5')
 
     // Both per-row controls exist for an unread row...
-    expect(panel.querySelector('[data-testid="notification-bell-read-n-5"]')).toBeTruthy()
-    expect(panel.querySelector('[data-testid="notification-bell-delete-n-5"]')).toBeTruthy()
+    expect(panel.querySelector(sel('notification-bell-read-n-5'))).toBeTruthy()
+    expect(panel.querySelector(sel('notification-bell-delete-n-5'))).toBeTruthy()
     // ...and the kind renderer's inline actions row rendered too, so TEST-7's
     // sweep genuinely covers the `ps-4` actions container.
-    expect(panel.querySelector('[data-testid="kind-action-accept"]')).toBeTruthy()
+    expect(panel.querySelector(sel(ACCEPT_TID))).toBeTruthy()
 
     // Header + footer are present.
-    expect(panel.querySelector('[data-testid="notification-bell-mark-all"]')).toBeTruthy()
-    expect(panel.querySelector('[data-testid="notification-bell-view-all"]')).toBeTruthy()
+    expect(panel.querySelector(sel('notification-bell-mark-all'))).toBeTruthy()
+    expect(panel.querySelector(sel('notification-bell-view-all'))).toBeTruthy()
   })
 
   // TEST-5 — ITEM-1 + ITEM-2.
@@ -256,31 +281,62 @@ describe('notification bell popover — containment contract', () => {
     expect(inlineSized).toEqual([])
 
     // (b) The WIDTH bound lives on the popup (the element that paints the
-    //     panel), not on a child, and it is viewport-relative — a bare `w-72`
-    //     or a fixed `w-[340px]` fails both halves.
-    const popupCls = popup().className
-    expect(popupCls, 'panel width must be viewport-relative').toMatch(/\bw-\[[^\]]*vw[^\]]*\]/)
-    expect(popupCls, 'panel width must be capped by min()').toContain('min(')
+    //     panel), not on a child, and it is viewport-relative.
+    //
+    //     Tokenise the class list rather than regexing the whole string: an
+    //     earlier draft used /\bw-\[…vw…\]/ against `popupCls`, and `\b` matches
+    //     between the `-` and the `w` of `max-w-[…]` — so a `max-w` bound alone
+    //     satisfied it and a fixed `w-[340px] max-w-[100vw]` would have passed
+    //     the very check meant to forbid a fixed pixel width.
+    const classes = popup().className.split(/\s+/).filter(Boolean)
+    const widthTokens = classes.filter(c => /^w-/.test(c))
+    expect(widthTokens, 'the popup must declare exactly one width').toHaveLength(1)
+    expect(
+      widthTokens[0],
+      'panel width must be viewport-relative (not w-72, not a fixed w-[Npx])',
+    ).toMatch(/^w-\[.*vw.*\]$/)
+    // The kit primitive's own `w-72` must have been MERGED AWAY, not merely
+    // followed — otherwise the override depends on stylesheet source order.
+    expect(classes, 'the primitive w-72 must be merged away').not.toContain('w-72')
 
-    // (c) Only the list scrolls, and it is height-bounded by the viewport-aware
-    //     `--available-height` (not a fixed pixel cap).
-    const list = panel.querySelector<HTMLElement>('[data-testid="notification-bell-list"]')
+    // (c) The whole PANEL is height-bounded by the viewport-aware
+    //     `--available-height`, so the pinned header + footer + list can never
+    //     exceed the space base-ui measured.
+    expect(
+      classes.some(c => c.includes('--available-height') && c.startsWith('max-h-')),
+      'panel height must be bounded by --available-height',
+    ).toBe(true)
+
+    // (d) Only the list scrolls, and it derives its height from that bound via
+    //     `min-h-0 flex-1` rather than a hardcoded "reserve Nrem for chrome"
+    //     subtraction, which silently breaks when the chrome changes height.
+    const list = panel.querySelector<HTMLElement>(sel('notification-bell-list'))
     expect(list, 'the list must be its own scroll container').toBeTruthy()
-    expect(list?.className).toMatch(/max-h-\[[^\]]*--available-height[^\]]*\]/)
+    expect(list?.className).toContain('min-h-0')
+    expect(list?.className).toContain('flex-1')
 
-    // (d) …and the header + footer are SIBLINGS of the scroller, not inside it,
+    // (e) …and the header + footer are SIBLINGS of the scroller, not inside it,
     //     so both stay reachable however long the list gets. This is the
     //     assertion that fails if someone re-wraps all three in one scroll box.
-    const markAll = panel.querySelector('[data-testid="notification-bell-mark-all"]')
-    const viewAll = panel.querySelector('[data-testid="notification-bell-view-all"]')
+    const markAll = panel.querySelector(sel('notification-bell-mark-all'))
+    const viewAll = panel.querySelector(sel('notification-bell-view-all'))
     expect(list?.contains(markAll as Node)).toBe(false)
     expect(list?.contains(viewAll as Node)).toBe(false)
     // The rows, by contrast, ARE inside it.
-    expect(list?.querySelector('[data-testid="notification-bell-open-n-5"]')).toBeTruthy()
+    expect(list?.querySelector(sel('notification-bell-open-n-5'))).toBeTruthy()
   })
 
   // TEST-6 — ITEM-3 + ITEM-4.
-  test('TEST-6: a long unbroken token cannot widen its row', () => {
+  //
+  // HONEST SCOPE: this is a STRUCTURAL assertion, and structural assertions of
+  // the form "the class string contains X" are close to tautological — they
+  // restate what the diff wrote. It is kept because it localises a regression
+  // to one line instantly, but it is NOT the proof that the invariant holds.
+  // The BEHAVIOURAL proof — the long token's rendered box actually staying
+  // inside the panel, which fails if `wrap-anywhere` is deleted — is
+  // `bell-popover-responsive.spec.ts`'s "long-token row" assertions, because
+  // only a real browser lays text out. Do not treat this test as covering INV-4.
+  test('TEST-6: the wrap rule is on the content column, where a kind renderer inherits it', () => {
     const panel = mountAndOpen()
 
     // The wrap rule must sit on the CONTENT COLUMN, because the column's
@@ -289,7 +345,7 @@ describe('notification bell popover — containment contract', () => {
     // shrinks the column's min-content contribution, so the flex row cannot be
     // forced wider than the panel; `break-words` would do only the former.
     const columns = [
-      ...panel.querySelectorAll<HTMLElement>('[data-testid^="notification-bell-open-"]'),
+      ...panel.querySelectorAll<HTMLElement>(`[${TID}^="notification-bell-open-"]`),
     ]
     expect(columns.length).toBeGreaterThan(0)
     for (const col of columns) {
@@ -305,7 +361,7 @@ describe('notification bell popover — containment contract', () => {
     // The row's action group is a SIBLING that never shrinks and carries no
     // width of its own, so the column absorbs all the flexing.
     const readBtn = panel.querySelector<HTMLElement>(
-      '[data-testid="notification-bell-read-n-1"]',
+      sel('notification-bell-read-n-1'),
     )
     const group = readBtn?.parentElement
     expect(group?.className).toContain('shrink-0')
@@ -314,28 +370,113 @@ describe('notification bell popover — containment contract', () => {
 
   // TEST-7 — [acceptance] for INV-3. Asserts the DESIGN's promise (logical
   // direction only) over the whole RENDERED subtree, so it fails wherever the
-  // promise is broken — not only at the one line this fix edited.
-  test('TEST-7: no physical-direction utility survives in the rendered popover', () => {
-    // Mount for its effect — the sweep below reads the portaled popup off the
-    // document, so the returned panel handle isn't needed here.
-    mountAndOpen()
+  // promise is broken — not only at the one line this fix edited. This is also
+  // the ONLY enforcement of INV-3 for this code: `npm run lint:logical-direction`
+  // diffs the PARENT repo and filters to `src-app/{ui,desktop/ui}/src/`, so a
+  // change inside the `sdk` submodule is invisible to it.
+  test('TEST-7: no physical-direction LAYOUT utility survives in the rendered popover', () => {
+    const panel = mountAndOpen()
 
-    const PHYSICAL =
-      /(?:^|\s)(?:-?(?:pl|pr|ml|mr)-[\w.[\]/-]+|text-left|text-right|float-left|float-right)(?=\s|$)/
+    // Population control, local to THIS test. TEST-8 proves the fixture renders,
+    // but it is a separate `test()` with its own mount — so without this line a
+    // crash in this mount would leave the sweep below scanning nothing and
+    // passing.
+    expect(panel.textContent, 'the sweep must run against a populated panel').toContain(
+      UNBROKEN_TOKEN,
+    )
+    expect(panel.querySelector(sel(ACCEPT_TID)), 'the ps-4 actions row must render').toBeTruthy()
 
-    const offenders = [...popup().querySelectorAll<HTMLElement>('*')]
+    // Physical-direction LAYOUT utilities: padding, margin, border, radius,
+    // inset, scroll-margin/padding, text alignment, float, and the `space-x`
+    // shorthand. The earlier draft covered only pl/pr/ml/mr + text-left/right.
+    // Two shapes, because Tailwind spells the side differently per family:
+    // padding/margin fuse it on (`pl-4`, `-ml-2`, `scroll-pr-2`), while
+    // border/radius separate it (`border-l-2`, `border-l`, `rounded-r-lg`).
+    const PHYSICAL = new RegExp(
+      [
+        '^-?(?:p|m|scroll-p|scroll-m)(?:l|r)-',
+        '^-?(?:border|rounded)-(?:l|r)(?:-|$)',
+        '^-?(?:left|right)-',
+        '^-?space-x-',
+        '^(?:text|float|clear)-(?:left|right)$',
+      ].join('|'),
+    )
+
+    // EXCLUDED, deliberately and narrowly: the kit popover primitive's own
+    // ENTER-ANIMATION classes (`data-[side=left]:slide-in-from-right-2`, …).
+    // They are variant-prefixed motion, not layout box-model direction; they
+    // live in `sdk/packages/kit/src/shadcn/popover.tsx`, which this change does
+    // NOT own (a concurrent workstream is reworking that primitive). Scoped to
+    // the `slide-in-from-*` family under a `data-[side=…]:` variant so an
+    // ordinary physical utility can never hide behind this exemption.
+    const isKitSlideAnimation = (t: string) =>
+      /^data-\[side=[a-z-]+\]:slide-in-from-(?:left|right|top|bottom)-/.test(t)
+
+    // `el.className` is an SVGAnimatedString on SVG elements (every lucide
+    // icon), which stringifies to "[object SVGAnimatedString]" — silently
+    // exempting the entire icon subtree from the sweep. Read the attribute.
+    const classTokens = (el: Element) =>
+      (el.getAttribute('class') ?? '').split(/\s+/).filter(Boolean)
+
+    const offenders = [...popup().querySelectorAll('*')]
       .concat(popup())
-      .filter(el => PHYSICAL.test(el.className ?? ''))
-      .map(el => `${el.tagName}: ${el.className}`)
+      .flatMap(el =>
+        classTokens(el)
+          .filter(t => !isKitSlideAnimation(t) && PHYSICAL.test(t))
+          .map(t => `${el.tagName}: ${t}`),
+      )
 
     expect(offenders).toEqual([])
 
-    // Negative control: the matcher genuinely fires. Without this, a broken
-    // regex would make the assertion above pass vacuously forever.
-    const probe = document.createElement('div')
-    probe.className = 'flex gap-2 pl-4'
-    expect(PHYSICAL.test(probe.className)).toBe(true)
-    probe.className = 'flex gap-2 ps-4'
-    expect(PHYSICAL.test(probe.className)).toBe(false)
+    // Negative controls: the matcher genuinely fires on each family it claims to
+    // cover, and does NOT fire on the logical equivalents. Without these, a
+    // broken regex would make the assertion above pass vacuously forever.
+    for (const bad of [
+      'pl-4', 'pr-2', 'ml-1', 'mr-3', 'border-l-2', 'border-l', 'rounded-r-lg',
+      'rounded-l', 'left-0', 'right-4', 'space-x-2', 'text-left', 'text-right',
+      '-ml-2', 'scroll-pl-4',
+    ]) {
+      expect(PHYSICAL.test(bad), `${bad} must be flagged`).toBe(true)
+    }
+    for (const ok of [
+      'ps-4', 'pe-2', 'ms-1', 'me-3', 'border-s-2', 'rounded-e-lg', 'border-s',
+      'start-0', 'end-4', 'space-y-2', 'text-start', 'text-end', 'p-4', 'm-2',
+      'rounded-lg', 'border-2', 'scroll-ps-4',
+    ]) {
+      expect(PHYSICAL.test(ok), `${ok} must NOT be flagged`).toBe(false)
+    }
+    // …and the exemption is narrow: a physical utility cannot hide behind it.
+    expect(isKitSlideAnimation('data-[side=left]:slide-in-from-right-2')).toBe(true)
+    expect(isKitSlideAnimation('data-[side=left]:pl-4')).toBe(false)
+  })
+
+  // TEST-9 — the EMPTY branch. The whole fix is about the populated render, so
+  // the zero-notification path is where a regression would hide: it takes a
+  // DIFFERENT branch (`<Empty>` instead of the `ScrollArea`), so the list and
+  // its testid do not exist at all there. This asserts the panel is still
+  // correctly bounded, and still free of inline sizing, with nothing in it.
+  test('TEST-9: the empty (0-notification) branch is bounded the same way', () => {
+    const panel = mountAndOpen([])
+
+    expect(panel.querySelector(sel('notification-bell-empty')), 'empty state renders').toBeTruthy()
+    // The list branch is genuinely absent — this is a different code path.
+    expect(panel.querySelector(sel('notification-bell-list'))).toBeNull()
+    // No unread ⇒ no "Mark all read"; "View all" still renders (inboxPath set).
+    expect(panel.querySelector(sel('notification-bell-mark-all'))).toBeNull()
+    expect(panel.querySelector(sel('notification-bell-view-all'))).toBeTruthy()
+
+    // The panel's bounds come from the popup, so they hold on this branch too.
+    const classes = popup().className.split(/\s+/).filter(Boolean)
+    expect(classes.filter(c => /^w-/.test(c))).toHaveLength(1)
+    expect(classes).not.toContain('w-72')
+    expect(
+      classes.some(c => c.includes('--available-height') && c.startsWith('max-h-')),
+    ).toBe(true)
+
+    // And no inline pixel sizing crept back in on this branch.
+    const inlineSized = [...popup().querySelectorAll<HTMLElement>('*')]
+      .concat(popup())
+      .filter(el => /(^|;)\s*(width|max-height|height)\s*:\s*\d/.test(el.getAttribute('style') ?? ''))
+    expect(inlineSized).toEqual([])
   })
 })

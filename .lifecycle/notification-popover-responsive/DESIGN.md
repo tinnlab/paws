@@ -56,6 +56,14 @@ picker popovers and that file is the seam both would collide on.
 
 Scrolling moves off the whole wrapper and onto the LIST only, via the shared
 `ScrollArea` (`@ziee/kit`, overlayscrollbars — the existing integration; no
-second one is added), bounded by base-ui's `--available-height` custom property
-exactly as `sdk/packages/kit/src/kit/dropdown.tsx` already does. That keeps the
-header and the "View all" footer pinned and reachable.
+second one is added). That keeps the header and the "View all" footer pinned and
+reachable.
+
+The height bound is base-ui's `--available-height` custom property — the same
+source `sdk/packages/kit/src/kit/dropdown.tsx` uses — but applied to the POPUP
+rather than to the scroller, with the list taking the remainder via
+`min-h-0 flex-1`. It must NOT be expressed as `calc(--available-height - Nrem)`
+on the list: that hardcodes an allowance for the pinned header + footer which is
+wrong the moment either changes height (measured: a `7rem` budget against 108px
+of actual chrome left 4px of slack, and went negative — collapsing the list to
+zero height — below a ~112px available height).
