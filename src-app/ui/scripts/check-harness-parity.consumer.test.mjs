@@ -409,7 +409,36 @@ const GENERATED_ARTIFACTS = [
 // The enumeration API. A copy of the surface lib DEFINES or EXPORTS these,
 // whatever the file is called and wherever it sits.
 const ENUM_API = ['enumerateSurfaces', 'captureCells', 'cellUrl', 'surfaceCount']
-const WALK_SKIP = new Set(['node_modules', '.git', 'dist', 'target', 'coverage', '.lifecycle'])
+// Skip only what CANNOT hold a shipped copy: installed deps and git internals.
+// `dist`/`coverage`/`target`/`.lifecycle` were skipped in the first version and
+// every one of them was a hole — `.lifecycle` is COMMITTED on a feature branch,
+// so a copy there ships. A skip list is a place for a copy to hide, so it is
+// kept to the two entries that are genuinely not source.
+const WALK_SKIP = new Set(['node_modules', '.git'])
+
+/**
+ * Does `src` DEFINE (not merely call or import) `fn`?
+ *
+ * The first version accepted only `function f`, `export function f` and
+ * `const|let f =`, and a blind audit walked past it with `var`, a `: Type`
+ * annotation before `=`, an `export { x as f }` re-export, an object-literal
+ * property, and a class method. The `: Type` case is the one that matters most:
+ * this repo already has a TS surface counterpart (`src/dev/gallery/surfaces.ts`),
+ * so a TS port is the most plausible way this enumeration really gets re-forked.
+ *
+ * Every alternative below requires a DEFINITION context, never a call site —
+ * otherwise every legitimate consumer of the shared module would be flagged.
+ */
+const definesFn = (src, fn) =>
+  new RegExp(
+    [
+      `function\\s+${fn}\\b`, // function / async function / export function
+      `(?:const|let|var)\\s+${fn}\\b[^=\\n]*=`, // incl. `: SomeType =`
+      `\\bas\\s+${fn}\\b`, // export { impl as f } re-export shim
+      `\\b${fn}\\s*:\\s*(?:async\\b|function\\b|\\()`, // object-literal property
+      `\\b${fn}\\s*\\([^)]*\\)\\s*\\{`, // class/object method (a body follows)
+    ].join('|'),
+  ).test(src)
 
 /**
  * Discover, BY CONTENT, every file that is a copy of the shared surface
@@ -442,7 +471,9 @@ function discoverEnumerationCopies(root) {
         if (!WALK_SKIP.has(e.name)) walk(full)
         continue
       }
-      if (!/\.(mjs|cjs|js|ts|mts|cts)$/.test(e.name)) continue
+      // `.tsx`/`.jsx` included: a copy in either walked straight past the first
+      // version, and a TSX port is not far-fetched in a React workspace.
+      if (!/\.(mjs|cjs|js|jsx|ts|tsx|mts|cts)$/.test(e.name)) continue
       let src
       try {
         src = fs.readFileSync(full, 'utf-8')
@@ -450,16 +481,25 @@ function discoverEnumerationCopies(root) {
         continue
       }
       // A surface-lib copy DEFINES or EXPORTS the enumeration API…
-      const api = ENUM_API.filter(fn =>
-        new RegExp(`(export\\s+(async\\s+)?function\\s+${fn}\\b|(async\\s+)?function\\s+${fn}\\b|(const|let)\\s+${fn}\\s*=)`).test(
-          src,
-        ),
-      )
-      // …a generator copy NAMES one of the artifacts AND writes it.
+      const api = ENUM_API.filter(fn => definesFn(src, fn))
+      // …a generator copy NAMES one of the THREE unified artifacts AND writes it.
+      // The write half is matched loosely (any of fs's spellings); the name half
+      // is deliberately NOT: a generic `.generated.<ext>` match flags every
+      // legitimate per-workspace generator (`gen-crawl-cassette.mjs`,
+      // `gen-override-registry.mjs`, …), and those SHOULD be per-workspace — the
+      // invariant is about these six, not "no workspace may generate anything".
+      //
+      // KNOWN LIMIT: a fork that assembles its output path from a template
+      // (`${NAME}.generated.ts`) is not matched by this arm. The enumeration-API
+      // arm above is the broad one and is what a capture/coverage fork trips;
+      // this arm is a narrower second net. Tightening it further needs real
+      // parsing, not a longer regex — the lesson this area already paid for.
       const artifacts = GENERATED_ARTIFACTS.filter(a => src.includes(a))
-      const writes = /writeFileSync|fs\.promises\.writeFile|await\s+fs\.writeFile/.test(src)
-      if (api.length || (artifacts.length && writes))
-        found.push({ file: full, api, artifacts: artifacts.length && writes ? artifacts : [] })
+      const artifactish = artifacts.length > 0
+      const writes =
+        /writeFileSync|writeFile\s*\(|outputFile\s*\(|createWriteStream\s*\(/.test(src)
+      if (api.length || (artifactish && writes))
+        found.push({ file: full, api, artifacts: artifactish && writes ? artifacts : [] })
     }
   }
   walk(root)
@@ -497,6 +537,18 @@ const NOT_A_GENERATOR_FORK = {
     'rule, which is a loophole a real fork could adopt.',
 }
 
+// This suite's own transient fixture namespace. BOTH ui workspaces run this file
+// (each `npm run check` invokes it), so two runs can overlap on one box and one
+// run's probe would otherwise be reported as the other's stray — a flaky RED for
+// a tree that is fine. Excluded here and asserted present by TEST-6, so the probe
+// is still proven discoverable.
+const PROBE_PREFIX = '.fork-probe-'
+const straysOutsideShared = () =>
+  discoverEnumerationCopies(ROOT)
+    .filter(c => !c.file.startsWith(`${SDK_SCRIPTS}${path.sep}`))
+    .map(c => rel(c.file))
+    .filter(r => !(r in NOT_A_GENERATOR_FORK) && !r.includes(PROBE_PREFIX))
+
 test('TEST-3 [acceptance INV-1] unify: NO second enumeration/generator exists (content-discovered)', () => {
   // The half that closes the hand-list hole. Discovery is by what a copy must DO,
   // so a re-fork under a new name or in a new directory is still found.
@@ -519,10 +571,7 @@ test('TEST-3 [acceptance INV-1] unify: NO second enumeration/generator exists (c
     )
   }
 
-  const strays = copies
-    .filter(c => !c.file.startsWith(`${SDK_SCRIPTS}${path.sep}`))
-    .map(c => rel(c.file))
-    .filter(r => !(r in NOT_A_GENERATOR_FORK))
+  const strays = straysOutsideShared()
   assert.deepEqual(
     strays,
     [],
@@ -536,29 +585,60 @@ test('TEST-6 [acceptance INV-3] unify: discovery goes RED for a fork under ANY n
   // The mutation the hand list missed. Planted in the REAL tree (try/finally), in a
   // directory nobody listed and under a name nobody would grep for, because that is
   // precisely the copy a path list cannot see.
-  const dir = path.join(ROOT, 'src-app/ui/scripts/local')
+  //
+  // The directory is created by mkdtemp, NOT a fixed `scripts/local` path. The
+  // fixed-path version destroyed whatever was already there: mkdirSync(recursive)
+  // succeeds on an existing directory and the finally rm -r'd the WHOLE thing —
+  // silently, while reporting PASS, on every `npm run check` in both workspaces.
+  // A unique name cannot collide, so cleanup can only ever remove what we made.
+  const dir = fs.mkdtempSync(path.join(ROOT, 'src-app/ui/scripts/.fork-probe-'))
   const planted = path.join(dir, 'surface-enum-helper.mjs')
   try {
-    fs.mkdirSync(dir, { recursive: true })
     fs.writeFileSync(
       planted,
-      'export async function enumerateSurfaces(page) { return page.evaluate(() => ({})) }\n' +
+      // A TS-style annotated const: the form a real re-fork is most likely to take
+      // here, and one the first version of this guard could not see.
+      'export const enumerateSurfaces: Enumerate = async page => page.evaluate(() => ({}))\n' +
         'export function captureCells() { return [] }\n',
     )
-    const strays = discoverEnumerationCopies(ROOT)
+    const discovered = discoverEnumerationCopies(ROOT).map(c => rel(c.file))
+    assert.ok(
+      discovered.includes(rel(planted)),
+      'a re-forked enumeration must be discovered wherever it is planted, under ' +
+        `whatever name, in whatever declaration form. Discovered:\n  ${discovered.join('\n  ')}`,
+    )
+    // …and it must be reported as a STRAY, not merely seen: the probe path is
+    // temporarily un-excluded so the real reporting path is what gets proven.
+    const reported = discoverEnumerationCopies(ROOT)
       .filter(c => !c.file.startsWith(`${SDK_SCRIPTS}${path.sep}`))
       .map(c => rel(c.file))
       .filter(r => !(r in NOT_A_GENERATOR_FORK))
-    assert.deepEqual(
-      strays,
-      ['src-app/ui/scripts/local/surface-enum-helper.mjs'],
-      'a re-forked enumeration must be discovered wherever it is planted',
+    assert.ok(
+      reported.includes(rel(planted)),
+      'the planted fork must reach the stray report, not just the raw discovery',
     )
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }
   // …and the tree is left as it was.
-  assert.equal(fs.existsSync(planted), false, 'the mutation fixture must be cleaned up')
+  assert.equal(fs.existsSync(dir), false, 'the mutation fixture must be cleaned up')
+})
+
+test('TEST-3 [acceptance INV-1] unify: the SHARED package holds exactly ONE enumeration', () => {
+  // Everything under sdk/.../scripts/ was previously a blanket safe harbour, so a
+  // `gallery-surfaces-legacy.mjs` left behind by the next refactor would have been
+  // "shared" and invisible — while being precisely the second implementation the
+  // invariant forbids. Inside the package, exactly one file may DEFINE the API;
+  // every other script imports it.
+  const definers = discoverEnumerationCopies(SDK_SCRIPTS)
+    .filter(c => c.api.length > 0)
+    .map(c => rel(c.file))
+  assert.deepEqual(
+    definers,
+    ['sdk/packages/gallery/scripts/lib/gallery-surfaces.mjs'],
+    'exactly ONE file in the shared package may implement surface enumeration; ' +
+      'a sibling copy inside the package is still a second implementation',
+  )
 })
 
 test('TEST-3 [acceptance INV-1] unify: the six named forks are absent and the scripts point at the sdk', () => {
@@ -641,7 +721,13 @@ test('TEST-1 unify: the ONE shared generator serves BOTH workspaces (real runs)'
       // The banner alone tolerates ZERO — and zero is exactly the fail-open shape
       // (a lost kit-import specifier makes every overlay host vanish). Assert a floor
       // wherever the tree genuinely has surfaces.
-      const n = Number((out.match(/\((\d+) (?:overlay )?surfaces/) || [])[1])
+      //
+      // The count follows EITHER '(' (coverage, state-matrix) or an em-dash
+      // (overlay: `overlay gate OK — 38 overlay surfaces (37 hosts, …)`). The first
+      // version anchored on '(' only, so it silently skipped the overlay generator —
+      // i.e. the exact generator whose fail-open case the comment above cites, and
+      // it would have matched `37 hosts` rather than the surface count anyway.
+      const n = Number((out.match(/(?:—|\() ?(\d+) (?:overlay )?surfaces/) || [])[1])
       if (Number.isFinite(n))
         assert.ok(
           n > 0,
