@@ -19,7 +19,7 @@
  *
  *   npx vitest run src/modules/file-rag/pages/FileRagAdminPage.test.tsx
  */
-import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest'
 import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -136,6 +136,37 @@ class Boundary extends React.Component<
 
 let root: Root | null = null
 let host: HTMLElement | null = null
+
+/**
+ * Warm the page's module graph OUTSIDE any test's time budget.
+ *
+ * `setupHarness` reaches this page through `await import(...)`, and on the FIRST
+ * call Vite has to transform the whole graph behind it — the page, its seven
+ * section cards, `@ziee/shell`, `@ziee/kit` and their transitive imports.
+ * Measured here that is ~3.5s of a ~3.9s first test, against Vitest's 5000ms
+ * default per-test timeout — roughly 1.1s of headroom. The remaining ~400ms is
+ * the part this spec actually asserts. So on a loaded box the FIRST test in this
+ * file dies with `Test timed out in 5000ms` while nothing about the component is
+ * wrong; the second and third tests, importing from cache, cost ~45ms and never
+ * flake. (Measured: 1 timeout in 80 runs under 8-way contention, 0 in 118
+ * uncontended runs, and this test at 3615ms was the slowest in the whole
+ * component suite — the next slowest was 2007ms.)
+ *
+ * Paying that transform in `beforeAll`, with its own explicit and generous
+ * budget, is deliberately NOT the same as raising `testTimeout`: each test keeps
+ * the 5s that guards the behaviour it asserts, so a genuine hang still fails.
+ * Only the build-cache warm-up — which is not under test — gets the long budget.
+ *
+ * This changes no semantics: tests 2 and 3 already resolve these modules from
+ * cache, i.e. already run with the graph evaluated before their own
+ * `setAuthView` call. Warming simply puts test 1 in the state its siblings are
+ * always in. Per-test isolation is untouched — `setupHarness` still builds a
+ * fresh Auth store and re-registers the view on every test.
+ */
+beforeAll(async () => {
+  await import('@/modules/file-rag/stores/fileRagAdmin')
+  await import('./FileRagAdminPage')
+}, 120_000)
 
 beforeEach(() => {
   consoleErrors.length = 0
