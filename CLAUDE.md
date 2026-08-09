@@ -1919,9 +1919,30 @@ the product.
 before. `npm run check:harness-parity` (part of `npm run check`) refuses a tree
 where a behavioural core is present in one copy and missing from the other. The
 shared behaviour itself lives in `sdk/packages/gallery/scripts/lib/`
-(`host-lock.mjs`, `run-validity.mjs`) which both copies import, and is unit-tested
-by `npm run test:gallery-scripts`. A third, DEAD copy at
+(`host-lock.mjs`, `run-validity.mjs`, `finding-classify.mjs`) which both copies
+import, and is unit-tested by `npm run test:gallery-scripts`. A third, DEAD copy at
 `src-app/ui/scripts/runtime-health.mjs` was deleted — it had zero invokers.
+
+**The copy list is ziee's, not the sdk's** — `@ziee/gallery` defines the CORES;
+which copies exist is supplied by the consumer, like every other gallery-script
+anchor (`srcDir`/`extraTrees`). Both ui workspaces set `"harnessCopies"` in their
+`gallery.config.json`, pointing at ONE committed root manifest,
+**`gallery-harness-copies.json`** — a per-workspace list would re-create, in the
+guard's own config, the duplication the guard exists to catch. **Adding a core, or
+a new live harness copy, means editing that manifest**; the guard fails on a core
+declared by no copy, an empty/unknown `cores` entry, an unknown `role`, and (via
+`check-harness-parity.consumer.test.mjs`) on any harness-shaped file on disk that
+the manifest does not declare. With no `harnessCopies` at all it says so and exits
+0 — that is the standalone-package case, not a pass.
+
+**Severity is decided by the message TEXT, never by the console channel.** React 19
+routes developer warnings through `console.error`, so a channel-derived severity
+gated every React warning as HIGH against the harness's own MEDIUM taxonomy.
+`classifyConsoleMessage` is the single source. Note the deliberate asymmetry: only
+the narrow `REACT_WARNING_STRICT` list is downgraded on the **error** channel,
+because there a false match is a gate hole (`/is deprecated/i` matches a real
+`410 Gone … is deprecated`); the looser historical list still applies on the
+**warning** channel, where over-matching costs nothing.
 The visual-testing layers themselves (Layer A layout invariants + axe, Layer B
 screenshots) live in `tests/e2e/visual/` and run under
 `playwright.visual.config.ts`.

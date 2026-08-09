@@ -107,7 +107,7 @@
     "test:unit:watch": "vitest --config vitest.config.ts",
     "check:gallery-seed-registry": "node ../../../sdk/packages/gallery/scripts/gen-gallery-seed-registry.mjs --src src --check",
     "gen:gallery-seed-registry": "node ../../../sdk/packages/gallery/scripts/gen-gallery-seed-registry.mjs --src src",
-    "test:gallery-scripts": "node --test ../../../sdk/packages/gallery/scripts/check-harness-parity.test.mjs ../../../sdk/packages/gallery/scripts/lib/host-lock.test.mjs ../../../sdk/packages/gallery/scripts/lib/run-validity.test.mjs ../../../sdk/packages/gallery/scripts/lib/finding-classify.test.mjs",
+    "test:gallery-scripts": "node --test ../../../sdk/packages/gallery/scripts/check-harness-parity.test.mjs ../../ui/scripts/check-harness-parity.consumer.test.mjs ../../../sdk/packages/gallery/scripts/lib/host-lock.test.mjs ../../../sdk/packages/gallery/scripts/lib/run-validity.test.mjs ../../../sdk/packages/gallery/scripts/lib/finding-classify.test.mjs",
     "check:harness-parity": "node ../../../sdk/packages/gallery/scripts/check-harness-parity.mjs"
   },
   "type": "module"

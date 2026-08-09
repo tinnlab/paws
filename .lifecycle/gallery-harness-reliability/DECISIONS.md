@@ -83,14 +83,41 @@ ADDED (6) — REAL ids rendered in `??`/ternary value positions that the regex s
 ## Descopes requiring OWNER sign-off (phase-3 FB-7 gate)
 
 These are recorded here so the cut is VISIBLE and gated, never a silent omission.
-**They deliberately carry no `[approved: …]` token**, because I do not have the
-owner's approval and writing one would be exactly the self-certification the gate
-exists to prevent. Phase 3 stays RED until the owner decides — that red is the
-correct state, not a defect in the artifacts.
+They carried no `[approved: …]` token until the owner ruled, and phase 3 stayed
+RED for that whole period — that red was the correct state, not a defect in the
+artifacts. **The owner has now approved the descope** (DEC-D2 below).
 
-- DESCOPED: ITEM-7 — `--repeat=N` in `runtime-health.mjs`. [approval: PENDING — owner]
-- DESCOPED: ITEM-8 — reproduce-to-gate (`flaky` annotation, subtracted from gating). [approval: PENDING — owner]
-- DESCOPED: ITEM-9 — `gate-ui` roll-up awareness of the `flaky` flag. [approval: PENDING — owner]
+- DESCOPED: ITEM-7 — `--repeat=N` in `runtime-health.mjs`. [approved: owner (coordinator), 2026-08-08 — see DEC-D2]
+- DESCOPED: ITEM-8 — reproduce-to-gate (`flaky` annotation, subtracted from gating). [approved: owner (coordinator), 2026-08-08 — see DEC-D2]
+- DESCOPED: ITEM-9 — `gate-ui` roll-up awareness of the `flaky` flag. [approved: owner (coordinator), 2026-08-08 — see DEC-D2]
+
+### DEC-D2: Build the reproduce-to-gate (`--repeat`) mechanism for D2, or descope it?
+
+**Resolution:** DESCOPE ITEM-7/8/9 from this branch. Not deferred-because-maybe-
+redundant (the flake study killed that reason) — descoped because **the mechanism
+that makes the failing set move is still UNKNOWN**, and a repeat-gate is the wrong
+instrument to build over an unknown cause.
+
+**Basis:** user — the owner's explicit ruling. The reasoning, recorded so a later
+reader does not re-litigate it: a reproduce-to-gate requires a finding to occur
+**twice** before it gates. Against a cause we cannot name, that is not a filter for
+noise — it is a blanket **suppression rule that halves the sensitivity of the gate
+to every real defect as well**, including a genuine load-dependent one (the exact
+class the study's own load correlation points at). Suppressing a real defect by
+demanding it happen twice is a worse failure than reporting an unstable set
+honestly. D2 is also proven INDEPENDENT of the D1/D3/D4 fixes this branch ships,
+so descoping it costs those fixes nothing.
+
+What ships instead: the instability stays VISIBLE and honestly reported (the
+validity line + the per-run findings), and D2 is carried as a named open
+investigation rather than papered over. The correct next step is to identify the
+mechanism — not to gate on repetition.
+
+**Superseding measurement.** Before this ruling was applied, the React-warning
+severity misclassification (FB-6) was found and fixed on this branch, and D2 was
+**re-measured** against the corrected gate — see FLAKE_STUDY.md § "Re-measurement".
+That result does NOT reopen this descope either way; it is recorded because the
+owner asked for it to be reported honestly in both directions.
 
 **Why they are cut, and why the reason CHANGED mid-branch.** They were originally
 deferred on a hypothesis: `run-key.mjs`'s own doc-comment attributes "failing

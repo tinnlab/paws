@@ -167,6 +167,30 @@ Lifted VERBATIM from DESIGN.md.
   others. Reads its expectations from a committed product-tree file, never from
   `.lifecycle/` (rule B6).
 
+- **ITEM-23**: Fix the React-warning severity MISCLASSIFICATION. The harness
+  taxonomy rates `unique "key" prop` (and the rest of `REACT_WARNING`) as
+  `react-warning`/**MEDIUM**, but that branch was only consulted when
+  `msg.type() === 'warning'`. React 19 routes developer warnings through
+  `console.error`, so every React warning was recorded as `console-error`/**HIGH**
+  and GATED its surface — the code contradicting its own taxonomy. Make console
+  classification **channel-independent** and single-source it in
+  `lib/finding-classify.mjs` (`classifyConsoleMessage`), alongside the
+  `REACT_WARNING` list and `errSeverity` that were duplicated in each crawl copy.
+  Add a `console-classification` parity core so the fix cannot land in one copy
+  only. Found BY the flake study (FB-6); it is a defect, not a flake, and it
+  inflates D2's apparent instability.
+- **ITEM-24**: Remove the parity guard's own consumer coupling (FB-7).
+  `check-harness-parity.mjs` hardcoded `src-app/desktop/ui/...` — ziee's layout —
+  INSIDE the shared `@ziee/gallery` package, so the guard and its own test were
+  red-by-construction in a standalone sdk checkout or a second consumer. That is
+  the SAME defect class this branch is removing, so shipping it would be trading
+  one coupling for another. INVERT it: the consumer declares its copies via
+  `gallery.config.json`'s `harnessCopies` (the `srcDir`/`extraTrees`/`kitTestIds`
+  pattern), pointing at ONE committed root manifest shared by both workspaces
+  (duplicating the list per workspace would re-create the drift the guard checks
+  for). The package keeps the app-agnostic CORES + engine + config contract; the
+  real-tree acceptance case moves consumer-side.
+
 ## Files to touch
 
 - `sdk/packages/gallery/scripts/runtime-health.mjs` — ITEM-1..5, 7, 8, 12
@@ -381,3 +405,21 @@ not reasoned from the plan.
   `agent-kit/skills/live-ui-audit/SKILL.md:24/344` name
   `scripts/runtime-health.mjs` / `scripts/gate-ui.mjs` paths that ITEM-19 changes;
   CODING_GUIDELINES §17 requires docs to reference only verified paths.
+
+- **ITEM-23** — verdict: PASS — verified against the codebase: `REACT_WARNING` and
+  `errSeverity` were byte-identical duplicates in both `runtime-health.mjs`
+  copies, and both consulted the channel. `lib/finding-classify.mjs` is already
+  the single-sourced classifier both copies import (ITEM-18's pattern), so the
+  new arm follows the established seam rather than inventing one. Risk checked:
+  the downgrade must not blind the gate — `ERRORBOUNDARY` still outranks the
+  warning arm, and the error-state MEDIUM rule is preserved; both directions are
+  asserted (TEST-32).
+- **ITEM-24** — verdict: PASS — `lib/gallery-config.mjs` already IS the
+  consumer-supplies-paths seam (`srcDir`, `extraTrees`, `kitTestIds`,
+  `runtimeBaselineModule` all default to ziee's historical value and are
+  overridable), so this conforms to the module's existing contract rather than
+  adding a new mechanism. B6-safe: the manifest is a committed PRODUCT-tree file
+  at the repo root (`gallery-harness-copies.json`), never a `.lifecycle/`
+  artifact, so it survives the merge strip. Failure modes closed explicitly: an
+  unreadable/malformed manifest THROWS and an unknown core id is an ERROR — a
+  gate must never degrade to silently checking nothing.

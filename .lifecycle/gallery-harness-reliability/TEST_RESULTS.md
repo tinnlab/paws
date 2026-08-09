@@ -164,3 +164,45 @@ the previous version of that test passed the same mutation (exit 0).
 - **`gate:ui` still exits 1** on both base and branch, because
   `seeded-s3-version-models-failed` has a real, pre-existing product defect.
 - **D2 is measured, not fixed.**
+
+---
+
+## Round 2 + 3 results (ITEM-23, ITEM-24)
+
+Real exit codes, captured with `set -o pipefail` (a recorded PASS taken from a
+`| tail` is a pipeline artifact, not a result).
+
+- **TEST-32**: PASS — `node --test .../lib/finding-classify.test.mjs` → **26 pass /
+  0 fail**. Observed RED first: `SyntaxError: The requested module
+  './finding-classify.mjs' does not provide an export named
+  'classifyConsoleMessage'`. Mutation-verified afterwards — loose-list-on-error
+  25/1, precedence reversed 25/1, channel filter removed 25/1, `errSeverity`
+  always-HIGH 25/1, control 26/0.
+- **TEST-33**: PASS — parity ENGINE against synthetic fixtures, no consumer path
+  in the shared package's test. Per-core removal loop, dead wiring,
+  producer/consumer role split, missing copy, unknown core, core-declared-by-none,
+  empty cores, unknown role, collected-not-early-returned.
+- **TEST-34**: PASS — config contract: absent ⇒ nothing to check; inline array
+  resolves against cwd; manifest string resolves against the MANIFEST;
+  unreadable and malformed both THROW.
+- **TEST-35**: PASS — measured red→green on a STANDALONE checkout of
+  `sdk/packages/gallery` with no consumer tree:
+  BEFORE `guard exit=1`, 4 violations, package test **3 pass / 3 fail**;
+  AFTER `guard exit=0` ("no consumer harness copies configured"), package test
+  **12 pass / 0 fail**. In ziee's tree the guard still ENFORCES from BOTH
+  workspace cwds: `4 live copies … all 5 behavioural cores`, exit 0.
+- **TEST-36**: PASS — D2 re-measured; see FLAKE_STUDY.md § Re-measurement. Both
+  runs VALID (ERR_NETWORK_CHANGED **0**, transport artifacts **0 (0%)**,
+  248/248 cells, origin alive). **D2 still reproduces**: 1 vs 0 gating HIGH.
+  Reported in the direction the evidence went, including that the gate now flips
+  PASS/FAIL rather than looking more stable.
+- **TEST-6** (acceptance, INV-6): PASS — real-tree half now at
+  `src-app/ui/scripts/check-harness-parity.consumer.test.mjs`; 25 pass / 0 fail
+  across both halves. Mutation-verified: dropping a core from the manifest →
+  guard **exit 1**; a new `runtime-health.v2.mjs` → TEST-6g **red**; deleting
+  `harnessCopies` from the desktop config → TEST-6f **red**.
+
+### Frontend gate lines (re-run after the round-3 fixes)
+
+- `npm run check (ui): PASS` — exit 0
+- `npm run check (desktop/ui): PASS` — exit 0

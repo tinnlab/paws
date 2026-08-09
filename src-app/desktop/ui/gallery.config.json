@@ -1,11 +1,20 @@
 {
   "galleryDir": "src/dev/gallery",
   "srcDir": "src",
-  "surfaceRoots": ["src/modules", "src/components/ui"],
+  "surfaceRoots": [
+    "src/modules",
+    "src/components/ui"
+  ],
   "kitImport": "@ziee/kit",
   "portWhich": "desktopGallery",
   "galleryUrl": "/gallery.html",
-  "extraTrees": ["../../ui/src"],
-  "kitTestIds": ["../../../sdk/packages/kit/src", "../../../sdk/packages/shell/src"],
-  "testidOut": "../../../sdk/packages/kit/src/testIds.generated.ts"
+  "extraTrees": [
+    "../../ui/src"
+  ],
+  "kitTestIds": [
+    "../../../sdk/packages/kit/src",
+    "../../../sdk/packages/shell/src"
+  ],
+  "testidOut": "../../../sdk/packages/kit/src/testIds.generated.ts",
+  "harnessCopies": "../../../gallery-harness-copies.json"
 }

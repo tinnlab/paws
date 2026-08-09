@@ -1,14 +1,26 @@
 {
   "galleryDir": "src/dev/gallery",
-  "surfaceRoots": ["src/modules", "src/components/ui"],
+  "surfaceRoots": [
+    "src/modules",
+    "src/components/ui"
+  ],
   "kitImport": "@ziee/kit",
   "galleryUrl": "/gallery.html",
   "prodMarker": "ZIEE_GALLERY_SEED_MARKER",
   "distDir": "../../dist/ui",
   "buildCmd": "npm run build:nocheck",
-  "devCmd": ["npm", "run", "dev"],
-  "extraTrees": ["../desktop/ui/src"],
-  "kitTestIds": ["../../sdk/packages/kit/src", "../../sdk/packages/shell/src"],
+  "devCmd": [
+    "npm",
+    "run",
+    "dev"
+  ],
+  "extraTrees": [
+    "../desktop/ui/src"
+  ],
+  "kitTestIds": [
+    "../../sdk/packages/kit/src",
+    "../../sdk/packages/shell/src"
+  ],
   "testidOut": "../../sdk/packages/kit/src/testIds.generated.ts",
   "runtimeBaselineModule": "src/dev/gallery/runtime-baseline.js",
   "visualConfig": "playwright.visual.config.ts",
@@ -20,5 +32,8 @@
     "chat-collapse-borders.spec.ts",
     "input-group-overflow.spec.ts"
   ],
-  "visualSnapshotSpecs": ["gallery.spec.ts"]
+  "visualSnapshotSpecs": [
+    "gallery.spec.ts"
+  ],
+  "harnessCopies": "../../gallery-harness-copies.json"
 }

@@ -109,3 +109,113 @@ failure" as different things.
 Separately, investigate the React-key-warning severity misclassification above; it
 inflates gating HIGHs on every surface and is likely a meaningful share of what
 made this gate feel unreliable.
+
+---
+
+# Re-measurement (TEST-36) — after the React-warning severity fix (ITEM-23)
+
+Run on a **fleet-paused** box (0 explorers; the rig stayed up on :1520 but was not
+driven), on a dedicated port `:1731` bind-checked free, with this worktree's own
+`node_modules` and `.vite` dropped first. Both runs use the same scope as flake2
+(`--report-only --only-kinds=seeded`, 248 cells) so the numbers are comparable.
+
+## Validity FIRST (the owner's gate)
+
+| run | ERR_NETWORK_CHANGED | transport artifacts | cells | origin | verdict |
+|---|---|---|---|---|---|
+| flake3/run01 | **0** | **0 (0%)** | 248/248 | alive (51 checks) | VALID |
+| flake3/run02 | **0** | **0 (0%)** | 248/248 | alive (48 checks) | VALID |
+
+Neither run is dismissible. Contention caveat, stated rather than hidden: the box
+was not fully quiet — two other agents (`wt-notif-popover`, `wt-filerag-hooks`)
+were mid-run and ~36 chromium processes remained after the pause. The port was
+chosen and verified free specifically because a foreign-worktree port collision is
+one of D1's three reproducing triggers. With 0 transport artifacts in both runs,
+a collision is ruled out for THESE runs; general CPU contention is not, and is a
+live confounder for the load-correlated behaviour below.
+
+## Result — D2 STILL REPRODUCES
+
+| run | findings | gating HIGH | failing surfaces |
+|---|---|---|---|
+| flake3/run01 | 195 | **1** | `hardware-monitor` (1) |
+| flake3/run02 | 200 | **0** | — none |
+
+**Two VALID runs, identical input, disagree.** Per the owner's framing this is the
+stronger of the two possible answers: D2 is a **confirmed defect, independent of
+D1/D3/D4 and independent of the misclassification**. It does NOT reopen the
+approved descope (DEC-D2).
+
+## What the fix DID change — and it is not a stability win
+
+The misclassification was **the entirety of the previously "stable" failing
+surface**. `seeded-s3-version-models-failed` failed in 2/2 flake2 runs; its two
+findings were both `Each child in a list should have a unique "key" prop` from
+`VersionModelsBlock`. In flake3 those same two findings are still RECORDED, now at
+**MEDIUM** — correctly, per the harness's own taxonomy — and the surface no longer
+gates. That is the fix working exactly as intended, verified in the run data
+(`react key-warnings recorded: 2 -> severities: ['MEDIUM']` in both runs).
+
+But the instability did not shrink; it changed KIND, and got more visible:
+
+- **Before** the fix: 8 vs 2 gating HIGH — both runs FAIL. Instability was
+  *count*-visible only; the verdict agreed.
+- **After** the fix: 1 vs 0 gating HIGH — run01 **FAILS**, run02 **PASSES**.
+  Instability is now **verdict-visible**.
+
+This is an honest gate and a worse-looking one. Removing the constant background
+of misclassified HIGHs did not stabilise the verdict; it removed the floor that
+was masking the flip. Reporting it as "the gate got more reliable" would be false.
+
+## The disagreeing finding is the SAME product-defect family, on a NEW surface
+
+flake3/run01's single gating HIGH:
+
+```
+[hardware-monitor | seeded | light] console-error
+Internal React error: Expected static flag was missing. Please notify the React team.
+```
+
+That is the second of the two recurring texts flake2 recorded, and it is the
+mount-time face of the same hook-count instability as flake2's
+`Rendered more hooks than during the previous render` (a missing passive-effect
+static flag is what React reports when a component's hook set differs between the
+mount and the next render).
+
+Independent corroboration of the mechanism, from a different direction: the
+component behind flake2's crash was traced to shared shell code reading
+`appLayoutSeam.peek()?.nativeScroll` — an optional chain over a call result, so
+the store proxy's get-trap (2 hooks) either runs or short-circuits (0 hooks)
+depending on whether the `app-layout` chunk has landed. **`HardwareMonitor.tsx:147`
+renders `DivScrollY`** — the very component carrying that read
+(`sdk/packages/shell/src/components/DivScrollY.tsx:34-36`) — and, like
+`seeded-file-rag-error`, it is a lazy component whose seeded `setup` forces a
+second render pass. Two different surfaces, one shared mechanism.
+
+So the re-measurement supports, and does not weaken, the reading that **the
+harness is faithfully reporting a genuinely nondeterministic PRODUCT defect**.
+The defect is in `sdk/packages/shell`, affects any surface using
+`DivScrollY`/`SettingsPageContainer`, and is owned elsewhere
+(`wt-filerag-hooks`); it is deliberately NOT fixed on this branch.
+
+## What this says about the descope, restated
+
+A reproduce-to-gate would require a finding to occur in EVERY run before it gates.
+Applied to flake3, it would have suppressed the `hardware-monitor` React internal
+error (1 of 2 runs) — and applied to flake2, the `seeded-file-rag-error`
+ErrorBoundary crash (1 of 2 runs). In the only two samples that exist, the
+mechanism would have suppressed exactly the real product defects and retained only
+the misclassified warning. The descope is right.
+
+## Honest limits
+
+- **N = 2 valid runs**, again. Enough to prove the set is unstable (one
+  disagreement on identical input does that); NOT enough to estimate a rate. No
+  percentage is claimed.
+- Scope is `--only-kinds=seeded` (248 of 682 cells); a flaky non-seeded surface
+  would not have been seen.
+- CPU contention from the two still-running agents could not be excluded, and the
+  behaviour is load-correlated, so run01-vs-run02 ordering may not be neutral.
+- `seeded-file-rag-error` gated in NEITHER flake3 run, having gated in 1 of 2
+  flake2 runs. Consistent with load-dependence on a quieter box, but with N=2 that
+  is an observation, not a measurement.
