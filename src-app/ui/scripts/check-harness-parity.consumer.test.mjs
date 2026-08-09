@@ -20,6 +20,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -317,4 +318,25 @@ test('TEST-6g every harness-shaped file on disk is DECLARED (closed-world guard)
       found.includes(path.resolve(c.file)),
       `discovery must find the declared copy ${c.id}; if it cannot, it cannot find an undeclared one either`,
     )
+})
+
+test('TEST-40 the guard PRINTS its own limit (behaviour, not source text)', () => {
+  // Executed, not scanned. The first version of this test read the SOURCE for the
+  // caveat; an auditor defeated it by deleting the words from the printed line and
+  // leaving them in an adjacent comment — green suite, silent operator. What
+  // matters is what an operator SEES, so run the guard and read stdout.
+  const r = spawnSync(
+    process.execPath,
+    ['../../sdk/packages/gallery/scripts/check-harness-parity.mjs'],
+    { cwd: UI, encoding: 'utf8' },
+  )
+  assert.equal(r.status, 0, `guard should pass on the real tree:\n${r.stdout}\n${r.stderr}`)
+  const out = `${r.stdout}${r.stderr}`
+  assert.match(out, /harness parity: OK/, 'expected the success banner')
+  assert.match(out, /WIRES each core/, 'the printed line must say it proves WIRING')
+  assert.match(
+    out,
+    /NOT prove the copy'?s logic/,
+    'and must print what it does NOT prove — a wiring check read as verification is the defect',
+  )
 })
