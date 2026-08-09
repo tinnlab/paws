@@ -45,3 +45,29 @@ async fn runtime_versions_engine_filter_rejects_nul() {
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "unpermitted caller");
 }
+
+/// REGRESSION (blind audit, round 1) — `?engine=` must stay a filter.
+///
+/// `list_runtime_versions` previously did `if let Some(engine) = params.engine`
+/// on an OWNED String, so `?engine=` was `Some("")` and queried
+/// `WHERE engine = ''` -> 0 rows. Routing it through a normalizer that maps
+/// blank to `None` flipped it to the `else` arm -> EVERY version of EVERY
+/// engine. `guard_raw` preserves the original meaning.
+#[tokio::test]
+async fn empty_engine_filter_still_filters_and_does_not_widen() {
+    let server = TestServer::start().await;
+    let user = create_user_with_permissions(
+        &server,
+        "rtver_empty",
+        &["llm_local_runtime::versions_read"],
+    )
+    .await;
+
+    let (status, body) = get(&server, &user.token, "/local-runtime/versions?engine=").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["versions"].as_array().map(|a| a.len()),
+        Some(0),
+        "an empty engine filter must match nothing, not fall back to unfiltered: {body}"
+    );
+}

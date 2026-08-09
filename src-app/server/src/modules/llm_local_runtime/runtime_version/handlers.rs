@@ -81,14 +81,20 @@ pub async fn list_runtime_versions(
     _auth: RequirePermissions<(RuntimeVersionRead,)>,
     Query(params): Query<ListVersionsQuery>,
 ) -> ApiResult<Json<RuntimeVersionListResponse>> {
+    // `engine` is bound as `WHERE engine = $1` with no other validation — the
+    // same text-bind class as the list `search` filters, same shared guard.
+    //
+    // Guarded FIRST, before the BinaryManager construction below, so that a
+    // cache-dir failure cannot turn a NUL-bearing request back into the 500
+    // this guard exists to prevent. `guard_raw`, NOT `normalize_text_filter`:
+    // the old code bound the raw value, so blank→None would widen `?engine=`
+    // from an empty page to every version of every engine.
+    let engine = crate::common::text_guard::guard_raw(params.engine.as_deref(), "engine")?;
+
     let pool = Repos.pool();
     let binary_manager = BinaryManager::with_cache_dir(pool.clone(), std::path::PathBuf::from(crate::core::get_caches_config().llm_engines_dir()))
         .map_err(|e| AppError::internal_with_id(e))?;
 
-    // `engine` is bound as `WHERE engine = $1` with no other validation — the
-    // same text-bind class as the list `search` filters, same shared guard.
-    let engine =
-        crate::common::text_guard::normalize_text_filter(params.engine.as_deref(), "engine")?;
     let versions = if let Some(engine) = engine {
         binary_manager
             .list_versions_for_engine(engine, params.page, params.per_page)
@@ -781,6 +787,7 @@ pub fn list_runtime_versions_docs(op: aide::transform::TransformOperation) -> ai
         .description("List all registered runtime versions, optionally filtered by engine")
         .tag("Runtime Versions")
         .response::<200, Json<RuntimeVersionListResponse>>()
+        .response_with::<400, (), _>(|res| res.description("Invalid query parameter (e.g. a NUL byte in a free-text filter)"))
 }
 
 pub fn get_runtime_version_docs(op: aide::transform::TransformOperation) -> aide::transform::TransformOperation {

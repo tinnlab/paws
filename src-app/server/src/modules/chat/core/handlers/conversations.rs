@@ -16,10 +16,9 @@ use crate::{
         chat::core::{
             models::Conversation,
             permissions::*,
-
             types::{
-                streaming::{SSEChatStreamEvent, SSEChatStreamHistoryReplacedData},
                 ConversationListResponse, CreateConversationRequest, UpdateConversationRequest,
+                streaming::{SSEChatStreamEvent, SSEChatStreamHistoryReplacedData},
             },
         },
         chat::stream::publish_raw_event,
@@ -81,14 +80,23 @@ pub async fn create_conversation(
     Json(request): Json<CreateConversationRequest>,
 ) -> ApiResult<Json<Conversation>> {
     // Validate title length if provided
-    if let Some(title) = &request.title
-        && title.len() > 500 {
-            return Err(AppError::bad_request("VALIDATION_ERROR", "Title must not exceed 500 characters").into());
+    if let Some(title) = &request.title {
+        if title.len() > 500 {
+            return Err(AppError::bad_request(
+                "VALIDATION_ERROR",
+                "Title must not exceed 500 characters",
+            )
+            .into());
         }
+        // A `text` column cannot hold U+0000; the length cap does not catch it.
+        crate::common::text_guard::reject_nul(title, "Title")?;
+    }
 
-    let conversation =
-        Repos.chat.core.create_conversation(auth.user.id, request.model_id, request.title)
-            .await?;
+    let conversation = Repos
+        .chat
+        .core
+        .create_conversation(auth.user.id, request.model_id, request.title)
+        .await?;
 
     sync_publish(
         SyncEntity::Conversation,
@@ -119,7 +127,10 @@ pub async fn get_conversation(
 
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<Conversation>> {
-    let conversation = Repos.chat.core.get_conversation( id, auth.user.id)
+    let conversation = Repos
+        .chat
+        .core
+        .get_conversation(id, auth.user.id)
         .await?
         .ok_or_else(|| AppError::not_found("Conversation"))?;
 
@@ -173,7 +184,13 @@ pub async fn list_conversations(
         .count_conversations(auth.user.id, search.as_deref())
         .await?;
 
-    Ok((StatusCode::OK, Json(ConversationListResponse { conversations, total })))
+    Ok((
+        StatusCode::OK,
+        Json(ConversationListResponse {
+            conversations,
+            total,
+        }),
+    ))
 }
 
 pub fn list_conversations_docs(op: TransformOperation) -> TransformOperation {
@@ -183,6 +200,9 @@ pub fn list_conversations_docs(op: TransformOperation) -> TransformOperation {
         .summary("List conversations")
         .description("List all conversations for the authenticated user with pagination")
         .response::<200, Json<ConversationListResponse>>()
+        .response_with::<400, (), _>(|res| {
+            res.description("Invalid query parameter (e.g. a NUL byte in a free-text filter)")
+        })
         .response_with::<401, (), _>(|res| res.description("Unauthorized"))
 }
 
@@ -195,10 +215,16 @@ pub async fn update_conversation(
     Json(request): Json<UpdateConversationRequest>,
 ) -> ApiResult<Json<Conversation>> {
     // Validate title length if provided
-    if let Some(Some(title)) = &request.title
-        && title.len() > 500 {
-            return Err(AppError::bad_request("VALIDATION_ERROR", "Title must not exceed 500 characters").into());
+    if let Some(Some(title)) = &request.title {
+        if title.len() > 500 {
+            return Err(AppError::bad_request(
+                "VALIDATION_ERROR",
+                "Title must not exceed 500 characters",
+            )
+            .into());
         }
+        crate::common::text_guard::reject_nul(title, "Title")?;
+    }
 
     let conversation = Repos
         .chat
@@ -246,13 +272,14 @@ pub async fn delete_conversation(
     // the link still exists. Owner-scoped inside, so a foreign/missing
     // conversation cancels nothing and the `!deleted` 404 below is unaffected.
     let cancelled_runs =
-        crate::modules::background_mcp::runs::cancel_conversation_background_runs(
-            id,
-            auth.user.id,
-        )
-        .await;
+        crate::modules::background_mcp::runs::cancel_conversation_background_runs(id, auth.user.id)
+            .await;
 
-    let deleted = Repos.chat.core.delete_conversation( id, auth.user.id).await?;
+    let deleted = Repos
+        .chat
+        .core
+        .delete_conversation(id, auth.user.id)
+        .await?;
 
     if !deleted {
         return Err(AppError::not_found("Conversation").into());
@@ -341,7 +368,9 @@ pub async fn compact_conversation(
     // summarizer failure must NOT fail the affordance; the marker still confirms
     // the user's action and the conversation stays usable.
     if let Err(e) = crate::modules::summarization::engine::summarizer::refresh_summary(
-        branch_id, model_id, Some(1),
+        branch_id,
+        model_id,
+        Some(1),
     )
     .await
     {
@@ -357,7 +386,10 @@ pub async fn compact_conversation(
     });
     publish_raw_event(auth.user.id, id, event.into());
 
-    Ok((StatusCode::OK, Json(serde_json::json!({ "compacted": true }))))
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({ "compacted": true })),
+    ))
 }
 
 pub fn compact_conversation_docs(op: TransformOperation) -> TransformOperation {

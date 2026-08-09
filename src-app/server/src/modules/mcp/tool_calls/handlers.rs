@@ -70,7 +70,11 @@ pub async fn list_tool_calls(
                 is_built_in: params.is_built_in,
                 // Bound as `tool_use_id = $5` — same text-bind class as the
                 // list `search` filters, same shared guard.
-                tool_use_id: crate::common::text_guard::normalize_text_filter(
+                //
+                // `guard_raw`, NOT `normalize_text_filter`: this binds the RAW
+                // value, so blank→None would widen `?tool_use_id=` from an
+                // empty page to the caller's ENTIRE tool-call history.
+                tool_use_id: crate::common::text_guard::guard_raw(
                     params.tool_use_id.as_deref(),
                     "tool_use_id",
                 )?,
@@ -96,6 +100,9 @@ pub fn list_tool_calls_docs(op: TransformOperation) -> TransformOperation {
         )
         .response::<200, Json<McpToolCallListResponse>>()
         .response_with::<401, (), _>(|res| res.description("Unauthorized"))
+        .response_with::<400, (), _>(|res| {
+            res.description("Invalid query parameter (e.g. a NUL byte in a free-text filter)")
+        })
 }
 
 /// GET /api/mcp/tool-calls/{id} — one tool-call row (404 if not owned).
@@ -253,9 +260,7 @@ pub fn reveal_tool_call_arguments_docs(op: TransformOperation) -> TransformOpera
         )
         .response::<200, Json<McpToolCallReveal>>()
         .response_with::<401, (), _>(|res| res.description("Unauthorized"))
-        .response_with::<403, (), _>(|res| {
-            res.description("Missing `mcp_servers_admin::edit`")
-        })
+        .response_with::<403, (), _>(|res| res.description("Missing `mcp_servers_admin::edit`"))
         .response_with::<404, (), _>(|res| {
             res.description("No such tool call, or it is not owned by the caller")
         })

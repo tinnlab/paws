@@ -126,8 +126,8 @@ pub(crate) fn validate_assistant_text_lengths(
     description: Option<&str>,
     instructions: Option<&str>,
 ) -> Result<(), AppError> {
-    if let Some(d) = description
-        && d.len() > ASSISTANT_MAX_DESCRIPTION_BYTES {
+    if let Some(d) = description {
+        if d.len() > ASSISTANT_MAX_DESCRIPTION_BYTES {
             return Err(AppError::bad_request(
                 "VALIDATION_ERROR",
                 format!(
@@ -136,8 +136,13 @@ pub(crate) fn validate_assistant_text_lengths(
                 ),
             ));
         }
-    if let Some(i) = instructions
-        && i.len() > ASSISTANT_MAX_INSTRUCTIONS_BYTES {
+        // The length cap does not catch U+0000 (a NUL-bearing value can be
+        // arbitrarily short), and these columns are `text`, so an unguarded
+        // NUL reached the INSERT and came back as a generic 500.
+        crate::common::text_guard::reject_nul(d, "description")?;
+    }
+    if let Some(i) = instructions {
+        if i.len() > ASSISTANT_MAX_INSTRUCTIONS_BYTES {
             return Err(AppError::bad_request(
                 "VALIDATION_ERROR",
                 format!(
@@ -146,6 +151,8 @@ pub(crate) fn validate_assistant_text_lengths(
                 ),
             ));
         }
+        crate::common::text_guard::reject_nul(i, "instructions")?;
+    }
     Ok(())
 }
 
@@ -352,7 +359,9 @@ pub async fn delete_user_assistant(
     Repos.assistant.delete(id).await?;
 
     // Emit deletion event for other modules to react (synchronous so cleanup completes before response)
-    event_bus.emit(AssistantEvent::deleted(id, Some(auth.user.id))).await;
+    event_bus
+        .emit(AssistantEvent::deleted(id, Some(auth.user.id)))
+        .await;
 
     sync_publish(
         SyncEntity::Assistant,

@@ -15,6 +15,20 @@
 //! BODY *or* in a QUERY PARAMETER — goes through this module.** Do not add a
 //! fourth private copy; that is the mistake this module exists to end.
 //!
+//! # Two entry points, and the difference matters
+//!
+//! [`reject_nul`] guards a value and returns it to you UNCHANGED. Use it
+//! whenever the existing code binds the raw value — an exact-match filter
+//! (`WHERE col = $1`) or a body field.
+//!
+//! [`normalize_text_filter`] additionally trims and maps blank to `None`. Use
+//! it ONLY where the call site already did that. Reaching for it at a site that
+//! did not is a **behaviour change, not a cleanup**: it turns `?p=` from
+//! "match the empty string" (a filter that selects nothing) into "no filter"
+//! (which selects EVERYTHING). Four call sites in this codebase bind the raw
+//! value for exactly that reason — see `background_mcp::runs`,
+//! `mcp::tool_calls::handlers`, and `llm_local_runtime::runtime_version`.
+//!
 //! # Why it lives here
 //!
 //! This guard previously existed as three independent private copies
@@ -56,6 +70,19 @@ pub fn reject_nul(value: &str, field: &str) -> Result<(), AppError> {
         ));
     }
     Ok(())
+}
+
+/// Guard an optional free-text query parameter and return it **unchanged**.
+///
+/// The counterpart to [`normalize_text_filter`] for call sites that bind the
+/// RAW value — exact-match filters (`WHERE col = $1`) and anything else where
+/// the pre-existing code did not trim. It adds the NUL rejection and nothing
+/// else, so it cannot change which rows a valid filter selects.
+pub fn guard_raw<'a>(raw: Option<&'a str>, field: &str) -> Result<Option<&'a str>, AppError> {
+    if let Some(value) = raw {
+        reject_nul(value, field)?;
+    }
+    Ok(raw)
 }
 
 /// Normalize a free-text list-filter query parameter.
@@ -152,24 +179,30 @@ mod tests {
         assert_eq!(err.error_code(), "VALIDATION_ERROR");
     }
 
-    /// TEST-4 [acceptance][INV-2] — REJECT, never strip. A pure "returns Err"
-    /// assertion would still pass against a stripping implementation that
-    /// errored for some other reason, so this asserts the result is never an
-    /// `Ok` carrying the NUL-stripped term.
+    /// TEST-4 [acceptance][INV-2] — REJECT, never strip.
+    ///
+    /// Written as a `match` on the Ok branch rather than `assert!(is_err())`
+    /// followed by `assert_ne!`: once `is_err()` has been asserted, `ok()` is
+    /// necessarily `None` and any subsequent `assert_ne!` against it is
+    /// unfalsifiable. Failing explicitly on ANY `Ok` — and naming the stripped
+    /// form when that is what came back — is what actually distinguishes
+    /// "rejected" from "silently rewritten".
     #[test]
     fn nul_is_rejected_never_silently_stripped() {
         for (input, stripped) in [("a\0b", "ab"), ("\0lead", "lead"), ("trail\0", "trail")] {
-            let out = normalize_text_filter(Some(input), "search");
-            assert!(
-                out.is_err(),
-                "input {input:?} must be refused, not normalized"
-            );
-            assert_ne!(
-                out.ok().flatten(),
-                Some(stripped),
-                "input {input:?} must NEVER be silently rewritten to {stripped:?} — \
-                 that would return hits the caller did not ask for"
-            );
+            match normalize_text_filter(Some(input), "search") {
+                Err(e) => assert_eq!(e.status_code(), 400, "input {input:?}"),
+                Ok(Some(v)) if v == stripped => panic!(
+                    "input {input:?} was silently rewritten to {stripped:?} — that \
+                     returns hits the caller did not ask for"
+                ),
+                Ok(other) => panic!("input {input:?} must be refused, got Ok({other:?})"),
+            }
+            // Same for the raw-preserving entry point.
+            match guard_raw(Some(input), "search") {
+                Err(e) => assert_eq!(e.status_code(), 400, "input {input:?}"),
+                Ok(other) => panic!("guard_raw({input:?}) must be refused, got Ok({other:?})"),
+            }
         }
     }
 
@@ -192,42 +225,71 @@ mod tests {
         }
     }
 
-    /// TEST-6 [acceptance][INV-3] — the guard is defined ONCE. Each of the
-    /// three pre-existing per-module wrappers must produce the same status and
-    /// error code as the shared definition; this fails the moment one drifts.
+    /// TEST-6 [acceptance][INV-3] — the guard is defined ONCE, asserted on the
+    /// thing that actually distinguishes delegation from a re-fork.
+    ///
+    /// Status and error code are NOT that thing: `400` + `VALIDATION_ERROR` is
+    /// what every hand-rolled `AppError::bad_request("VALIDATION_ERROR", …)`
+    /// produces, including the three private copies that existed BEFORE this
+    /// module — a test comparing only those two would have passed against the
+    /// duplication it is supposed to forbid. The MESSAGE is what a re-fork
+    /// changes, so the message format is the assertion: any wrapper must render
+    /// exactly `"{field} cannot contain NUL characters"`.
+    ///
+    /// Living here (rather than importing three feature modules into `common/`,
+    /// which would invert the module DAG) as a message-format contract; each
+    /// module's own test file asserts that ITS wrapper produces this format.
     #[test]
-    fn the_three_per_module_wrappers_agree_with_the_shared_definition() {
-        let shared = reject_nul("x\0y", "field").expect_err("shared rejects");
-
-        let wrappers: [(&str, AppError); 3] = [
+    fn the_rejection_message_format_is_the_single_contract() {
+        for (field, expected) in [
+            ("search", "search cannot contain NUL characters"),
+            ("Project name", "Project name cannot contain NUL characters"),
             (
-                "project::handlers::reject_nul",
-                crate::modules::project::handlers::reject_nul("x\0y", "Project name")
-                    .expect_err("project wrapper rejects"),
+                "Group description",
+                "Group description cannot contain NUL characters",
             ),
             (
-                "user::handlers::groups::reject_nul",
-                crate::modules::user::handlers::groups::reject_nul("x\0y", "Group description")
-                    .expect_err("groups wrapper rejects"),
+                "Message content",
+                "Message content cannot contain NUL characters",
             ),
-            (
-                "chat::…::validation::reject_nul_in_content",
-                crate::modules::chat::core::handlers::validation::reject_nul_in_content("x\0y")
-                    .expect_err("chat wrapper rejects"),
-            ),
-        ];
-
-        for (name, err) in wrappers {
-            assert_eq!(
-                err.status_code(),
-                shared.status_code(),
-                "{name} drifted from the shared guard's status"
-            );
-            assert_eq!(
-                err.error_code(),
-                shared.error_code(),
-                "{name} drifted from the shared guard's error code"
+        ] {
+            let err = reject_nul("x\0y", field).expect_err("rejects");
+            assert_eq!(err.status_code(), 400, "field {field}");
+            assert_eq!(err.error_code(), "VALIDATION_ERROR", "field {field}");
+            let rendered = serde_json::to_string(&err).expect("serialize");
+            assert!(
+                rendered.contains(expected),
+                "field {field}: expected message {expected:?}, got {rendered}"
             );
         }
+    }
+
+    /// `guard_raw` adds the rejection and NOTHING else — the property that
+    /// makes it safe at the four exact-match call sites whose pre-existing code
+    /// bound the value untouched. Trimming or blank→None there would widen
+    /// `?p=` from "match the empty string" to "no filter at all".
+    #[test]
+    fn guard_raw_returns_valid_input_byte_for_byte_unchanged() {
+        for raw in [None, Some(""), Some("   "), Some("  padded  "), Some("v")] {
+            assert_eq!(
+                guard_raw(raw, "status").unwrap(),
+                raw,
+                "guard_raw must not rewrite {raw:?}"
+            );
+        }
+        let err = guard_raw(Some("a\0b"), "status").expect_err("rejects NUL");
+        assert_eq!(err.status_code(), 400);
+        assert_eq!(err.error_code(), "VALIDATION_ERROR");
+    }
+
+    /// The two entry points differ EXACTLY where it matters: on a blank value
+    /// `normalize_text_filter` says "no filter" and `guard_raw` preserves the
+    /// caller's empty term. Picking the wrong one is the regression this pins.
+    #[test]
+    fn the_two_entry_points_differ_on_blank_and_that_is_the_point() {
+        assert_eq!(normalize_text_filter(Some(""), "p").unwrap(), None);
+        assert_eq!(guard_raw(Some(""), "p").unwrap(), Some(""));
+        assert_eq!(normalize_text_filter(Some(" x "), "p").unwrap(), Some("x"));
+        assert_eq!(guard_raw(Some(" x "), "p").unwrap(), Some(" x "));
     }
 }

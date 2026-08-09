@@ -162,7 +162,7 @@ fn validate_project_name(name: &str) -> Result<(), AppError> {
 /// existing call sites and their tests read unchanged. The guard itself lives
 /// in ONE place — this used to be one of three independent private copies, and
 /// that duplication is why the read path (query parameters) never got it.
-pub(crate) fn reject_nul(value: &str, field: &str) -> Result<(), AppError> {
+fn reject_nul(value: &str, field: &str) -> Result<(), AppError> {
     crate::common::text_guard::reject_nul(value, field)
 }
 
@@ -322,6 +322,9 @@ pub fn list_projects_docs(op: TransformOperation) -> TransformOperation {
         .tag("Projects")
         .summary("List user's projects")
         .response::<200, Json<ProjectListResponse>>()
+        .response_with::<400, (), _>(|res| {
+            res.description("Invalid query parameter (e.g. a NUL byte in a free-text filter)")
+        })
 }
 
 #[debug_handler]
@@ -440,7 +443,9 @@ pub async fn delete_project(
         user_id = %auth.user.id,
         "project: deleted"
     );
-    event_bus.emit(ProjectEvent::deleted(id, auth.user.id)).await;
+    event_bus
+        .emit(ProjectEvent::deleted(id, auth.user.id))
+        .await;
     sync_publish(
         SyncEntity::Project,
         SyncAction::Delete,
@@ -468,7 +473,9 @@ pub fn delete_project_docs(op: TransformOperation) -> TransformOperation {
 pub async fn duplicate_project(
     auth: RequirePermissions<(ProjectsCreate, ProjectsRead)>,
     Extension(event_bus): Extension<Arc<EventBus>>,
-    Extension(extension_registry): Extension<Arc<crate::modules::project::ProjectExtensionRegistry>>,
+    Extension(extension_registry): Extension<
+        Arc<crate::modules::project::ProjectExtensionRegistry>,
+    >,
     Path(id): Path<Uuid>,
     origin: SyncOrigin,
 ) -> ApiResult<Json<Project>> {
@@ -660,6 +667,22 @@ mod tests {
         assert_eq!(
             normalize_search(Some("roadmap")).unwrap().as_deref(),
             Some("roadmap")
+        );
+    }
+
+    /// INV-3 — this module's `reject_nul` wrapper must render the SHARED
+    /// message format, not a re-forked one. The message is what a re-fork
+    /// changes; the status/error-code pair is what every hand-rolled copy
+    /// already produced, so only the message can detect the drift.
+    #[test]
+    fn reject_nul_wrapper_renders_the_shared_message_format() {
+        let err = reject_nul("a\0b", "Project name").expect_err("rejects");
+        assert_eq!(err.status_code(), 400);
+        assert_eq!(err.error_code(), "VALIDATION_ERROR");
+        let rendered = serde_json::to_string(&err).expect("serialize");
+        assert!(
+            rendered.contains("Project name cannot contain NUL characters"),
+            "wrapper drifted from the shared message format: {rendered}"
         );
     }
 

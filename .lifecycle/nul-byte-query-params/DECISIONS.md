@@ -55,7 +55,15 @@ behaviour to reproduce, not five. Pinned by TEST-2 (unit) and TEST-14 (the
 pre-existing project search suite kept unmodified as the regression control).
 
 ### DEC-6: `agent-kit` is a shared submodule — is documenting the rule there safe?
-**Resolution:** Yes, and it is the right place: `agent-kit/docs/CODING_GUIDELINES.md`
+**AMENDED in FIX_ROUND-1 — the fallback was taken.** An edit inside the
+`agent-kit` submodule does not ship: it is absent from the parent repo's diff and
+from every commit unless the submodule is committed AND pushed, which this branch
+may not do (and which would leave a dangling pointer for everyone else). The rule
+therefore landed in the repo-root `CLAUDE.md`, which this repo actually ships,
+and the submodule is reverted clean. This is the fallback DEC-6 recorded in
+advance — taken as a decided path, not improvised.
+
+**Original resolution:** Yes, and it is the right place: `agent-kit/docs/CODING_GUIDELINES.md`
 §4 (DB correctness) is where this repo's DB-correctness rules live, and the rule
 is framework-general. The edit is documentation-only and append-shaped, so it
 cannot break a consumer. The rules forbid touching `sdk`, not `agent-kit`.
@@ -86,7 +94,15 @@ Postgres" is not a setting; Postgres would still refuse them).
 magic numbers; a boolean-valued correctness invariant has no magic number.
 
 ### DEC-9: Does the fix need an OpenAPI regen?
-**Resolution:** No, and it is verified rather than asserted — the regen is run
+**SUPERSEDED by FIX_ROUND-1 — the answer is YES.** The original "no" was correct
+only because no `*_docs` had been updated; the blind audit showed nine routes had
+gained a 400 without declaring it, which is a contract defect. Declaring it
+changes `openapi.json`, so the regen was run for BOTH workspaces (+27 lines each;
+`types.ts` regenerates identically, being response-type-keyed). The original
+reasoning is kept below because it is exactly the circularity worth remembering:
+a verification that confirms an omission rather than a claim.
+
+**Original resolution:** No, and it is verified rather than asserted — the regen is run
 at phase 8 and the diff confirmed empty in BOTH `src-app/ui/` and
 `src-app/desktop/ui/`.
 **Basis:** codebase — no `#[derive(JsonSchema)]` type gains, loses or retypes a
@@ -110,3 +126,41 @@ about HTTP status codes, which the integration tier asserts directly and an e2e
 could only assert less precisely.
 **Basis:** convention — the phase-3 gate computes touched areas from the diff;
 `src-app/ui/**` and `src-app/desktop/ui/**` are untouched.
+
+### DEC-12: Reject-only or normalize, at each of the twelve call sites?
+**Resolution:** It depends on what the site's PRE-EXISTING code did, and getting
+this wrong is a behaviour change rather than a cleanup. Five sites already did
+`trim` + blank→`None`, so they keep `normalize_text_filter`. Four bound the RAW
+value, so they use `guard_raw` (rejection only). Three are body fields, so they
+use `reject_nul` directly.
+**Basis:** codebase + the blind audit. The first cut used `normalize_text_filter`
+everywhere, which silently widened `?p=` at the four raw sites from "match the
+empty string" (0 rows) to "no filter at all" (everything the caller owns) — a
+regression the whole test suite missed because every benign value in the sweep
+table was non-empty. Recorded as a DECISION rather than a code comment because it
+is the single non-obvious rule a future contributor must follow.
+
+### DEC-13: Is the body path in scope?
+**Resolution:** Yes for the members a live probe proved were broken. The task
+framed the defect as a query-parameter class, but the shared guard's own module
+doc claimed body coverage, and probing found `POST /assistants
+{description,instructions}`, `POST /conversations {title}`, `POST
+/knowledge-bases {description}` and `POST /memories {content}` still returning
+**500** — the same root cause, one function call away.
+**Basis:** measurement, not inference (`REPRO_PRE_FIX.txt`). Fixing the reachable
+layer while leaving verified 500s of the same class would be exactly the
+"fix the cause, not the reachable layer" failure. Bounded deliberately: the probe
+covered the create endpoints of the main entities and is reported in full,
+including the ones already guarded (negative space).
+
+### DEC-14: Enforce the parameter inventory from source, or keep the manifest?
+**Resolution:** Keep the manifest for now, and record the limit honestly.
+**Basis:** scope. Both auditors independently found that
+`assert_eq!(FREE_TEXT_SQL_BOUND_PARAMS.len(), 12)` only observes the table, so a
+13th unguarded parameter fails nothing. They are right. A source-derived check
+(the `ast-grep`/CI diff rule CODING_GUIDELINES §17 recommends) is
+lint-infrastructure with its own blast radius and does not belong inside a
+500→400 bugfix — it would also violate B6 if wired to read anything under
+`.lifecycle/`. Compensating controls: the rule is documented in `CLAUDE.md` with
+the widening trap spelled out, and both auditors re-derived the inventory from
+source and confirmed the current twelve are complete.

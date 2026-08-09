@@ -84,10 +84,15 @@ async fn the_unfiltered_endpoints_ignore_the_parameter_rather_than_validate_it()
     )
     .await;
 
+    // All SEVEN endpoints from the reported table — /users and /groups were
+    // missing from the first cut, which left two of the ten unexplained.
     for path in [
+        "/users",
+        "/groups",
         "/workflows",
         "/skills",
         "/assistants",
+        "/llm-providers",
         "/knowledge-bases",
         "/citations",
     ] {
@@ -143,6 +148,131 @@ async fn whitelisted_and_bool_mapped_params_are_unaffected() {
             StatusCode::OK,
             "GET {path}: a non-text-bound parameter must stay unaffected by the \
              NUL guard; body = {body}"
+        );
+    }
+}
+
+/// INV-4 at the HTTP tier — the guard is NARROW.
+///
+/// The other negative control probes `?sort` and `?status`, which this change
+/// never touched, so no edit here could make it fail. THIS one probes the
+/// parameters the guard actually runs on: a non-NUL control character
+/// (newline / tab / ESC / DEL) in a GUARDED filter must still be 200. It goes
+/// red the moment someone "hardens" the guard to `char::is_control()`.
+#[tokio::test]
+async fn non_nul_control_characters_in_a_guarded_param_are_still_accepted() {
+    let server = TestServer::start().await;
+    let user = create_user_with_permissions(&server, "nul_narrow", SWEEP_PERMISSIONS).await;
+
+    for enc in ["%0A", "%09", "%1B", "%7F"] {
+        for base in [
+            "/projects?search=a",
+            "/memories?search=a",
+            "/mcp/servers?search=a",
+        ] {
+            let path = format!("{base}{enc}b");
+            let (status, body) = get(&server, &user.token, &path).await;
+            assert_eq!(
+                status,
+                StatusCode::OK,
+                "GET {path}: a non-NUL control character is storable and must \
+                 stay a 200 (it simply matches nothing); body = {body}"
+            );
+        }
+    }
+}
+
+/// TEST-30 — the BODY-path members of the SAME class.
+///
+/// Found only after the blind audit pointed out that the shared guard's own
+/// module doc claimed request-body coverage it did not have. A live probe then
+/// showed these four still returning the exact 500 this branch exists to
+/// eliminate: same Postgres `22021`, same root cause, one function call away.
+/// Each carries its happy-path counterpart in the same loop iteration, so a
+/// 400 can never be a symptom of a broken create endpoint.
+#[tokio::test]
+async fn nul_in_a_request_body_text_field_is_also_a_400() {
+    let server = TestServer::start().await;
+    let user = create_user_with_permissions(
+        &server,
+        "nul_body",
+        &[
+            "assistants::create",
+            "conversations::create",
+            "knowledge_base::manage",
+            "memory::write",
+            "memory::read",
+        ],
+    )
+    .await;
+
+    // (path, valid body, NUL-bearing body, expected success status)
+    let cases: [(&str, serde_json::Value, serde_json::Value, StatusCode); 5] = [
+        (
+            "/assistants",
+            json!({ "name": "ok-desc", "description": "clean" }),
+            json!({ "name": "bad-desc", "description": "a\u{0}b" }),
+            StatusCode::CREATED,
+        ),
+        (
+            "/assistants",
+            json!({ "name": "ok-instr", "instructions": "clean" }),
+            json!({ "name": "bad-instr", "instructions": "a\u{0}b" }),
+            StatusCode::CREATED,
+        ),
+        (
+            "/conversations",
+            json!({ "title": "clean title" }),
+            json!({ "title": "a\u{0}b" }),
+            StatusCode::CREATED,
+        ),
+        (
+            "/knowledge-bases",
+            json!({ "name": "kb-ok", "description": "clean" }),
+            json!({ "name": "kb-bad", "description": "a\u{0}b" }),
+            StatusCode::CREATED,
+        ),
+        (
+            "/memories",
+            json!({ "content": "clean content", "kind": "fact", "importance": 50 }),
+            json!({ "content": "a\u{0}b", "kind": "fact", "importance": 50 }),
+            StatusCode::CREATED,
+        ),
+    ];
+
+    let client = reqwest::Client::new();
+    for (path, ok_body, nul_body, ok_status) in cases {
+        // HAPPY-PATH COUNTERPART first — the endpoint genuinely accepts writes.
+        let resp = client
+            .post(server.api_url(path))
+            .header("Authorization", format!("Bearer {}", user.token))
+            .json(&ok_body)
+            .send()
+            .await
+            .expect("post");
+        let status = resp.status();
+        let body: Value = resp.json().await.unwrap_or(Value::Null);
+        assert_eq!(status, ok_status, "POST {path} happy path: {body}");
+
+        // The defect.
+        let resp = client
+            .post(server.api_url(path))
+            .header("Authorization", format!("Bearer {}", user.token))
+            .json(&nul_body)
+            .send()
+            .await
+            .expect("post");
+        let status = resp.status();
+        let body: Value = resp.json().await.unwrap_or(Value::Null);
+        assert_ne!(
+            status,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "POST {path}: a NUL in a body text field must never be a 500; body = {body}"
+        );
+        assert_eq!(status, StatusCode::BAD_REQUEST, "POST {path}: {body}");
+        assert_eq!(
+            body["error_code"], "VALIDATION_ERROR",
+            "POST {path}: {body}"
         );
     }
 }

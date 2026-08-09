@@ -45,3 +45,34 @@ async fn background_runs_status_and_kind_reject_nul() {
     let (status, _) = get(&server, &nobody.token, "/background/runs?status=completed").await;
     assert_eq!(status, StatusCode::FORBIDDEN, "unpermitted caller");
 }
+
+/// REGRESSION (blind audit, round 1) — the guard must NOT turn `?status=` into
+/// "no filter".
+///
+/// The first cut routed these through `normalize_text_filter`, which maps a
+/// blank value to `None`. Because the repository binds
+/// `AND ($2::text IS NULL OR status = $2)`, that silently widened `?status=`
+/// from "match the empty string" (0 rows) to no filter at all (every run the
+/// caller owns) — a filter the client explicitly sent being discarded. The fix
+/// is `guard_raw`, which adds the NUL rejection and nothing else.
+#[tokio::test]
+async fn empty_filter_values_still_filter_and_do_not_widen() {
+    let server = TestServer::start().await;
+    let user = create_user_with_permissions(&server, "bg_empty", &["background::use"]).await;
+
+    // Baseline: the unfiltered list.
+    let (status, unfiltered) = get(&server, &user.token, "/background/runs").await;
+    assert_eq!(status, StatusCode::OK, "{unfiltered}");
+    let all = unfiltered["total"].as_i64().expect("total");
+
+    for path in ["/background/runs?status=", "/background/runs?kind="] {
+        let (status, body) = get(&server, &user.token, path).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {body}");
+        let got = body["total"].as_i64().expect("total");
+        assert_eq!(
+            got, 0,
+            "{path}: an empty filter value must match NOTHING (it binds the \
+             empty string), never fall back to the unfiltered list of {all}: {body}"
+        );
+    }
+}

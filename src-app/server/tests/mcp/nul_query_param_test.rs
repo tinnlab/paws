@@ -140,3 +140,23 @@ async fn mcp_tool_calls_tool_use_id_rejects_nul() {
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "unpermitted caller");
 }
+
+/// REGRESSION (blind audit, round 1) — `?tool_use_id=` must stay a filter.
+///
+/// The repository binds `AND ($5::text IS NULL OR tool_use_id = $5)`, so
+/// mapping a blank value to `None` would widen `?tool_use_id=` from an empty
+/// page to the caller's ENTIRE tool-call history. `guard_raw` keeps the empty
+/// string an empty string.
+#[tokio::test]
+async fn empty_tool_use_id_still_filters_and_does_not_widen() {
+    let server = TestServer::start().await;
+    let user =
+        create_user_with_permissions(&server, "toolcall_empty", &["mcp_servers::read"]).await;
+
+    let (status, body) = get(&server, &user.token, "/mcp/tool-calls?tool_use_id=").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["total"], 0,
+        "an empty tool_use_id must match nothing, not fall back to unfiltered: {body}"
+    );
+}

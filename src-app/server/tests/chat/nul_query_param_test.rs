@@ -9,7 +9,8 @@ use crate::common::TestServer;
 use crate::common::nul_query_param::{assert_nul_is_rejected, get};
 use crate::common::test_helpers::{TestUser, create_user_with_permissions};
 
-async fn create_conversation(server: &TestServer, user: &TestUser, title: &str) -> String {
+/// Returns `(conversation_id, active_branch_id)`.
+async fn create_conversation(server: &TestServer, user: &TestUser, title: &str) -> (String, Value) {
     let resp = reqwest::Client::new()
         .post(server.api_url("/conversations"))
         .header("Authorization", format!("Bearer {}", user.token))
@@ -19,7 +20,9 @@ async fn create_conversation(server: &TestServer, user: &TestUser, title: &str) 
         .expect("create conversation");
     assert_eq!(resp.status(), StatusCode::CREATED, "create conversation");
     let body: Value = resp.json().await.expect("conversation json");
-    body["id"].as_str().expect("conversation id").to_string()
+    let id = body["id"].as_str().expect("conversation id").to_string();
+    let branch = body["active_branch_id"].clone();
+    (id, branch)
 }
 
 fn chat_permissions() -> &'static [&'static str] {
@@ -34,22 +37,28 @@ fn chat_permissions() -> &'static [&'static str] {
 
 /// TEST-9 — `/conversations?search`.
 ///
-/// Leg (b) is the ordering proof: `escape_like` runs on the term before it is
-/// bound, and escaping does NOT remove a NUL, so a guard placed after it would
-/// still bind U+0000. A backslash+NUL term (which `escape_like` rewrites to
-/// `\\` + `\0`) must therefore ALSO be a 400.
+/// NOTE on leg (b): an earlier draft billed `?search=%5C%00` as proof that the
+/// guard runs BEFORE `escape_like`. It is not. `escape_like` only rewrites
+/// `\` `%` `_`; it neither removes nor introduces U+0000, so BOTH orderings
+/// reject the same input set and no query string can distinguish them. The
+/// claim was withdrawn rather than left as a test that cannot fail for its
+/// stated reason. The case is kept only as an extra input shape (a NUL
+/// alongside a LIKE metacharacter).
 #[tokio::test]
 async fn conversations_search_rejects_nul_before_like_escaping() {
     let server = TestServer::start().await;
     let user = create_user_with_permissions(&server, "conv_nul", chat_permissions()).await;
     create_conversation(&server, &user, "Quarterly Roadmap review").await;
+    // A SECOND, non-matching conversation, so the happy-path leg proves the
+    // filter SELECTS rather than merely that the list is non-empty.
+    create_conversation(&server, &user, "Unrelated kitten thread").await;
 
-    // (c) HAPPY-PATH COUNTERPART.
+    // (c) HAPPY-PATH COUNTERPART — selects one of two.
     let (status, body) = get(&server, &user.token, "/conversations?search=Roadmap").await;
     assert_eq!(status, StatusCode::OK, "happy path: {body}");
     assert_eq!(
         body["total"], 1,
-        "the seeded conversation must match: {body}"
+        "search must select exactly the matching conversation of the two: {body}"
     );
 
     // (a) The defect.
@@ -60,7 +69,8 @@ async fn conversations_search_rejects_nul_before_like_escaping() {
     )
     .await;
 
-    // (b) The guard must precede `escape_like`.
+    // (b) Extra input shape: a NUL next to a LIKE metacharacter. NOT an
+    // ordering proof (see the note above) — just another rejected input.
     assert_nul_is_rejected(&server, &user.token, "/conversations?search=%5C%00").await;
 
     // (d) OWNERSHIP CONTROL.
@@ -79,12 +89,29 @@ async fn conversations_search_rejects_nul_before_like_escaping() {
 async fn message_search_q_rejects_nul() {
     let server = TestServer::start().await;
     let user = create_user_with_permissions(&server, "msg_nul", chat_permissions()).await;
-    let cid = create_conversation(&server, &user, "message search conversation").await;
+    let (cid, branch) = create_conversation(&server, &user, "message search conversation").await;
+    let branch_id = super::helpers::parse_uuid(&branch);
 
-    // (b) HAPPY-PATH COUNTERPART — a real term returns a well-formed page.
-    // (No message is seeded, so `total` is 0; what this proves is that the
-    // endpoint parses, authorizes, and reaches the search path — the leg the
-    // rejection assertion needs in order to mean anything.)
+    // Seed TWO messages, only one matching, so the happy-path leg proves the
+    // `q` term actually SELECTS. Without real messages the leg degenerates to
+    // "an empty page is well-formed", which an endpoint ignoring `q` satisfies
+    // just as well — and then the paired rejection assertion proves nothing.
+    super::helpers::seed_text_message(
+        &server.database_url,
+        branch_id,
+        "user",
+        "please review the roadmap for Q3",
+    )
+    .await;
+    super::helpers::seed_text_message(
+        &server.database_url,
+        branch_id,
+        "assistant",
+        "unrelated filler about kittens",
+    )
+    .await;
+
+    // (b) HAPPY-PATH COUNTERPART — selects the one hit, excludes the other.
     let (status, body) = get(
         &server,
         &user.token,
@@ -92,9 +119,12 @@ async fn message_search_q_rejects_nul() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "happy path: {body}");
+    assert_eq!(body["total"], 1, "`q` must select exactly the hit: {body}");
     assert!(
-        body["total"].is_number() && body["matches"].is_array(),
-        "a well-formed search page: {body}"
+        body["matches"][0]["snippet"]
+            .as_str()
+            .is_some_and(|s| s.contains("roadmap")),
+        "the snippet carries the hit: {body}"
     );
 
     // (a) The defect.

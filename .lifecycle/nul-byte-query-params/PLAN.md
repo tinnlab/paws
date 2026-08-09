@@ -72,6 +72,17 @@ error caused by a client-supplied value must surface as a client error.
 - **ITEM-12**: `GET /mcp/tool-calls` — `tool_use_id`
   (`mcp/tool_calls/handlers.rs:51`) is bound at
   `mcp/tool_calls/repository.rs:174` (`tool_use_id = $5`). Guard it.
+- **ITEM-14**: The four call sites that bind the RAW value
+  (`background/runs?{status,kind}`, `mcp/tool-calls?tool_use_id`,
+  `local-runtime/versions?engine`) use `guard_raw` (reject-only), NOT
+  `normalize_text_filter`. Added in FIX_ROUND-1 after the blind audit found the
+  first cut had silently widened `?p=` at all four from "match the empty string"
+  to "no filter at all".
+- **ITEM-15**: Guard the BODY-path members of the same class that a live probe
+  found still returning 500: `assistants.{description,instructions}`,
+  `conversations.title`, `knowledge_bases.description`, `memories.content`.
+- **ITEM-16**: Declare the new `400` on all nine list routes' `*_docs` and
+  regenerate OpenAPI for BOTH UI workspaces.
 - **ITEM-13**: `GET /local-runtime/versions` — `engine`
   (`llm_local_runtime/runtime_version/handlers.rs:44`) is bound at
   `runtime_version/repository.rs:157` (`WHERE engine = $1`) with no validation.
@@ -82,9 +93,11 @@ error caused by a client-supplied value must surface as a client error.
   `chat::core::handlers::validation::reject_nul_in_content` delegate to
   `common::text_guard::reject_nul`. Existing call sites, messages, status codes
   and their unit tests stay behaviourally identical.
-- **ITEM-9**: Document the rule in `agent-kit/docs/CODING_GUIDELINES.md` §4
-  (DB correctness) so the next free-text query parameter inherits the guard by
-  convention rather than by a fourth copy-paste.
+- **ITEM-9**: Document the rule so the next free-text value inherits the guard by
+  convention rather than by a fourth copy-paste. **Landed in the repo-root
+  `CLAUDE.md`**, not in the `agent-kit` submodule — see DEC-6 (amended): a
+  submodule edit is invisible to the diff and to every consumer unless the
+  submodule is committed AND pushed, which this branch may not do.
 
 ## Files to touch
 
@@ -197,10 +210,12 @@ the same `JsonSchema` derives. Only the handler *body* changes. Verified: no
 - **ITEM-3** — verdict: PASS — `normalize_search` is private to
   `project/handlers.rs` with one caller (line 320); making it fallible is a
   one-line `?`.
-- **ITEM-4** — verdict: CONCERN — order matters here and only here:
-  `escape_like` runs BEFORE the value is bound, and escaping a NUL still leaves
-  a NUL. The guard MUST run before `escape_like`, not after. Resolved in the
-  item text; pinned by TEST-9.
+- **ITEM-4** — verdict: PASS — an earlier CONCERN here claimed the guard MUST
+  run before `escape_like`. **Withdrawn in FIX_ROUND-1 as vacuous**: `escape_like`
+  only rewrites `\ % _`, so it neither removes nor introduces a NUL and BOTH
+  orderings reject the identical input set. No query string can distinguish them,
+  so the "ordering proof" test could not have failed for its stated reason. The
+  guard is still placed first (it is the right shape), but the claim is gone.
 - **ITEM-5** — verdict: PASS — `mcp/handlers/user.rs:111`, single call site.
 - **ITEM-6** — verdict: PASS — `mcp/handlers/system.rs:64`, single call site.
 - **ITEM-7** — verdict: CONCERN — `kind`/`source` were NOT in the reported
@@ -235,3 +250,14 @@ the same `JsonSchema` derives. Only the handler *body* changes. Verified: no
   the rules explicitly forbid only `sdk`. Documentation-only edit. If the
   submodule proves unwritable the rule lands in the repo-root `CLAUDE.md`
   instead (recorded as DEC-6).
+
+- **ITEM-14** — verdict: PASS — `guard_raw` is a strict subset of
+  `normalize_text_filter` (rejection only), so it cannot change which rows a
+  valid filter selects; proven by `guard_raw_returns_valid_input_byte_for_byte_unchanged`
+  and by three integration tests asserting `?p=` still returns 0 rows.
+- **ITEM-15** — verdict: PASS — each is an existing validator gaining one
+  `reject_nul` call next to its existing length cap; the 500s were measured live
+  before the change (`REPRO_PRE_FIX.txt`).
+- **ITEM-16** — verdict: CONCERN → resolved — this DOES require an OpenAPI regen
+  (superseding DEC-9's "no regen"), which was run for both workspaces: +27 lines
+  each in `openapi.json`, `types.ts` byte-identical.
