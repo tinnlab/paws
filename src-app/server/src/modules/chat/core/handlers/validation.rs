@@ -21,14 +21,10 @@ const FORK_LEVELS: [&str; 2] = ["user", "assistant"];
 /// Deliberately narrower than the assistant-name gate: `\n`/`\t` and every
 /// other control character are legitimate inside a chat message, so only the
 /// one byte the storage layer physically cannot hold is rejected.
+/// Thin wrapper over the shared `common::text_guard::reject_nul` — one of the
+/// three private copies that has been collapsed onto the single definition.
 pub(crate) fn reject_nul_in_content(content: &str) -> Result<(), AppError> {
-    if content.contains('\0') {
-        return Err(AppError::bad_request(
-            "VALIDATION_ERROR",
-            "Message content cannot contain NUL characters",
-        ));
-    }
-    Ok(())
+    crate::common::text_guard::reject_nul(content, "Message content")
 }
 
 /// Reject a `fork_level` outside the CHECK-constrained vocabulary.

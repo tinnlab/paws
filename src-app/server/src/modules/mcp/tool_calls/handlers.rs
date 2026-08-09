@@ -68,7 +68,12 @@ pub async fn list_tool_calls(
                 server_id: params.server_id,
                 conversation_id: params.conversation_id,
                 is_built_in: params.is_built_in,
-                tool_use_id: params.tool_use_id.as_deref(),
+                // Bound as `tool_use_id = $5` — same text-bind class as the
+                // list `search` filters, same shared guard.
+                tool_use_id: crate::common::text_guard::normalize_text_filter(
+                    params.tool_use_id.as_deref(),
+                    "tool_use_id",
+                )?,
                 message_id: params.message_id,
             },
             params.page.max(1),

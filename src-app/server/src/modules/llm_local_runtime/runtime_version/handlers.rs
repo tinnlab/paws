@@ -85,9 +85,13 @@ pub async fn list_runtime_versions(
     let binary_manager = BinaryManager::with_cache_dir(pool.clone(), std::path::PathBuf::from(crate::core::get_caches_config().llm_engines_dir()))
         .map_err(|e| AppError::internal_with_id(e))?;
 
-    let versions = if let Some(engine) = params.engine {
+    // `engine` is bound as `WHERE engine = $1` with no other validation — the
+    // same text-bind class as the list `search` filters, same shared guard.
+    let engine =
+        crate::common::text_guard::normalize_text_filter(params.engine.as_deref(), "engine")?;
+    let versions = if let Some(engine) = engine {
         binary_manager
-            .list_versions_for_engine(&engine, params.page, params.per_page)
+            .list_versions_for_engine(engine, params.page, params.per_page)
             .await
             .map_err(|e| AppError::database_error(e))?
     } else {

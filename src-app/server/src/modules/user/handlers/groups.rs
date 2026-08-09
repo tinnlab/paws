@@ -72,19 +72,14 @@ pub(crate) fn validate_group_name(name: &str) -> Result<(), AppError> {
     Ok(())
 }
 
-/// A Postgres `text` column cannot hold U+0000 at all (`22021`), which
-/// `AppError::database_error` flattens into a generic 500. `description` is
-/// free-form prose, so unlike the name it accepts `\n`/`\t` — only the byte the
-/// storage layer physically cannot hold is rejected. Mirrors
-/// `project::handlers::reject_nul`.
+/// Reject a value Postgres cannot store (U+0000).
+///
+/// Thin wrapper over the shared `common::text_guard::reject_nul`, kept so the
+/// existing call sites and their tests read unchanged. This used to be one of
+/// three independent private copies of the same guard; that duplication is the
+/// reason the read path (free-text query parameters) never got it.
 pub(crate) fn reject_nul(value: &str, field: &str) -> Result<(), AppError> {
-    if value.contains('\0') {
-        return Err(AppError::bad_request(
-            "VALIDATION_ERROR",
-            format!("{field} cannot contain NUL characters"),
-        ));
-    }
-    Ok(())
+    crate::common::text_guard::reject_nul(value, field)
 }
 
 // =====================================================

@@ -3,6 +3,7 @@
 mod capability_filter_test;
 mod core_memory_test;
 mod crud_test;
+mod nul_query_param_test;
 mod extraction_injection_test;
 mod extraction_model_validation_test;
 mod extraction_test;

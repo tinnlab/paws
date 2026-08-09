@@ -7,6 +7,9 @@
 
 pub mod chat_stream_probe;
 pub mod memory_setup;
+pub mod nul_query_param;
+#[path = "nul_query_param_sweep_test.rs"]
+mod nul_query_param_sweep_test;
 pub mod oai_capture_stub;
 pub mod stub_chat;
 pub mod stub_engine;

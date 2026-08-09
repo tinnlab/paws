@@ -88,8 +88,10 @@ pub async fn list_background_runs(
         auth.user.id,
         page,
         per_page,
-        params.status.as_deref(),
-        params.kind.as_deref(),
+        // Bound as `status = $2` / `job_kind = $3` with no other validation,
+        // so both need the shared NUL guard (a NUL here 500'd).
+        crate::common::text_guard::normalize_text_filter(params.status.as_deref(), "status")?,
+        crate::common::text_guard::normalize_text_filter(params.kind.as_deref(), "kind")?,
         params.conversation_id,
     )
     .await?;

@@ -2,6 +2,7 @@ pub mod embedded;
 pub mod groups;
 pub mod macros;
 pub mod secret;
+pub mod text_guard;
 pub mod tokens;
 pub mod tool_args;
 pub mod r#type;

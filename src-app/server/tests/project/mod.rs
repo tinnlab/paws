@@ -12,6 +12,7 @@
 
 mod conversations_test;
 mod crud_test;
+mod nul_query_param_test;
 mod duplicate_test;
 mod files_test;
 mod injection_test;

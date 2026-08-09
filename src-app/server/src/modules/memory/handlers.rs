@@ -94,21 +94,13 @@ pub async fn list_memories(
 
     // Normalize: trim search, treat empty as None so the SQL noop
     // short-circuits and we don't run `ILIKE '%%'`.
-    let search = q
-        .search
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
-    let kind = q
-        .kind
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
-    let source = q
-        .source
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
+    // `kind` and `source` are bound as `text` exactly like `search`
+    // (`kind = $5` / `source = $6`), so they carry the identical defect and
+    // take the identical guard.
+    use crate::common::text_guard::normalize_text_filter;
+    let search = normalize_text_filter(q.search.as_deref(), "search")?;
+    let kind = normalize_text_filter(q.kind.as_deref(), "kind")?;
+    let source = normalize_text_filter(q.source.as_deref(), "source")?;
 
     let items = Repos
         .memory

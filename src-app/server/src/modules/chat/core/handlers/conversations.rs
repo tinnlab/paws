@@ -154,12 +154,11 @@ pub async fn list_conversations(
     // metacharacters (\ % _) so the term is matched as a LITERAL substring
     // (matching the client-side plain-substring find), not as SQL wildcards —
     // ILIKE's default ESCAPE is backslash.
-    let search: Option<String> = params
-        .search
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(escape_like);
+    // The NUL guard runs BEFORE `escape_like`: escaping does not remove a NUL,
+    // so a guard placed after it would still bind U+0000 and 500.
+    let search: Option<String> =
+        crate::common::text_guard::normalize_text_filter(params.search.as_deref(), "search")?
+            .map(escape_like);
     let sort = params.sort.as_deref();
 
     let conversations = Repos

@@ -1,0 +1,160 @@
+# Development runtime configuration for ziee web backend
+# This file is used by src-web when running the application
+
+# Application settings
+app:
+  data_dir: "/data/pbya/ziee/tmp/nulrepro/app-data"  # Directory for models, caches, and temporary files
+
+# PostgreSQL connection settings
+postgresql:
+  # Use embedded PostgreSQL (true) or external PostgreSQL (false)
+  use_embedded: true
+
+  # Embedded PostgreSQL configuration (used when use_embedded: true)
+  embedded:
+    version: "18.3.0"
+    port: 54399  # Use 0 for automatic port selection
+    bind_address: "127.0.0.1"
+    username: "postgres"
+    password: "password"
+    database: "postgres"
+
+    # Directories for embedded PostgreSQL runtime instance
+    installation_dir: "/data/pbya/ziee/tmp/nulrepro/postgres"
+    data_dir: "/data/pbya/ziee/tmp/nulrepro/postgres-data"
+
+    # Timezone settings
+    timezone: "UTC"
+    log_timezone: "UTC"
+
+    # Logging configuration for embedded PostgreSQL
+    logging:
+      collector: true
+      directory: "log"
+      filename: "postgresql-%Y-%m-%d_%H%M%S.log"
+      statement: "all"
+
+  # External PostgreSQL configuration (used when use_embedded: false)
+  external:
+    host: "localhost"
+    port: 5432
+    username: "postgres"
+    password: "password"
+    database: "ziee_dev"
+
+  # Connection pool settings (used for both embedded and external)
+  pool:
+    max_connections: 10
+    min_connections: 1
+    acquire_timeout_secs: 5
+    idle_timeout_secs: 30
+    max_lifetime_secs: 300
+
+# Web server settings
+server:
+  host: "127.0.0.1"
+  port: 29617  # Use 0 for automatic port selection
+  api_prefix: "/api"  # Base path prefix for all API routes
+
+  # Honor X-Forwarded-Host / X-Forwarded-Proto when deriving the OAuth
+  # redirect_uri. Default false. Dev runs behind the Vite proxy (see
+  # vite.config.ts), which sets X-Forwarded-Host so the backend can derive
+  # the user-facing origin — set true here. Keep false on any directly-
+  # exposed server: otherwise an attacker can send X-Forwarded-Host: evil.com
+  # and a permissive IdP hands them the OAuth code.
+  trust_forwarded_headers: true
+
+  # Global per-IP rate limiter (tower-governor token bucket).
+  #   enabled:     master on/off switch (default true).
+  #   per_second:  sustained requests/sec per peer IP (default 50).
+  #   burst_size:  token-bucket burst capacity (default 500) — wide enough
+  #                that a normal SPA cold-load (15-25 parallel calls) doesn't
+  #                429; tighten behind a real reverse proxy.
+  # NOTE: the built-in code_sandbox + memory MCP servers are reached over
+  # loopback (127.0.0.1) and share one bucket with user traffic, so a rapid
+  # agent tool loop can make the server 429 itself. If you hit that, raise the
+  # limits — or set enabled: false on a trusted/non-public deployment (which
+  # disables throttling for ALL traffic, internal and external).
+  rate_limit:
+    enabled: true
+    per_second: 50
+    burst_size: 500
+
+  # CORS settings
+  cors:
+    allow_origins:
+      - "http://localhost:5173"
+      - "http://localhost:3000"
+    allow_methods:
+      - "GET"
+      - "POST"
+      - "PUT"
+      - "DELETE"
+      - "OPTIONS"
+    allow_headers:
+      - "Content-Type"
+      - "Authorization"
+      # Only needed for CROSS-ORIGIN browser deployments (SPA served from a
+      # different origin than the API): the web client sends this to opt into
+      # httpOnly refresh-token cookies on the token-minting endpoints. Same-
+      # origin deployments (the default; SPA served by this server, or a
+      # same-origin reverse proxy) don't need it. Cross-origin cookie mode
+      # additionally requires allow_credentials + explicit (non-"*") origins.
+      - "X-Refresh-Cookie"
+
+# Logging settings
+logging:
+  level: "debug"
+  format: "pretty"
+
+# JWT authentication settings
+jwt:
+  secret: "M83aQCdW1mBIlSFdRuEufdr07zq5HkHcHuTBUUFOafB1ZTT9qkKRmqOfzqIgnKEq"
+  issuer: "ziee"
+  audience: "ziee-api"
+  # NOTE (migration 129): the two lifetimes below are the INITIAL SEED for
+  # the DB-backed `session_settings` singleton, copied in exactly once at
+  # first boot. Thereafter admins manage them on /settings/sessions and
+  # edits here are ignored (they remain the fallback if the DB read fails
+  # at token-mint time).
+  access_token_expiry_hours: 24  # Access token TTL (clients silently refresh)
+  refresh_token_expiry_days: 30  # Max session length (idle bound; rolls on refresh)
+
+# Code sandbox (bwrap-isolated code execution exposed as a built-in MCP server).
+# Disabled by default; flip `enabled: true` after installing bubblewrap +
+# squashfuse and mounting a rootfs to `rootfs_path`.
+code_sandbox:
+  enabled: false
+  rootfs_path: "./.ziee-cache/sandbox-rootfs/current"
+  cgroup_parent: ""   # empty = rlimits-only mode (no per-call cgroup scope)
+  # Optional knobs below (defaults shown):
+  # workspace_root: "<app.data_dir>/sandboxes"   # per-conversation workspaces
+  # require_download_consent: true     # prompt before a first rootfs download
+  # auto_download_under_mb: 100        # flavors smaller than this skip the prompt
+  # allow_wsl2_mirrored_mode: false    # Windows: allow WSL2 networkingMode=mirrored
+  # allow_cloud_imds_reachable: false  # allow when 169.254.169.254 (cloud IMDS) is reachable
+  # public_base_url: ""                # root MCP resource links at a tunnel/proxy URL
+
+# At-rest encryption for stored credentials (LLM provider api_keys, LLM
+# repository auth tokens, per-user provider keys). When UNSET (the default),
+# these are stored in PLAINTEXT in the database and are reachable in DB
+# dumps/backups. Set a stable random key (min 32 chars) to encrypt them at rest.
+# NOTE: changing or losing the key makes previously-encrypted secrets
+# unrecoverable.
+# secrets:
+#   storage_key: "change-me-to-a-stable-random-string-min-32-chars"
+
+# Per-cache path overrides. All optional — each defaults to a subdir of
+# app.data_dir. Override individual entries to put a cache on a different
+# disk (e.g. big HF models on a spinning disk while git_cache stays on SSD).
+# caches:
+#   hf_models_dir: "<app.data_dir>/hf-models"      # HuggingFace downloads
+#   llm_engines_dir: "<app.data_dir>/llm-engines"  # llama.cpp / mistralrs binaries
+#   git_cache_dir: "<app.data_dir>/cache/git"      # Hub repository clones
+#   lfs_cache_dir: "<app.data_dir>/cache/lfs"      # Git LFS objects
+
+# Daily check against the GitHub Releases API for a newer ziee.
+# NOTIFICATION ONLY — never downloads or installs. Set enabled: false for
+# air-gapped deployments (no outbound calls, no admin banner).
+update_check:
+  enabled: true

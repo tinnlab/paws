@@ -26,6 +26,7 @@ mod permissions_test;
 mod conversations_test;
 // Content search + sort on the conversation list endpoint (chat-power-features).
 mod conversation_search_test;
+mod nul_query_param_test;
 mod conversation_sort_test;
 mod messages_test;
 mod branches_test;

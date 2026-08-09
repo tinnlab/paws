@@ -110,7 +110,7 @@ pub async fn search_conversation_messages(
     let per_page = query.clamped_per_page();
 
     // Blank query → empty result without a DB scan.
-    let Some(term) = query.trimmed_term() else {
+    let Some(term) = query.trimmed_term()? else {
         return Ok((
             StatusCode::OK,
             Json(MessageSearchResults {

@@ -108,11 +108,8 @@ pub async fn list_accessible_servers(
     auth: RequirePermissions<(McpServersRead,)>,
     Query(params): Query<ListAccessibleServersQuery>,
 ) -> ApiResult<Json<McpServerListResponse>> {
-    let search = params
-        .search
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
+    let search =
+        crate::common::text_guard::normalize_text_filter(params.search.as_deref(), "search")?;
     let (enabled, is_system) = match params.status.as_deref() {
         Some("enabled") => (Some(true), None),
         Some("disabled") => (Some(false), None),
