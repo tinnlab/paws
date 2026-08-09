@@ -162,8 +162,9 @@ function makeStore(items: NotificationRow[]): NotificationsStoreView {
 }
 
 /**
- * Build a `data-testid` attribute selector WITHOUT writing the literal
- * `data-testid="…"` text anywhere in this file.
+ * Build a testid attribute selector WITHOUT writing the attribute name followed
+ * by a quoted value anywhere in this file — including in this comment, which is
+ * how an earlier version of it leaked a phantom id into the shared registry.
  *
  * `sdk/packages/gallery/scripts/gen-testid-registry.mjs` scans `src/**` for
  * /data-testid\s*[=:]\s*["']([^"']+)["']/ and folds every hit into the app's
