@@ -262,3 +262,27 @@ that collision; the delta was the header count, 1778 → 1781).
 
 - `npm run check (ui): PASS` — exit 0
 - `npm run check (desktop/ui): PASS` — exit 0
+
+## Round-7 additions (coverage for the config-driven branches)
+
+- **TEST-41**: PASS — `sdk/packages/gallery/scripts/lib/gallery-config.test.mjs`,
+  8 cases: an unknown key is refused naming the key; prototype-chain names
+  (`constructor`/`toString`/`hasOwnProperty`/`valueOf`) are refused rather than
+  silently accepted; the visual-layer keys this package's OWN
+  `playwright/visual.config.ts` documents are accepted; `$`-prefixed comments are
+  allowed and the error says so; defaults survive a partial config;
+  `visualConfig: null` is legal; a missing file still resolves to defaults; malformed
+  JSON throws naming the file.
+- **TEST-42**: PASS — `sdk/packages/gallery/scripts/gate-ui.config.e2e.mjs`,
+  6 cases spawning the REAL scripts: both entry points refuse a missing config with
+  an operator message (asserted NOT to be a stack trace) and exit 2, each with a
+  positive control proving "refuses" does not mean "always fails"; a typo'd key
+  stops the gate before the crawl; and a DOC-DRIFT check that states in its own body
+  that it is not behavioural evidence.
+- Both suites wired into `test:gallery-scripts` in **both** workspaces.
+  `npm run test:gallery-scripts (ui)`: **150 pass / 0 fail**.
+
+### Frontend gate lines (after round 7)
+
+- `npm run check (ui): PASS` — exit 0
+- `npm run check (desktop/ui): PASS` — exit 0
