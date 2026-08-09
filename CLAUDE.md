@@ -1953,11 +1953,21 @@ generated artifacts across both workspaces are byte-identical to before.
 Only ONE divergence was real behaviour, and it is now a config key rather than a
 fork: desktop surfaces import overlay primitives from the kit PACKAGE specifier,
 which the package-default `overlayKitImports` does not list, so desktop's
-`gallery.config.json` appends it. Without that the overlay gate reports zero hosts
-and PASSES — a gate failing open. Everything else was a comment, a `__dirname`
-anchor, or a latent sdk improvement (the sdk copies additionally skip
-`.test`/`.stories`/`.desktop` `.tsx` files; desktop has a `seam-parity.test.tsx`
-under a walked root that was benign only because it declares no state signals).
+`gallery.config.json` appends it. Without it every such host vanishes from the
+registry; in the CURRENT tree that is caught loudly (the host is allow-listed, so
+`--check` fails on the now-stale allow-list entry, exit 1), but a host that is
+neither wired nor allow-listed would simply disappear and the gate would pass —
+the fail-open shape is real, just not presently realized.
+
+Everything else was a comment, a `__dirname` anchor, or a latent sdk improvement.
+The sdk copies additionally skip `.test`/`.stories`/**`.desktop`** `.tsx` files.
+Both halves are latent-but-live: desktop has a `seam-parity.test.tsx` under a
+walked root, benign only because it declares no state signals; and desktop has
+**zero** `*.desktop.tsx` today, so the first one added under `src/modules` or
+`src/components/ui` will silently drop out of desktop's coverage denominator and
+state matrix. That is the sdk behaviour, not a regression — but it is a real
+behavioural delta from the deleted forks and should be revisited if desktop ever
+adopts co-located `.desktop.tsx` overrides.
 
 The invariant is carried by `check-harness-parity.consumer.test.mjs` (TEST-1..8),
 which SPAWNS the real generators under each workspace's cwd and asserts on their
@@ -1987,18 +1997,41 @@ singular form of `overlayKitImports` or delete it; leaving a config key that
 silently does nothing is the same defect class the unknown-key validator exists
 to refuse.
 
-**1c. `affordance-audit.mjs` and `gen-crop-review-manifests.mjs` are still forked
-per workspace.** Out of scope above (only their surface-lib import was
-repointed). They differ between workspaces in exactly ONE thing — where the
-dev-server port comes from: `src-app/ui` hardcodes `'1420'` while desktop derives
-it via `resolveGalleryPort({ which: 'desktopGallery' })`. The hardcoded `1420` is
-the known gate/port-collision trap, so this is a live hazard, not just tidiness.
-It is a config anchor, i.e. the same treatment applies. The now-shared
-`capture-gallery-{states,screenshots}.mjs` have the same wart in milder form:
-they default `--url=` to a hardcoded `localhost:1466`. That is unchanged by the
-unification (both desktop forks defaulted to it too, and every real invocation
-passes `--url=`), but it should become a `gallery.config.json` anchor with the
-rest.
+**1c. Twelve script pairs are still forked between the two workspaces** (5
+byte-identical, 7 drifted) — measured with `comm -12` over the two `scripts/`
+dirs. Out of scope above; only the surface-lib import of four of them was
+repointed. The recurring difference is where the dev-server port comes from, and
+**four** `src-app/ui` scripts still hardcode `'1420'`: `affordance-audit.mjs`,
+`gen-crop-review-manifests.mjs`, `gallery-geometry-audit.mjs`,
+`detector-acceptance.mjs`. Desktop's twins derive it via
+`resolveGalleryPort({ which: 'desktopGallery' })`.
+
+This is **destructive, not merely untidy**, and it was hit during this branch's
+audit: running web's `gen-crop-review-manifests.mjs` attached to a *foreign*
+worktree's Vite server on 1420 and rewrote the tracked
+`src-app/ui/src/dev/gallery/CROP_REVIEW_MANIFEST.md` from 183 lines to 5. Same
+class as the `gate:ui` port trap. It is a config anchor; the same treatment
+applies.
+
+Two smaller warts in the same family: the now-shared
+`capture-gallery-{states,screenshots}.mjs` default `--url=` to a hardcoded
+`localhost:1466` and `--out=` to `/tmp/...`, and no npm script passes either
+(unchanged by the unification — both deleted desktop forks had the identical
+defaults). And five scripts navigate to `/dev-gallery.html`, which exists in
+NEITHER workspace (the real entry is `gallery.html`) — also pre-existing.
+
+**1d. `gallery-geometry-audit.mjs` defines its OWN `enumerateSurfaces`.** A second
+enumeration lives in both workspaces' copies of that 1,700-line audit. It is not
+stale in the way the deleted lib fork was (it does read the interaction global),
+but it never consults `__GALLERY_LIST_ALL_SURFACES__`, so it holds the legacy
+per-class-globals notion of a surface and would silently see nothing if the
+gallery ever stopped publishing those. It has a different call shape
+(`(browser)`, creating its own page) and its own settle policy (`networkidle` +
+2.5s vs the shared `domcontentloaded` + 5s), so folding it in changes timing under
+an audit that would need revalidating — deliberately deferred. It is DISCOVERED
+and explicitly exempted by name in `check-harness-parity.consumer.test.mjs`
+(`NOT_A_GENERATOR_FORK`), with a stale-exemption check, so it cannot quietly
+become cover for a real fork.
 
 **2. `mountGallery` does not await `cfg.loadModules()`.**
 `sdk/packages/gallery/src/runtime/mount.tsx:58` fires it without `await`, then

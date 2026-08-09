@@ -39,7 +39,19 @@ test('desktop enumerates surfaces through the shared module, interactions includ
   // ── Positive control ──────────────────────────────────────────────────────
   // The desktop gallery must actually have rendered. Without this, every
   // "absent"/"empty" assertion below would pass just as well against a blank page.
-  const before = await enumerateSurfaces(page, base)
+  //
+  // Wait on the CONDITION, not a fixed sleep: the shared enumeration settles with a
+  // flat `waitForTimeout`, and `mountGallery` does not await `cfg.loadModules()`
+  // (CLAUDE.md follow-up 2), so on a loaded box the mount is genuinely racy.
+  await page.goto(base, { waitUntil: 'domcontentloaded' })
+  await page.waitForFunction(
+    () =>
+      ((window as unknown as Record<string, () => { pages: unknown[] }>)
+        .__GALLERY_LIST_ALL_SURFACES__?.()?.pages?.length ?? 0) > 0,
+    undefined,
+    { timeout: 60_000 },
+  )
+  const before = await enumerateSurfaces(page)
   expect(before.pages.length, 'the desktop gallery must render pages').toBeGreaterThan(0)
 
   // The shared module always reports the class; the stale fork returned an object
@@ -80,7 +92,12 @@ test('desktop enumerates surfaces through the shared module, interactions includ
   expect(after.overlays).toEqual(before.overlays)
   expect(after.deep).toEqual(before.deep)
   expect(after.seeded).toEqual(before.seeded)
-  expect(cells.filter((c: { cls: string }) => c.cls === 'interaction')).toHaveLength(1)
+  // Relative to what was already there — NOT a hardcoded 1. Desktop registers zero
+  // recipes today, and this spec exists precisely for the moment one is added; a
+  // literal 1 would go red on that healthy tree.
+  expect(cells.filter((c: { cls: string }) => c.cls === 'interaction')).toHaveLength(
+    before.interactions.length + 1,
+  )
   expect(cells.filter((c: { cls: string }) => c.cls === 'page')).toHaveLength(
     before.pages.length * 3,
   )

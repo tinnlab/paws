@@ -373,6 +373,13 @@ const runGen = (ws, script, args) =>
 // The six files that used to be forked under an app workspace, plus the shared
 // enumeration lib. Absence is the assertion: a path that does not exist has no
 // evasion space, unlike a predicate over a path that does.
+//
+// This list is the FAST, PRECISE half only. It is NOT the guard — a hand list
+// catches exactly the six paths someone already thought of, and a re-fork one
+// directory over (or under any other name) walks straight past it. That is the
+// same mistake TEST-6g abandoned name-matching for, and it was reproduced here:
+// a drifted copy planted at `scripts/local/gallery-surfaces.mjs` left every test
+// green. `discoverEnumerationCopies` below is the half that actually closes it.
 const UNIFIED_GENERATORS = [
   'gen-gallery-coverage.mjs',
   'gen-overlay-registry.mjs',
@@ -393,7 +400,168 @@ function generatorForkViolations(read) {
   return bad
 }
 
-test('TEST-3 [acceptance INV-1] no workspace re-forks a generator or the surface lib', () => {
+// The generated artifacts a generator fork must both NAME and WRITE.
+const GENERATED_ARTIFACTS = [
+  'galleryCoverage.generated.ts',
+  'overlay-registry.generated.json',
+  'stateMatrix.generated.ts',
+]
+// The enumeration API. A copy of the surface lib DEFINES or EXPORTS these,
+// whatever the file is called and wherever it sits.
+const ENUM_API = ['enumerateSurfaces', 'captureCells', 'cellUrl', 'surfaceCount']
+const WALK_SKIP = new Set(['node_modules', '.git', 'dist', 'target', 'coverage', '.lifecycle'])
+
+/**
+ * Discover, BY CONTENT, every file that is a copy of the shared surface
+ * enumeration or of a generator — anywhere under `root`, under any name.
+ *
+ * Discovery is deliberately broad and the ASSERTION is narrow ("it must live
+ * under the shared package, or be an explicitly reasoned exemption"). That is
+ * the shape TEST-6g settled on and the reason it survives: a rename, a move, or
+ * a new extension cannot hide a copy, because the thing being matched is what
+ * the copy must DO to function at all.
+ */
+function discoverEnumerationCopies(root) {
+  const found = []
+  const walk = dir => {
+    let entries
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const e of entries) {
+      const full = path.join(dir, e.name)
+      let st
+      try {
+        st = fs.statSync(full) // resolve symlinks: isDirectory() is false for a symlinked dir
+      } catch {
+        continue
+      }
+      if (st.isDirectory()) {
+        if (!WALK_SKIP.has(e.name)) walk(full)
+        continue
+      }
+      if (!/\.(mjs|cjs|js|ts|mts|cts)$/.test(e.name)) continue
+      let src
+      try {
+        src = fs.readFileSync(full, 'utf-8')
+      } catch {
+        continue
+      }
+      // A surface-lib copy DEFINES or EXPORTS the enumeration API…
+      const api = ENUM_API.filter(fn =>
+        new RegExp(`(export\\s+(async\\s+)?function\\s+${fn}\\b|(async\\s+)?function\\s+${fn}\\b|(const|let)\\s+${fn}\\s*=)`).test(
+          src,
+        ),
+      )
+      // …a generator copy NAMES one of the artifacts AND writes it.
+      const artifacts = GENERATED_ARTIFACTS.filter(a => src.includes(a))
+      const writes = /writeFileSync|fs\.promises\.writeFile|await\s+fs\.writeFile/.test(src)
+      if (api.length || (artifacts.length && writes))
+        found.push({ file: full, api, artifacts: artifacts.length && writes ? artifacts : [] })
+    }
+  }
+  walk(root)
+  return found
+}
+
+// Files that legitimately match discovery without being a fork of the six.
+// Explicit, reasoned, and re-verified below so an exemption cannot rot into
+// cover for a real copy (the TEST-6g idiom).
+const NOT_A_GENERATOR_FORK = {
+  'src-app/ui/scripts/gallery-geometry-audit.mjs':
+    'a 1,700-line geometry/spacing audit that happens to define its OWN ' +
+    'enumerateSurfaces(browser) — a different call shape (it creates its own page) ' +
+    'and its own settle policy (networkidle + 2.5s vs the shared domcontentloaded + 5s). ' +
+    'It is NOT a capture/coverage copy of the six unified here. It DOES already cover ' +
+    'the interaction class, so it is not stale in the way the deleted lib fork was, but ' +
+    'it reads only the per-class globals and never __GALLERY_LIST_ALL_SURFACES__ — see ' +
+    'CLAUDE.md follow-up 1d. Exempted by exact path, never by a directory or suffix rule.',
+  'src-app/desktop/ui/scripts/gallery-geometry-audit.mjs':
+    'the desktop twin of the above, identical but for the dev-server port source. ' +
+    'Same reasoning; same follow-up.',
+  'src-app/ui/scripts/classify-gallery-coverage.mjs':
+    'a one-shot bootstrap helper that CONSUMES galleryCoverage.generated.ts and ' +
+    'writes the HAND-MAINTAINED coverage.ts — the opposite direction from a ' +
+    'generator. It has no npm script, no sdk counterpart, and defines none of the ' +
+    'enumeration API; it matches discovery only because it names the artifact and ' +
+    'writes a (different) file. Verified: its only writeFileSync targets coverage.ts.',
+  'src-app/desktop/ui/scripts/classify-gallery-coverage.mjs':
+    'the desktop twin of the above (drifted, but same role and same direction). ' +
+    'It is one of the 12 still-forked pairs recorded in CLAUDE.md follow-up 1c, ' +
+    'not a fork of the generators unified here.',
+  'src-app/ui/scripts/check-harness-parity.consumer.test.mjs':
+    'THIS guard. It names the artifacts and writes a mutation fixture, so it ' +
+    'matches its own discovery. Exempted by exact path — never by a *.test.mjs ' +
+    'rule, which is a loophole a real fork could adopt.',
+}
+
+test('TEST-3 [acceptance INV-1] unify: NO second enumeration/generator exists (content-discovered)', () => {
+  // The half that closes the hand-list hole. Discovery is by what a copy must DO,
+  // so a re-fork under a new name or in a new directory is still found.
+  const copies = discoverEnumerationCopies(ROOT)
+  const shared = copies.filter(c => c.file.startsWith(`${SDK_SCRIPTS}${path.sep}`))
+  assert.ok(
+    shared.some(c => c.file.endsWith(`lib${path.sep}gallery-surfaces.mjs`)),
+    'discovery must find the SHARED surface lib; if it cannot find the real one it ' +
+      'cannot find a forked one either (positive control)',
+  )
+
+  for (const [rel, why] of Object.entries(NOT_A_GENERATOR_FORK)) {
+    const abs = path.join(ROOT, rel)
+    assert.ok(fs.existsSync(abs), `stale exemption: ${rel} no longer exists — remove it`)
+    assert.ok(why.length > 40, `exemption for ${rel} must state WHY`)
+    assert.ok(
+      copies.some(c => c.file === abs),
+      `stale exemption: ${rel} is no longer discovered, so it exempts nothing and ` +
+        `would silently cover a real copy added at that path`,
+    )
+  }
+
+  const strays = copies
+    .filter(c => !c.file.startsWith(`${SDK_SCRIPTS}${path.sep}`))
+    .map(c => rel(c.file))
+    .filter(r => !(r in NOT_A_GENERATOR_FORK))
+  assert.deepEqual(
+    strays,
+    [],
+    'these files implement surface enumeration or write a generated gallery artifact ' +
+      'OUTSIDE the shared package — i.e. a second implementation, which is exactly ' +
+      'what this unification removed:\n  ' + strays.join('\n  '),
+  )
+})
+
+test('TEST-6 [acceptance INV-3] unify: discovery goes RED for a fork under ANY name/place', () => {
+  // The mutation the hand list missed. Planted in the REAL tree (try/finally), in a
+  // directory nobody listed and under a name nobody would grep for, because that is
+  // precisely the copy a path list cannot see.
+  const dir = path.join(ROOT, 'src-app/ui/scripts/local')
+  const planted = path.join(dir, 'surface-enum-helper.mjs')
+  try {
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(
+      planted,
+      'export async function enumerateSurfaces(page) { return page.evaluate(() => ({})) }\n' +
+        'export function captureCells() { return [] }\n',
+    )
+    const strays = discoverEnumerationCopies(ROOT)
+      .filter(c => !c.file.startsWith(`${SDK_SCRIPTS}${path.sep}`))
+      .map(c => rel(c.file))
+      .filter(r => !(r in NOT_A_GENERATOR_FORK))
+    assert.deepEqual(
+      strays,
+      ['src-app/ui/scripts/local/surface-enum-helper.mjs'],
+      'a re-forked enumeration must be discovered wherever it is planted',
+    )
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+  // …and the tree is left as it was.
+  assert.equal(fs.existsSync(planted), false, 'the mutation fixture must be cleaned up')
+})
+
+test('TEST-3 [acceptance INV-1] unify: the six named forks are absent and the scripts point at the sdk', () => {
   const violations = generatorForkViolations(realRead)
   assert.deepEqual(
     violations,
@@ -430,7 +598,7 @@ test('TEST-3 [acceptance INV-1] no workspace re-forks a generator or the surface
   }
 })
 
-test('TEST-6 [acceptance INV-3] the fork proof goes RED when a fork comes back', () => {
+test('TEST-6 [acceptance INV-3] unify: the named-fork list goes RED when a fork comes back', () => {
   // A positive-only guard proves nothing about whether it would ever fire, and a
   // guard for THIS invariant is worth exactly as much as its mutation case.
   for (const { ws } of WORKSPACES)
@@ -446,7 +614,7 @@ test('TEST-6 [acceptance INV-3] the fork proof goes RED when a fork comes back',
     }
 })
 
-test('TEST-1 the ONE shared generator serves BOTH workspaces (real runs)', () => {
+test('TEST-1 unify: the ONE shared generator serves BOTH workspaces (real runs)', () => {
   // Executed, not inspected: each generator is spawned under each workspace's own
   // cwd, so what is proven is that one implementation + two gallery.config.json
   // files reproduce both workspaces' committed artifacts.
@@ -459,12 +627,30 @@ test('TEST-1 the ONE shared generator serves BOTH workspaces (real runs)', () =>
     for (const [script, banner] of Object.entries(EXPECT)) {
       const r = runGen(ws, script, ['--check'])
       const out = `${r.stdout}${r.stderr}`
-      assert.equal(r.status, 0, `${label} ${script} --check must exit 0:\n${out}`)
+      // A5: name the REAL cause. This file runs in BOTH workspaces' `npm run check`,
+      // so a stale artifact in the OTHER workspace surfaces here; without this the
+      // failure reads as "harness parity" and sends the reader to the wrong place.
+      assert.equal(
+        r.status,
+        0,
+        `${label} ${script} --check must exit 0. NOTE this runs for BOTH workspaces: ` +
+          `if you are in the other one, fix it by running the matching gen:* script in ` +
+          `src-app/${label === 'ui' ? 'ui' : 'desktop/ui'} and committing.\n${out}`,
+      )
       assert.match(out, banner, `${label} ${script} --check printed an unexpected banner:\n${out}`)
+      // The banner alone tolerates ZERO — and zero is exactly the fail-open shape
+      // (a lost kit-import specifier makes every overlay host vanish). Assert a floor
+      // wherever the tree genuinely has surfaces.
+      const n = Number((out.match(/\((\d+) (?:overlay )?surfaces/) || [])[1])
+      if (Number.isFinite(n))
+        assert.ok(
+          n > 0,
+          `${label} ${script} reported ZERO surfaces. That is the fail-open shape, not a pass:\n${out}`,
+        )
     }
 })
 
-test('TEST-2 desktop’s overlay gate is NOT vacuous (positive + negative control)', () => {
+test('TEST-2 unify: desktop’s overlay gate is NOT vacuous (positive + negative control)', () => {
   // The one behaviour the deleted desktop fork carried that config had to
   // re-express: desktop surfaces import overlay primitives from the kit PACKAGE
   // specifier. If that is lost, the gate reports zero hosts and PASSES — a gate
@@ -506,7 +692,7 @@ test('TEST-2 desktop’s overlay gate is NOT vacuous (positive + negative contro
   }
 })
 
-test('TEST-5 [acceptance INV-2] the divergence is a CONFIG KEY, not a second implementation', () => {
+test('TEST-5 [acceptance INV-2] unify: the divergence is a CONFIG KEY, not a second implementation', () => {
   const desktop = resolveGalleryConfig(path.join(ROOT, 'src-app/desktop/ui'))
   const web = resolveGalleryConfig(path.join(ROOT, 'src-app/ui'))
   const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'gcfg-'))
@@ -534,7 +720,7 @@ test('TEST-5 [acceptance INV-2] the divergence is a CONFIG KEY, not a second imp
   )
 })
 
-test('TEST-8 the recorded follow-ups are still TRUE (behaviour, not prose)', () => {
+test('TEST-8 unify: the recorded follow-ups are still TRUE (behaviour, not prose)', () => {
   // CLAUDE.md records two findings this change deliberately did NOT fix. A
   // recorded follow-up that silently becomes false is worse than none, so both
   // are asserted by RUNNING, not by reading the doc.
@@ -581,7 +767,7 @@ test('TEST-8 the recorded follow-ups are still TRUE (behaviour, not prose)', () 
   )
 })
 
-test('TEST-7 every local script consumes the SHARED surface lib', () => {
+test('TEST-7 unify: every local script consumes the SHARED surface lib', () => {
   // The scripts themselves launch browsers, so they are not imported here; what
   // is checked is that the specifier each one names RESOLVES, through node’s real
   // resolver from that script’s own directory, to the sdk module.
@@ -596,20 +782,26 @@ test('TEST-7 every local script consumes the SHARED surface lib', () => {
     const abs = path.join(ROOT, rel)
     const src = realRead(abs)
     assert.ok(src !== null, `${rel} must exist`)
-    const m = src.match(/from\s+'([^']*gallery-surfaces\.mjs)'/)
-    assert.ok(m, `${rel} must import the surface enumeration`)
-    const resolved = createRequire(abs).resolve(m[1])
-    assert.equal(
-      path.resolve(resolved),
-      SHARED,
-      `${rel} imports "${m[1]}", which resolves to ${resolved} — every consumer must ` +
-        `reach the ONE shared module, or the workspace disagrees with itself about ` +
-        `what a surface is`,
-    )
+    // EVERY specifier, not just the first static import: a second (dynamic or
+    // require) reference to a local copy would otherwise slip past.
+    const specs = [
+      ...src.matchAll(/(?:from|import\s*\(|require\s*\()\s*['"]([^'"]*gallery-surfaces\.mjs)['"]/g),
+    ].map(m => m[1])
+    assert.ok(specs.length > 0, `${rel} must import the surface enumeration`)
+    for (const spec of specs) {
+      const resolved = createRequire(abs).resolve(spec)
+      assert.equal(
+        path.resolve(resolved),
+        SHARED,
+        `${rel} imports "${spec}", which resolves to ${resolved} — every consumer must ` +
+          `reach the ONE shared module, or the workspace disagrees with itself about ` +
+          `what a surface is`,
+      )
+    }
   }
 })
 
-test('TEST-4 [acceptance INV-4] the shared enumeration reports the interaction class', async () => {
+test('TEST-4 [acceptance INV-4] unify: the shared enumeration reports the interaction class', async () => {
   // Driven for real through the shipped module. The stale desktop copy had no
   // notion of interactions: it returned no `interactions` key, emitted no
   // interaction cell, and counted none — SILENTLY (fewer cells, no error). Each

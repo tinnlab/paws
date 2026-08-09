@@ -16,9 +16,14 @@
   source-text predicate is introduced. The pre-existing file-absence assertions
   (`realRead(fork) === null`) are extended in kind — those assert a file does not
   EXIST, which has no evasion space, unlike a content regex.
-- **INV-4** — fidelity: UPHELD — with both local `gallery-surfaces.mjs` copies gone,
-  every desktop script (`gate:ui`, `gallery:runtime`, `gallery:states`,
-  `gallery:screenshots`, `affordance-audit`, `gen-crop-review-manifests`)
-  enumerates surfaces through the same module, so the workspace can no longer
-  disagree with itself about what a surface is. TEST-4 proves this by driving the
-  real enumeration against a fixture carrying an interaction recipe.
+- **INV-4** — fidelity: AT-RISK (narrowed after the blind audit) — with both local
+  `gallery-surfaces.mjs` copies gone, all six scripts named in the follow-up
+  (`gate:ui`, `gallery:runtime`, `gallery:states`, `gallery:screenshots`,
+  `affordance-audit`, `gen-crop-review-manifests`) enumerate through the ONE shared
+  module; TEST-4 + TEST-9 prove it. The blind audit correctly found the claim was
+  broader than the fact: `gallery-geometry-audit.mjs` (both workspaces, outside the
+  brief's six) still defines its own `enumerateSurfaces`. It is not stale w.r.t. the
+  interaction class, but it holds the legacy per-class-globals notion of a surface.
+  Rather than overstate, the invariant is scoped to the unified set, the second
+  enumeration is DISCOVERED and explicitly exempted with a stated reason plus a
+  stale-exemption check (TEST-3), and it is recorded as CLAUDE.md follow-up 1d.
