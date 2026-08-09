@@ -128,7 +128,7 @@ class Boundary extends React.Component<
   }
   render() {
     if (this.state.caught) {
-      return <div data-testid="boundary-crash">{this.state.caught.message}</div>
+      return <div data-testid="test-error-boundary-crash">{this.state.caught.message}</div>
     }
     return this.props.children as React.ReactElement
   }
@@ -236,7 +236,7 @@ describe('FileRagAdminPage — hook-count stability across its state transitions
       { crashes: crashes.map(c => c.message), hookErrors: hookErrors() },
       'no React hook-order invariant violation',
     ).toEqual({ crashes: [], hookErrors: [] })
-    expect(host!.querySelector('[data-testid="boundary-crash"]')).toBeNull()
+    expect(host!.querySelector('[data-testid="test-error-boundary-crash"]')).toBeNull()
   })
 
   test('load failure with no settings, then a late load succeeds', async () => {

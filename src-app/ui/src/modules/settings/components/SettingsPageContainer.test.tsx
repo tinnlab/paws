@@ -96,7 +96,7 @@ class Boundary extends React.Component<
   }
   render() {
     if (this.state.caught) {
-      return <div data-testid="boundary-crash">{this.state.caught.message}</div>
+      return <div data-testid="test-error-boundary-crash">{this.state.caught.message}</div>
     }
     return this.props.children as React.ReactElement
   }
@@ -149,7 +149,7 @@ describe('SettingsPageContainer — hook count must not depend on seam registrat
     const tree = (
       <Boundary onError={onError}>
         <SettingsPageContainer title="Document RAG">
-          <div data-testid="body">body</div>
+          <div data-testid="settings-container-test-body">body</div>
         </SettingsPageContainer>
       </Boundary>
     )
@@ -158,7 +158,7 @@ describe('SettingsPageContainer — hook count must not depend on seam registrat
     await act(async () => {
       root!.render(tree)
     })
-    expect(host.querySelector('[data-testid="body"]'), 'container rendered').not.toBeNull()
+    expect(host.querySelector('[data-testid="settings-container-test-body"]'), 'container rendered').not.toBeNull()
 
     // 2. The lazy `modules/layouts/app-layout/appLayout` chunk is imported and
     //    its module side effect injects the seam.
@@ -177,7 +177,7 @@ describe('SettingsPageContainer — hook count must not depend on seam registrat
       root!.render(
         <Boundary onError={onError}>
           <SettingsPageContainer title="Document RAG" subtitle="re-render">
-            <div data-testid="body">body</div>
+            <div data-testid="settings-container-test-body">body</div>
           </SettingsPageContainer>
         </Boundary>,
       )
@@ -188,6 +188,6 @@ describe('SettingsPageContainer — hook count must not depend on seam registrat
       { crashes: crashes.map(c => c.message), hookErrorCount: hookErrors.length },
       `hook-order invariant violated:\n${hookErrors.join('\n')}`,
     ).toEqual({ crashes: [], hookErrorCount: 0 })
-    expect(host.querySelector('[data-testid="boundary-crash"]')).toBeNull()
+    expect(host.querySelector('[data-testid="test-error-boundary-crash"]')).toBeNull()
   })
 })
