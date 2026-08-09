@@ -35,7 +35,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resolveGalleryPort } from '@ziee/gallery/scripts/lib/run-key.mjs'
-import { enumerateSurfaces, cellUrl } from './lib/gallery-surfaces.mjs'
+import { enumerateSurfaces, cellUrl } from '@ziee/gallery/scripts/lib/gallery-surfaces.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const GALLERY_DIR = path.resolve(__dirname, '../src/dev/gallery')

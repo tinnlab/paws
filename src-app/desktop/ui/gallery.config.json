@@ -6,6 +6,21 @@
     "src/components/ui"
   ],
   "kitImport": "@ziee/kit",
+  "$overlayKitImports": [
+    "The package default is ['@/components/ui', '@/modules/layouts/app-layout/components/Drawer'].",
+    "Desktop surfaces import overlay primitives straight from the kit PACKAGE",
+    "specifier instead (e.g. ConversationMountsControl's Popover), so '@ziee/kit'",
+    "is appended here. Without it the overlay gate silently reports 0 hosts and",
+    "passes — the one active behaviour the deleted desktop fork carried, now",
+    "expressed as config rather than a second implementation.",
+    "NOTE the sibling 'kitImport' key above is read by nothing; see CLAUDE.md's",
+    "follow-up list."
+  ],
+  "overlayKitImports": [
+    "@/components/ui",
+    "@/modules/layouts/app-layout/components/Drawer",
+    "@ziee/kit"
+  ],
   "portWhich": "desktopGallery",
   "galleryUrl": "/gallery.html",
   "extraTrees": [

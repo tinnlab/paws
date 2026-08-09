@@ -28,7 +28,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { enumerateSurfaces } from './lib/gallery-surfaces.mjs'
+import { enumerateSurfaces } from '@ziee/gallery/scripts/lib/gallery-surfaces.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const UI_DIR = path.resolve(__dirname, '..')

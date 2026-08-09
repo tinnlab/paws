@@ -1942,26 +1942,63 @@ Recorded HERE rather than in `.lifecycle/` on purpose: lifecycle artifacts are
 stripped at merge, so a follow-up written only there disappears the moment it
 lands.
 
-**1. `src-app/desktop/ui/scripts/` still forks six more generators.** The harness
-itself was unified; these were deliberately left alone to keep that change
-bounded. Measured state (`diff` against `sdk/packages/gallery/scripts/`):
+**1. DONE — `src-app/desktop/ui/scripts/`'s six forked generators are unified.**
+All six are deleted; both workspaces now run
+`sdk/packages/gallery/scripts/{gen-gallery-coverage,gen-overlay-registry,gen-state-matrix,capture-gallery-states,capture-gallery-screenshots}.mjs`
+plus the shared `lib/gallery-surfaces.mjs`, each anchored by its own
+`gallery.config.json`. `src-app/ui/scripts/lib/gallery-surfaces.mjs` — a
+byte-identical third copy not in the original list — went with them. All twelve
+generated artifacts across both workspaces are byte-identical to before.
 
-| file | state | fix |
-|---|---|---|
-| `gen-gallery-coverage.mjs` | drifted, 42 lines | **same config-inversion**: the desktop copy is the old `__dirname`-anchored version; the sdk copy already reads `resolveGalleryConfig()` |
-| `gen-overlay-registry.mjs` | drifted, 84 lines | same config-inversion |
-| `gen-state-matrix.mjs` | drifted, 48 lines | same config-inversion |
-| `lib/gallery-surfaces.mjs` | drifted, 19 lines | **desktop is missing a FEATURE** — the sdk copy has a whole `interactions` surface class (`window.__GALLERY_INTERACTIONS__`, `cls: 'interaction'`) the desktop copy cannot see |
-| `capture-gallery-states.mjs` | drifted, 24 lines | same missing `interactions` handling (waits on `body[data-gallery-interact-done]`) |
-| `capture-gallery-screenshots.mjs` | **byte-identical** | pure duplication — delete and point at the sdk copy |
+Only ONE divergence was real behaviour, and it is now a config key rather than a
+fork: desktop surfaces import overlay primitives from the kit PACKAGE specifier,
+which the package-default `overlayKitImports` does not list, so desktop's
+`gallery.config.json` appends it. Without that the overlay gate reports zero hosts
+and PASSES — a gate failing open. Everything else was a comment, a `__dirname`
+anchor, or a latent sdk improvement (the sdk copies additionally skip
+`.test`/`.stories`/`.desktop` `.tsx` files; desktop has a `seam-parity.test.tsx`
+under a walked root that was benign only because it declares no state signals).
 
-The first three are a drop-in repeat of what was already done for
-`runtime-health`/`gate-ui`: delete the fork, point the npm script at
-`../../../sdk/packages/gallery/scripts/<x>.mjs`, and let
-`gallery.config.json` supply the anchors. The `gallery-surfaces` pair is the
-interesting one — desktop's crawl now DOES see interaction surfaces (it runs the
-sdk script), but desktop's *other* scripts still import the stale local copy, so
-the workspace is internally inconsistent about what a surface is.
+The invariant is carried by `check-harness-parity.consumer.test.mjs` (TEST-1..8),
+which SPAWNS the real generators under each workspace's cwd and asserts on their
+exit code and output, plus `gallery-desktop-surfaces.spec.ts`, which drives the
+real desktop gallery in a browser. No source-text guard was added — that approach
+already failed to converge in this area twice.
+
+**1a. The package-default `overlayKitImports` omits the kit package specifier,
+so `src-app/ui`'s overlay gate is blind to 58 surfaces.** Measured: 58 surfaces
+under `src-app/ui/src/{modules,components/ui}` import an overlay primitive
+(`Dialog|Drawer|Sheet|Modal|Popover|AlertDialog|Confirm|Popconfirm`) from the kit
+package while the registry reports 38 surfaces total — those 58 are neither wired
+open nor allow-listed, because the gate cannot see them. Desktop was fixed with a
+per-workspace key rather than by changing the default, deliberately: adding the
+specifier to the default surfaces ~58 new hosts in the web workspace, each of
+which must then be wired open in a gallery entry or allow-listed with a reason,
+or `src-app/ui`'s `npm run check` fails. That is a separate change with its own
+review. `TEST-8` fails if this entry ever becomes untrue.
+
+**1b. The `kitImport` config key is dead.** It is declared in
+`sdk/packages/gallery/scripts/lib/gallery-config.mjs` DEFAULTS, documented there
+as feeding the overlay registry's kit-source test, and set by
+`src-app/desktop/ui/gallery.config.json` — but no shipped script reads it;
+`overlayKitImports` superseded it. Proven behaviourally by `TEST-8` (changing
+`kitImport` to a nonsense specifier changes nothing). Either wire it as the
+singular form of `overlayKitImports` or delete it; leaving a config key that
+silently does nothing is the same defect class the unknown-key validator exists
+to refuse.
+
+**1c. `affordance-audit.mjs` and `gen-crop-review-manifests.mjs` are still forked
+per workspace.** Out of scope above (only their surface-lib import was
+repointed). They differ between workspaces in exactly ONE thing — where the
+dev-server port comes from: `src-app/ui` hardcodes `'1420'` while desktop derives
+it via `resolveGalleryPort({ which: 'desktopGallery' })`. The hardcoded `1420` is
+the known gate/port-collision trap, so this is a live hazard, not just tidiness.
+It is a config anchor, i.e. the same treatment applies. The now-shared
+`capture-gallery-{states,screenshots}.mjs` have the same wart in milder form:
+they default `--url=` to a hardcoded `localhost:1466`. That is unchanged by the
+unification (both desktop forks defaulted to it too, and every real invocation
+passes `--url=`), but it should become a `gallery.config.json` anchor with the
+rest.
 
 **2. `mountGallery` does not await `cfg.loadModules()`.**
 `sdk/packages/gallery/src/runtime/mount.tsx:58` fires it without `await`, then
