@@ -787,7 +787,9 @@ pub fn list_runtime_versions_docs(op: aide::transform::TransformOperation) -> ai
         .description("List all registered runtime versions, optionally filtered by engine")
         .tag("Runtime Versions")
         .response::<200, Json<RuntimeVersionListResponse>>()
-        .response_with::<400, (), _>(|res| res.description("Invalid query parameter (e.g. a NUL byte in a free-text filter)"))
+        .response_with::<400, (), _>(|res| {
+            res.description("Invalid query parameter (e.g. a NUL byte in a free-text filter)")
+        })
 }
 
 pub fn get_runtime_version_docs(op: aide::transform::TransformOperation) -> aide::transform::TransformOperation {

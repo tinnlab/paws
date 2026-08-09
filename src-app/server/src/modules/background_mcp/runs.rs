@@ -91,7 +91,7 @@ pub async fn list_background_runs(
         // Bound as `status = $2` / `job_kind = $3` with no other validation,
         // so both need the shared NUL guard (a NUL here 500'd).
         //
-        // `reject_nul`, NOT `normalize_text_filter`: this call site binds the
+        // `guard_raw`, NOT `normalize_text_filter`: this call site binds the
         // RAW value, so trimming or mapping blank to None would silently widen
         // `?status=` from "match the empty string" (0 rows) to "no filter"
         // (every run the caller owns). Guard the value; do not rewrite it.
@@ -303,10 +303,8 @@ mod tests {
     #[test]
     fn conversation_id_composes_with_the_other_filters() {
         let id = Uuid::new_v4();
-        let q = parse(&format!(
-            "status=running&kind=subagent&conversation_id={id}"
-        ))
-        .expect("valid query");
+        let q = parse(&format!("status=running&kind=subagent&conversation_id={id}"))
+            .expect("valid query");
         assert_eq!(q.conversation_id, Some(id));
         assert_eq!(q.status.as_deref(), Some("running"));
         assert_eq!(q.kind.as_deref(), Some("subagent"));

@@ -296,35 +296,12 @@ mod tests {
     }
 
     // TEST-14: search query clamps + blank handling + snippet bounds.
-    // Expectations UNCHANGED after `trimmed_term` became fallible — every
-    // valid input still normalizes exactly as it did before the guard existed.
     #[test]
     fn search_query_blank_term_is_none() {
+        assert_eq!(MessageSearchQuery { q: "   ".into(), ..Default::default() }.trimmed_term().unwrap(), None);
+        assert_eq!(MessageSearchQuery { q: "".into(), ..Default::default() }.trimmed_term().unwrap(), None);
         assert_eq!(
-            MessageSearchQuery {
-                q: "   ".into(),
-                ..Default::default()
-            }
-            .trimmed_term()
-            .unwrap(),
-            None
-        );
-        assert_eq!(
-            MessageSearchQuery {
-                q: "".into(),
-                ..Default::default()
-            }
-            .trimmed_term()
-            .unwrap(),
-            None
-        );
-        assert_eq!(
-            MessageSearchQuery {
-                q: "  hi ".into(),
-                ..Default::default()
-            }
-            .trimmed_term()
-            .unwrap(),
+            MessageSearchQuery { q: "  hi ".into(), ..Default::default() }.trimmed_term().unwrap(),
             Some("hi")
         );
     }
@@ -332,12 +309,9 @@ mod tests {
     /// A NUL in `q` is a typed 400 rather than a 500 from the `ILIKE` bind.
     #[test]
     fn search_query_nul_term_is_a_validation_error() {
-        let err = MessageSearchQuery {
-            q: "a\0b".into(),
-            ..Default::default()
-        }
-        .trimmed_term()
-        .expect_err("expected rejection");
+        let err = MessageSearchQuery { q: "a\0b".into(), ..Default::default() }
+            .trimmed_term()
+            .expect_err("expected rejection");
         assert_eq!(err.status_code(), 400);
         assert_eq!(err.error_code(), "VALIDATION_ERROR");
     }

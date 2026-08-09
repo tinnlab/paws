@@ -84,8 +84,9 @@ async fn the_unfiltered_endpoints_ignore_the_parameter_rather_than_validate_it()
     )
     .await;
 
-    // All SEVEN endpoints from the reported table — /users and /groups were
-    // missing from the first cut, which left two of the ten unexplained.
+    // All seven endpoints from the reported table (plus /groups, which shares
+    // the shape). /users and /groups were missing from the first cut, which
+    // left two of the reported ten unexplained.
     for path in [
         "/users",
         "/groups",
@@ -207,7 +208,7 @@ async fn nul_in_a_request_body_text_field_is_also_a_400() {
     .await;
 
     // (path, valid body, NUL-bearing body, expected success status)
-    let cases: [(&str, serde_json::Value, serde_json::Value, StatusCode); 5] = [
+    let cases: [(&str, serde_json::Value, serde_json::Value, StatusCode); 6] = [
         (
             "/assistants",
             json!({ "name": "ok-desc", "description": "clean" }),
@@ -236,6 +237,18 @@ async fn nul_in_a_request_body_text_field_is_also_a_400() {
             "/memories",
             json!({ "content": "clean content", "kind": "fact", "importance": 50 }),
             json!({ "content": "a\u{0}b", "kind": "fact", "importance": 50 }),
+            StatusCode::CREATED,
+        ),
+        // `metadata` is a jsonb bind, so the NUL is nested inside a JSON
+        // string value — a different SQLSTATE (22P05) and invisible to a
+        // scalar check on the serialized text, which is why it needs the
+        // walking guard.
+        (
+            "/memories",
+            json!({ "content": "meta ok", "kind": "fact", "importance": 50,
+                    "metadata": { "x": "clean" } }),
+            json!({ "content": "meta bad", "kind": "fact", "importance": 50,
+                    "metadata": { "x": "a\u{0}b" } }),
             StatusCode::CREATED,
         ),
     ];

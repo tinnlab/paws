@@ -137,7 +137,7 @@ pub(crate) fn validate_assistant_text_lengths(
             ));
         }
         // The length cap does not catch U+0000 (a NUL-bearing value can be
-        // arbitrarily short), and these columns are `text`, so an unguarded
+        // arbitrarily short), and these are `text` columns, so an unguarded
         // NUL reached the INSERT and came back as a generic 500.
         crate::common::text_guard::reject_nul(d, "description")?;
     }
@@ -359,9 +359,7 @@ pub async fn delete_user_assistant(
     Repos.assistant.delete(id).await?;
 
     // Emit deletion event for other modules to react (synchronous so cleanup completes before response)
-    event_bus
-        .emit(AssistantEvent::deleted(id, Some(auth.user.id)))
-        .await;
+    event_bus.emit(AssistantEvent::deleted(id, Some(auth.user.id))).await;
 
     sync_publish(
         SyncEntity::Assistant,

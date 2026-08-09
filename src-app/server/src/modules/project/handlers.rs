@@ -118,13 +118,10 @@ impl<'de> Deserialize<'de> for ProjectListQuery {
     }
 }
 
-/// Normalize a raw `search` query value: reject a NUL, trim, and treat a
-/// blank/whitespace-only term as "no filter" (`None`).
-///
-/// Delegates to the shared `common::text_guard::normalize_text_filter`, which
-/// is the ONE definition of this shape — it was previously copy-pasted across
-/// every list endpoint WITHOUT the NUL guard, so `?search=%00` reached the
-/// `ILIKE` bind and came back as a 500.
+/// Normalize a raw `search` query value: trim, and treat a blank/whitespace-only
+/// term as "no filter" (`None`). Extracted from the handler body so it's
+/// Tier-1 unit-testable independently of the HTTP layer. Mirrors the mcp
+/// list-search convention (`mcp/handlers/user.rs`).
 fn normalize_search(raw: Option<&str>) -> Result<Option<String>, AppError> {
     Ok(crate::common::text_guard::normalize_text_filter(raw, "search")?.map(str::to_string))
 }
@@ -156,12 +153,16 @@ fn validate_project_name(name: &str) -> Result<(), AppError> {
     Ok(())
 }
 
-/// Reject a value Postgres cannot store (U+0000).
+/// A Postgres `text`/`varchar` column cannot hold U+0000 at ALL — the wire
+/// protocol rejects it with `22021 invalid byte sequence for encoding UTF8`,
+/// which `AppError::database_error` flattens into a generic 500
+/// `SYSTEM_DATABASE_ERROR`. Every user-supplied string that reaches an INSERT
+/// therefore needs this gate; the length caps above do not catch it because a
+/// NUL-bearing value can be arbitrarily short.
 ///
-/// Thin wrapper over the shared `common::text_guard::reject_nul`, kept so the
-/// existing call sites and their tests read unchanged. The guard itself lives
-/// in ONE place — this used to be one of three independent private copies, and
-/// that duplication is why the read path (query parameters) never got it.
+/// Deliberately narrower than the display-name gate: `\n`/`\t` are legitimate
+/// in `instructions` and `description`, so ONLY the byte Postgres physically
+/// cannot store is rejected.
 fn reject_nul(value: &str, field: &str) -> Result<(), AppError> {
     crate::common::text_guard::reject_nul(value, field)
 }
@@ -443,9 +444,7 @@ pub async fn delete_project(
         user_id = %auth.user.id,
         "project: deleted"
     );
-    event_bus
-        .emit(ProjectEvent::deleted(id, auth.user.id))
-        .await;
+    event_bus.emit(ProjectEvent::deleted(id, auth.user.id)).await;
     sync_publish(
         SyncEntity::Project,
         SyncAction::Delete,
@@ -473,9 +472,7 @@ pub fn delete_project_docs(op: TransformOperation) -> TransformOperation {
 pub async fn duplicate_project(
     auth: RequirePermissions<(ProjectsCreate, ProjectsRead)>,
     Extension(event_bus): Extension<Arc<EventBus>>,
-    Extension(extension_registry): Extension<
-        Arc<crate::modules::project::ProjectExtensionRegistry>,
-    >,
+    Extension(extension_registry): Extension<Arc<crate::modules::project::ProjectExtensionRegistry>>,
     Path(id): Path<Uuid>,
     origin: SyncOrigin,
 ) -> ApiResult<Json<Project>> {
@@ -650,30 +647,31 @@ mod tests {
 
     /// TEST-2 — `normalize_search` trims and maps blank/whitespace to
     /// `None` (the "no filter" convention), non-blank to the trimmed term.
-    ///
-    /// TEST-17 — unchanged expectations after the signature became fallible:
-    /// every valid input still normalizes exactly as it did before the guard
-    /// existed. That is the regression control for the shared helper.
     #[test]
     fn normalize_search_trims_and_blanks_to_none() {
+        // Expectations UNCHANGED after the signature became fallible — every
+        // valid input still normalizes exactly as it did before the guard.
         assert_eq!(normalize_search(None).unwrap(), None);
         assert_eq!(normalize_search(Some("")).unwrap(), None);
         assert_eq!(normalize_search(Some("   ")).unwrap(), None);
         assert_eq!(normalize_search(Some("\t\n")).unwrap(), None);
-        assert_eq!(
-            normalize_search(Some("  foo ")).unwrap().as_deref(),
-            Some("foo")
-        );
-        assert_eq!(
-            normalize_search(Some("roadmap")).unwrap().as_deref(),
-            Some("roadmap")
-        );
+        assert_eq!(normalize_search(Some("  foo ")).unwrap().as_deref(), Some("foo"));
+        assert_eq!(normalize_search(Some("roadmap")).unwrap().as_deref(), Some("roadmap"));
     }
 
-    /// INV-3 — this module's `reject_nul` wrapper must render the SHARED
-    /// message format, not a re-forked one. The message is what a re-fork
-    /// changes; the status/error-code pair is what every hand-rolled copy
-    /// already produced, so only the message can detect the drift.
+    /// A NUL-bearing term is now a typed 400 rather than reaching the `ILIKE`
+    /// bind and coming back as a 500.
+    #[test]
+    fn normalize_search_rejects_nul_as_a_validation_error() {
+        let err = normalize_search(Some("a\0b")).expect_err("expected rejection");
+        assert_eq!(err.status_code(), 400);
+        assert_eq!(err.error_code(), "VALIDATION_ERROR");
+    }
+
+    /// INV-3 — this module's wrapper must render the SHARED message format.
+    /// The status/error-code pair is NOT sufficient: every hand-rolled
+    /// `AppError::bad_request("VALIDATION_ERROR", …)` produces it, including
+    /// the private copy this wrapper replaced.
     #[test]
     fn reject_nul_wrapper_renders_the_shared_message_format() {
         let err = reject_nul("a\0b", "Project name").expect_err("rejects");
@@ -684,14 +682,5 @@ mod tests {
             rendered.contains("Project name cannot contain NUL characters"),
             "wrapper drifted from the shared message format: {rendered}"
         );
-    }
-
-    /// TEST-17 — and a NUL-bearing term is now a typed 400 rather than
-    /// reaching the `ILIKE` bind and coming back as a 500.
-    #[test]
-    fn normalize_search_rejects_nul_as_a_validation_error() {
-        let err = normalize_search(Some("a\0b")).expect_err("expected rejection");
-        assert_eq!(err.status_code(), 400);
-        assert_eq!(err.error_code(), "VALIDATION_ERROR");
     }
 }

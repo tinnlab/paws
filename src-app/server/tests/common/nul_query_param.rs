@@ -9,8 +9,9 @@
 //!
 //! The endpoints that LOOKED healthy were not validating anything: they simply
 //! have no such parameter, so axum's `Query` extractor discarded
-//! `?search=%00` unread (`the_unfiltered_endpoints_ignore_the_parameter`
-//! proves this by hashing their bodies).
+//! `?search=%00` unread. `the_unfiltered_endpoints_ignore_the_parameter_rather_than_validate_it`
+//! proves this by asserting their response bodies are EQUAL with the parameter,
+//! without it, and with a parameter name that certainly does not exist.
 
 #![allow(dead_code)]
 
@@ -76,7 +77,7 @@ pub async fn assert_benign_value_is_accepted(server: &TestServer, token: &str, p
 /// before binding (`conversations?sort`), mapped to a bool
 /// (`mcp/servers?status`), parsed into an enum (`llm-models/downloads?status`),
 /// or that never touch SQL at all are deliberately NOT here — they are covered
-/// as negative controls by `whitelisted_params_are_unaffected`.
+/// as negative controls by `whitelisted_and_bool_mapped_params_are_unaffected`.
 pub const FREE_TEXT_SQL_BOUND_PARAMS: &[(&str, &str, &str)] = &[
     (
         "projects?search",

@@ -16,6 +16,13 @@ async fn background_runs_status_and_kind_reject_nul() {
     let server = TestServer::start().await;
     let user = create_user_with_permissions(&server, "bg_nul", &["background::use"]).await;
 
+    // Seed two runs that differ in BOTH status and kind, so each happy-path
+    // leg can assert the filter SELECTS a strict subset. A well-formedness
+    // assertion on an empty table would be satisfied by a handler that ignores
+    // the parameter, which would make the paired rejection prove nothing.
+    insert_bg_run(&server, &user.user_id, "subagent", "completed").await;
+    insert_bg_run(&server, &user.user_id, "sandbox_exec", "failed").await;
+
     for (nul_path, benign_path) in [
         (
             "/background/runs?status=%00",
@@ -26,14 +33,13 @@ async fn background_runs_status_and_kind_reject_nul() {
             "/background/runs?kind=subagent",
         ),
     ] {
-        // HAPPY-PATH COUNTERPART — a legal filter value returns a well-formed
-        // page (empty here: no runs are seeded), proving the filter path is
-        // reached and the 400 below is a validation refusal.
+        // HAPPY-PATH COUNTERPART — selects exactly one of the two seeded runs.
         let (status, body) = get(&server, &user.token, benign_path).await;
         assert_eq!(status, StatusCode::OK, "happy path {benign_path}: {body}");
-        assert!(
-            body["runs"].is_array() && body["total"].is_number(),
-            "{benign_path} must return a well-formed page: {body}"
+        assert_eq!(
+            body["total"], 1,
+            "{benign_path} must select ONE of the two seeded runs; returning \
+             both means the filter is ignored: {body}"
         );
 
         assert_nul_is_rejected(&server, &user.token, nul_path).await;
@@ -46,6 +52,24 @@ async fn background_runs_status_and_kind_reject_nul() {
     assert_eq!(status, StatusCode::FORBIDDEN, "unpermitted caller");
 }
 
+/// Insert a background `workflow_runs` row owned by `user_id`. Mirrors
+/// `runs.rs::insert_bg_run` — direct SQL, because spawning a real background
+/// run needs an LLM.
+async fn insert_bg_run(server: &TestServer, user_id: &str, kind: &str, status: &str) {
+    let pool = sqlx::PgPool::connect(&server.database_url).await.unwrap();
+    sqlx::query(
+        "INSERT INTO workflow_runs (job_kind, user_id, status, inputs_json) \
+         VALUES ($1, $2, $3, $4)",
+    )
+    .bind(kind)
+    .bind(uuid::Uuid::parse_str(user_id).unwrap())
+    .bind(status)
+    .bind(serde_json::json!({ "task": "t" }))
+    .execute(&pool)
+    .await
+    .expect("insert background run");
+}
+
 /// REGRESSION (blind audit, round 1) — the guard must NOT turn `?status=` into
 /// "no filter".
 ///
@@ -55,24 +79,41 @@ async fn background_runs_status_and_kind_reject_nul() {
 /// from "match the empty string" (0 rows) to no filter at all (every run the
 /// caller owns) — a filter the client explicitly sent being discarded. The fix
 /// is `guard_raw`, which adds the NUL rejection and nothing else.
+///
+/// REAL rows are seeded on purpose: on an EMPTY table "filtered returns 0" and
+/// "unfiltered returns 0" are the same observation, so the test would have been
+/// a tautology and could not have caught the very regression it exists for.
 #[tokio::test]
 async fn empty_filter_values_still_filter_and_do_not_widen() {
     let server = TestServer::start().await;
     let user = create_user_with_permissions(&server, "bg_empty", &["background::use"]).await;
+    insert_bg_run(&server, &user.user_id, "subagent", "completed").await;
+    insert_bg_run(&server, &user.user_id, "sandbox_exec", "failed").await;
 
-    // Baseline: the unfiltered list.
+    // Baseline: the unfiltered list is NON-EMPTY, which is what makes the
+    // assertions below able to fail.
     let (status, unfiltered) = get(&server, &user.token, "/background/runs").await;
     assert_eq!(status, StatusCode::OK, "{unfiltered}");
     let all = unfiltered["total"].as_i64().expect("total");
+    assert_eq!(all, 2, "two seeded runs must be visible: {unfiltered}");
 
+    // A real filter value selects a strict subset — proves the parameter is read.
+    let (_, one) = get(&server, &user.token, "/background/runs?status=completed").await;
+    assert_eq!(
+        one["total"], 1,
+        "?status=completed selects one of two: {one}"
+    );
+    let (_, one) = get(&server, &user.token, "/background/runs?kind=subagent").await;
+    assert_eq!(one["total"], 1, "?kind=subagent selects one of two: {one}");
+
+    // The regression: an EMPTY value must match nothing, NOT fall back to all 2.
     for path in ["/background/runs?status=", "/background/runs?kind="] {
         let (status, body) = get(&server, &user.token, path).await;
         assert_eq!(status, StatusCode::OK, "{path}: {body}");
-        let got = body["total"].as_i64().expect("total");
         assert_eq!(
-            got, 0,
-            "{path}: an empty filter value must match NOTHING (it binds the \
-             empty string), never fall back to the unfiltered list of {all}: {body}"
+            body["total"], 0,
+            "{path}: an empty filter value binds the empty string and must match \
+             NOTHING; returning the unfiltered {all} rows is the widening bug: {body}"
         );
     }
 }

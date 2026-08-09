@@ -70,6 +70,23 @@ mod tests {
         assert_eq!(err.error_code(), "VALIDATION_ERROR");
     }
 
+    /// INV-3 — this module's wrapper must render the SHARED message format.
+    /// Status + error code are NOT sufficient: every hand-rolled
+    /// `AppError::bad_request("VALIDATION_ERROR", …)` produces that pair,
+    /// including the private copy this wrapper replaced. The MESSAGE is what a
+    /// re-fork changes, so it is what is asserted. (The third of the three
+    /// wrappers; its siblings assert the same in project/handlers.rs and
+    /// user/handlers/groups.rs.)
+    #[test]
+    fn reject_nul_wrapper_renders_the_shared_message_format() {
+        let err = reject_nul_in_content("a\0b").expect_err("rejects");
+        let rendered = serde_json::to_string(&err).expect("serialize");
+        assert!(
+            rendered.contains("Message content cannot contain NUL characters"),
+            "wrapper drifted from the shared message format: {rendered}"
+        );
+    }
+
     #[test]
     fn fork_level_accepts_exactly_the_check_constraint_vocabulary() {
         assert!(validate_fork_level("user").is_ok());
