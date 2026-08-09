@@ -94,21 +94,15 @@ pub async fn list_memories(
 
     // Normalize: trim search, treat empty as None so the SQL noop
     // short-circuits and we don't run `ILIKE '%%'`.
-    let search = q
-        .search
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
-    let kind = q
-        .kind
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
-    let source = q
-        .source
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
+    // `kind` and `source` are bound as `text` exactly like `search`
+    // (`kind = $5` / `source = $6`), so they carry the identical defect and
+    // take the identical guard. All three sites already trimmed + treated
+    // blank as "no filter", so `normalize_text_filter` (not `guard_raw`) is
+    // the entry point that preserves their behaviour exactly.
+    use crate::common::text_guard::normalize_text_filter;
+    let search = normalize_text_filter(q.search.as_deref(), "search")?;
+    let kind = normalize_text_filter(q.kind.as_deref(), "kind")?;
+    let source = normalize_text_filter(q.source.as_deref(), "source")?;
 
     let items = Repos
         .memory
@@ -136,6 +130,9 @@ pub fn list_memories_docs(op: TransformOperation) -> TransformOperation {
         .tag("Memory")
         .summary("List the caller's own memories (paginated)")
         .response::<200, Json<MemoryListResponse>>()
+        .response_with::<400, (), _>(|res| {
+            res.description("Invalid query parameter (e.g. a NUL byte in a free-text filter)")
+        })
 }
 
 #[debug_handler]
@@ -177,6 +174,13 @@ pub async fn create_memory(
         )
         .into());
     }
+    // The length cap does not catch U+0000, which `user_memories.content`
+    // (a `text` column) cannot hold — an unguarded NUL 500'd.
+    crate::common::text_guard::reject_nul(content, "content")?;
+    // `metadata` is a jsonb bind — a NUL in any nested string value or object
+    // key is the same defect with a different SQLSTATE (22P05), so it needs the
+    // walking guard rather than the scalar one.
+    crate::common::text_guard::reject_nul_in_json(&body.metadata, "metadata")?;
     if !is_valid_kind(&body.kind) {
         return Err(AppError::bad_request("VALIDATION_ERROR", "invalid kind").into());
     }
@@ -239,6 +243,10 @@ pub async fn update_memory(
             )
             .into());
         }
+        crate::common::text_guard::reject_nul(c, "content")?;
+    }
+    if let Some(m) = body.metadata.as_ref() {
+        crate::common::text_guard::reject_nul_in_json(m, "metadata")?;
     }
     if let Some(k) = &body.kind {
         if !is_valid_kind(k) {

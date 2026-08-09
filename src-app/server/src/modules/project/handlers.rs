@@ -122,10 +122,8 @@ impl<'de> Deserialize<'de> for ProjectListQuery {
 /// term as "no filter" (`None`). Extracted from the handler body so it's
 /// Tier-1 unit-testable independently of the HTTP layer. Mirrors the mcp
 /// list-search convention (`mcp/handlers/user.rs`).
-fn normalize_search(raw: Option<&str>) -> Option<String> {
-    raw.map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
+fn normalize_search(raw: Option<&str>) -> Result<Option<String>, AppError> {
+    Ok(crate::common::text_guard::normalize_text_filter(raw, "search")?.map(str::to_string))
 }
 
 // =====================================================
@@ -166,13 +164,7 @@ fn validate_project_name(name: &str) -> Result<(), AppError> {
 /// in `instructions` and `description`, so ONLY the byte Postgres physically
 /// cannot store is rejected.
 fn reject_nul(value: &str, field: &str) -> Result<(), AppError> {
-    if value.contains('\0') {
-        return Err(AppError::bad_request(
-            "VALIDATION_ERROR",
-            format!("{field} cannot contain NUL characters"),
-        ));
-    }
-    Ok(())
+    crate::common::text_guard::reject_nul(value, field)
 }
 
 fn validate_project_text_lengths(
@@ -317,7 +309,7 @@ pub async fn list_projects(
     Query(query): Query<ProjectListQuery>,
 ) -> ApiResult<Json<ProjectListResponse>> {
     let (page, limit) = query.resolved();
-    let search = normalize_search(query.search.as_deref());
+    let search = normalize_search(query.search.as_deref())?;
     let response = Repos
         .project
         .list_for_user(auth.user.id, page, limit, search.as_deref())
@@ -331,6 +323,9 @@ pub fn list_projects_docs(op: TransformOperation) -> TransformOperation {
         .tag("Projects")
         .summary("List user's projects")
         .response::<200, Json<ProjectListResponse>>()
+        .response_with::<400, (), _>(|res| {
+            res.description("Invalid query parameter (e.g. a NUL byte in a free-text filter)")
+        })
 }
 
 #[debug_handler]
@@ -654,11 +649,38 @@ mod tests {
     /// `None` (the "no filter" convention), non-blank to the trimmed term.
     #[test]
     fn normalize_search_trims_and_blanks_to_none() {
-        assert_eq!(normalize_search(None), None);
-        assert_eq!(normalize_search(Some("")), None);
-        assert_eq!(normalize_search(Some("   ")), None);
-        assert_eq!(normalize_search(Some("\t\n")), None);
-        assert_eq!(normalize_search(Some("  foo ")).as_deref(), Some("foo"));
-        assert_eq!(normalize_search(Some("roadmap")).as_deref(), Some("roadmap"));
+        // Expectations UNCHANGED after the signature became fallible — every
+        // valid input still normalizes exactly as it did before the guard.
+        assert_eq!(normalize_search(None).unwrap(), None);
+        assert_eq!(normalize_search(Some("")).unwrap(), None);
+        assert_eq!(normalize_search(Some("   ")).unwrap(), None);
+        assert_eq!(normalize_search(Some("\t\n")).unwrap(), None);
+        assert_eq!(normalize_search(Some("  foo ")).unwrap().as_deref(), Some("foo"));
+        assert_eq!(normalize_search(Some("roadmap")).unwrap().as_deref(), Some("roadmap"));
+    }
+
+    /// A NUL-bearing term is now a typed 400 rather than reaching the `ILIKE`
+    /// bind and coming back as a 500.
+    #[test]
+    fn normalize_search_rejects_nul_as_a_validation_error() {
+        let err = normalize_search(Some("a\0b")).expect_err("expected rejection");
+        assert_eq!(err.status_code(), 400);
+        assert_eq!(err.error_code(), "VALIDATION_ERROR");
+    }
+
+    /// INV-3 — this module's wrapper must render the SHARED message format.
+    /// The status/error-code pair is NOT sufficient: every hand-rolled
+    /// `AppError::bad_request("VALIDATION_ERROR", …)` produces it, including
+    /// the private copy this wrapper replaced.
+    #[test]
+    fn reject_nul_wrapper_renders_the_shared_message_format() {
+        let err = reject_nul("a\0b", "Project name").expect_err("rejects");
+        assert_eq!(err.status_code(), 400);
+        assert_eq!(err.error_code(), "VALIDATION_ERROR");
+        let rendered = serde_json::to_string(&err).expect("serialize");
+        assert!(
+            rendered.contains("Project name cannot contain NUL characters"),
+            "wrapper drifted from the shared message format: {rendered}"
+        );
     }
 }

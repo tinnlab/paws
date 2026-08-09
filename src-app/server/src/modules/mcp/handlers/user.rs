@@ -108,11 +108,8 @@ pub async fn list_accessible_servers(
     auth: RequirePermissions<(McpServersRead,)>,
     Query(params): Query<ListAccessibleServersQuery>,
 ) -> ApiResult<Json<McpServerListResponse>> {
-    let search = params
-        .search
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
+    let search =
+        crate::common::text_guard::normalize_text_filter(params.search.as_deref(), "search")?;
     let (enabled, is_system) = match params.status.as_deref() {
         Some("enabled") => (Some(true), None),
         Some("disabled") => (Some(false), None),
@@ -144,6 +141,9 @@ pub fn list_accessible_servers_docs(op: TransformOperation) -> TransformOperatio
         .description("List user's own MCP servers and system servers assigned through groups")
         .response::<200, Json<McpServerListResponse>>()
         .response_with::<401, (), _>(|res| res.description("Unauthorized"))
+        .response_with::<400, (), _>(|res| {
+            res.description("Invalid query parameter (e.g. a NUL byte in a free-text filter)")
+        })
 }
 
 /// Create a new user MCP server

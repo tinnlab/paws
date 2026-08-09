@@ -68,7 +68,16 @@ pub async fn list_tool_calls(
                 server_id: params.server_id,
                 conversation_id: params.conversation_id,
                 is_built_in: params.is_built_in,
-                tool_use_id: params.tool_use_id.as_deref(),
+                // Bound as `tool_use_id = $5` — same text-bind class as the
+                // list `search` filters, same shared guard.
+                //
+                // `guard_raw`, NOT `normalize_text_filter`: this binds the RAW
+                // value, so blank→None would widen `?tool_use_id=` from an
+                // empty page to the caller's ENTIRE tool-call history.
+                tool_use_id: crate::common::text_guard::guard_raw(
+                    params.tool_use_id.as_deref(),
+                    "tool_use_id",
+                )?,
                 message_id: params.message_id,
             },
             params.page.max(1),
@@ -91,6 +100,9 @@ pub fn list_tool_calls_docs(op: TransformOperation) -> TransformOperation {
         )
         .response::<200, Json<McpToolCallListResponse>>()
         .response_with::<401, (), _>(|res| res.description("Unauthorized"))
+        .response_with::<400, (), _>(|res| {
+            res.description("Invalid query parameter (e.g. a NUL byte in a free-text filter)")
+        })
 }
 
 /// GET /api/mcp/tool-calls/{id} — one tool-call row (404 if not owned).

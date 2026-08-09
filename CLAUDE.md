@@ -2397,6 +2397,36 @@ killall -9 node
 
 ## Critical Patterns
 
+### User text → Postgres: one guard, `common::text_guard`
+
+Postgres cannot hold `U+0000` in a `text` value (`22021`; `22P05` on a `jsonb`
+path). An unguarded NUL therefore surfaces a **client** error as a generic
+**500** `SYSTEM_DATABASE_ERROR`. **Every user-supplied string that reaches a SQL
+text bind — request BODY *or* QUERY PARAMETER — goes through
+`server/src/common/text_guard.rs`**, which returns **400 `VALIDATION_ERROR`**.
+
+Two entry points, and picking the wrong one is a silent behaviour change:
+
+| use | when |
+|---|---|
+| `reject_nul(value, field)` | a body field, or anywhere you bind the value as-is |
+| `guard_raw(opt, field)` | a query param whose existing code bound the RAW value (exact-match `WHERE col = $1`) — adds the rejection and nothing else |
+| `normalize_text_filter(opt, field)` | a query param whose existing code ALREADY did `trim` + blank→`None` |
+
+Reaching for `normalize_text_filter` at a site that did not already trim widens
+`?p=` from "match the empty string" (selects nothing) to "no filter" (selects
+**everything**). That regression was shipped and caught in blind audit here.
+
+**Reject, never strip** — stripping turns `search=a\0b` into `search=ab` and
+returns hits the caller never asked for. Keep it **narrow (NUL only)**: `\n`/`\t`
+are storable, are legitimate in prose, and merely match nothing in a filter, so
+they stay 200. **Do not write a fourth private copy of this guard** — three
+independent per-module copies, each wired into one module's write path, are
+exactly why twelve free-text query parameters across nine routes went unguarded
+and 500'd. A handler that can now return 400 must also declare it
+(`.response_with::<400, …>`) and the OpenAPI must be regenerated for BOTH UI
+workspaces.
+
 ### Frontend Store Usage
 
 ```typescript

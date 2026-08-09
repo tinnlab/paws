@@ -329,6 +329,12 @@ pub async fn create_kb(
 ) -> ApiResult<Json<KnowledgeBase>> {
     let name = body.name.trim();
     validate_kb_name(name)?;
+    // `validate_kb_name` covers the name (it already rejects all control
+    // characters); `description` is free-form prose reaching a `text` column,
+    // so it needs the NUL guard — an unguarded NUL 500'd.
+    if let Some(d) = body.description.as_deref() {
+        crate::common::text_guard::reject_nul(d, "description")?;
+    }
     let kb = Repos
         .knowledge_base
         .create(auth.user.id, name, body.description.as_deref())
@@ -371,6 +377,11 @@ pub async fn update_kb(
         .filter(|s| !s.is_empty());
     if let Some(n) = name {
         validate_kb_name(n)?;
+    }
+    // Pure pre-check — deliberately does NOT touch the omit-vs-clear semantics
+    // of `desc` below.
+    if let Some(d) = body.description.as_deref() {
+        crate::common::text_guard::reject_nul(d, "description")?;
     }
     let desc = Some(body.description.as_deref());
     let kb = Repos

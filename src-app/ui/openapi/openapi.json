@@ -5560,6 +5560,9 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Invalid query parameter (e.g. a NUL byte in a free-text filter)"
           }
         },
         "security": [
@@ -10427,6 +10430,9 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Invalid query parameter (e.g. a NUL byte in a free-text filter)"
           }
         },
         "security": [
@@ -11749,6 +11755,9 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid query parameter (e.g. a NUL byte in a free-text filter)"
+          },
           "401": {
             "description": "Unauthorized"
           }
@@ -12408,6 +12417,9 @@
           },
           "401": {
             "description": "Unauthorized"
+          },
+          "400": {
+            "description": "Invalid query parameter (e.g. a NUL byte in a free-text filter)"
           }
         },
         "security": [
@@ -13132,6 +13144,9 @@
           },
           "401": {
             "description": "Unauthorized"
+          },
+          "400": {
+            "description": "Invalid query parameter (e.g. a NUL byte in a free-text filter)"
           }
         },
         "security": [
@@ -13844,6 +13859,9 @@
           },
           "401": {
             "description": "Unauthorized"
+          },
+          "400": {
+            "description": "Invalid query parameter (e.g. a NUL byte in a free-text filter)"
           }
         },
         "security": [
@@ -14596,6 +14614,9 @@
           },
           "401": {
             "description": "Unauthorized"
+          },
+          "400": {
+            "description": "Invalid query parameter (e.g. a NUL byte in a free-text filter)"
           }
         },
         "security": [
@@ -17804,6 +17825,9 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Invalid query parameter (e.g. a NUL byte in a free-text filter)"
           }
         },
         "security": [
@@ -22821,6 +22845,9 @@
           },
           "401": {
             "description": "Unauthorized"
+          },
+          "400": {
+            "description": "Invalid query parameter (e.g. a NUL byte in a free-text filter)"
           }
         },
         "security": [

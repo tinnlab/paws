@@ -61,11 +61,8 @@ pub async fn list_system_servers(
     _auth: RequirePermissions<(McpServersAdminRead,)>,
     Query(params): Query<ListSystemServersQuery>,
 ) -> ApiResult<Json<McpServerListResponse>> {
-    let search = params
-        .search
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
+    let search =
+        crate::common::text_guard::normalize_text_filter(params.search.as_deref(), "search")?;
     let enabled = match params.status.as_deref() {
         Some("enabled") => Some(true),
         Some("disabled") => Some(false),
@@ -93,6 +90,9 @@ pub fn list_system_servers_docs(op: TransformOperation) -> TransformOperation {
         .description("List all system MCP servers")
         .response::<200, Json<McpServerListResponse>>()
         .response_with::<401, (), _>(|res| res.description("Unauthorized"))
+        .response_with::<400, (), _>(|res| {
+            res.description("Invalid query parameter (e.g. a NUL byte in a free-text filter)")
+        })
 }
 
 /// Create a new system MCP server

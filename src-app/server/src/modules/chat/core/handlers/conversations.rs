@@ -81,10 +81,13 @@ pub async fn create_conversation(
     Json(request): Json<CreateConversationRequest>,
 ) -> ApiResult<Json<Conversation>> {
     // Validate title length if provided
-    if let Some(title) = &request.title
-        && title.len() > 500 {
+    if let Some(title) = &request.title {
+        if title.len() > 500 {
             return Err(AppError::bad_request("VALIDATION_ERROR", "Title must not exceed 500 characters").into());
         }
+        // A `text` column cannot hold U+0000; the length cap does not catch it.
+        crate::common::text_guard::reject_nul(title, "Title")?;
+    }
 
     let conversation =
         Repos.chat.core.create_conversation(auth.user.id, request.model_id, request.title)
@@ -154,12 +157,9 @@ pub async fn list_conversations(
     // metacharacters (\ % _) so the term is matched as a LITERAL substring
     // (matching the client-side plain-substring find), not as SQL wildcards —
     // ILIKE's default ESCAPE is backslash.
-    let search: Option<String> = params
-        .search
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(escape_like);
+    let search: Option<String> =
+        crate::common::text_guard::normalize_text_filter(params.search.as_deref(), "search")?
+            .map(escape_like);
     let sort = params.sort.as_deref();
 
     let conversations = Repos
@@ -185,6 +185,9 @@ pub fn list_conversations_docs(op: TransformOperation) -> TransformOperation {
         .description("List all conversations for the authenticated user with pagination")
         .response::<200, Json<ConversationListResponse>>()
         .response_with::<401, (), _>(|res| res.description("Unauthorized"))
+        .response_with::<400, (), _>(|res| {
+            res.description("Invalid query parameter (e.g. a NUL byte in a free-text filter)")
+        })
 }
 
 /// Update conversation metadata (title).
@@ -196,10 +199,12 @@ pub async fn update_conversation(
     Json(request): Json<UpdateConversationRequest>,
 ) -> ApiResult<Json<Conversation>> {
     // Validate title length if provided
-    if let Some(Some(title)) = &request.title
-        && title.len() > 500 {
+    if let Some(Some(title)) = &request.title {
+        if title.len() > 500 {
             return Err(AppError::bad_request("VALIDATION_ERROR", "Title must not exceed 500 characters").into());
         }
+        crate::common::text_guard::reject_nul(title, "Title")?;
+    }
 
     let conversation = Repos
         .chat

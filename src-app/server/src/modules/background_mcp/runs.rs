@@ -88,8 +88,15 @@ pub async fn list_background_runs(
         auth.user.id,
         page,
         per_page,
-        params.status.as_deref(),
-        params.kind.as_deref(),
+        // Bound as `status = $2` / `job_kind = $3` with no other validation,
+        // so both need the shared NUL guard (a NUL here 500'd).
+        //
+        // `guard_raw`, NOT `normalize_text_filter`: this call site binds the
+        // RAW value, so trimming or mapping blank to None would silently widen
+        // `?status=` from "match the empty string" (0 rows) to "no filter"
+        // (every run the caller owns). Guard the value; do not rewrite it.
+        crate::common::text_guard::guard_raw(params.status.as_deref(), "status")?,
+        crate::common::text_guard::guard_raw(params.kind.as_deref(), "kind")?,
         params.conversation_id,
     )
     .await?;
@@ -129,6 +136,9 @@ pub fn list_background_runs_docs(op: TransformOperation) -> TransformOperation {
         )
         .response::<200, Json<BackgroundRunListResponse>>()
         .response_with::<401, (), _>(|r| r.description("Unauthorized"))
+        .response_with::<400, (), _>(|res| {
+            res.description("Invalid query parameter (e.g. a NUL byte in a free-text filter)")
+        })
 }
 
 #[debug_handler]

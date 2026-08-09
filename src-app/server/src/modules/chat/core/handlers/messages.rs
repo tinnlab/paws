@@ -110,7 +110,7 @@ pub async fn search_conversation_messages(
     let per_page = query.clamped_per_page();
 
     // Blank query → empty result without a DB scan.
-    let Some(term) = query.trimmed_term() else {
+    let Some(term) = query.trimmed_term()? else {
         return Ok((
             StatusCode::OK,
             Json(MessageSearchResults {
@@ -149,6 +149,9 @@ pub fn search_conversation_messages_docs(op: TransformOperation) -> TransformOpe
         .response::<200, Json<MessageSearchResults>>()
         .response_with::<404, (), _>(|res| res.description("Conversation not found"))
         .response_with::<401, (), _>(|res| res.description("Unauthorized"))
+        .response_with::<400, (), _>(|res| {
+            res.description("Invalid query parameter (e.g. a NUL byte in a free-text filter)")
+        })
 }
 
 /// Get a specific message with its content

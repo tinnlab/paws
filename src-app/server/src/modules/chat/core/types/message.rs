@@ -131,9 +131,14 @@ pub struct MessageSearchQuery {
 impl MessageSearchQuery {
     /// The trimmed term, or `None` when blank (caller returns an empty result
     /// without touching the DB).
-    pub fn trimmed_term(&self) -> Option<&str> {
-        let t = self.q.trim();
-        if t.is_empty() { None } else { Some(t) }
+    ///
+    /// Fallible because this IS the normalization boundary for this endpoint:
+    /// the term is bound into an `ILIKE` at
+    /// `chat/core/repository/messages.rs`, and Postgres cannot hold a NUL in a
+    /// `text` value, so an unguarded `?q=%00` came back as a 500. Guarding
+    /// anywhere else would re-create the split this shared guard removes.
+    pub fn trimmed_term(&self) -> Result<Option<&str>, crate::common::AppError> {
+        crate::common::text_guard::normalize_text_filter(Some(self.q.as_str()), "q")
     }
 
     /// 1-based page floored at 1.
@@ -293,12 +298,22 @@ mod tests {
     // TEST-14: search query clamps + blank handling + snippet bounds.
     #[test]
     fn search_query_blank_term_is_none() {
-        assert_eq!(MessageSearchQuery { q: "   ".into(), ..Default::default() }.trimmed_term(), None);
-        assert_eq!(MessageSearchQuery { q: "".into(), ..Default::default() }.trimmed_term(), None);
+        assert_eq!(MessageSearchQuery { q: "   ".into(), ..Default::default() }.trimmed_term().unwrap(), None);
+        assert_eq!(MessageSearchQuery { q: "".into(), ..Default::default() }.trimmed_term().unwrap(), None);
         assert_eq!(
-            MessageSearchQuery { q: "  hi ".into(), ..Default::default() }.trimmed_term(),
+            MessageSearchQuery { q: "  hi ".into(), ..Default::default() }.trimmed_term().unwrap(),
             Some("hi")
         );
+    }
+
+    /// A NUL in `q` is a typed 400 rather than a 500 from the `ILIKE` bind.
+    #[test]
+    fn search_query_nul_term_is_a_validation_error() {
+        let err = MessageSearchQuery { q: "a\0b".into(), ..Default::default() }
+            .trimmed_term()
+            .expect_err("expected rejection");
+        assert_eq!(err.status_code(), 400);
+        assert_eq!(err.error_code(), "VALIDATION_ERROR");
     }
 
     #[test]
