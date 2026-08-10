@@ -8,6 +8,9 @@
 //!   settings structs that `deployment::local` maps onto each CLI.
 //! - `health`    — the health state machine (exponential backoff +
 //!   flap-detection) wired into the auto-start crash path.
+//! - `release_cache` — process-lifetime TTL cache over the release catalogue,
+//!   so version discovery costs one GitHub request per TTL rather than one per
+//!   page load, and degrades to stale-but-labelled data instead of an empty list.
 //! - `binary`    — `ensure_executable`.
 //! - `error`     — module-local `RuntimeError`/`Result` (mapped to
 //!   `AppError` at the `binary_manager` seam).
@@ -17,6 +20,7 @@ pub mod download;
 pub mod error;
 pub mod health;
 pub mod metadata;
+pub mod release_cache;
 pub mod types;
 
 // Re-export the types consumers reference directly. Everything else

@@ -5,7 +5,10 @@ use uuid::Uuid;
 use chrono::{DateTime, Utc};
 
 use crate::common::AppError;
-use super::runtime_settings::models::{RuntimeSettings, UpdateRuntimeSettingsRequest};
+use super::runtime_settings::models::{
+    ENGINE_RELEASE_CACHE_TTL_MAX_SECS, ENGINE_RELEASE_CACHE_TTL_MIN_SECS, RuntimeSettings,
+    UpdateRuntimeSettingsRequest,
+};
 
 type AppResult<T> = Result<T, AppError>;
 
@@ -261,6 +264,7 @@ impl LocalRuntimeRepository {
         sqlx::query_as!(
             RuntimeSettings,
             r#"SELECT idle_unload_secs, auto_start_timeout_secs, drain_timeout_secs,
+                    engine_release_cache_ttl_secs,
                     created_at as "created_at: chrono::DateTime<chrono::Utc>",
                     updated_at as "updated_at: chrono::DateTime<chrono::Utc>"
              FROM llm_runtime_settings WHERE id = TRUE"#,
@@ -300,6 +304,14 @@ impl LocalRuntimeRepository {
                 ));
             }
         }
+        if let Some(v) = req.engine_release_cache_ttl_secs
+            && !(ENGINE_RELEASE_CACHE_TTL_MIN_SECS..=ENGINE_RELEASE_CACHE_TTL_MAX_SECS).contains(&v)
+        {
+            return Err(AppError::bad_request(
+                "RUNTIME_SETTINGS_OUT_OF_RANGE",
+                "engine_release_cache_ttl_secs must be 60..86400 (1 minute to 24 hours)",
+            ));
+        }
 
         sqlx::query_as!(
             RuntimeSettings,
@@ -307,14 +319,17 @@ impl LocalRuntimeRepository {
                 idle_unload_secs        = COALESCE($1, idle_unload_secs),
                 auto_start_timeout_secs = COALESCE($2, auto_start_timeout_secs),
                 drain_timeout_secs      = COALESCE($3, drain_timeout_secs),
+                engine_release_cache_ttl_secs = COALESCE($4, engine_release_cache_ttl_secs),
                 updated_at = NOW()
              WHERE id = TRUE
              RETURNING idle_unload_secs, auto_start_timeout_secs, drain_timeout_secs,
+                       engine_release_cache_ttl_secs,
                        created_at as "created_at: chrono::DateTime<chrono::Utc>",
                        updated_at as "updated_at: chrono::DateTime<chrono::Utc>""#,
             req.idle_unload_secs,
             req.auto_start_timeout_secs,
             req.drain_timeout_secs,
+            req.engine_release_cache_ttl_secs,
         )
         .fetch_one(&self.pool)
         .await

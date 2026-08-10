@@ -177,6 +177,99 @@ pub struct AvailableUpdatesResponse {
     /// Host architecture (`x86_64`/`aarch64`).
     pub arch: String,
     pub versions: Vec<AvailableVersion>,
+    /// Where this catalogue came from: `live` (fetched now), `cache` (reused
+    /// within the TTL, or retained because a refresh failed), or `unavailable`
+    /// (nothing cached and the refresh failed).
+    pub source: String,
+    /// RFC3339 timestamp of the fetch that produced `versions`. `None` only
+    /// when `source == "unavailable"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checked_at: Option<String>,
+    /// Why the catalogue could not be refreshed. `None` on a clean read. Set
+    /// alongside `source == "cache"` this means "these versions are real but
+    /// possibly out of date"; alongside `source == "unavailable"` it is the
+    /// whole story.
+    ///
+    /// This field is what stops an empty `versions` list from being read as
+    /// "upstream has published no versions" when the truth is "we could not
+    /// reach upstream" — the two are otherwise indistinguishable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unavailable_reason: Option<String>,
+}
+
+/// One concrete, installable artifact: the exact tuple
+/// `POST /local-runtime/versions/download` requires.
+///
+/// The download endpoint demands all five of
+/// `{engine, version, platform, arch, backend}`, so a discovery response that
+/// reported only host-matching backends would still leave a caller guessing
+/// `platform` and `arch`. Every published variant is listed here; host-scoped
+/// convenience (which one to pick on THIS machine) stays on the enclosing
+/// [`InstallableVersion`].
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct InstallableVariant {
+    /// `linux` / `macos` / `windows`.
+    pub platform: String,
+    /// `x86_64` / `aarch64`.
+    pub arch: String,
+    /// `cpu` / `cuda12.9` / `metal` / `rocm6.1` / …
+    pub backend: String,
+    /// Byte size of the release archive, as reported by GitHub.
+    pub size_bytes: u64,
+    /// True when this variant matches the host this server runs on.
+    pub matches_host: bool,
+}
+
+/// One installable release, with every published variant enumerated.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct InstallableVersion {
+    /// The value to pass as `version` (e.g. `v0.0.3-alpha`).
+    pub version: String,
+    /// Every `(platform, arch, backend)` this release actually publishes.
+    /// Empty ⇒ the tag exists but no binary has been uploaded yet.
+    pub variants: Vec<InstallableVariant>,
+    /// True when ≥1 variant matches this host.
+    pub binary_ready: bool,
+    /// Backends already installed for the host platform/arch.
+    pub installed_backends: Vec<String>,
+    /// True when ≥1 backend of this version is installed for this host.
+    pub installed: bool,
+    /// The backend recommended for this host given its detected GPU/driver.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recommended_backend: Option<String>,
+    /// GitHub prerelease flag.
+    pub prerelease: bool,
+    /// ISO-8601 publish timestamp, if present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub published_at: Option<String>,
+}
+
+/// One engine's installable catalogue.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct InstallableEngine {
+    /// `llamacpp` / `mistralrs` — the value to pass as `engine`.
+    pub engine: String,
+    pub versions: Vec<InstallableVersion>,
+    /// See [`AvailableUpdatesResponse::source`].
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checked_at: Option<String>,
+    /// See [`AvailableUpdatesResponse::unavailable_reason`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unavailable_reason: Option<String>,
+}
+
+/// `GET /local-runtime/versions/available` — everything a caller needs to
+/// construct a valid `POST /local-runtime/versions/download` body without
+/// guessing a tag or reading source.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct AvailableVersionsResponse {
+    /// Host platform this server runs on (`linux`/`macos`/`windows`).
+    pub platform: String,
+    /// Host architecture (`x86_64`/`aarch64`).
+    pub arch: String,
+    /// One entry per engine (filtered when `?engine=` is supplied).
+    pub engines: Vec<InstallableEngine>,
 }
 
 /// Response after syncing cache with database

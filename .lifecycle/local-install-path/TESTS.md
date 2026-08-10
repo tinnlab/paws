@@ -21,9 +21,9 @@ cannot go unnoticed.
 - **TEST-7** (tier: unit) [covers: ITEM-2] file: `src-app/server/src/modules/llm_local_runtime/engine/download.rs` — asserts: the GitHub request builder attaches an `Authorization` header when `GITHUB_TOKEN` is set and attaches none when it is unset, and the token never appears in the struct's `Debug` output or in any produced error string.
 - **TEST-8** (tier: integration) [covers: ITEM-5] file: `src-app/server/tests/llm_local_runtime/release_cache_test.rs` — asserts: the pre-existing `GET /versions/{engine}/check-updates` keeps every field it had (`versions[]`, `binary_ready`, `installed`, `available_backends`, `size_bytes`, `platform`, `arch`) AND gains `source`/`checked_at`, and that a second call within TTL issues no additional upstream request.
 - **TEST-9** (tier: integration) [covers: ITEM-3] file: `src-app/server/tests/llm_local_runtime/available_versions_test.rs` — asserts: the discovery endpoint requires auth (401 unauthenticated) and requires `RuntimeVersionRead` (403 for a user without it), with the permitted user succeeding in the same test as the positive control.
-- **TEST-10** (tier: e2e) [acceptance] [invariant: INV-1] [covers: ITEM-8] file: `src-app/ui/tests/e2e/12-local-runtime/05-version-discovery.spec.ts` — asserts: on the runtime settings page an admin who has typed nothing SEES a list of installable versions with their sizes and CHOOSES one via an Install control — the version is picked from the rendered list, never typed into a field.
-- **TEST-11** (tier: e2e) [acceptance] [invariant: INV-2] [covers: ITEM-4, ITEM-8] file: `src-app/ui/tests/e2e/12-local-runtime/05-version-discovery.spec.ts` — asserts: with the upstream feed unreachable the card states that the feed could not be reached (and, when a catalogue was previously loaded, still lists it labelled with when it was last refreshed) — and specifically does NOT render an empty "no versions" list. Positive control in the same spec: with the feed reachable the same card renders version rows.
-- **TEST-12** (tier: unit) [covers: ITEM-8] file: `src-app/ui/src/modules/llm-local-runtime/components/AvailableVersionsCard.test.tsx` — asserts: the three states render distinctly — versions listed; feed-unavailable-with-cache (rows + staleness notice); feed-unavailable-without-cache (explicit unreachable message, not an empty list).
+- **TEST-10** (tier: e2e) [acceptance] [invariant: INV-1] [covers: ITEM-8] file: `src-app/ui/tests/e2e/local-runtime/version-discovery.spec.ts` — asserts: on the runtime settings page an admin who has typed nothing SEES a list of installable versions with their sizes and CHOOSES one via an Install control — the version string is READ OFF the rendered row, never hardcoded or typed into a field.
+- **TEST-11** (tier: unit) [acceptance] [invariant: INV-2] [covers: ITEM-4, ITEM-8] file: `src-app/ui/src/modules/llm-local-runtime/components/AvailableVersionsCard.test.tsx` — asserts: in a mounted component harness (the real card, jsdom), with the feed unreachable and nothing cached the card SAYS so and specifically does NOT render "No published binaries" (the pre-fix sentence, which claims upstream published nothing); and with a stale cache it STILL lists the installable rows, labelled with when they were last refreshed. Positive control in the same file: a live catalogue renders rows + Install actions and shows neither degradation affordance.
+- **TEST-12** (tier: unit) [covers: ITEM-8] file: `src-app/ui/src/modules/llm-local-runtime/components/AvailableVersionsCard.test.tsx` — asserts: a SUCCESSFUL check that returned no host-ready builds still reports upstream as empty ("No published binaries"), so the genuinely-empty case stays distinguishable from the unreachable one — the distinction INV-2 turns on. Separate assertion from TEST-11's, in the same file.
 
 ## §2 Progress
 
@@ -45,7 +45,7 @@ cannot go unnoticed.
 
 ## §1 Settings surface
 
-- **TEST-25** (tier: e2e) [covers: ITEM-6] file: `src-app/ui/tests/e2e/12-local-runtime/05-version-discovery.spec.ts` — asserts: an admin edits the release-catalogue TTL on the runtime settings card and the value persists across a reload; an out-of-bounds value is refused with a visible message (rejection + happy path in one spec).
+- **TEST-25** (tier: e2e) [covers: ITEM-6] file: `src-app/ui/tests/e2e/local-runtime/version-discovery.spec.ts` — asserts: an admin edits the release-catalogue TTL on the runtime settings card and the value persists across a reload; an out-of-bounds value is refused and does NOT replace the stored value (rejection + happy path in one spec).
 
 ## Coverage map
 
@@ -69,6 +69,6 @@ cannot go unnoticed.
 | INV | pinned by |
 |---|---|
 | INV-1 | TEST-1 (integration), TEST-10 (e2e) |
-| INV-2 | TEST-4 (integration), TEST-11 (e2e) |
+| INV-2 | TEST-4 (integration), TEST-11 (mounted component harness) |
 | INV-3 | TEST-13 (integration) |
 | INV-4 | TEST-17, TEST-18 (integration), TEST-23 (e2e) |

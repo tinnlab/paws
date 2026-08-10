@@ -53,6 +53,15 @@ pub struct ListVersionsQuery {
 fn default_page() -> i64 { 1 }
 fn default_per_page() -> i64 { DEFAULT_PAGE_SIZE }
 
+/// Query for the discovery endpoint. `engine` is optional: omitted, every
+/// engine's catalogue is returned, so a caller that knows nothing at all still
+/// gets a complete picture in one request.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct AvailableVersionsQuery {
+    /// Restrict to one engine (`llamacpp` or `mistralrs`). Omit for all.
+    pub engine: Option<String>,
+}
+
 /// A backend artifact tag: starts with a lowercase letter, then `[a-z0-9.]`
 /// (e.g. `cpu`, `cuda12.6`, `rocm6.1`). Rejects `..` / path separators.
 fn is_valid_backend(s: &str) -> bool {
@@ -627,7 +636,7 @@ pub async fn check_for_updates(
     let platform = super::super::utils::gpu_detect::host_platform();
     let arch = super::super::utils::gpu_detect::host_arch();
 
-    let versions = binary_manager
+    let (versions, catalog) = binary_manager
         .check_for_updates(&engine, &platform, &arch)
         .await
         .map_err(|e| {
@@ -635,14 +644,106 @@ pub async fn check_for_updates(
             AppError::internal_with_id(e)
         })?;
 
+    // A GitHub failure is NOT a 500 here. A 500 throws away a perfectly good
+    // cached catalogue and renders in the UI as a generic error, which is how a
+    // rate-limited box ended up showing no installable versions at all. Instead
+    // the catalogue's provenance rides the 200 so the caller can say WHY the
+    // list is short — or show stale-but-real versions.
     let response = AvailableUpdatesResponse {
         engine,
         platform,
         arch,
         versions,
+        source: catalog.source.as_str().to_string(),
+        checked_at: catalog.checked_at,
+        unavailable_reason: catalog.unavailable_reason,
     };
 
     Ok((StatusCode::OK, Json(response)))
+}
+
+/// List every installable engine version, with all published
+/// platform/arch/backend variants.
+///
+/// This is the discovery endpoint: `POST /local-runtime/versions/download`
+/// requires all five of `{engine, version, platform, arch, backend}`, and
+/// before this route existed nothing told a caller what to pass —
+/// `GET /versions` lists only what is already installed, and the obvious noun
+/// `/versions/available` was swallowed by `/versions/{version_id}` and answered
+/// with a UUID parse error.
+///
+/// Answers 200 even when upstream is unreachable; `source` /
+/// `unavailable_reason` carry the truth (see the note in `check_for_updates`).
+pub async fn list_available_versions(
+    _auth: RequirePermissions<(RuntimeVersionRead,)>,
+    Query(params): Query<AvailableVersionsQuery>,
+) -> ApiResult<Json<AvailableVersionsResponse>> {
+    let pool = Repos.pool();
+    let binary_manager = BinaryManager::with_cache_dir(
+        pool.clone(),
+        std::path::PathBuf::from(crate::core::get_caches_config().llm_engines_dir()),
+    )
+    .map_err(|e| AppError::internal_with_id(e))?;
+
+    let platform = super::super::utils::gpu_detect::host_platform();
+    let arch = super::super::utils::gpu_detect::host_arch();
+
+    // Which engines to report. An unknown `?engine=` is a client error rather
+    // than a silently-empty list — otherwise a typo looks like "this engine has
+    // no versions", which is the same failure mode this endpoint exists to fix.
+    let engines: Vec<&str> = match params.engine.as_deref() {
+        None => vec!["llamacpp", "mistralrs"],
+        Some(e) if e == "llamacpp" || e == "mistralrs" => vec![e],
+        Some(other) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                AppError::bad_request(
+                    "UNKNOWN_ENGINE",
+                    format!("Unknown engine '{other}'. Supported engines: llamacpp, mistralrs."),
+                ),
+            ));
+        }
+    };
+
+    let mut out = Vec::with_capacity(engines.len());
+    for engine in engines {
+        let entry = binary_manager
+            .list_installable(engine, &platform, &arch)
+            .await
+            .map_err(|e| {
+                tracing::error!(engine, error = %e, "failed to list installable versions");
+                AppError::internal_with_id(e)
+            })?;
+        out.push(entry);
+    }
+
+    Ok((
+        StatusCode::OK,
+        Json(AvailableVersionsResponse {
+            platform,
+            arch,
+            engines: out,
+        }),
+    ))
+}
+
+pub fn list_available_versions_docs(
+    op: aide::transform::TransformOperation,
+) -> aide::transform::TransformOperation {
+    with_permission::<(RuntimeVersionRead,)>(op)
+        .id("RuntimeVersion.listAvailable")
+        .description(
+            "List every installable engine version with all published \
+             platform/arch/backend variants — the exact tuples \
+             POST /local-runtime/versions/download accepts. Answers 200 even \
+             when the upstream release feed is unreachable; `source` and \
+             `unavailable_reason` state whether the list is live, cached, or \
+             unavailable, so an empty list is never mistaken for 'no versions \
+             exist'.",
+        )
+        .tag("Runtime Versions")
+        .response::<200, Json<AvailableVersionsResponse>>()
+        .response_with::<400, (), _>(|res| res.description("Unknown engine"))
 }
 
 /// List local models grouped by the engine version they effectively use.

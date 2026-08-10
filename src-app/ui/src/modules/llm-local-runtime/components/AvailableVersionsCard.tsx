@@ -95,6 +95,16 @@ export function AvailableVersionsCard({ engine }: { engine: RuntimeEngine }) {
     v => v.binary_ready,
   )
 
+  // The server answers 200 even when the release feed is unreachable, carrying
+  // the reason instead of throwing it away in a 500. `unavailable_reason` set
+  // means "this list could not be refreshed" — with rows it's stale-but-real,
+  // without rows it's genuinely unknown. Neither may be rendered as "there are
+  // no versions".
+  const feedUnreachable = !!updateCheck?.unavailable_reason
+  const staleCheckedAt = updateCheck?.checked_at
+    ? new Date(updateCheck.checked_at).toLocaleString()
+    : undefined
+
   const handleDownload = async (v: RuntimeAvailableVersion) => {
     if (!platform || !arch) {
       message.error(
@@ -118,6 +128,13 @@ export function AvailableVersionsCard({ engine }: { engine: RuntimeEngine }) {
     } catch (e) {
       message.error(e instanceof Error ? e.message : 'Failed to start download')
     }
+  }
+
+  // One place that re-runs the check and swallows the rejection (the store
+  // already surfaces the failure via `error`). Extracted so the three retry
+  // affordances share it instead of each carrying its own empty catch.
+  const retryCheck = () => {
+    void RuntimeUpdate.checkForUpdates(engine).catch(() => undefined)
   }
 
   const handleCheckForUpdates = async () => {
@@ -172,21 +189,41 @@ export function AvailableVersionsCard({ engine }: { engine: RuntimeEngine }) {
             resource="available versions"
             description="Couldn't reach the upstream release feed."
             details={updateError}
-            onRetry={() => {
-              void RuntimeUpdate.checkForUpdates(engine).catch(() => {})
-            }}
+            onRetry={retryCheck}
             data-testid="llmrt-available-error"
           />
         ) : !updateCheck ? (
           <Text type="secondary">
             Could not reach the upstream release feed.
           </Text>
+        ) : feedUnreachable && readyUpstream.length === 0 ? (
+          // The feed is unreachable AND we have nothing cached. Say exactly
+          // that — rendering "No published binaries found" here would claim
+          // upstream published nothing, which is a different (and false)
+          // statement, and it is why a rate-limited box looked like an engine
+          // with no releases.
+          <ErrorState
+            resource="available versions"
+            description="Couldn't reach the upstream release feed, so the installable versions are unknown."
+            details={updateCheck.unavailable_reason}
+            onRetry={retryCheck}
+            data-testid="llmrt-available-unreachable"
+          />
         ) : readyUpstream.length === 0 ? (
           <Text type="secondary">
             No published binaries found for {platform}/{arch}.
           </Text>
         ) : (
           <Flex vertical gap="small">
+            {feedUnreachable && (
+              // Cached-but-stale: the rows below are real, they just could not
+              // be refreshed. Showing them beats hiding them, as long as the
+              // user is told they may be out of date.
+              <Text type="secondary" data-testid="llmrt-available-stale-notice">
+                Couldn't refresh from the release feed
+                {staleCheckedAt ? ` — showing versions last updated ${staleCheckedAt}` : ''}.
+              </Text>
+            )}
             {readyUpstream.slice(0, 10).map(v => (
               <AvailableVersionRow
                 key={v.version}

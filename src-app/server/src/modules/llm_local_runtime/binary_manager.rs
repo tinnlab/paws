@@ -8,10 +8,20 @@
 
 use sqlx::PgPool;
 use crate::modules::llm_local_runtime::runtime_version::repository as version_repo;
-use crate::modules::llm_local_runtime::runtime_version::models::{AvailableVersion, RuntimeVersion};
+use crate::modules::llm_local_runtime::runtime_version::models::{
+    AvailableVersion, InstallableEngine, InstallableVariant, InstallableVersion, RuntimeVersion,
+};
+use crate::modules::llm_local_runtime::engine::download::parse_asset_variant;
+use crate::modules::llm_local_runtime::engine::release_cache;
 use crate::modules::llm_local_runtime::engine::{
     asset_size_for_backend, available_backends, BinaryDownloader, EngineType,
 };
+
+/// Fallback TTL when the settings row cannot be read. Mirrors the column
+/// default in `202607200500_llm_runtime_release_cache_ttl.sql`; a settings
+/// read failure must degrade to a sane cache, never to an uncached path that
+/// would hammer GitHub.
+const DEFAULT_RELEASE_CACHE_TTL_SECS: i32 = 3600;
 use std::path::PathBuf;
 use uuid::Uuid;
 
@@ -239,23 +249,30 @@ impl BinaryManager {
     ///   version + host platform/arch.
     ///
     /// Drafts are omitted (not public). Prereleases are kept but flagged.
+    ///
+    /// Returns the diff alongside the catalogue's provenance, so the caller can
+    /// tell "upstream published nothing" apart from "we could not reach
+    /// upstream" — the distinction that stops an empty list from reading as
+    /// "no versions exist".
     pub async fn check_for_updates(
         &self,
         engine: &str,
         platform: &str,
         arch: &str,
-    ) -> Result<Vec<AvailableVersion>, Box<dyn std::error::Error>> {
+    ) -> Result<(Vec<AvailableVersion>, release_cache::Catalog), Box<dyn std::error::Error>> {
         let engine_type = match engine {
             "llamacpp" => EngineType::Llamacpp,
             "mistralrs" => EngineType::Mistralrs,
             _ => return Err(format!("Unknown engine: {}", engine).into()),
         };
 
-        let releases = self.downloader.list_releases(engine_type).await?;
+        let catalog = self.release_catalog(engine_type).await;
         let installed = version_repo::list_by_engine(&self.pool, engine, 1, 500).await?;
 
-        let versions = releases
-            .into_iter()
+        let versions = catalog
+            .releases
+            .iter()
+            .cloned()
             .filter(|r| !r.draft)
             .map(|r| {
                 let avail = available_backends(engine_type, platform, arch, &r.assets);
@@ -298,7 +315,119 @@ impl BinaryManager {
             })
             .collect();
 
-        Ok(versions)
+        Ok((versions, catalog))
+    }
+
+    /// Read `engine`'s release catalogue through the process TTL cache.
+    ///
+    /// This is the ONLY path from a request to the GitHub release list. Before
+    /// it existed each discovery call issued its own `GET /repos/{repo}/releases`,
+    /// so the surface cost one GitHub API request per page load against a
+    /// 60/hour anonymous budget — measured on a live server as exactly 5
+    /// upstream requests for 5 calls.
+    ///
+    /// The TTL is read from the admin-configurable settings row at each use
+    /// (not captured at construction), so an admin's change takes effect on the
+    /// next call rather than at the next restart. A settings read failure falls
+    /// back to the column default rather than failing discovery.
+    async fn release_catalog(&self, engine_type: EngineType) -> release_cache::Catalog {
+        let ttl_secs = sqlx::query_scalar!(
+            "SELECT engine_release_cache_ttl_secs FROM llm_runtime_settings WHERE id = TRUE"
+        )
+        .fetch_one(&self.pool)
+        .await
+        .unwrap_or(DEFAULT_RELEASE_CACHE_TTL_SECS);
+        let ttl = std::time::Duration::from_secs(ttl_secs.max(1) as u64);
+
+        release_cache::get_or_refresh(engine_type, ttl, || async {
+            self.downloader
+                .list_releases(engine_type)
+                .await
+                .map_err(|e| e.to_string())
+        })
+        .await
+    }
+
+    /// Every installable release for `engine`, with EVERY published variant
+    /// enumerated — the data a caller needs to build a valid
+    /// `POST /versions/download` body without guessing.
+    ///
+    /// Distinct from [`Self::check_for_updates`], which answers "what should I
+    /// upgrade to on THIS host" and therefore reports only host-matching
+    /// backends. Discovery must also report `platform` and `arch`, because the
+    /// download endpoint requires them.
+    pub async fn list_installable(
+        &self,
+        engine: &str,
+        host_platform: &str,
+        host_arch: &str,
+    ) -> Result<InstallableEngine, Box<dyn std::error::Error>> {
+        let engine_type = match engine {
+            "llamacpp" => EngineType::Llamacpp,
+            "mistralrs" => EngineType::Mistralrs,
+            _ => return Err(format!("Unknown engine: {}", engine).into()),
+        };
+
+        let catalog = self.release_catalog(engine_type).await;
+        let installed = version_repo::list_by_engine(&self.pool, engine, 1, 500).await?;
+
+        let versions = catalog
+            .releases
+            .iter()
+            .filter(|r| !r.draft)
+            .map(|r| {
+                let variants: Vec<InstallableVariant> = r
+                    .assets
+                    .iter()
+                    .filter_map(|a| {
+                        let (platform, arch, backend) =
+                            parse_asset_variant(engine_type, &a.name)?;
+                        let matches_host = platform == host_platform && arch == host_arch;
+                        Some(InstallableVariant {
+                            platform,
+                            arch,
+                            backend,
+                            size_bytes: a.size_bytes,
+                            matches_host,
+                        })
+                    })
+                    .collect();
+
+                let host_backends = available_backends(engine_type, host_platform, host_arch, &r.assets);
+                let installed_backends: Vec<String> = installed
+                    .iter()
+                    .filter(|v| {
+                        v.version == r.version
+                            && v.platform == host_platform
+                            && v.arch == host_arch
+                    })
+                    .map(|v| v.backend.clone())
+                    .collect();
+                let recommended_backend =
+                    crate::modules::llm_local_runtime::utils::gpu_detect::recommend_backend(
+                        &host_backends,
+                    );
+
+                InstallableVersion {
+                    version: r.version.clone(),
+                    binary_ready: variants.iter().any(|v| v.matches_host),
+                    variants,
+                    installed: !installed_backends.is_empty(),
+                    installed_backends,
+                    recommended_backend,
+                    prerelease: r.prerelease,
+                    published_at: r.published_at.clone(),
+                }
+            })
+            .collect();
+
+        Ok(InstallableEngine {
+            engine: engine.to_string(),
+            versions,
+            source: catalog.source.as_str().to_string(),
+            checked_at: catalog.checked_at,
+            unavailable_reason: catalog.unavailable_reason,
+        })
     }
 
     /// Sync database with cached binaries

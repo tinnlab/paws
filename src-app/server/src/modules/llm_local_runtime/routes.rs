@@ -85,6 +85,20 @@ pub fn llm_local_runtime_router() -> ApiRouter {
             "/local-runtime/versions/download",
             post_with(version_handlers::download_runtime_version, version_handlers::download_runtime_version_docs),
         )
+        // Version DISCOVERY: what can I install, and with which
+        // platform/arch/backend? `/versions` above lists only what is already
+        // installed, so on a fresh install it teaches a caller nothing.
+        //
+        // A literal segment is matched ahead of the sibling
+        // `/versions/{version_id}` (axum 0.8 / matchit prioritises static over
+        // parameter) — the same shape `/versions/downloads` below already
+        // relies on. Before this route existed, `/versions/available` fell
+        // through to the UUID route and answered
+        // "Cannot parse `version_id` with value `available`".
+        .api_route(
+            "/local-runtime/versions/available",
+            get_with(version_handlers::list_available_versions, version_handlers::list_available_versions_docs),
+        )
         // Detached-download progress surface (page-reload-safe).
         // `list` returns every task in the in-process registry, `get`
         // is a single-snapshot polling fallback, `events` is the SSE

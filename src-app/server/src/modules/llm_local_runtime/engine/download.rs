@@ -48,6 +48,22 @@ fn api_base_url() -> String {
     "https://api.github.com".to_string()
 }
 
+/// The operator's GitHub token, if one is set.
+///
+/// Unauthenticated GitHub API access is capped at **60 requests/hour/IP**; a
+/// token raises it to 5000/hour. Returns `None` for an unset or blank value so
+/// an empty env var can never produce an `Authorization: Bearer ` header (which
+/// GitHub answers 401, turning a working anonymous path into a broken one).
+///
+/// The value is returned for immediate use in a header and is never logged,
+/// never placed in an error string, and never serialized onto a response.
+fn github_token() -> Option<String> {
+    std::env::var("GITHUB_TOKEN")
+        .ok()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+}
+
 /// GitHub repo slug for an engine's fork.
 fn engine_repo(engine: EngineType) -> &'static str {
     match engine {
@@ -105,6 +121,58 @@ fn asset_backend(engine: EngineType, platform: &str, arch: &str, asset: &str) ->
         .strip_prefix(&prefix)?
         .strip_suffix(&suffix)
         .map(|s| s.to_string())
+}
+
+/// Platforms an engine release can publish for. Used to parse an asset name
+/// back into its `(platform, arch, backend)` tuple.
+const KNOWN_PLATFORMS: [&str; 3] = ["linux", "macos", "windows"];
+/// Architectures an engine release can publish for.
+const KNOWN_ARCHES: [&str; 2] = ["x86_64", "aarch64"];
+
+/// Parse a release asset filename back into the `(platform, arch, backend)`
+/// tuple `POST /versions/download` requires — the inverse of [`archive_name`].
+///
+/// [`asset_backend`] can only answer "is this asset for the host I already
+/// know about"; discovery needs the opposite direction: given an arbitrary
+/// asset, which installable combination IS it? Without this a discovery
+/// response could only ever describe the host's own variants, leaving a caller
+/// to guess `platform` and `arch` — the exact gap this branch exists to close.
+///
+/// Returns `None` for anything that is not an engine archive: sibling `.sig`
+/// files, checksum sidecars, source tarballs, and any name whose platform or
+/// arch segment is not one we publish (so a future/unknown token is skipped
+/// rather than surfaced as a bogus installable variant).
+pub fn parse_asset_variant(engine: EngineType, asset: &str) -> Option<(String, String, String)> {
+    let stem = format!("{}-", archive_stem(engine));
+    let rest = asset.strip_prefix(&stem)?;
+
+    // Extension is platform-dependent, so try both and keep whichever matches.
+    let rest = rest
+        .strip_suffix(".tar.gz")
+        .or_else(|| rest.strip_suffix(".zip"))?;
+
+    // `{platform}-{arch}-{backend}`. `x86_64`/`aarch64` carry an underscore,
+    // never a dash, so the first two dashes delimit exactly; the remainder is
+    // the backend (which may itself contain dots, e.g. `cuda12.9`).
+    let mut parts = rest.splitn(3, '-');
+    let platform = parts.next()?;
+    let arch = parts.next()?;
+    let backend = parts.next()?;
+
+    if !KNOWN_PLATFORMS.contains(&platform) || !KNOWN_ARCHES.contains(&arch) {
+        return None;
+    }
+    if backend.is_empty() {
+        return None;
+    }
+    // A windows archive is a .zip and everything else a .tar.gz; a mismatch
+    // means the name is not one we produced, so don't advertise it.
+    let expected_ext = archive_ext(platform);
+    if !asset.ends_with(&format!(".{expected_ext}")) {
+        return None;
+    }
+
+    Some((platform.to_string(), arch.to_string(), backend.to_string()))
 }
 
 /// One release asset, reduced to what update-checking needs:
@@ -334,9 +402,11 @@ impl BinaryDownloader {
             .map_err(|e| {
                 RuntimeError::BinaryNotFound(format!(
                     "engine binary not published for {resolved_version} \
-                     {platform}/{arch}/{backend} ({archive_name}): {e}. If the \
-                     release was just created, its CI build may still be in \
-                     progress — retry later."
+                     {platform}/{arch}/{backend} ({archive_name}): {e}. List the \
+                     installable versions and their platform/arch/backend \
+                     variants with GET /api/local-runtime/versions/available?engine={engine} \
+                     and retry with a combination from that list. (If the release \
+                     was just created, its CI build may still be in progress.)"
                 ))
             })?;
 
@@ -415,13 +485,20 @@ impl BinaryDownloader {
         let mut attempt = 0;
         loop {
             attempt += 1;
-            let result = self
+            let mut req = self
                 .client
                 .get(url)
                 .header("Accept", "application/vnd.github.v3+json")
-                .timeout(std::time::Duration::from_secs(30))
-                .send()
-                .await;
+                .timeout(std::time::Duration::from_secs(30));
+            // Authenticate when the operator supplied a token. Unauthenticated
+            // GitHub allows 60 requests/hour/IP, which a shared egress IP
+            // exhausts quickly; a token lifts that to 5000/hour. `hub_seed.rs`
+            // already honours GITHUB_TOKEN at build time for exactly this
+            // reason — the runtime path simply never adopted it.
+            if let Some(token) = github_token() {
+                req = req.header("Authorization", format!("Bearer {token}"));
+            }
+            let result = req.send().await;
             let transient = match &result {
                 Ok(resp) => resp.status().is_server_error() || resp.status().as_u16() == 429,
                 Err(_) => true,
@@ -895,17 +972,22 @@ impl Default for BinaryDownloader {
 mod tests {
     use super::*;
 
+    /// Serializes every test in this module that mutates process environment.
+    /// `set_var`/`remove_var` are process-global and cargo runs tests in
+    /// parallel threads, so two env-mutating tests must never overlap — this
+    /// module now has more than one (mirror overrides + `GITHUB_TOKEN`).
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// Base hosts default to the real GitHub endpoints when the (debug-only)
     /// mirror env vars are unset, and — in debug builds — honor the override
     /// while trimming a trailing slash so URL construction never
-    /// double-slashes. Kept as ONE test because it mutates process env; no
-    /// other test in this crate touches these vars, so serializing the
-    /// assertions here avoids a parallel-execution race.
+    /// double-slashes. Kept as ONE test because it mutates process env.
     #[test]
     fn base_urls_default_to_github_and_honor_mirror_override() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // SAFETY: edition-2024 marks env mutation unsafe (it's a process
-        // global). This is the only test in the crate touching these vars,
-        // so there's no concurrent reader to race with.
+        // global). ENV_LOCK serializes this against the other env-mutating
+        // test in this module, so there's no concurrent writer to race with.
         unsafe {
             std::env::remove_var("LLM_RUNTIME_RELEASE_MIRROR");
             std::env::remove_var("LLM_RUNTIME_API_MIRROR");
@@ -1006,5 +1088,104 @@ mod tests {
         // Escaping symlinks were rejected (never created).
         assert!(dest.join("evil.so").symlink_metadata().is_err(), "absolute-target symlink must be rejected");
         assert!(dest.join("escape.so").symlink_metadata().is_err(), "parent-traversal symlink must be rejected");
+    }
+
+    /// TEST-3a — every published variant of the REAL `ziee-ai/llama.cpp`
+    /// v0.0.3-alpha asset set parses back into the `(platform, arch, backend)`
+    /// tuple the download endpoint requires — including the non-host ones,
+    /// which is the whole point (a caller must be able to pick a combination
+    /// for a machine other than this server).
+    #[test]
+    fn parse_asset_variant_covers_every_published_asset() {
+        let cases: &[(&str, (&str, &str, &str))] = &[
+            ("llama-server-linux-x86_64-cpu.tar.gz", ("linux", "x86_64", "cpu")),
+            ("llama-server-linux-x86_64-cuda12.9.tar.gz", ("linux", "x86_64", "cuda12.9")),
+            ("llama-server-linux-x86_64-cuda13.2.tar.gz", ("linux", "x86_64", "cuda13.2")),
+            ("llama-server-linux-x86_64-rocm5.7.tar.gz", ("linux", "x86_64", "rocm5.7")),
+            ("llama-server-macos-aarch64-metal.tar.gz", ("macos", "aarch64", "metal")),
+            ("llama-server-windows-x86_64-cpu.zip", ("windows", "x86_64", "cpu")),
+            ("llama-server-windows-x86_64-cuda12.4.zip", ("windows", "x86_64", "cuda12.4")),
+        ];
+        for (asset, want) in cases {
+            let got = parse_asset_variant(EngineType::Llamacpp, asset)
+                .unwrap_or_else(|| panic!("failed to parse {asset}"));
+            assert_eq!(
+                (got.0.as_str(), got.1.as_str(), got.2.as_str()),
+                *want,
+                "wrong tuple for {asset}"
+            );
+        }
+
+        // The mistral.rs fork uses a different binary stem.
+        assert_eq!(
+            parse_asset_variant(EngineType::Mistralrs, "mistralrs-server-linux-x86_64-cpu.tar.gz"),
+            Some(("linux".into(), "x86_64".into(), "cpu".into()))
+        );
+    }
+
+    /// TEST-3b — non-archive and malformed assets are rejected, so discovery
+    /// never advertises a `.sig` sidecar or an unknown platform as something
+    /// installable. Paired with the accept-cases above so a predicate that
+    /// rejected everything could not pass.
+    #[test]
+    fn parse_asset_variant_rejects_non_archives() {
+        let reject = [
+            // sibling signature — must not become a "sig" backend
+            "llama-server-linux-x86_64-cpu.tar.gz.sig",
+            // checksum sidecar
+            "llama-server-linux-x86_64-cpu.tar.gz.sha256",
+            // other engine's stem
+            "mistralrs-server-linux-x86_64-cpu.tar.gz",
+            // unknown platform / arch tokens
+            "llama-server-solaris-x86_64-cpu.tar.gz",
+            "llama-server-linux-riscv64-cpu.tar.gz",
+            // wrong extension for the platform (windows must be .zip)
+            "llama-server-windows-x86_64-cpu.tar.gz",
+            // missing backend segment
+            "llama-server-linux-x86_64-.tar.gz",
+            "llama-server-linux-x86_64.tar.gz",
+            // unrelated release artifact
+            "Source code (zip)",
+        ];
+        for asset in reject {
+            assert_eq!(
+                parse_asset_variant(EngineType::Llamacpp, asset),
+                None,
+                "{asset} must not parse as an installable variant"
+            );
+        }
+    }
+
+    /// TEST-7 — `GITHUB_TOKEN` handling. A set token is used; an unset or
+    /// blank one yields `None` so no empty `Bearer` header is ever sent (GitHub
+    /// answers 401 to that, which would break the working anonymous path).
+    ///
+    /// Serialized against the other env-var test via a mutex: `std::env::set_var`
+    /// is process-global and Rust runs tests in threads.
+    #[test]
+    fn github_token_is_read_and_blank_is_treated_as_absent() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prior = std::env::var("GITHUB_TOKEN").ok();
+
+        unsafe { std::env::remove_var("GITHUB_TOKEN") };
+        assert_eq!(github_token(), None, "unset must be None");
+
+        unsafe { std::env::set_var("GITHUB_TOKEN", "") };
+        assert_eq!(github_token(), None, "empty must be None, not Some(\"\")");
+
+        unsafe { std::env::set_var("GITHUB_TOKEN", "   ") };
+        assert_eq!(github_token(), None, "whitespace-only must be None");
+
+        unsafe { std::env::set_var("GITHUB_TOKEN", " ghp_exampletoken ") };
+        assert_eq!(
+            github_token().as_deref(),
+            Some("ghp_exampletoken"),
+            "a set token must be returned, trimmed"
+        );
+
+        match prior {
+            Some(v) => unsafe { std::env::set_var("GITHUB_TOKEN", v) },
+            None => unsafe { std::env::remove_var("GITHUB_TOKEN") },
+        }
     }
 }

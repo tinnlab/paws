@@ -91,6 +91,137 @@ export const gallery: ModuleGallery = {
         })
       },
     },
+    // ── AvailableVersionsCard: the release feed is UNREACHABLE and nothing was
+    //    ever cached. Must state that the versions are unknown — rendering the
+    //    "No published binaries" empty here would claim upstream published
+    //    nothing, a different and false statement, and is how a rate-limited
+    //    box looked like an engine with no releases. ─────────────────────────
+    {
+      slug: 'seeded-s3-available-versions-unreachable',
+      title: 'Available runtime versions — feed unreachable',
+      note: 'source=unavailable + unavailable_reason, no cached rows → explicit "couldn\'t reach" state, NOT an empty list',
+      path: '/',
+      initialPath: '/',
+      component: lazyProps(
+        () => import('@/modules/llm-local-runtime/components/AvailableVersionsCard'),
+        'AvailableVersionsCard',
+        { engine: 'llamacpp' },
+      ),
+      setup: async () => {
+        const { RuntimeUpdateRaw } = await import(
+          '@/modules/llm-local-runtime/stores/runtimeUpdate'
+        )
+        const { RuntimeConfigRaw } = await import(
+          '@/modules/llm-local-runtime/stores/runtimeConfig'
+        )
+        await holdPatch(() => {
+          RuntimeConfigRaw.setState({
+            gpu: {
+              platform: 'linux',
+              arch: 'x86_64',
+              available: ['cpu'],
+              recommended: 'cpu',
+            },
+            loadingGpu: false,
+          } as any)
+          RuntimeUpdateRaw.setState({
+            checking: new Map(),
+            updateChecks: new Map([
+              [
+                'llamacpp',
+                {
+                  engine: 'llamacpp',
+                  platform: 'linux',
+                  arch: 'x86_64',
+                  versions: [],
+                  source: 'unavailable',
+                  unavailable_reason:
+                    'GitHub API: HTTP 403 rate limit exceeded',
+                  latest_version: '',
+                  has_updates: false,
+                },
+              ],
+            ]),
+          } as any)
+        })
+      },
+    },
+    // ── AvailableVersionsCard: the feed could not be REFRESHED, but a previous
+    //    catalogue survives. The rows are real and installable; they are simply
+    //    labelled with when they were last fetched. ─────────────────────────
+    {
+      slug: 'seeded-s3-available-versions-stale-cache',
+      title: 'Available runtime versions — stale cache',
+      note: 'source=cache + unavailable_reason → rows still listed, with a "couldn\'t refresh" notice',
+      path: '/',
+      initialPath: '/',
+      component: lazyProps(
+        () => import('@/modules/llm-local-runtime/components/AvailableVersionsCard'),
+        'AvailableVersionsCard',
+        { engine: 'llamacpp' },
+      ),
+      setup: async () => {
+        const { RuntimeUpdateRaw } = await import(
+          '@/modules/llm-local-runtime/stores/runtimeUpdate'
+        )
+        const { RuntimeConfigRaw } = await import(
+          '@/modules/llm-local-runtime/stores/runtimeConfig'
+        )
+        await holdPatch(() => {
+          RuntimeConfigRaw.setState({
+            gpu: {
+              platform: 'linux',
+              arch: 'x86_64',
+              available: ['cpu'],
+              recommended: 'cpu',
+            },
+            loadingGpu: false,
+          } as any)
+          RuntimeUpdateRaw.setState({
+            checking: new Map(),
+            updateChecks: new Map([
+              [
+                'llamacpp',
+                {
+                  engine: 'llamacpp',
+                  platform: 'linux',
+                  arch: 'x86_64',
+                  versions: [
+                    {
+                      version: 'v0.0.3-alpha',
+                      installed: false,
+                      installed_backends: [],
+                      binary_ready: true,
+                      available_backends: ['cpu'],
+                      recommended_backend: 'cpu',
+                      size_bytes: 12928771,
+                      prerelease: false,
+                      published_at: '2026-05-30T15:53:54Z',
+                    },
+                    {
+                      version: 'v0.0.2-alpha',
+                      installed: false,
+                      installed_backends: [],
+                      binary_ready: true,
+                      available_backends: ['cpu'],
+                      recommended_backend: 'cpu',
+                      size_bytes: 12928151,
+                      prerelease: false,
+                      published_at: '2026-05-29T22:07:51Z',
+                    },
+                  ],
+                  source: 'cache',
+                  checked_at: '2026-08-10T09:15:00Z',
+                  unavailable_reason: 'GitHub API: HTTP 403 rate limit exceeded',
+                  latest_version: 'v0.0.3-alpha',
+                  has_updates: true,
+                },
+              ],
+            ]),
+          } as any)
+        })
+      },
+    },
     // ── AvailableVersionsCard: a ready version WITH a FAILED download snapshot →
     //    the inline progress line (:300) + the failed-error text (:301,302). ───────
     {

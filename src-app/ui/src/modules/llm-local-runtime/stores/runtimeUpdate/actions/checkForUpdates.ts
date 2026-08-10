@@ -28,6 +28,13 @@ export default (set: RuntimeUpdateSet, _get: RuntimeUpdateGet) =>
         platform: response.platform,
         arch: response.arch,
         versions,
+        // Provenance rides the 200 so the card can distinguish "upstream has
+        // no versions" from "we couldn't reach upstream" — the server no
+        // longer 500s on an unreachable feed, which used to discard a
+        // perfectly good cached catalogue.
+        source: (response.source ?? 'live') as RuntimeUpdateCheck['source'],
+        checked_at: response.checked_at,
+        unavailable_reason: response.unavailable_reason,
         current_version: currentVersion?.version,
         latest_version: latestVersion,
         has_updates: hasUpdates,

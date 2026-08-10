@@ -148,6 +148,41 @@ pub async fn wait_for_download(
     }
 }
 
+/// Poll a download task until it reaches ANY terminal status and return the
+/// full snapshot.
+///
+/// Distinct from [`wait_for_download`], which panics on failure because its
+/// callers only care about the happy path. Discovery tests need to INSPECT a
+/// failure (e.g. that a version absent from the catalogue is refused with an
+/// error naming the discovery endpoint), so the failure must be returned, not
+/// asserted away.
+pub async fn await_download_terminal(
+    server: &TestServer,
+    token: &str,
+    key: &str,
+) -> serde_json::Value {
+    use std::time::{Duration, Instant};
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let client = reqwest::Client::new();
+    loop {
+        let resp = client
+            .get(server.api_url(&format!("/local-runtime/versions/downloads/{key}")))
+            .header("Authorization", format!("Bearer {token}"))
+            .send()
+            .await
+            .expect("snapshot fetch");
+        assert_eq!(resp.status(), StatusCode::OK, "snapshot endpoint must exist");
+        let snap: serde_json::Value = resp.json().await.expect("snapshot body");
+        if matches!(snap["status"].as_str(), Some("completed") | Some("failed")) {
+            return snap;
+        }
+        if Instant::now() > deadline {
+            panic!("await_download_terminal timeout for {key}: last snapshot {snap}");
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
 /// Download (register) an engine version from the mock release
 /// server. Returns the new runtime_version_id. The
 /// `allow_unsigned_downloads` opt-in has been removed — downloads now

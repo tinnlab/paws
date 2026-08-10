@@ -38,12 +38,21 @@ export interface RuntimeAvailableVersion {
   published_at?: string
 }
 
+// Where a catalogue came from. `cache` with an `unavailable_reason` set means
+// the versions are real but could not be refreshed; `unavailable` means we have
+// nothing AND could not reach upstream — which is NOT the same as upstream
+// genuinely publishing no versions.
+export type RuntimeCatalogSource = 'live' | 'cache' | 'unavailable'
+
 // From backend - releases diffed against installed, scoped to host platform/arch.
 export interface RuntimeUpdateCheckRaw {
   engine: string
   platform: string
   arch: string
   versions: RuntimeAvailableVersion[]
+  source: RuntimeCatalogSource
+  checked_at?: string
+  unavailable_reason?: string
 }
 
 // Enhanced type with computed properties

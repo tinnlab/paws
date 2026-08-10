@@ -20,12 +20,14 @@ const schema = z.object({
   idle_unload_secs: z.number().min(0).max(86400),
   auto_start_timeout_secs: z.number().min(1).max(600),
   drain_timeout_secs: z.number().min(1).max(600),
+  engine_release_cache_ttl_secs: z.number().min(60).max(86400),
 })
 type Schema = z.infer<typeof schema>
 
 /**
  * Runtime config card: the singleton llm_runtime_settings row —
- * idle_unload_secs / auto_start_timeout_secs / drain_timeout_secs.
+ * idle_unload_secs / auto_start_timeout_secs / drain_timeout_secs /
+ * engine_release_cache_ttl_secs.
  * Mirrors the peer settings module layout (Text strong section header
  * + secondary description + Form.Item; Save in a justify-end flex
  * after a Divider).
@@ -40,6 +42,7 @@ export function RuntimeConfigCard() {
       idle_unload_secs: 0,
       auto_start_timeout_secs: 30,
       drain_timeout_secs: 30,
+      engine_release_cache_ttl_secs: 3600,
     },
   })
 
@@ -49,6 +52,7 @@ export function RuntimeConfigCard() {
         idle_unload_secs: settings.idle_unload_secs,
         auto_start_timeout_secs: settings.auto_start_timeout_secs,
         drain_timeout_secs: settings.drain_timeout_secs,
+        engine_release_cache_ttl_secs: settings.engine_release_cache_ttl_secs,
       })
     }
   }, [settings, form])
@@ -139,6 +143,15 @@ export function RuntimeConfigCard() {
           required
         >
           <InputNumber min={1} max={600} className="!w-full" data-testid="llmrt-config-drain-timeout" />
+        </FormField>
+
+        <FormField
+          name="engine_release_cache_ttl_secs"
+          label="Release catalogue cache (seconds)"
+          description="How long the list of installable engine versions is reused before refreshing from GitHub. Longer means fewer upstream requests — unauthenticated GitHub allows only 60 per hour per IP, and setting GITHUB_TOKEN raises that to 5000."
+          required
+        >
+          <InputNumber min={60} max={86400} className="!w-full" data-testid="llmrt-config-release-cache-ttl" />
         </FormField>
 
       </Form>

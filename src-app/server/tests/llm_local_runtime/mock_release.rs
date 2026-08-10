@@ -19,7 +19,8 @@
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -51,8 +52,23 @@ pub struct MockReleaseServer {
     /// sha256 of the staged llamacpp archive (informational; the runtime
     /// download path does not itself verify sha256).
     pub llamacpp_sha256: String,
+    release_list_hits: Arc<AtomicUsize>,
     _serve_dir: TempDir,
     _server_handle: JoinHandle<()>,
+}
+
+impl MockReleaseServer {
+    /// How many release-LIST requests this fixture has served since start.
+    pub fn release_list_hits(&self) -> usize {
+        self.release_list_hits.load(Ordering::SeqCst)
+    }
+
+    /// Stop serving, so the next upstream read fails the way a rate-limited or
+    /// air-gapped host does. Used to drive the degradation path (the server
+    /// must then answer from cache, labelled — never an empty list).
+    pub fn take_upstream_down(&self) {
+        self._server_handle.abort();
+    }
 }
 
 impl Drop for MockReleaseServer {
@@ -104,10 +120,12 @@ pub async fn setup_with_env(mut extra_env: Vec<(String, String)>) -> MockRelease
     let port = listener.local_addr().expect("local_addr").port();
     let mirror_url = format!("http://127.0.0.1:{port}");
 
+    let release_list_hits = Arc::new(AtomicUsize::new(0));
     let app = axum::Router::new()
         .route("/{*path}", get(serve))
         .with_state(AppState {
             serve_root: serve_root.clone(),
+            release_list_hits: Arc::clone(&release_list_hits),
         });
     let server_handle = tokio::spawn(async move {
         let _ = axum::serve(listener, app.into_make_service()).await;
@@ -132,6 +150,7 @@ pub async fn setup_with_env(mut extra_env: Vec<(String, String)>) -> MockRelease
         platform,
         arch,
         llamacpp_sha256,
+        release_list_hits,
         _serve_dir: serve_dir,
         _server_handle: server_handle,
     }
@@ -189,10 +208,19 @@ fn stage_engine(
     let sig_size = std::fs::metadata(dl_dir.join(format!("{archive_name}.sig")))
         .expect("stat sig")
         .len();
+    // Non-host variants: named exactly as the real fork publishes them, but
+    // with no file staged — discovery reads the release JSON, never the file.
+    // They exist so a test can prove the catalogue reports variants for
+    // platforms OTHER than the test host. Without them the fixture could only
+    // ever confirm host-scoped behaviour, which is the very gap being closed
+    // (a caller must be able to pick a platform/arch that is not this box).
+    let other_variants = format!(
+        r#",{{"name":"{server_bin}-windows-x86_64-cpu.zip","size":5526813}},{{"name":"{server_bin}-macos-aarch64-metal.tar.gz","size":12904087}},{{"name":"{server_bin}-linux-x86_64-cuda12.9.tar.gz","size":287894314}}"#
+    );
     let releases_json = format!(
         r#"[
             {{"tag_name":"{PENDING_VERSION}","draft":false,"prerelease":true,"published_at":"2026-05-29T00:00:00Z","assets":[]}},
-            {{"tag_name":"{TEST_VERSION}","draft":false,"prerelease":false,"published_at":"2026-05-01T00:00:00Z","assets":[{{"name":"{archive_name}","size":{archive_size}}},{{"name":"{archive_name}.sig","size":{sig_size}}}]}}
+            {{"tag_name":"{TEST_VERSION}","draft":false,"prerelease":false,"published_at":"2026-05-01T00:00:00Z","assets":[{{"name":"{archive_name}","size":{archive_size}}},{{"name":"{archive_name}.sig","size":{sig_size}}}{other_variants}]}}
         ]"#
     );
     std::fs::write(
@@ -303,6 +331,12 @@ fn host_arch() -> String {
 #[derive(Clone)]
 struct AppState {
     serve_root: PathBuf,
+    /// Number of `repos/{repo}/releases` LIST requests served. This is the
+    /// measurement that proves caching: discovery used to issue exactly one
+    /// upstream request per call (verified on a live server as 5 GitHub
+    /// requests for 5 calls), so a test that drives N calls and asserts this
+    /// counter stayed at 1 is asserting the actual defect is fixed.
+    release_list_hits: Arc<AtomicUsize>,
 }
 
 async fn serve(
@@ -315,6 +349,11 @@ async fn serve(
         if seg == ".." || seg.starts_with('/') {
             return Err((StatusCode::FORBIDDEN, "invalid path".to_string()));
         }
+    }
+    // Count release-LIST requests (`repos/{owner}/{repo}/releases`), not the
+    // artifact downloads that share the prefix.
+    if path.ends_with("/releases") {
+        state.release_list_hits.fetch_add(1, Ordering::SeqCst);
     }
     let target = state.serve_root.join(&path);
     // `repos/{repo}/releases` is a directory on disk (it holds `latest`), so
