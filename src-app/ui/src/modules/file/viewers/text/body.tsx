@@ -13,7 +13,10 @@ export function TextBody(props: FileViewerSlotProps) {
   const inlineContent = useResourceLinkContent(url, !!file)
   const content = file ? rightPanelContent : inlineContent
   // Read the wrap flag reactively (right-panel only; inline has no fileId).
-  const wordWrap = file ? File.fileWordWrap.get(file.id) ?? false : false
+  // The proxy read IS a hook, so it happens unconditionally — only the Map
+  // LOOKUP is conditional on `file`, which is a plain (hook-free) call.
+  const wordWrapByFile = File.fileWordWrap
+  const wordWrap = file ? wordWrapByFile.get(file.id) ?? false : false
 
   if (content === '__error__') {
     return (

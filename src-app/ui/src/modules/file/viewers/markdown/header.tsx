@@ -10,13 +10,17 @@ import type { FileViewerSlotProps } from '../../types/viewer'
 import { File } from '@/modules/file/stores/file'
 
 export function MarkdownHeader(props: FileViewerSlotProps) {
+  // A reactive store-proxy read IS a hook here (it calls useEffect + useStore),
+  // so it must stay ABOVE the type-guard early return — otherwise the hook count
+  // varies between renders and React unmounts the tree.
+  const viewModes = File.fileViewModes
   // Chrome buttons read from the FileStore via `file.id`; they need
   // a real FileEntity. Inline context renders no extra header chrome.
   if (!('file' in props)) return null
   const { file } = props
   // Word-wrap only applies to the raw (RawCodeView) mode; the rendered markdown
   // already wraps. Show the toggle only when raw is active.
-  const isRaw = (File.fileViewModes.get(file.id) ?? 'compiled') === 'raw'
+  const isRaw = (viewModes.get(file.id) ?? 'compiled') === 'raw'
   return (
     <Space size="small">
       <FindButton file={file} />

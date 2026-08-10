@@ -5,15 +5,18 @@ import type { FileViewerSlotProps } from '../../types/viewer'
 import { File } from '@/modules/file/stores/file'
 
 export function ImageHeader(props: FileViewerSlotProps) {
+  // Read the map directly (reactive subscription) so the Segmented reflects
+  // scale-driven mode flips (a zoom switches mode → 'actual'). That read IS a
+  // hook (useEffect + useStore inside the proxy), so it must stay ABOVE the
+  // type-guard early return or the hook count varies between renders.
+  const imageViewStates = File.imageViewStates
   // Inline-context headers are owned by the chat-side InlineFilePreview
   // (which renders icon + filename + open-in-new-tab link). The
   // FileStore-coupled chrome below only works with a real FileEntity,
   // so for inline context we render nothing extra.
   if (!('file' in props)) return null
   const { file } = props
-  // Read the map directly (reactive subscription) so the Segmented reflects
-  // scale-driven mode flips (a zoom switches mode → 'actual').
-  const view = File.imageViewStates.get(file.id) ?? DEFAULT_IMAGE_VIEW
+  const view = imageViewStates.get(file.id) ?? DEFAULT_IMAGE_VIEW
   return (
     <Space size="small" wrap={false}>
       <Button

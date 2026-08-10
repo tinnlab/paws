@@ -6,6 +6,7 @@ import { useChatPaneOrNull } from '@/modules/chat/core/pane/ChatPaneContext'
 import type { ContentRendererProps } from '@/modules/chat/core/extensions'
 import {
   type KbHit,
+  type SearchKnowledgeResult,
   hitToPanelData,
   isIndexingIncomplete,
   isRenderableSearchKnowledgeResult,
@@ -29,8 +30,6 @@ import { Chat } from '@/modules/chat/core/stores/chatBridge'
  * first-wins early exit.
  */
 export function SearchKnowledgeToolResultCard(props: ContentRendererProps) {
-  // Open into THIS pane's right panel (ITEM-36), not the focused pane's.
-  const chat = (useChatPaneOrNull()?.store ?? Chat) as typeof Chat
   const { content } = props
   // Defensive only — `contentMatch` already scopes this renderer to well-formed
   // `search_knowledge` results, so neither guard is reachable through the
@@ -41,6 +40,18 @@ export function SearchKnowledgeToolResultCard(props: ContentRendererProps) {
   const sc = parseSearchKnowledge(block)
   if (!sc) return null
 
+  return <SearchKnowledgeCardBody sc={sc} />
+}
+
+/**
+ * The rendering half, split out so every hook runs unconditionally. Inline
+ * above, `useState` sat below two CONTENT-dependent guards, so the hook count
+ * flipped as a `search_knowledge` tool_result streamed its payload in — React
+ * throws "Rendered more hooks than expected" and unmounts the chat tree.
+ */
+function SearchKnowledgeCardBody({ sc }: { sc: SearchKnowledgeResult }) {
+  // Open into THIS pane's right panel (ITEM-36), not the focused pane's.
+  const chat = (useChatPaneOrNull()?.store ?? Chat) as typeof Chat
   const incomplete = isIndexingIncomplete(sc)
   // Default collapsed — the transparency detail is on-demand, not always in the
   // reader's face (the plan's default-collapsed rule).

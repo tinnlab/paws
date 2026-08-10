@@ -104,6 +104,18 @@ export function MessageFilesView({ content }: ContentRendererProps) {
     deduped.push(link)
   }
 
+  return <ResourceLinkFiles links={deduped} />
+}
+
+/**
+ * The rendering half, split out so its reactive store-proxy read (a hook —
+ * `createStoreProxy` calls `useEffect` + `useStore`) is unconditional. Inline in
+ * `MessageFilesView` it sat below the content-dependent `links.length === 0`
+ * early return, so the hook count flipped as a tool_result streamed its
+ * resource_links in, crashing the whole chat tree with "Rendered more hooks
+ * than expected".
+ */
+function ResourceLinkFiles({ links: deduped }: { links: ResourceLink[] }) {
   // Reactive subscription — re-renders when getMessageFile() resolves the
   // full entity (e.g. once a thumbnail becomes available).
   const messageFilesCache = FileStore.messageFilesCache

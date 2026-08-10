@@ -18,8 +18,12 @@ export function useFileTextContent(
   file: FileEntity | undefined,
   skip = false,
 ): string | null {
+  // A reactive store-proxy read IS a hook (useEffect + useStore inside the
+  // proxy), so it must run on EVERY call — above the skip/undefined guard.
+  // Only the Map lookup below is conditional, and that is a plain call.
+  const textContents = FileStore.fileTextContents
   if (skip || !file) return null
-  const content = FileStore.fileTextContents.get(file.id) ?? null
+  const content = textContents.get(file.id) ?? null
   if (content === null) FileStore.getFileTextContent(file.id, file)
   return content
 }
@@ -27,6 +31,8 @@ export function useFileTextContent(
 /** Current view mode for a file ('compiled' default). Returns 'compiled'
  *  when `fileId` is empty (skip mode for inline context). */
 export function useFileViewMode(fileId: string): 'compiled' | 'raw' {
+  // Same rule as above: the proxy read is a hook, so it stays unconditional.
+  const viewModes = FileStore.fileViewModes
   if (!fileId) return 'compiled'
-  return FileStore.fileViewModes.get(fileId) ?? 'compiled'
+  return viewModes.get(fileId) ?? 'compiled'
 }

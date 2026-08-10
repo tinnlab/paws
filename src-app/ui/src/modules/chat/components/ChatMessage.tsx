@@ -106,6 +106,35 @@ export const ChatMessage = memo(function ChatMessage({
     [emptyCompletionCauseValue],
   )
 
+  // ── Extension-registry subscription — MUST stay in the unconditional hook
+  //    prologue, ABOVE the early return below. ─────────────────────────────────
+  //
+  // Rail segmentation (further down) asks the extension registry which blocks are
+  // steps, and that registry is MUTABLE: extension modules are lazily imported and
+  // register after first paint. This component is `memo`'d on props that do not
+  // change when one arrives, so without a subscription a message segmented before
+  // its extensions registered would recognise none of its blocks as rail steps,
+  // fall back to raw tool CARDS, and stay that way for the life of the message —
+  // the activity rail silently absent. Same defect, and same fix, as
+  // `ContentRenderer` one level down.
+  //
+  // It lives HERE, and not next to the segmentation that uses it, because the
+  // `contents.length === 0` early return below is a CONDITIONAL return: a hook
+  // placed after it is called on some renders and skipped on others. A mounted
+  // message whose answerless-turn notice is suppressed (the store's per-turn
+  // `interrupted`/`finalizing` signal arriving — see `shouldShowEmptyCompletionNotice`)
+  // flips from "falls through" to "early-returns" and the hook count drops, so
+  // React throws `Rendered fewer hooks than expected` and unmounts the entire
+  // tree. That reached production as a WHITE SCREEN: the throw was caught by the
+  // shell's per-module boundary around the `router` component and rendered as
+  // nothing. Covered by `ChatMessage.hooks.test.tsx`; enforced repo-wide by
+  // biome's `correctness/useHookAtTopLevel`.
+  useSyncExternalStore(
+    chatExtensionRegistry.subscribeToExtensions,
+    chatExtensionRegistry.getExtensionsVersion,
+    chatExtensionRegistry.getExtensionsVersion,
+  )
+
   // Check if message has any content to render. A finalised, empty assistant
   // turn has no blocks but still renders the notice below, so don't bail then.
   if (contents.length === 0 && !showEmptyCompletionNotice) {
@@ -166,20 +195,9 @@ export const ChatMessage = memo(function ChatMessage({
   // Membership comes from CONTRIBUTIONS — core asks each extension "is this a
   // step of yours?" and never inspects a tool name itself.
   //
-  // Which is exactly why this component must RE-RENDER when contributions change:
-  // `resolveRailStep` reads a mutable registry populated by lazily-imported
-  // extension modules, and this component is `memo`'d on props that do not change
-  // when one arrives. A message segmented before its extensions registered
-  // therefore recognised none of its blocks as rail steps, fell back to rendering
-  // them as raw tool CARDS, and stayed that way for the life of the message — the
-  // activity rail silently absent. Measured under concurrent gallery load, where
-  // module import is slow enough to lose the race. Same defect, and same fix, as
-  // `ContentRenderer` one level down.
-  useSyncExternalStore(
-    chatExtensionRegistry.subscribeToExtensions,
-    chatExtensionRegistry.getExtensionsVersion,
-    chatExtensionRegistry.getExtensionsVersion,
-  )
+  // `resolveRailStep` reads the MUTABLE extension registry, which is why this
+  // component subscribes to it — see the `useSyncExternalStore` in the hook
+  // prologue above (it must stay above the early return, not here).
   const segments = segmentRail(
     bubbleBlocks,
     ctx => chatExtensionRegistry.resolveRailStep(ctx)?.step ?? null,

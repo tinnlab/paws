@@ -1,4 +1,5 @@
 import { Spin } from '@ziee/kit'
+import type { File as FileEntity } from '@/api-client/types'
 import type { FileViewerSlotProps } from '../../types/viewer'
 import { useFileTextContent, useFileViewMode } from '../shared/hooks'
 import { RawCodeView } from '../shared/RawCodeView'
@@ -8,8 +9,16 @@ import { File } from '@/modules/file/stores/file'
 export function WebBody(props: FileViewerSlotProps) {
   // Web viewer is not inline-capable (XSS surface; deferred). Type guard
   // only — chat dispatcher won't reach here for source-shaped props.
+  //
+  // The guard is an EARLY RETURN, so every hook (incl. the reactive
+  // store-proxy reads, which are hooks in this codebase) lives in the inner
+  // component below — a hook after a conditional return makes the hook count
+  // vary between renders and React unmounts the tree.
   if (!('file' in props)) return null
-  const { file } = props
+  return <WebBodyInner file={props.file} />
+}
+
+function WebBodyInner({ file }: { file: FileEntity }) {
   const content = useFileTextContent(file)
   const mode = useFileViewMode(file.id)
   const wordWrap = File.fileWordWrap.get(file.id) ?? false

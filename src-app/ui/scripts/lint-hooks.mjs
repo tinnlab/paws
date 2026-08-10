@@ -270,6 +270,31 @@ function buildRegistries(asts) {
     }
     const factoryName = (nm) => importedAs.get(nm) ?? nm
 
+    // Pre-pass: local (non-exported) `const X = <proxyFactory>(…)` bindings, so
+    // an `export const Y = X` alias below can be resolved to a proxy.
+    const localProxyBindings = new Set()
+    const collectLocal = (n) => {
+      if (ts.isVariableStatement(n)) {
+        for (const d of n.declarationList.declarations) {
+          if (!ts.isIdentifier(d.name) || !d.initializer) continue
+          const init = unwrap(d.initializer)
+          if (ts.isCallExpression(init)) {
+            const callee = unwrap(init.expression)
+            const nm = ts.isIdentifier(callee)
+              ? factoryName(callee.text)
+              : ts.isPropertyAccessExpression(callee)
+                ? callee.name.text
+                : null
+            if (nm && PROXY_FACTORY.test(nm)) localProxyBindings.add(d.name.text)
+          }
+          if (ts.isPropertyAccessExpression(init) && init.name.text === 'store')
+            localProxyBindings.add(d.name.text)
+        }
+      }
+      ts.forEachChild(n, collectLocal)
+    }
+    collectLocal(src)
+
     const visit = (n) => {
       if (ts.isVariableStatement(n) && n.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)) {
         for (const d of n.declarationList.declarations) {
@@ -288,6 +313,13 @@ function buildRegistries(asts) {
           }
           // `export const Foo = FooDef.store` — the defineStore(...).store accessor.
           if (ts.isPropertyAccessExpression(init) && init.name.text === 'store') addTo(proxies, d.name.text, file)
+          // `const Inner = registerLazyStore(Def); export const Foo = Inner` —
+          // an export that ALIASES a local proxy binding. Without this the
+          // aliased proxy never enters the registry, so every conditional read
+          // of it is silently unchecked (the `File` store shipped exactly this
+          // way, hiding real O2 violations behind a green "0 violations").
+          if (ts.isIdentifier(init) && localProxyBindings.has(init.text))
+            addTo(proxies, d.name.text, file)
         }
       }
       if (storeFile) {

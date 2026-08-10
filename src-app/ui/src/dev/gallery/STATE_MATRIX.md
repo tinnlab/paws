@@ -404,13 +404,13 @@ Required states: `empty`
 | kind | condition | line |
 |---|---|---|
 | branch | `isStreaming \|\| wasStreamingRef.current \|\| isActiveMatch` | 70 |
-| empty | `contents.length === 0 && !showEmptyCompletionNotice` | 111 |
-| branch | `!resolved` | 218 |
-| branch | `attachmentBlocks.length > 0` | 306 |
-| branch | `bubbleBlocks.length > 0` | 335 |
-| branch | `offerCollapse` | 361 |
-| branch | `showEmptyCompletionNotice` | 381 |
-| branch | `renderAsUser` | 401 |
+| empty | `contents.length === 0 && !showEmptyCompletionNotice` | 140 |
+| branch | `!resolved` | 236 |
+| branch | `attachmentBlocks.length > 0` | 324 |
+| branch | `bubbleBlocks.length > 0` | 353 |
+| branch | `offerCollapse` | 379 |
+| branch | `showEmptyCompletionNotice` | 399 |
+| branch | `renderAsUser` | 419 |
 
 ### `modules/chat/components/CollapsibleBlock`
 
@@ -1352,12 +1352,12 @@ Required states: _(branch-only — proven via dynamic coverage)_
 | kind | condition | line |
 |---|---|---|
 | branch | `!url` | 24 |
-| branch | `isUser && source.type === 'file'` | 77 |
-| branch | `source.type === 'url'` | 87 |
-| branch | `isSameOriginUrl(source.url)` | 88 |
-| branch | `source.type === 'base64'` | 91 |
-| branch | `!source.media_type?.startsWith('image/')` | 92 |
-| branch | `!url` | 104 |
+| branch | `!url` | 88 |
+| branch | `isUser && source.type === 'file'` | 108 |
+| branch | `source.type === 'url'` | 118 |
+| branch | `isSameOriginUrl(source.url)` | 119 |
+| branch | `source.type === 'base64'` | 122 |
+| branch | `!source.media_type?.startsWith('image/')` | 123 |
 
 ### `modules/file/chat-extension/components/InlineFilePreview`
 
@@ -1608,7 +1608,7 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!('file' in props)` | 12 |
+| branch | `!('file' in props)` | 17 |
 
 ### `modules/file/viewers/markdown/body`
 
@@ -1622,10 +1622,10 @@ Required states: `error`
 | branch | `href?.startsWith('#')` | 72 |
 | error | `!(err instanceof Error)` | 98 |
 | error | `this.state.error` | 143 |
-| branch | `content === '__error__'` | 201 |
-| branch | `content === null` | 208 |
-| branch | `file` | 215 |
-| branch | `file && mode === 'raw'` | 217 |
+| branch | `content === '__error__'` | 204 |
+| branch | `content === null` | 211 |
+| branch | `file` | 218 |
+| branch | `file && mode === 'raw'` | 220 |
 
 ### `modules/file/viewers/markdown/header`
 
@@ -1633,8 +1633,8 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!('file' in props)` | 15 |
-| branch | `isRaw` | 23 |
+| branch | `!('file' in props)` | 19 |
+| branch | `isRaw` | 27 |
 
 ### `modules/file/viewers/pdf/body`
 
@@ -1642,12 +1642,12 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!('file' in props)` | 17 |
-| empty | `!root \|\| file.preview_page_count === 0` | 52 |
-| empty | `file.preview_page_count === 0` | 79 |
-| branch | `truncated` | 91 |
-| branch | `url` | 124 |
-| branch | `pageErrors?.has(i + 1)` | 131 |
+| branch | `!('file' in props)` | 23 |
+| empty | `!root \|\| file.preview_page_count === 0` | 60 |
+| empty | `file.preview_page_count === 0` | 87 |
+| branch | `truncated` | 99 |
+| branch | `url` | 132 |
+| branch | `pageErrors?.has(i + 1)` | 139 |
 
 ### `modules/file/viewers/pdf/pdfjs-body`
 
@@ -1690,11 +1690,11 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| empty | `file.text_page_count === 0` | 41 |
-| branch | `text === undefined \|\| text === ''` | 109 |
-| branch | `!isHighlightSupported()` | 179 |
-| branch | `text.trim() === '' \|\| !inViewer` | 235 |
-| branch | `inRouter` | 269 |
+| empty | `file.text_page_count === 0` | 45 |
+| branch | `text === undefined \|\| text === ''` | 113 |
+| branch | `!isHighlightSupported()` | 187 |
+| branch | `text.trim() === '' \|\| !inViewer` | 243 |
+| branch | `inRouter` | 277 |
 
 ### `modules/file/viewers/shared/find/FindableRegion`
 
@@ -1772,9 +1772,9 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `content === '__error__'` | 18 |
-| branch | `content === null` | 25 |
-| branch | `file` | 31 |
+| branch | `content === '__error__'` | 21 |
+| branch | `content === null` | 28 |
+| branch | `file` | 34 |
 
 ### `modules/file/viewers/text/header`
 
@@ -1790,9 +1790,9 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!('file' in props)` | 11 |
-| branch | `content === null` | 17 |
-| branch | `mode === 'raw'` | 20 |
+| branch | `!('file' in props)` | 17 |
+| branch | `content === null` | 26 |
+| branch | `mode === 'raw'` | 29 |
 
 ### `modules/file/viewers/web/header`
 
@@ -1800,10 +1800,10 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!('file' in props)` | 13 |
-| branch | `isRaw` | 21 |
-| branch | `isRaw` | 22 |
-| branch | `isRaw` | 23 |
+| branch | `!('file' in props)` | 17 |
+| branch | `isRaw` | 25 |
+| branch | `isRaw` | 26 |
+| branch | `isRaw` | 27 |
 
 ### `modules/hardware/HardwareMonitor`
 
@@ -2239,13 +2239,13 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!isSearchKnowledgeResult(content)` | 39 |
-| branch | `!sc` | 42 |
-| branch | `expanded` | 75 |
-| branch | `incomplete` | 90 |
-| branch | `!(!expanded)` | 97 |
-| empty | `sc.hits.length === 0` | 97 |
-| branch | `expanded` | 133 |
+| branch | `!isSearchKnowledgeResult(content)` | 38 |
+| branch | `!sc` | 41 |
+| branch | `expanded` | 86 |
+| branch | `incomplete` | 101 |
+| branch | `!(!expanded)` | 108 |
+| empty | `sc.hits.length === 0` | 108 |
+| branch | `expanded` | 144 |
 
 ### `modules/knowledge-base/chat-extension/extension`
 

@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { File, TriangleAlert } from 'lucide-react'
 import type { OverlayScrollbarsComponentRef } from 'overlayscrollbars-react'
 import { Alert, Button, ScrollArea, Spin, Text } from '@ziee/kit'
+import type { File as FileEntity } from '@/api-client/types'
 import type { FileViewerSlotProps } from '../../types/viewer'
 import { File as FileStore } from '@/modules/file/stores/file'
 
@@ -14,9 +15,16 @@ export function PdfBody(props: FileViewerSlotProps) {
   // PDF viewer is not inline-capable (its module declares no `inline:`).
   // The chat dispatcher won't call this in source context, but guard for
   // type-narrowing safety.
+  //
+  // The guard is an EARLY RETURN, so every hook (useRef/useEffect AND the
+  // reactive store-proxy reads, which are hooks in this codebase) lives in the
+  // inner component below — a hook after a conditional return makes the hook
+  // count vary between renders and React unmounts the tree.
   if (!('file' in props)) return null
-  const { file } = props
+  return <PdfBodyInner file={props.file} />
+}
 
+function PdfBodyInner({ file }: { file: FileEntity }) {
   // Subscribe to previewPageUrls Map directly so we re-render as each
   // page slot loads. Calling the `getPreviewPageUrls()` action instead
   // would only subscribe to the function reference (whose identity never

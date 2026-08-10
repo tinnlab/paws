@@ -38,8 +38,12 @@ import { File as FileStore } from '@/modules/file/stores/file'
 // automatically becomes toggleable client-side.
 
 export function RawToggle({ file }: { file: FileEntity }) {
+  // A reactive store-proxy read IS a hook (useEffect + useStore inside the
+  // proxy), so it must stay ABOVE the early return — a mounted file whose
+  // `text_page_count` flips would otherwise change the hook count.
+  const viewModes = FileStore.fileViewModes
   if (file.text_page_count === 0) return null
-  const mode = FileStore.fileViewModes.get(file.id) ?? 'compiled'
+  const mode = viewModes.get(file.id) ?? 'compiled'
   return (
     <Segmented
       value={mode}
@@ -176,8 +180,12 @@ function findShortcutLabel(): string {
 }
 
 export function FindButton({ file }: { file: FileEntity }) {
+  // A reactive store-proxy read IS a hook (useEffect + useStore inside the
+  // proxy), so it must stay ABOVE the early return to keep the hook count
+  // constant across renders.
+  const findOpen = FileStore.fileFindOpen
   if (!isHighlightSupported()) return null
-  const open = FileStore.fileFindOpen.get(file.id) ?? false
+  const open = findOpen.get(file.id) ?? false
   return (
     <Button
       variant="ghost"

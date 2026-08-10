@@ -64,6 +64,37 @@ function Img({ src, alt }: { src: string; alt: string }) {
   )
 }
 
+/**
+ * The `file`-source branch, split out as its OWN component so its two reactive
+ * store-proxy reads (each a hook — `createStoreProxy` calls `useEffect` +
+ * `useStore`) run unconditionally. Inline in `ImageContent` they sat after three
+ * early returns, so the hook count varied with `isUser`/`source.type` — both of
+ * which flip while a message streams — and React would throw
+ * "Rendered fewer hooks than expected" and unmount the whole chat tree.
+ */
+function FileSourceImage({
+  fileId,
+  altText,
+}: {
+  fileId: string
+  altText?: string | null
+}) {
+  const fallback = fallbackFile(fileId, altText)
+  const file = FileStore.messageFilesCache.get(fileId) ?? fallback
+  FileStore.getMessageFile(fileId, fallback)
+  // Subscribe to the blob-url Map directly so we re-render once it resolves.
+  const url = FileStore.thumbnailUrls.get(fileId) ?? null
+  if (url === null) FileStore.getThumbnailUrl(fileId, file)
+  if (!url) {
+    return (
+      <div className="flex items-center py-4">
+        <Spin label="Loading" />
+      </div>
+    )
+  }
+  return <Img src={url} alt={altText || file.filename || 'image'} />
+}
+
 export function ImageContent({ content, isUser }: ContentRendererProps) {
   const data = content.content as MessageContentDataImage
   const source = data.source
@@ -93,20 +124,8 @@ export function ImageContent({ content, isUser }: ContentRendererProps) {
     return <Img src={`data:${source.media_type};base64,${source.data}`} alt={alt} />
   }
 
-  // `file` source — resolve the entity + its authenticated preview blob URL.
-  const fileId = source.file_id
-  const fallback = fallbackFile(fileId, data.alt_text)
-  const file = FileStore.messageFilesCache.get(fileId) ?? fallback
-  FileStore.getMessageFile(fileId, fallback)
-  // Subscribe to the blob-url Map directly so we re-render once it resolves.
-  const url = FileStore.thumbnailUrls.get(fileId) ?? null
-  if (url === null) FileStore.getThumbnailUrl(fileId, file)
-  if (!url) {
-    return (
-      <div className="flex items-center py-4">
-        <Spin label="Loading" />
-      </div>
-    )
-  }
-  return <Img src={url} alt={data.alt_text || file.filename || 'image'} />
+  // `file` source — resolve the entity + its authenticated preview blob URL in a
+  // dedicated component: this branch is the ONLY one that reads the store, and a
+  // hook may not live below the early returns above.
+  return <FileSourceImage fileId={source.file_id} altText={data.alt_text} />
 }

@@ -3,7 +3,7 @@
 	"extends": ["../../sdk/packages/config/biome.base.json"],
 	"files": {
 		"ignoreUnknown": false,
-		"includes": ["**", "!**/*.desktop.tsx", "!**/*.desktop.ts"]
+		"includes": ["**", "!**/*.desktop.tsx", "!**/*.desktop.ts", "!**/dev/gallery/__detector_fixtures__/**"]
 	},
 	"overrides": [
 		{
