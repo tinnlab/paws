@@ -4,7 +4,7 @@
 // renders + overlay triggers + panel/slot registrations) that the reconciliation
 // gate (scripts/reconcile-state-matrix.mjs) checks the gallery entries against.
 //
-// 353 surfaces carry renderable-state signals; 2174 signals total.
+// 353 surfaces carry renderable-state signals; 2175 signals total.
 
 /** A signal is one mechanically-detected render fork (a state the surface can be in). */
 export interface StateSignal {
@@ -2259,23 +2259,24 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     requiredStates: ["empty","error"],
     signals: [
       { kind: "branch", condition: "!platform || !arch", line: 109 },
-      { kind: "branch", condition: "isChecking && !updateCheck", line: 185 },
-      { kind: "branch", condition: "updateError && !updateCheck", line: 187 },
-      { kind: "branch", condition: "!updateCheck", line: 195 },
-      { kind: "empty", condition: "feedUnreachable && readyUpstream.length === 0", line: 199 },
-      { kind: "empty", condition: "readyUpstream.length === 0", line: 212 },
-      { kind: "branch", condition: "feedUnreachable", line: 218 },
-      { kind: "branch", condition: "readyUpstream.length > 10", line: 236 },
-      { kind: "branch", condition: "loadingGpu && !gpu", line: 255 },
-      { kind: "branch", condition: "!gpu", line: 263 },
-      { kind: "branch", condition: "loadingGpu && !gpu", line: 281 },
-      { kind: "branch", condition: "!gpu", line: 289 },
-      { kind: "branch", condition: "v.size_bytes != null && !v.installed", line: 333 },
-      { kind: "branch", condition: "isLatest", line: 338 },
-      { kind: "branch", condition: "v.installed", line: 339 },
-      { kind: "branch", condition: "v.prerelease", line: 340 },
-      { kind: "branch", condition: "progress", line: 359 },
-      { kind: "error", condition: "failed && progress?.error", line: 360 },
+      { kind: "branch", condition: "result?.unavailable_reason", line: 147 },
+      { kind: "branch", condition: "isChecking && !updateCheck", line: 195 },
+      { kind: "branch", condition: "updateError && !updateCheck", line: 197 },
+      { kind: "branch", condition: "!updateCheck", line: 205 },
+      { kind: "empty", condition: "feedUnreachable && (updateCheck.versions?.length ?? 0) === 0", line: 209 },
+      { kind: "empty", condition: "readyUpstream.length === 0", line: 222 },
+      { kind: "branch", condition: "feedUnreachable", line: 228 },
+      { kind: "branch", condition: "readyUpstream.length > 10", line: 246 },
+      { kind: "branch", condition: "loadingGpu && !gpu", line: 265 },
+      { kind: "branch", condition: "!gpu", line: 273 },
+      { kind: "branch", condition: "loadingGpu && !gpu", line: 291 },
+      { kind: "branch", condition: "!gpu", line: 299 },
+      { kind: "branch", condition: "v.size_bytes != null && !v.installed", line: 343 },
+      { kind: "branch", condition: "isLatest", line: 348 },
+      { kind: "branch", condition: "v.installed", line: 349 },
+      { kind: "branch", condition: "v.prerelease", line: 350 },
+      { kind: "branch", condition: "progress", line: 369 },
+      { kind: "error", condition: "failed && progress?.error", line: 370 },
     ],
   },
   "modules/llm-local-runtime/components/InstalledVersionsCard": {

@@ -140,6 +140,16 @@ export function AvailableVersionsCard({ engine }: { engine: RuntimeEngine }) {
   const handleCheckForUpdates = async () => {
     try {
       const result = await RuntimeUpdate.checkForUpdates(engine)
+      // The server no longer 500s on an unreachable feed — it answers 200 with
+      // an `unavailable_reason` — so the catch below never fires for that case.
+      // Reporting "you're up to date" off an empty list would be the exact lie
+      // the degradation vocabulary exists to remove.
+      if (result?.unavailable_reason) {
+        message.error(
+          `Couldn't reach the ${engine} release feed — the version list may be out of date.`,
+        )
+        return
+      }
       const readyAfter = (result?.versions ?? []).filter(rv => rv.binary_ready)
       const newCount = readyAfter.filter(rv => !rv.installed).length
       if (newCount === 0) {
@@ -196,7 +206,7 @@ export function AvailableVersionsCard({ engine }: { engine: RuntimeEngine }) {
           <Text type="secondary">
             Could not reach the upstream release feed.
           </Text>
-        ) : feedUnreachable && readyUpstream.length === 0 ? (
+        ) : feedUnreachable && (updateCheck.versions?.length ?? 0) === 0 ? (
           // The feed is unreachable AND we have nothing cached. Say exactly
           // that — rendering "No published binaries found" here would claim
           // upstream published nothing, which is a different (and false)
