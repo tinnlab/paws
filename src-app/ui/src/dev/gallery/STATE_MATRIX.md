@@ -8,7 +8,7 @@
 ## Summary
 
 - **353** surfaces carry at least one renderable-state signal.
-- **2174** signals total: 1707 branch, 141 empty, 126 error, 93 loading, 102 overlay, 5 panel.
+- **2175** signals total: 1708 branch, 141 empty, 126 error, 93 loading, 102 overlay, 5 panel.
 - **5** right-panel renderers registered (each a right-panel-open state).
 - **35** slot registrations (sidebar / settings / chat mount points).
 
@@ -2493,23 +2493,24 @@ Required states: `empty`, `error`
 | kind | condition | line |
 |---|---|---|
 | branch | `!platform \|\| !arch` | 109 |
-| branch | `isChecking && !updateCheck` | 185 |
-| branch | `updateError && !updateCheck` | 187 |
-| branch | `!updateCheck` | 195 |
-| empty | `feedUnreachable && readyUpstream.length === 0` | 199 |
-| empty | `readyUpstream.length === 0` | 212 |
-| branch | `feedUnreachable` | 218 |
-| branch | `readyUpstream.length > 10` | 236 |
-| branch | `loadingGpu && !gpu` | 255 |
-| branch | `!gpu` | 263 |
-| branch | `loadingGpu && !gpu` | 281 |
-| branch | `!gpu` | 289 |
-| branch | `v.size_bytes != null && !v.installed` | 333 |
-| branch | `isLatest` | 338 |
-| branch | `v.installed` | 339 |
-| branch | `v.prerelease` | 340 |
-| branch | `progress` | 359 |
-| error | `failed && progress?.error` | 360 |
+| branch | `result?.unavailable_reason` | 147 |
+| branch | `isChecking && !updateCheck` | 195 |
+| branch | `updateError && !updateCheck` | 197 |
+| branch | `!updateCheck` | 205 |
+| empty | `feedUnreachable && (updateCheck.versions?.length ?? 0) === 0` | 209 |
+| empty | `readyUpstream.length === 0` | 222 |
+| branch | `feedUnreachable` | 228 |
+| branch | `readyUpstream.length > 10` | 246 |
+| branch | `loadingGpu && !gpu` | 265 |
+| branch | `!gpu` | 273 |
+| branch | `loadingGpu && !gpu` | 291 |
+| branch | `!gpu` | 299 |
+| branch | `v.size_bytes != null && !v.installed` | 343 |
+| branch | `isLatest` | 348 |
+| branch | `v.installed` | 349 |
+| branch | `v.prerelease` | 350 |
+| branch | `progress` | 369 |
+| error | `failed && progress?.error` | 370 |
 
 ### `modules/llm-local-runtime/components/InstalledVersionsCard`
 

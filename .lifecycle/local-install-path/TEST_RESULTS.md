@@ -97,13 +97,22 @@ Restored: `Tests 4 passed (4)`.
 
 ## Frontend gate
 
-- `tsc --noEmit (ui)`: PASS (exit 0)
-- `tsc --noEmit (desktop/ui)`: PASS (exit 0)
+- `npm run check (ui): PASS` — exit 0. The full chain: tsc + biome guardrails +
+  lint:colors/settings-field/adjacent-inline/icon-action/hooks/logical-direction/
+  tooltip-placement + check:kit-manifest/testid-registry/design-spec/
+  gallery-coverage/gallery-crawl/state-matrix/overlay-registry/override-registry/
+  gallery-seed-registry/store-actions/harness-parity + the hook-gate,
+  gallery-script and gate-ui-stale test suites.
+  (`check:state-matrix` failed on the first run — the two new conditional
+  renders in `AvailableVersionsCard` needed a regenerated matrix; regenerated
+  and committed, then green.)
+- `npm run check (desktop/ui): PASS` — exit 0 (114 tests pass).
+- `tsc --noEmit (ui)`: PASS (exit 0); `tsc --noEmit (desktop/ui)`: PASS (exit 0)
 - `check:testid-registry (ui)`: PASS — `testIds.generated.ts up to date (1790 ids)`
 - `cargo check -p ziee --tests`: PASS — 0 errors
 
-`npm run check` in full has **not** been run end-to-end, and `gate:ui` has not
-been run — see "Not run".
+`npm run gate:ui` (runtime-health boot canary + Layer A/axe + visual regression)
+has **not** been run — see "Not run".
 
 ## Environmental failures (Category A — NOT regressions)
 
@@ -143,10 +152,9 @@ read-only token or expect-skip").
 - **TEST-10, TEST-16, TEST-23, TEST-25** (Playwright e2e) — not executed. The
   specs are written and committed; they have never been observed green, so they
   are recorded NOT RUN rather than PASS.
-- **`npm run check`** (the full chained frontend gate) and **`npm run gate:ui`**
-  (runtime-health + Layer A/axe + visual regression) — not run. Their
-  constituent checks that were run individually are listed above; the rest are
-  unverified.
+- **`npm run gate:ui`** (the A7 boot/runtime canary + Layer A/axe + visual
+  regression) — not run. `npm run check` covers the static contract and passes
+  in both workspaces, but the runtime canary is a separate, unrun step.
 
 Phase 8 is therefore **not** satisfiable on this evidence, and is not claimed to
 be. What is claimed is exactly what was observed.
