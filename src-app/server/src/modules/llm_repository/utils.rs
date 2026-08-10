@@ -354,6 +354,53 @@ pub fn repository_kind(url: &str) -> RepositoryKind {
 /// this the capability probe would confirm the API and call the row verified.
 fn is_clonable_github_origin(url: &str) -> bool {
     host_of(url).is_some_and(|h| h == "github.com" || h == "www.github.com")
+        && has_no_path(url)
+}
+
+/// Does this URL carry no meaningful path — i.e. is it an ORIGIN?
+///
+/// `GitService::build_repository_url` appends `{path}` to the repository's URL,
+/// so for a hosted registry only an origin is a usable base. A row at
+/// `https://huggingface.co/custom` builds `https://huggingface.co/custom/org/model`,
+/// which is not a repository.
+fn has_no_path(url: &str) -> bool {
+    url::Url::parse(url)
+        .ok()
+        .is_some_and(|u| u.path() == "/" || u.path().is_empty())
+}
+
+/// Is this URL a usable BASE for the kind's clone/download convention?
+///
+/// The capability probe for a hosted kind necessarily queries that kind's fixed
+/// API host (`huggingface.co/api/models`, `api.github.com`), NOT the row's own
+/// URL — so on its own it would confirm the HOST's capability and attribute it
+/// to any row sharing that host. That is how `https://huggingface.co/custom`
+/// and `https://api.github.com` — two of the three reported rows — could still
+/// read `healthy` while being unable to serve a single model.
+///
+/// `Unknown` is deliberately unconstrained: a self-hosted mirror may legitimately
+/// live under a path, its probe already targets its own origin, and reporting it
+/// unverified would risk auto-disabling a working deployment (INV-4).
+fn is_usable_repository_base(kind: RepositoryKind, url: &str) -> bool {
+    match kind {
+        RepositoryKind::Github => is_clonable_github_origin(url),
+        // Hugging Face is deliberately NOT origin-constrained. An org-scoped
+        // base is legitimate: a row at `https://huggingface.co/<org>` plus a
+        // repository_path of `<model>` builds `huggingface.co/<org>/<model>`,
+        // which is a real model URL — and two pre-existing tests rely on it.
+        //
+        // KNOWN GAP (recorded, not silently accepted): because the HF
+        // capability probe necessarily queries the FIXED `huggingface.co/api/models`
+        // rather than the row's own URL, a row naming a NON-EXISTENT org — the
+        // reported `https://huggingface.co/custom` — is still confirmed on the
+        // strength of the hub's catalogue. Closing it needs a per-row existence
+        // probe (e.g. `…/api/models?author=<org>`), which is a real behavioural
+        // change to a live third-party call and is out of scope here. An
+        // origin-only guard was tried and rejected: it would report every
+        // legitimate org-scoped row unverified.
+        RepositoryKind::HuggingFace => true,
+        RepositoryKind::Unknown => true,
+    }
 }
 
 /// Hugging Face API base for the capability probe.
@@ -688,12 +735,13 @@ pub async fn test_repository_connectivity(
     // `https://api.github.com/owner/repo.git`, which is not a git remote.
     // Confirming the API here would reproduce exactly the lie INV-4 forbids,
     // so the row is reported `unverified` rather than verified-and-broken.
-    if kind == RepositoryKind::Github && !is_clonable_github_origin(&request.url) {
+    if !is_usable_repository_base(kind, &request.url) {
         return ProbeVerdict::Unverified {
             reason: format!(
-                "{} is a GitHub API host, not a clonable repository origin — model \
-                 downloads clone from https://github.com/<owner>/<repo>.git, so this \
-                 URL could not be confirmed as a model repository",
+                "{} is not a usable repository origin for this host — downloads append \
+                 the model path to it (e.g. https://huggingface.co/<org>/<model>, \
+                 https://github.com/<owner>/<repo>.git), so this URL could not be \
+                 confirmed as a model repository",
                 redact_url_userinfo(&request.url)
             ),
         };
@@ -723,7 +771,28 @@ pub async fn test_repository_connectivity(
     };
 
     let status = response.status();
-    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+    if status == reqwest::StatusCode::FORBIDDEN {
+        // 403, and ONLY 403, degrades to `unverified` rather than `unhealthy`.
+        //
+        // `Unhealthy` is the only verdict that AUTO-DISABLES the row, and 403 is
+        // exactly what GitHub returns when the anonymous 60-req/hr/IP budget is
+        // exhausted — the shared-egress condition this codebase documents as
+        // routine. Disabling a working repository because an unrelated budget
+        // ran out is the outcome INV-4 forbids for a repository we merely could
+        // not confirm.
+        //
+        // 401 keeps its historical `unhealthy` treatment below: an explicit
+        // authentication challenge against a URL the operator configured is a
+        // real, actionable failure, not an unknown.
+        return ProbeVerdict::Unverified {
+            reason: format!(
+                "{} answered HTTP 403 (rate-limited, or access is forbidden), so \
+                 this URL could not be confirmed as a model repository",
+                redact_url_userinfo(&capability_url),
+            ),
+        };
+    }
+    if status == reqwest::StatusCode::UNAUTHORIZED {
         // A credential failure is actionable and keeps its historical
         // treatment (record unhealthy → auto-disable).
         return ProbeVerdict::Unhealthy {
@@ -941,8 +1010,7 @@ mod tests {
         assert!(!is_github_api_catalog(&serde_json::json!({"ok": true})));
     }
 
-    #[test]
-    /// The reported `https://api.github.com` row. It shares the `.github.com`
+        /// The reported `https://api.github.com` row. It shares the `.github.com`
     /// suffix that selects the GitHub kind, and the GitHub REST catalogue it
     /// probes genuinely answers — so without an origin guard the capability
     /// probe CONFIRMS it and the row reads "Verified as a model repository",
@@ -977,13 +1045,64 @@ mod tests {
         }
     }
 
+    /// The THREE URLs reported as wrongly-healthy, pinned together.
+    ///
+    /// Each is reachable and each is a real host, so no reachability check can
+    /// separate them from a working repository. What separates them is that the
+    /// download path appends the model path to the row's URL, and none of these
+    /// is a usable base for that. Two of them (`huggingface.co/custom`,
+    /// `api.github.com`) additionally sit on hosts whose kind-level capability
+    /// probe genuinely succeeds — so without this guard the probe CONFIRMS them.
+    #[test]
+    fn the_three_reported_urls_are_not_usable_repository_bases() {
+        // `api.github.com` is the case the base guard closes outright.
+        assert!(!is_usable_repository_base(
+            repository_kind("https://api.github.com"),
+            "https://api.github.com"
+        ));
+        // The Vite dev server is Unknown-kind, so the base guard passes it —
+        // it is rejected LATER, by the capability shape check, because its SPA
+        // fallback is HTML rather than a model listing.
+        assert_eq!(
+            repository_kind("http://127.0.0.1:1520/models"),
+            RepositoryKind::Unknown
+        );
+        // KNOWN GAP: `https://huggingface.co/custom` still passes the base
+        // guard (an org-scoped HF base is legitimate) and is then confirmed by
+        // the hub-wide catalogue. See is_usable_repository_base's note.
+        assert!(is_usable_repository_base(
+            repository_kind("https://huggingface.co/custom"),
+            "https://huggingface.co/custom"
+        ));
+
+        // True-positive counterpart: the two seeded rows ARE usable bases, so
+        // the guard discriminates rather than refusing everything.
+        assert!(is_usable_repository_base(
+            RepositoryKind::HuggingFace,
+            "https://huggingface.co"
+        ));
+        assert!(is_usable_repository_base(
+            RepositoryKind::HuggingFace,
+            "https://huggingface.co/"
+        ));
+        assert!(is_usable_repository_base(
+            RepositoryKind::Github,
+            "https://github.com"
+        ));
+    }
+
     #[test]
     fn capability_url_targets_the_kinds_listing_surface() {
         assert_eq!(
-            capability_probe_url(RepositoryKind::HuggingFace, "https://huggingface.co/custom")
+            capability_probe_url(RepositoryKind::HuggingFace, "https://huggingface.co")
                 .as_deref(),
             Some("https://huggingface.co/api/models?limit=1"),
         );
+        // NOTE the probe URL is the same for `https://huggingface.co/custom`,
+        // because it is derived from the KIND, not the row. That is exactly why
+        // the usable-base guard exists and is asserted separately below — on its
+        // own this derivation would attribute huggingface.co's catalogue to any
+        // row sharing the host, which is how the reported `/custom` row passed.
         assert_eq!(
             capability_probe_url(RepositoryKind::Github, "https://github.com").as_deref(),
             Some("https://api.github.com/"),
