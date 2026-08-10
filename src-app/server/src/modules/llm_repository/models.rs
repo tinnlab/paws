@@ -22,8 +22,7 @@ use uuid::Uuid;
 /// `llm_repositories::read` (no per-user scope on llm_repositories).
 /// Closes 09-llm-repository F-02 (High). The deeper at-rest encryption
 /// (pgcrypto / SecretView) is the follow-up A5-full work.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub struct RepositoryAuthConfig {
     #[serde(default, skip_serializing)]
     pub api_key: Option<String>,
@@ -117,17 +116,24 @@ impl RepositoryAuthConfig {
     pub fn has_credential_for(&self, auth_type: &str) -> bool {
         match auth_type {
             "none" => true,
-            "api_key" => self.api_key.as_deref().is_some_and(|s| !s.trim().is_empty()),
+            "api_key" => self
+                .api_key
+                .as_deref()
+                .is_some_and(|s| !s.trim().is_empty()),
             "bearer_token" => self.token.as_deref().is_some_and(|s| !s.trim().is_empty()),
             "basic_auth" => {
-                self.username.as_deref().is_some_and(|s| !s.trim().is_empty())
-                    && self.password.as_deref().is_some_and(|s| !s.trim().is_empty())
+                self.username
+                    .as_deref()
+                    .is_some_and(|s| !s.trim().is_empty())
+                    && self
+                        .password
+                        .as_deref()
+                        .is_some_and(|s| !s.trim().is_empty())
             }
             _ => false,
         }
     }
 }
-
 
 /// LLM Repository database entity
 /// Represents a row in the llm_repositories table
@@ -147,11 +153,48 @@ pub struct LlmRepository {
     /// check, create-flow probe, update-flow enable-transition
     /// probe, and the explicit form-based test path.
     /// `last_health_check_at` is NULL on rows that have never been
-    /// probed (default status "untested"). UI renders an Alert
-    /// when `last_health_check_status == "unhealthy"`.
+    /// probed (default status "untested"). The UI renders an error
+    /// Alert on "unhealthy" and a warning Alert on "unverified".
     pub last_health_check_at: Option<DateTime<Utc>>,
-    pub last_health_check_status: String, // "untested" | "healthy" | "unhealthy"
+    /// One of `"untested" | "healthy" | "unverified" | "unhealthy"`.
+    ///
+    /// `"unverified"` (added by migration
+    /// `202607200600_llm_repository_unverified_status`) means "reachable,
+    /// but model-serving capability not confirmed for this URL shape". It
+    /// is deliberately NOT `"unhealthy"`: an unconfirmable host must never
+    /// auto-disable a working self-hosted deployment (INV-4). `"healthy"`
+    /// now requires positive evidence — a confirmed model listing — so
+    /// reachability alone can never earn it.
+    pub last_health_check_status: String,
     pub last_health_check_reason: Option<String>,
+}
+
+/// The health outcome vocabulary, as an API-facing enum.
+///
+/// The DB column is text (it also carries the `"untested"` default, which a
+/// probe never writes), so this enum covers exactly the three values a probe
+/// can produce.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RepositoryHealthStatus {
+    /// A model-serving capability was positively confirmed.
+    Healthy,
+    /// Reachable, but the capability could not be confirmed for this URL
+    /// shape. Never auto-disables the repository.
+    Unverified,
+    /// Unreachable, or the credentials were rejected.
+    Unhealthy,
+}
+
+impl RepositoryHealthStatus {
+    /// The `last_health_check_status` column value.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Healthy => "healthy",
+            Self::Unverified => "unverified",
+            Self::Unhealthy => "unhealthy",
+        }
+    }
 }
 
 impl LlmRepository {

@@ -293,22 +293,313 @@ pub fn validate_auth_config_for_update(
     Ok(())
 }
 
-/// Test repository connectivity
-/// Copied exactly from react-test - includes all business logic:
-/// - 10s timeout (reduced from 30s for faster failure on invalid credentials)
-/// - Hugging Face special handling (Bearer vs X-API-Key)
-/// - auth_test_api_endpoint support
-/// - Only HTTP 200 is success
+// =====================================================================
+// Repository kind + model-registry capability probing
+// =====================================================================
+
+/// What a repository URL's **host** says the repository is, and therefore
+/// which model-listing surface proves it can actually serve models.
 ///
-/// NOTE: this validates REST-API reachability/credentials against
-/// `auth_test_api_endpoint`, NOT the git-clone Basic-over-HTTPS path that the
-/// actual model download uses (see the credential callbacks in
-/// `utils/git/service.rs`). For `auth_type == "basic_auth"` the two wire formats
-/// differ, so a green "Test connection" does not by itself guarantee the clone
-/// will authenticate.
+/// Derived exactly the way the download path derives it
+/// (`llm_model/handlers/repo_files.rs`): an exact host match or a
+/// subdomain-suffix match, NEVER a substring of the whole URL. A substring
+/// test routes `https://evil.example/huggingface.co` at the Hugging Face
+/// branch — which is how the stored bearer token used to reach an
+/// attacker-chosen host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RepositoryKind {
+    HuggingFace,
+    Github,
+    /// A host we cannot classify — a self-hosted mirror, a corporate proxy,
+    /// or something that is not a model registry at all. Probed against the
+    /// Hugging-Face-compatible `/api/models` convention on its own origin;
+    /// a host that does not answer with a model listing is reported
+    /// `unverified`, never `healthy` and never auto-disabled.
+    Unknown,
+}
+
+/// Host of `url`, lowercased. `None` when the URL does not parse or carries
+/// no host.
+fn host_of(url: &str) -> Option<String> {
+    url::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(|h| h.to_lowercase()))
+}
+
+/// Classify a repository URL by HOST (exact or subdomain suffix).
+///
+/// Mirrors the `host == suffix || host.ends_with(".{suffix}")` predicate in
+/// `llm_model/handlers/repo_files.rs` — the one place in the tree that
+/// already answers "what is this repository for".
+pub fn repository_kind(url: &str) -> RepositoryKind {
+    let Some(host) = host_of(url) else {
+        return RepositoryKind::Unknown;
+    };
+    let host_is = |suffix: &str| host == suffix || host.ends_with(&format!(".{suffix}"));
+    if host_is("huggingface.co") {
+        RepositoryKind::HuggingFace
+    } else if host_is("github.com") {
+        RepositoryKind::Github
+    } else {
+        RepositoryKind::Unknown
+    }
+}
+
+/// Hugging Face API base for the capability probe.
+///
+/// `LLM_REPOSITORY_HF_API_BASE` is a **debug-only** test seam (mirrors
+/// `LLM_MODEL_HF_API_BASE`, `WEB_SEARCH_BRAVE_ENDPOINT`,
+/// `LIT_SEARCH_*_ENDPOINT`) so a loopback fixture can stand in for
+/// `huggingface.co`. The `#[cfg(debug_assertions)]` attribute physically
+/// removes the lookup from a release build, so it cannot be set in
+/// production.
+fn hf_api_base() -> String {
+    #[cfg(debug_assertions)]
+    if let Ok(v) = std::env::var("LLM_REPOSITORY_HF_API_BASE") {
+        if !v.trim().is_empty() {
+            return v.trim_end_matches('/').to_string();
+        }
+    }
+    "https://huggingface.co".to_string()
+}
+
+/// GitHub REST API base for the capability probe. Debug-only seam, same
+/// contract as [`hf_api_base`].
+fn github_api_base() -> String {
+    #[cfg(debug_assertions)]
+    if let Ok(v) = std::env::var("LLM_REPOSITORY_GITHUB_API_BASE") {
+        if !v.trim().is_empty() {
+            return v.trim_end_matches('/').to_string();
+        }
+    }
+    "https://api.github.com".to_string()
+}
+
+/// The URL whose response proves this repository can serve models.
+///
+/// * Hugging Face — `/api/models?limit=1`, the model listing itself.
+/// * GitHub — the REST API root, whose catalog carries the
+///   `repository_url` template the download path (`fetch_github_files`)
+///   uses to read repo trees. A repository row carries no `owner/repo`
+///   (that arrives per-download), so the host-level capability is the most
+///   that can honestly be asserted here.
+/// * Unknown — the Hugging-Face-compatible `/api/models` convention on the
+///   repository's OWN origin, so a self-hosted mirror can still confirm
+///   itself.
+///
+/// `None` when the URL does not parse well enough to build an origin.
+pub fn capability_probe_url(kind: RepositoryKind, repo_url: &str) -> Option<String> {
+    match kind {
+        RepositoryKind::HuggingFace => Some(format!("{}/api/models?limit=1", hf_api_base())),
+        RepositoryKind::Github => Some(format!("{}/", github_api_base())),
+        RepositoryKind::Unknown => {
+            let origin = url::Url::parse(repo_url)
+                .ok()
+                .map(|u| u.origin().ascii_serialization())
+                .filter(|o| o != "null")?;
+            Some(format!("{origin}/api/models?limit=1"))
+        }
+    }
+}
+
+/// Does this body carry positive evidence that the host can serve models?
+///
+/// A Hugging-Face-style listing is a NON-EMPTY JSON array whose first
+/// element is a model record: a string `id`/`modelId`/`model_id` plus at
+/// least one model-registry marker field. Requiring a marker is what makes
+/// this a SHAPE assertion rather than a "did the body parse" assertion — a
+/// JSON array of arbitrary `{"id": …}` objects is not a model listing.
+///
+/// An EMPTY array is deliberately not accepted: a registry asked for one
+/// model that returns none is not positive evidence, and `unverified` is
+/// the honest outcome for "we looked and could not confirm".
+pub fn is_model_listing(body: &serde_json::Value) -> bool {
+    const MARKERS: &[&str] = &[
+        "modelId",
+        "model_id",
+        "pipeline_tag",
+        "siblings",
+        "tags",
+        "downloads",
+        "likes",
+        "library_name",
+        "lastModified",
+        "last_modified",
+        "sha",
+        "gated",
+        "private",
+        "author",
+    ];
+    let Some(items) = body.as_array() else {
+        return false;
+    };
+    let Some(first) = items.first() else {
+        return false;
+    };
+    let Some(obj) = first.as_object() else {
+        return false;
+    };
+    let has_identifier = ["id", "modelId", "model_id"].iter().any(|k| {
+        obj.get(*k)
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| !s.is_empty())
+    });
+    has_identifier && MARKERS.iter().any(|m| obj.contains_key(*m))
+}
+
+/// Does this body look like the GitHub REST API's endpoint catalog?
+///
+/// The catalog names `repository_url` (the `…/repos/{owner}/{repo}`
+/// template `fetch_github_files` builds on), which is the capability a
+/// GitHub-hosted model repository row actually needs. An HTML page or an
+/// arbitrary JSON object never carries it.
+pub fn is_github_api_catalog(body: &serde_json::Value) -> bool {
+    body.get("repository_url")
+        .and_then(|v| v.as_str())
+        .is_some_and(|s| s.contains("/repos/"))
+}
+
+/// Apply the kind's capability predicate to a decoded body.
+fn confirms_capability(kind: RepositoryKind, body: &serde_json::Value) -> bool {
+    match kind {
+        RepositoryKind::Github => is_github_api_catalog(body),
+        RepositoryKind::HuggingFace | RepositoryKind::Unknown => is_model_listing(body),
+    }
+}
+
+/// The three-way outcome of a repository probe.
+///
+/// The middle variant is the whole point (DEC-12 / INV-4): "we reached the
+/// host and could not confirm a model-serving capability" is neither a lie
+/// (`healthy`) nor grounds for auto-disabling a working self-hosted
+/// deployment (`unhealthy`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProbeVerdict {
+    /// A model-registry capability was positively confirmed.
+    Healthy,
+    /// Reachable, but the model-serving capability could not be confirmed
+    /// for this URL shape. NEVER auto-disables the repository.
+    Unverified { reason: String },
+    /// The host could not be reached, or rejected the credentials.
+    Unhealthy { reason: String },
+}
+
+/// Cap on the capability-response body we will buffer + parse. Mirrors the
+/// `MAX_BODY_BYTES` guard on the repository-file listing path.
+const MAX_CAPABILITY_BODY_BYTES: usize = 1024 * 1024;
+
+/// Map a reqwest transport failure to the historical message vocabulary.
+fn map_transport_error(e: &reqwest::Error) -> String {
+    let error_msg = e.to_string();
+    if error_msg.contains("timeout") {
+        "Connection timed out".to_string()
+    } else if error_msg.contains("dns") {
+        format!("DNS resolution failed: {}", e)
+    } else if error_msg.contains("connection") {
+        format!("Connection failed: {}", e)
+    } else {
+        format!("Network request failed: {}", e)
+    }
+}
+
+/// Read at most [`MAX_CAPABILITY_BODY_BYTES`] of a response body without
+/// trusting `Content-Length` (a chunked response has none).
+async fn read_capped_body(mut response: reqwest::Response) -> Result<Vec<u8>, String> {
+    let mut buf: Vec<u8> = Vec::new();
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                if buf.len() + chunk.len() > MAX_CAPABILITY_BODY_BYTES {
+                    buf.extend_from_slice(&chunk[..MAX_CAPABILITY_BODY_BYTES - buf.len()]);
+                    break;
+                }
+                buf.extend_from_slice(&chunk);
+            }
+            Ok(None) => break,
+            Err(e) => return Err(map_transport_error(&e)),
+        }
+    }
+    Ok(buf)
+}
+
+/// Attach the repository's credentials to an outbound probe request.
+///
+/// The Bearer-vs-`X-API-Key` choice keys off the repository's **host**
+/// (`repository_kind`), not `url.contains("huggingface.co")`. The old
+/// substring test handed the Hugging Face bearer token to any URL merely
+/// CONTAINING that string — e.g. `https://evil.example/huggingface.co`.
+fn apply_auth(
+    mut req_builder: reqwest::RequestBuilder,
+    request: &TestRepositoryConnectionRequest,
+) -> reqwest::RequestBuilder {
+    let Some(auth_config) = &request.auth_config else {
+        return req_builder;
+    };
+    match request.auth_type.as_str() {
+        "api_key" => {
+            if let Some(api_key) = &auth_config.api_key {
+                if repository_kind(&request.url) == RepositoryKind::HuggingFace {
+                    // Hugging Face takes the key as a Bearer token.
+                    req_builder =
+                        req_builder.header("Authorization", format!("Bearer {}", api_key));
+                } else {
+                    // For other APIs, use X-API-Key header (common pattern)
+                    req_builder = req_builder.header("X-API-Key", api_key);
+                }
+            }
+        }
+        "basic_auth" => {
+            if let (Some(username), Some(password)) = (&auth_config.username, &auth_config.password)
+            {
+                req_builder = req_builder.basic_auth(username, Some(password));
+            }
+        }
+        "bearer_token" => {
+            if let Some(token) = &auth_config.token {
+                req_builder = req_builder.header("Authorization", format!("Bearer {}", token));
+            }
+        }
+        _ => {} // "none" - no authentication
+    }
+    req_builder
+}
+
+/// Probe a repository's model-serving CAPABILITY.
+///
+/// Two steps, in order:
+///
+/// 1. **Credentials** — when `auth_test_api_endpoint` is configured, GET it.
+///    Anything other than 200 is `unhealthy`, exactly as before: a stale
+///    token is an actionable failure and must keep auto-disabling the row.
+/// 2. **Capability** — GET the kind's model-listing surface
+///    ([`capability_probe_url`]) and require the body to parse into the
+///    shape a model listing has ([`confirms_capability`]).
+///
+/// Outcome vocabulary:
+///
+/// | observation | verdict |
+/// |---|---|
+/// | transport failure (DNS / connect / timeout) | `unhealthy` |
+/// | HTTP 401 / 403 | `unhealthy` |
+/// | 2xx whose body confirms the capability | `healthy` |
+/// | anything else (2xx wrong shape, 404, 429, 5xx) | `unverified` |
+///
+/// The last row is deliberately NOT `unhealthy`: "we reached it and could
+/// not confirm" must never auto-disable a working self-hosted deployment
+/// (INV-4). Reachability alone is likewise never `healthy` — a web server
+/// answering 200 to every GET (a Vite dev server's SPA fallback, the
+/// reported `http://127.0.0.1:<vite>/models` case) lands on `unverified`.
+///
+/// NOTE: this still validates REST-API reachability/credentials, NOT the
+/// git-clone Basic-over-HTTPS path that the actual model download uses (see
+/// the credential callbacks in `utils/git/service.rs`). For
+/// `auth_type == "basic_auth"` the two wire formats differ, so a green
+/// "Test connection" does not by itself guarantee the clone will
+/// authenticate. What changed is the outcome vocabulary: `healthy` now
+/// requires positive evidence rather than a socket answering 200.
 pub async fn test_repository_connectivity(
     request: &TestRepositoryConnectionRequest,
-) -> Result<(), String> {
+) -> ProbeVerdict {
     // Create a reqwest client with timeout (10s for faster feedback).
     // A non-empty User-Agent is REQUIRED: GitHub's REST API (the seeded GitHub
     // test endpoint https://api.github.com/user) rejects any UA-less request with
@@ -319,91 +610,129 @@ pub async fn test_repository_connectivity(
     // loopback / RFC1918 / link-local IMDS, and closes the redirect-to-internal
     // bypass). The 10s timeout + User-Agent are applied per-request below since
     // the validated-client builder owns the resolver/redirect config.
-    let client = crate::utils::url_validator::build_validated_client(
+    let client = match crate::utils::url_validator::build_validated_client(
         crate::utils::url_validator::OutboundUrlPolicy::PUBLIC_HTTP_OR_HTTPS,
-    )
-    .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
-
-    // Determine the test URL - use auth_test_api_endpoint if provided, otherwise use the main URL
-    let test_url = if let Some(auth_config) = &request.auth_config {
-        if let Some(ref test_endpoint) = auth_config.auth_test_api_endpoint {
-            if !test_endpoint.trim().is_empty() {
-                test_endpoint
-            } else {
-                &request.url
-            }
-        } else {
-            &request.url
+    ) {
+        Ok(c) => c,
+        Err(e) => {
+            return ProbeVerdict::Unhealthy {
+                reason: format!("Failed to create HTTP client: {}", e),
+            };
         }
-    } else {
-        &request.url
     };
 
-    // Build the request with authentication. Timeout + UA are per-request
-    // (the validated client owns the resolver/redirect config). GitHub's REST
-    // API rejects UA-less requests with 403 before checking the token.
-    let mut req_builder = client
-        .get(test_url)
-        .timeout(std::time::Duration::from_secs(10))
-        .header(
-            reqwest::header::USER_AGENT,
-            concat!("ziee/", env!("CARGO_PKG_VERSION")),
+    let get = |url: &str| {
+        // Timeout + UA are per-request (the validated client owns the
+        // resolver/redirect config). GitHub's REST API rejects UA-less
+        // requests with 403 before checking the token.
+        let builder = client
+            .get(url)
+            .timeout(std::time::Duration::from_secs(10))
+            .header(
+                reqwest::header::USER_AGENT,
+                concat!("ziee/", env!("CARGO_PKG_VERSION")),
+            );
+        apply_auth(builder, request)
+    };
+
+    // ── Step 1: credentials ──────────────────────────────────────────
+    // Only runs when an explicit auth-test endpoint is configured (the
+    // seeded Hugging Face `whoami-v2` / GitHub `/user` rows). Its
+    // semantics are UNCHANGED: anything but 200 is a real failure.
+    let credential_endpoint = request
+        .auth_config
+        .as_ref()
+        .and_then(|c| c.auth_test_api_endpoint.as_ref())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
+
+    if let Some(endpoint) = credential_endpoint {
+        tracing::info!(
+            "Testing repository credentials against: {}",
+            redact_url_userinfo(endpoint)
         );
-
-    tracing::info!("Testing connection to: {}", redact_url_userinfo(test_url));
-
-    if let Some(auth_config) = &request.auth_config {
-        match request.auth_type.as_str() {
-            "api_key" => {
-                if let Some(api_key) = &auth_config.api_key {
-                    // For Hugging Face, use Bearer token format
-                    if request.url.contains("huggingface.co") {
-                        req_builder =
-                            req_builder.header("Authorization", format!("Bearer {}", api_key));
-                    } else {
-                        // For other APIs, use X-API-Key header (common pattern)
-                        req_builder = req_builder.header("X-API-Key", api_key);
-                    }
-                }
+        match get(endpoint).send().await {
+            Ok(response) if response.status() == 200 => {}
+            Ok(response) => {
+                return ProbeVerdict::Unhealthy {
+                    reason: format!("HTTP request failed with status: {}", response.status()),
+                };
             }
-            "basic_auth" => {
-                if let (Some(username), Some(password)) =
-                    (&auth_config.username, &auth_config.password)
-                {
-                    req_builder = req_builder.basic_auth(username, Some(password));
-                }
+            Err(e) => {
+                return ProbeVerdict::Unhealthy {
+                    reason: map_transport_error(&e),
+                };
             }
-            "bearer_token" => {
-                if let Some(token) = &auth_config.token {
-                    req_builder = req_builder.header("Authorization", format!("Bearer {}", token));
-                }
-            }
-            _ => {} // "none" - no authentication
         }
     }
 
-    // Make the request
-    match req_builder.send().await {
-        Ok(response) => {
-            let status = response.status();
-            if status == 200 {
-                // Only consider HTTP 200 as successful
-                Ok(())
-            } else {
-                Err(format!("HTTP request failed with status: {}", status))
-            }
-        }
+    // ── Step 2: model-registry capability ────────────────────────────
+    let kind = repository_kind(&request.url);
+    let Some(capability_url) = capability_probe_url(kind, &request.url) else {
+        return ProbeVerdict::Unverified {
+            reason: format!(
+                "Could not derive a model-listing URL from {}",
+                redact_url_userinfo(&request.url)
+            ),
+        };
+    };
+
+    tracing::info!(
+        "Testing model-registry capability at: {}",
+        redact_url_userinfo(&capability_url)
+    );
+
+    let response = match get(&capability_url).send().await {
+        Ok(r) => r,
         Err(e) => {
-            let error_msg = e.to_string();
-            if error_msg.contains("timeout") {
-                Err("Connection timed out".to_string())
-            } else if error_msg.contains("dns") {
-                Err(format!("DNS resolution failed: {}", e))
-            } else if error_msg.contains("connection") {
-                Err(format!("Connection failed: {}", e))
-            } else {
-                Err(format!("Network request failed: {}", e))
-            }
+            return ProbeVerdict::Unhealthy {
+                reason: map_transport_error(&e),
+            };
+        }
+    };
+
+    let status = response.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        // A credential failure is actionable and keeps its historical
+        // treatment (record unhealthy → auto-disable).
+        return ProbeVerdict::Unhealthy {
+            reason: format!("HTTP request failed with status: {}", status),
+        };
+    }
+    if !status.is_success() {
+        return ProbeVerdict::Unverified {
+            reason: format!(
+                "{} did not serve a model listing (HTTP {})",
+                redact_url_userinfo(&capability_url),
+                status
+            ),
+        };
+    }
+
+    let body = match read_capped_body(response).await {
+        Ok(b) => b,
+        Err(reason) => return ProbeVerdict::Unverified { reason },
+    };
+    let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body) else {
+        return ProbeVerdict::Unverified {
+            reason: format!(
+                "{} answered {} but the response is not JSON, so no model listing could be \
+                 confirmed",
+                redact_url_userinfo(&capability_url),
+                status
+            ),
+        };
+    };
+    if confirms_capability(kind, &json) {
+        ProbeVerdict::Healthy
+    } else {
+        ProbeVerdict::Unverified {
+            reason: format!(
+                "{} answered {} but the response is not a model listing, so this URL could not \
+                 be confirmed as a model repository",
+                redact_url_userinfo(&capability_url),
+                status
+            ),
         }
     }
 }
@@ -432,5 +761,177 @@ mod tests {
             .expect_err("over-cap name must be rejected");
         assert_eq!(err.status_code(), 400);
         assert_eq!(err.error_code(), "VALIDATION_ERROR");
+    }
+
+    // ── TEST-20 (ITEM-13) ────────────────────────────────────────────
+    // Host-kind derivation is a HOST-suffix match, not a substring test.
+    // The substring test is what handed the stored Hugging Face bearer
+    // token to `https://evil.example/huggingface.co`. True positives ship
+    // in the SAME test so a rejection that passes because the predicate
+    // rejects everything cannot go unnoticed.
+    #[test]
+    fn repository_kind_matches_host_suffix_not_substring() {
+        // True positives — exact host and subdomain.
+        for url in [
+            "https://huggingface.co",
+            "https://huggingface.co/custom",
+            "https://sub.huggingface.co/api/models",
+            "https://HuggingFace.CO/",
+        ] {
+            assert_eq!(
+                repository_kind(url),
+                RepositoryKind::HuggingFace,
+                "expected HuggingFace for {url:?}"
+            );
+        }
+
+        // The bug: the string appears in the URL but NOT as the host.
+        for url in [
+            "https://evil.example/huggingface.co",
+            "https://huggingface.co.evil.example",
+            "https://huggingface.co.evil.example/api/models",
+            "https://nothuggingface.co",
+        ] {
+            assert_ne!(
+                repository_kind(url),
+                RepositoryKind::HuggingFace,
+                "must NOT route the Hugging Face bearer token at {url:?}"
+            );
+        }
+
+        // GitHub gets the same treatment (exact + subdomain + negatives).
+        assert_eq!(
+            repository_kind("https://github.com"),
+            RepositoryKind::Github
+        );
+        assert_eq!(
+            repository_kind("https://api.github.com/user"),
+            RepositoryKind::Github
+        );
+        assert_ne!(
+            repository_kind("https://evil.example/github.com"),
+            RepositoryKind::Github
+        );
+        assert_ne!(
+            repository_kind("https://github.com.evil.example"),
+            RepositoryKind::Github
+        );
+
+        // Anything else is Unknown — including an unparseable URL.
+        assert_eq!(
+            repository_kind("https://models.internal.corp"),
+            RepositoryKind::Unknown
+        );
+        assert_eq!(
+            repository_kind("http://127.0.0.1:1520/models"),
+            RepositoryKind::Unknown
+        );
+        assert_eq!(repository_kind("not a url"), RepositoryKind::Unknown);
+    }
+
+    /// The auth-header choice must follow the SAME host predicate, or the
+    /// substring bug is only half-fixed. Locks the branch condition.
+    #[test]
+    fn hugging_face_bearer_branch_follows_host_not_substring() {
+        assert!(
+            repository_kind("https://huggingface.co/custom") == RepositoryKind::HuggingFace,
+            "canonical host takes the Bearer branch"
+        );
+        assert!(
+            repository_kind("https://evil.example/huggingface.co") != RepositoryKind::HuggingFace,
+            "a path segment must take the X-API-Key branch, never Bearer"
+        );
+    }
+
+    // ── TEST-21 (ITEM-11) ────────────────────────────────────────────
+    // The capability predicate is a SHAPE assertion, not a "did the body
+    // parse as JSON" assertion.
+    #[test]
+    fn model_listing_predicate_accepts_real_payload_and_rejects_lookalikes() {
+        // A trimmed but faithful Hugging Face `/api/models` payload.
+        let hf: serde_json::Value = serde_json::from_str(
+            r#"[
+                {
+                    "_id": "621ffdc036468d709f17434d",
+                    "id": "openai-community/gpt2",
+                    "likes": 2743,
+                    "private": false,
+                    "downloads": 12345678,
+                    "tags": ["transformers", "gpt2", "text-generation"],
+                    "pipeline_tag": "text-generation",
+                    "modelId": "openai-community/gpt2"
+                }
+            ]"#,
+        )
+        .unwrap();
+        assert!(is_model_listing(&hf), "a real HF model listing is accepted");
+
+        // An HTML document — the Vite dev-server SPA fallback shape. It is
+        // not even JSON, so it can never reach the predicate as a value;
+        // the string-as-JSON form is the closest representable case.
+        let html = serde_json::Value::String(
+            "<!doctype html><html><body><div id=\"root\"></div></body></html>".to_string(),
+        );
+        assert!(!is_model_listing(&html), "an HTML document is rejected");
+
+        // An empty object.
+        assert!(
+            !is_model_listing(&serde_json::json!({})),
+            "an empty object is rejected"
+        );
+        // The historical `mock_ok` body, which used to be reported healthy.
+        assert!(!is_model_listing(&serde_json::json!({"ok": true})));
+
+        // A JSON ARRAY of non-model objects — parses fine, has ids, but
+        // carries no model-registry marker.
+        assert!(
+            !is_model_listing(&serde_json::json!([{"id": "a"}, {"id": "b"}])),
+            "an array of bare id objects is not a model listing"
+        );
+        assert!(
+            !is_model_listing(&serde_json::json!([{"title": "not a model"}])),
+            "an array of arbitrary objects is not a model listing"
+        );
+        // An EMPTY array is not positive evidence.
+        assert!(!is_model_listing(&serde_json::json!([])));
+    }
+
+    #[test]
+    fn github_catalog_predicate_accepts_rest_root_and_rejects_lookalikes() {
+        let catalog = serde_json::json!({
+            "current_user_url": "https://api.github.com/user",
+            "repository_url": "https://api.github.com/repos/{owner}/{repo}",
+        });
+        assert!(is_github_api_catalog(&catalog));
+        assert!(!is_github_api_catalog(&serde_json::json!({})));
+        assert!(!is_github_api_catalog(
+            &serde_json::json!({"repository_url": 7})
+        ));
+        assert!(!is_github_api_catalog(&serde_json::json!({"ok": true})));
+    }
+
+    #[test]
+    fn capability_url_targets_the_kinds_listing_surface() {
+        assert_eq!(
+            capability_probe_url(RepositoryKind::HuggingFace, "https://huggingface.co/custom")
+                .as_deref(),
+            Some("https://huggingface.co/api/models?limit=1"),
+        );
+        assert_eq!(
+            capability_probe_url(RepositoryKind::Github, "https://github.com").as_deref(),
+            Some("https://api.github.com/"),
+        );
+        // Unknown hosts are probed on their OWN origin, so a self-hosted
+        // mirror can confirm itself — and the reported Vite case resolves
+        // to that dev server's `/api/models`, which is not a listing.
+        assert_eq!(
+            capability_probe_url(RepositoryKind::Unknown, "http://127.0.0.1:1520/models")
+                .as_deref(),
+            Some("http://127.0.0.1:1520/api/models?limit=1"),
+        );
+        assert_eq!(
+            capability_probe_url(RepositoryKind::Unknown, "not a url"),
+            None
+        );
     }
 }

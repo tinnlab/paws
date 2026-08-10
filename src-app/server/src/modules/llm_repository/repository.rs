@@ -471,10 +471,12 @@ pub async fn find_llm_repository_by_url(
 /// test path. Stamps `last_health_check_at = CURRENT_TIMESTAMP` so the UI can
 /// render a relative timestamp on the Alert.
 ///
-/// Status must be one of `"healthy"` | `"unhealthy"` — the CHECK
-/// constraint also accepts `"untested"`, but we never write that
+/// Status must be one of `"healthy"` | `"unverified"` | `"unhealthy"` —
+/// the CHECK constraint also accepts `"untested"`, but we never write that
 /// value here (it's the column default). `reason` is required on
-/// unhealthy and ignored on healthy (callers should pass `None`).
+/// `unverified` / `unhealthy` and ignored on healthy (callers should pass
+/// `None`). Prefer going through `HealthOps`, whose three semantic methods
+/// make an invalid status string unrepresentable.
 pub async fn record_health_check(
     pool: &PgPool,
     repo_id: Uuid,

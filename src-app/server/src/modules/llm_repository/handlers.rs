@@ -21,7 +21,7 @@ use std::sync::Arc;
 use super::{
     connection_health::{self, LlmRepositoryWithHealthWarning},
     events::LlmRepositoryEvent,
-    models::LlmRepository,
+    models::{LlmRepository, RepositoryHealthStatus},
     permissions::*,
     types::{
         CreateLlmRepositoryRequest, LlmRepositoryListResponse, TestRepositoryConnectionRequest,
@@ -91,7 +91,8 @@ pub async fn get_repository(
     _auth: RequirePermissions<(LlmRepositoriesRead,)>,
     Path(repository_id): Path<Uuid>,
 ) -> ApiResult<Json<LlmRepository>> {
-    let repository = Repos.llm_repository
+    let repository = Repos
+        .llm_repository
         .get_by_id(repository_id)
         .await
         .map_err(|e| {
@@ -211,7 +212,8 @@ pub async fn update_repository(
     }
 
     // Get current repository to validate auth config updates
-    let current_repository = Repos.llm_repository
+    let current_repository = Repos
+        .llm_repository
         .get_by_id(repository_id)
         .await
         .map_err(|e| {
@@ -237,9 +239,8 @@ pub async fn update_repository(
     // bad api_key, but that exfiltrates only to the legitimate (still
     // pinned) HF URL.
     if current_repository.built_in {
-        let touches_immutable = request.url.is_some()
-            || request.auth_type.is_some()
-            || request.name.is_some();
+        let touches_immutable =
+            request.url.is_some() || request.auth_type.is_some() || request.name.is_some();
         if touches_immutable {
             return Err(AppError::bad_request(
                 "BUILT_IN_REPOSITORY",
@@ -257,7 +258,8 @@ pub async fn update_repository(
     let old_enabled = current_repository.enabled;
 
     // Update repository
-    let updated_repository = Repos.llm_repository
+    let updated_repository = Repos
+        .llm_repository
         .update(repository_id, request)
         .await
         .map_err(|e| {
@@ -338,7 +340,11 @@ pub async fn delete_repository(
         .get_by_id(repository_id)
         .await
         .map_err(|e| {
-            tracing::error!("Failed to fetch repository {} for delete: {}", repository_id, e);
+            tracing::error!(
+                "Failed to fetch repository {} for delete: {}",
+                repository_id,
+                e
+            );
             AppError::internal_error("Database operation failed")
         })?
         .ok_or_else(|| AppError::not_found("Repository"))?
@@ -350,14 +356,21 @@ pub async fn delete_repository(
             // Emit event
             event_bus
                 .emit_async(LlmRepositoryEvent::deleted(repository_id, repository_name).into());
-            sync_publish(SyncEntity::LlmRepository, SyncAction::Delete, repository_id, Audience::perm::<LlmRepositoriesRead>(), origin.0);
+            sync_publish(
+                SyncEntity::LlmRepository,
+                SyncAction::Delete,
+                repository_id,
+                Audience::perm::<LlmRepositoriesRead>(),
+                origin.0,
+            );
             Ok((StatusCode::NO_CONTENT, StatusCode::NO_CONTENT))
         }
         Ok(Ok(false)) => Err(AppError::not_found("Repository").into()),
         Ok(Err(error_message)) => {
             tracing::error!(
                 "Cannot delete repository {}: {}",
-                repository_id, error_message
+                repository_id,
+                error_message
             );
             Err(
                 AppError::bad_request("INVALID_OPERATION", "Cannot delete built-in repository")
@@ -398,27 +411,42 @@ pub async fn test_repository_connection(
             Json(TestRepositoryConnectionResponse {
                 success: false,
                 message: "Invalid URL format".to_string(),
+                status: RepositoryHealthStatus::Unhealthy,
             }),
         ));
     }
 
-    // Test the repository connection
-    match utils::test_repository_connectivity(&request).await {
-        Ok(()) => Ok((
-            StatusCode::OK,
-            Json(TestRepositoryConnectionResponse {
-                success: true,
-                message: format!("Connection to {} successful", request.name),
-            }),
-        )),
-        Err(e) => Ok((
-            StatusCode::OK,
-            Json(TestRepositoryConnectionResponse {
-                success: false,
-                message: format!("Connection to {} failed: {}", request.name, e),
-            }),
-        )),
-    }
+    // Test the repository connection. Three-way: only a CONFIRMED model
+    // listing reports success.
+    let verdict = utils::test_repository_connectivity(&request).await;
+    let (success, status, message) = match &verdict {
+        utils::ProbeVerdict::Healthy => (
+            true,
+            RepositoryHealthStatus::Healthy,
+            format!("Connection to {} successful", request.name),
+        ),
+        utils::ProbeVerdict::Unverified { reason } => (
+            false,
+            RepositoryHealthStatus::Unverified,
+            format!(
+                "Reached {} but could not confirm it serves models: {}",
+                request.name, reason
+            ),
+        ),
+        utils::ProbeVerdict::Unhealthy { reason } => (
+            false,
+            RepositoryHealthStatus::Unhealthy,
+            format!("Connection to {} failed: {}", request.name, reason),
+        ),
+    };
+    Ok((
+        StatusCode::OK,
+        Json(TestRepositoryConnectionResponse {
+            success,
+            message,
+            status,
+        }),
+    ))
 }
 
 /// Documentation for test_repository_connection endpoint
@@ -517,6 +545,7 @@ pub async fn test_repository_connection_by_id(
                 Json(TestRepositoryConnectionResponse {
                     success: false,
                     message: "Invalid URL format".to_string(),
+                    status: RepositoryHealthStatus::Unhealthy,
                 }),
             ));
         }
@@ -550,9 +579,7 @@ pub async fn test_repository_connection_by_id(
         // type. Compares against `old_auth_type` (the snapshot)
         // because `working.auth_type` was already overwritten above.
         working.auth_config = match overrides.auth_type.as_deref() {
-            Some(new_type) if new_type != old_auth_type.as_str() => {
-                merged.pruned_for(new_type)
-            }
+            Some(new_type) if new_type != old_auth_type.as_str() => merged.pruned_for(new_type),
             _ => merged,
         };
     }
@@ -561,14 +588,13 @@ pub async fn test_repository_connection_by_id(
     //     handler validates this before persisting; this path
     //     bypasses persistence, so we run the same allowlist here so
     //     the probe can't be steered at RFC1918 / IMDS / loopback.
-    if let Err(e) = utils::validate_test_endpoint(
-        &working.auth_config.auth_test_api_endpoint,
-    ) {
+    if let Err(e) = utils::validate_test_endpoint(&working.auth_config.auth_test_api_endpoint) {
         return Ok((
             StatusCode::OK,
             Json(TestRepositoryConnectionResponse {
                 success: false,
                 message: format!("Invalid auth_test_api_endpoint: {}", e),
+                status: RepositoryHealthStatus::Unhealthy,
             }),
         ));
     }
@@ -584,13 +610,9 @@ pub async fn test_repository_connection_by_id(
     //    auto-disables + emits `auto_disabled`. The helper's branch
     //    matrix is unit-tested in `connection_health.rs::tests`.
     let ops = connection_health::ProductionHealthOps::new(&event_bus);
-    let outcome = connection_health::record_test_outcome(
-        repository_id,
-        old_enabled,
-        probe_result,
-        &ops,
-    )
-    .await?;
+    let outcome =
+        connection_health::record_test_outcome(repository_id, old_enabled, probe_result, &ops)
+            .await?;
 
     // 5. If the helper DIDN'T already emit `auto_disabled` (success
     //    path, failure-on-already-disabled, OR failure-on-enabled
@@ -631,20 +653,27 @@ pub async fn test_repository_connection_by_id(
         origin.0,
     );
 
-    let message = if outcome.success {
-        format!("Connection to {} successful", working_name)
-    } else {
-        format!(
+    let message = match outcome.status {
+        RepositoryHealthStatus::Healthy => {
+            format!("Connection to {} successful", working_name)
+        }
+        RepositoryHealthStatus::Unverified => format!(
+            "Reached {} but could not confirm it serves models: {}",
+            working_name,
+            outcome.reason.as_deref().unwrap_or("(unknown)")
+        ),
+        RepositoryHealthStatus::Unhealthy => format!(
             "Connection to {} failed: {}",
             working_name,
             outcome.reason.as_deref().unwrap_or("(unknown)")
-        )
+        ),
     };
     Ok((
         StatusCode::OK,
         Json(TestRepositoryConnectionResponse {
             success: outcome.success,
             message,
+            status: outcome.status,
         }),
     ))
 }

@@ -4,7 +4,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::models::{LlmRepository, RepositoryAuthConfig};
+use super::models::{LlmRepository, RepositoryAuthConfig, RepositoryHealthStatus};
 
 // =====================================================
 // Request Types
@@ -59,6 +59,12 @@ pub struct LlmRepositoryListResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TestRepositoryConnectionResponse {
+    /// True ONLY when a model-serving capability was positively confirmed.
+    /// A reachable-but-unconfirmable host reports `success: false` with
+    /// `status: "unverified"` — reachability alone is not a pass.
     pub success: bool,
     pub message: String,
+    /// The three-way probe outcome. `unverified` is distinct from
+    /// `unhealthy`: it never auto-disables the repository.
+    pub status: RepositoryHealthStatus,
 }

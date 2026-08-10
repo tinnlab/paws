@@ -16,9 +16,16 @@
 //!    `enabled: false` and surface a `connection_warning` so the row
 //!    is preserved for the user to edit + retry.
 //! 3. Boot — every enabled repository is probed on server startup;
-//!    failures flip `enabled = false` automatically so a stale token
-//!    on HuggingFace or GitHub doesn't surface as confusing download
-//!    failures later.
+//!    genuine failures flip `enabled = false` automatically so a stale
+//!    token on HuggingFace or GitHub doesn't surface as confusing
+//!    download failures later.
+//!
+//! The probe is three-way ([`ProbeVerdict`]): `healthy` requires a
+//! CONFIRMED model listing, `unhealthy` means unreachable/rejected, and
+//! `unverified` means "reachable, capability not confirmed". Only
+//! `unhealthy` may auto-disable a repository (INV-4) — folding
+//! `unverified` into it would disable working self-hosted deployments,
+//! and folding it into `healthy` would restore the lie.
 //!
 //! Unlike the MCP analog, this module does NOT skip "built-in" rows:
 //! the seed HuggingFace + GitHub repos are exactly the rows that
@@ -31,7 +38,7 @@
 //! refactored around two seams so the Tier-1 unit tests can drive
 //! every branch without a Postgres or a network mock:
 //!
-//! - **`ProbeFn`** — `async Fn(&LlmRepository) -> Result<(), ProbeFailure>`.
+//! - **`ProbeFn`** — `async Fn(&LlmRepository) -> ProbeVerdict`.
 //!   Production code passes the live `probe` (which wraps the existing
 //!   `test_repository_connectivity` HTTP call); tests pass a closure
 //!   that returns a canned outcome.
@@ -60,11 +67,11 @@ use uuid::Uuid;
 /// `fn(&LlmRepository) -> impl Future + '_` and `|r| async { ... }`
 /// closures. One `Box::pin` per call — cost is negligible against the
 /// HTTP round-trip the production probe makes.
-pub type ProbeFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<(), ProbeFailure>> + Send + 'a>>;
+pub type ProbeFuture<'a> = Pin<Box<dyn Future<Output = ProbeVerdict> + Send + 'a>>;
 
-use super::models::LlmRepository;
+use super::models::{LlmRepository, RepositoryHealthStatus};
 use super::types::TestRepositoryConnectionRequest;
+pub use super::utils::ProbeVerdict;
 use super::utils::test_repository_connectivity;
 
 /// Structured probe failure carrying the underlying reason so the
@@ -72,9 +79,8 @@ use super::utils::test_repository_connectivity;
 /// in the UI toast).
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct ProbeFailure {
-    /// Human-readable reason — taken verbatim from
-    /// `test_repository_connectivity`'s `Err(String)` (timeout / 401 /
-    /// DNS / etc.).
+    /// Human-readable reason — taken verbatim from the probe's
+    /// [`ProbeVerdict::Unhealthy`] reason (timeout / 401 / DNS / etc.).
     pub reason: String,
 }
 
@@ -111,12 +117,17 @@ pub struct LlmRepositoryWithHealthWarning {
 /// which records the calls.
 ///
 /// The trait deliberately does NOT expose the raw `record_health_check`
-/// shape (status as `&str`, etc.) — instead it offers two semantic
-/// methods (`record_healthy` / `record_unhealthy`) so the enforcement
-/// code can't accidentally pass an invalid status string.
+/// shape (status as `&str`, etc.) — instead it offers three semantic
+/// methods (`record_healthy` / `record_unverified` / `record_unhealthy`)
+/// so the enforcement code can't accidentally pass an invalid status
+/// string.
 #[async_trait]
 pub trait HealthOps: Send + Sync {
     async fn record_healthy(&self, repo_id: Uuid);
+    /// Record "reachable, capability not confirmed". MUST NOT be paired
+    /// with `disable_repository` at any call site — that is the INV-4
+    /// guarantee this method exists to make legible.
+    async fn record_unverified(&self, repo_id: Uuid, reason: &str);
     async fn record_unhealthy(&self, repo_id: Uuid, reason: &str);
     async fn disable_repository(&self, repo_id: Uuid) -> Result<(), AppError>;
     async fn get_repository(&self, repo_id: Uuid) -> Result<Option<LlmRepository>, AppError>;
@@ -145,6 +156,24 @@ impl<'a> HealthOps for ProductionHealthOps<'a> {
                 error = ?e,
                 repo_id = %repo_id,
                 "llm_repo::health: failed to record healthy status (non-fatal)",
+            );
+        }
+    }
+
+    async fn record_unverified(&self, repo_id: Uuid, reason: &str) {
+        if let Err(e) = Repos
+            .llm_repository
+            .record_health_check(
+                repo_id,
+                RepositoryHealthStatus::Unverified.as_str(),
+                Some(reason),
+            )
+            .await
+        {
+            tracing::warn!(
+                error = ?e,
+                repo_id = %repo_id,
+                "llm_repo::health: failed to record unverified status (non-fatal)",
             );
         }
     }
@@ -180,34 +209,32 @@ impl<'a> HealthOps for ProductionHealthOps<'a> {
     }
 
     fn emit_auto_disabled(&self, repo_id: Uuid, reason: String) {
-        self.event_bus.emit_async(
-            super::events::LlmRepositoryEvent::auto_disabled(repo_id, reason).into(),
-        );
+        self.event_bus
+            .emit_async(super::events::LlmRepositoryEvent::auto_disabled(repo_id, reason).into());
     }
 }
 
 // =====================================================================
-// ProbeFn — async Fn(&LlmRepository) -> Result<(), ProbeFailure>.
+// ProbeFn — async Fn(&LlmRepository) -> ProbeVerdict.
 // =====================================================================
 
-/// Probe an LLM repository's connection. Returns `Ok(())` on a 200 OK
-/// from the configured auth-test endpoint; `Err(ProbeFailure)`
-/// otherwise (timeout, DNS, non-200, etc.).
+/// Probe an LLM repository's model-serving capability. Returns
+/// [`ProbeVerdict::Healthy`] only when a model listing was positively
+/// confirmed; [`ProbeVerdict::Unverified`] when the host answered but the
+/// capability could not be confirmed; [`ProbeVerdict::Unhealthy`] when it
+/// could not be reached or rejected the credentials.
 ///
 /// Reuses the existing `test_repository_connectivity` so the probe is
 /// byte-for-byte the same code path the explicit "Test Connection"
 /// button hits — a green button guarantees a green probe.
-pub async fn probe(repository: &LlmRepository) -> Result<(), ProbeFailure> {
+pub async fn probe(repository: &LlmRepository) -> ProbeVerdict {
     let request = TestRepositoryConnectionRequest {
         name: repository.name.clone(),
         url: repository.url.clone(),
         auth_type: repository.auth_type.clone(),
         auth_config: Some(repository.auth_config.clone()),
     };
-    match test_repository_connectivity(&request).await {
-        Ok(()) => Ok(()),
-        Err(reason) => Err(ProbeFailure { reason }),
-    }
+    test_repository_connectivity(&request).await
 }
 
 // =====================================================================
@@ -248,8 +275,24 @@ where
     }
 
     match probe_fn(&repository).await {
-        Ok(()) => {
-            ops.record_healthy(repository.id).await;
+        // INV-4: an unconfirmable host is recorded honestly but is NEVER
+        // downgraded to disabled — that would take a working self-hosted
+        // deployment offline the moment this shipped. Both non-failing
+        // verdicts therefore share the "keep the row enabled" path; they
+        // differ only in the status they record.
+        verdict @ (ProbeVerdict::Healthy | ProbeVerdict::Unverified { .. }) => {
+            match &verdict {
+                ProbeVerdict::Unverified { reason } => {
+                    tracing::info!(
+                        repo_id = %repository.id,
+                        reason = %reason,
+                        "llm_repo::health: create-time probe could not confirm a model listing; \
+                         recording unverified (repository stays enabled)",
+                    );
+                    ops.record_unverified(repository.id, reason).await;
+                }
+                _ => ops.record_healthy(repository.id).await,
+            }
             // Re-fetch so the response carries the recorded health
             // timestamp + status fields.
             let refetched = ops
@@ -261,7 +304,8 @@ where
                 connection_warning: None,
             })
         }
-        Err(failure) => {
+        ProbeVerdict::Unhealthy { reason } => {
+            let failure = ProbeFailure { reason };
             tracing::warn!(
                 repo_id = %repository.id,
                 reason = %failure.reason,
@@ -270,12 +314,9 @@ where
             ops.disable_repository(repository.id).await?;
             ops.record_unhealthy(repository.id, &failure.reason).await;
             ops.emit_auto_disabled(repository.id, failure.reason.clone());
-            let refetched = ops
-                .get_repository(repository.id)
-                .await?
-                .ok_or_else(|| {
-                    AppError::internal_error("Repository vanished after auto-disable")
-                })?;
+            let refetched = ops.get_repository(repository.id).await?.ok_or_else(|| {
+                AppError::internal_error("Repository vanished after auto-disable")
+            })?;
             Ok(LlmRepositoryWithHealthWarning {
                 repository: refetched,
                 connection_warning: Some(failure),
@@ -302,13 +343,8 @@ pub async fn enforce_on_update_transition(
     event_bus: &EventBus,
 ) -> Result<LlmRepository, AppError> {
     let ops = ProductionHealthOps::new(event_bus);
-    enforce_on_update_transition_with_ops(
-        persisted,
-        old_enabled,
-        &ops,
-        |r| Box::pin(probe(r)),
-    )
-    .await
+    enforce_on_update_transition_with_ops(persisted, old_enabled, &ops, |r| Box::pin(probe(r)))
+        .await
 }
 
 /// Testable inner — see module-level docs on `ProbeFn` / `HealthOps`.
@@ -328,15 +364,26 @@ where
     }
 
     match probe_fn(&persisted).await {
-        Ok(()) => {
-            ops.record_healthy(persisted.id).await;
-            let refetched = ops
-                .get_repository(persisted.id)
-                .await?
-                .unwrap_or(persisted);
+        // A capability we could not confirm must NOT block the enable —
+        // that would make a self-hosted repository un-enableable (INV-4).
+        verdict @ (ProbeVerdict::Healthy | ProbeVerdict::Unverified { .. }) => {
+            match &verdict {
+                ProbeVerdict::Unverified { reason } => {
+                    tracing::info!(
+                        repo_id = %persisted.id,
+                        reason = %reason,
+                        "llm_repo::health: enable-transition probe could not confirm a model \
+                         listing; recording unverified (enable allowed)",
+                    );
+                    ops.record_unverified(persisted.id, reason).await;
+                }
+                _ => ops.record_healthy(persisted.id).await,
+            }
+            let refetched = ops.get_repository(persisted.id).await?.unwrap_or(persisted);
             Ok(refetched)
         }
-        Err(failure) => {
+        ProbeVerdict::Unhealthy { reason } => {
+            let failure = ProbeFailure { reason };
             tracing::warn!(
                 repo_id = %persisted.id,
                 reason = %failure.reason,
@@ -365,7 +412,13 @@ where
 /// the handler maps this into a `TestRepositoryConnectionResponse`.
 #[derive(Debug, Clone)]
 pub struct TestOutcome {
+    /// True ONLY on a confirmed capability. An `unverified` outcome is
+    /// NOT a success — reporting it as one is exactly the lie this branch
+    /// exists to remove.
     pub success: bool,
+    /// The recorded health status, so the handler can surface the third
+    /// outcome distinctly instead of collapsing it into success/failure.
+    pub status: RepositoryHealthStatus,
     pub reason: Option<String>,
     /// True when the helper already emitted `auto_disabled` (failure
     /// on an enabled row AND `disable_repository` itself succeeded).
@@ -389,19 +442,33 @@ pub struct TestOutcome {
 pub async fn record_test_outcome<H: HealthOps>(
     repo_id: uuid::Uuid,
     was_enabled: bool,
-    probe_result: Result<(), ProbeFailure>,
+    probe_result: ProbeVerdict,
     ops: &H,
 ) -> Result<TestOutcome, AppError> {
     match probe_result {
-        Ok(()) => {
+        ProbeVerdict::Healthy => {
             ops.record_healthy(repo_id).await;
             Ok(TestOutcome {
                 success: true,
+                status: RepositoryHealthStatus::Healthy,
                 reason: None,
                 already_emitted_auto_disabled: false,
             })
         }
-        Err(failure) => {
+        // INV-4: "reachable but not confirmed" is recorded, reported as
+        // NOT-success, and never auto-disables — regardless of whether the
+        // row was enabled.
+        ProbeVerdict::Unverified { reason } => {
+            ops.record_unverified(repo_id, &reason).await;
+            Ok(TestOutcome {
+                success: false,
+                status: RepositoryHealthStatus::Unverified,
+                reason: Some(reason),
+                already_emitted_auto_disabled: false,
+            })
+        }
+        ProbeVerdict::Unhealthy { reason } => {
+            let failure = ProbeFailure { reason };
             ops.record_unhealthy(repo_id, &failure.reason).await;
             // Auto-disable path. `disable_repository` is best-effort:
             // the probe outcome has already been persisted in
@@ -429,6 +496,7 @@ pub async fn record_test_outcome<H: HealthOps>(
             }
             Ok(TestOutcome {
                 success: false,
+                status: RepositoryHealthStatus::Unhealthy,
                 reason: Some(failure.reason),
                 already_emitted_auto_disabled: emitted_auto_disabled,
             })
@@ -507,19 +575,14 @@ pub async fn run_startup_health_check(pool: PgPool) {
             continue;
         }
         match probe(&repository).await {
-            Ok(()) => {
+            ProbeVerdict::Healthy => {
                 tracing::debug!(
                     repo_id = %repo_id,
                     repo_name = %repo_name,
-                    "llm_repo::health: repository reachable",
+                    "llm_repo::health: repository confirmed as a model registry",
                 );
-                if let Err(e) = super::repository::record_health_check(
-                    &pool,
-                    repo_id,
-                    "healthy",
-                    None,
-                )
-                .await
+                if let Err(e) =
+                    super::repository::record_health_check(&pool, repo_id, "healthy", None).await
                 {
                     tracing::warn!(
                         error = ?e,
@@ -528,15 +591,41 @@ pub async fn run_startup_health_check(pool: PgPool) {
                     );
                 }
             }
-            Err(failure) => {
+            // INV-4: the boot scan is the single most destructive caller —
+            // it auto-disables without a human in the loop. A host whose
+            // capability we could not confirm is recorded and LEFT ENABLED.
+            ProbeVerdict::Unverified { reason } => {
+                tracing::info!(
+                    repo_id = %repo_id,
+                    repo_name = %repo_name,
+                    reason = %reason,
+                    "llm_repo::health: could not confirm a model listing; recording unverified \
+                     (repository left enabled)",
+                );
+                if let Err(e) = super::repository::record_health_check(
+                    &pool,
+                    repo_id,
+                    RepositoryHealthStatus::Unverified.as_str(),
+                    Some(&reason),
+                )
+                .await
+                {
+                    tracing::warn!(
+                        error = ?e,
+                        repo_id = %repo_id,
+                        "llm_repo::health: failed to record unverified status (non-fatal)",
+                    );
+                }
+            }
+            ProbeVerdict::Unhealthy { reason } => {
+                let failure = ProbeFailure { reason };
                 tracing::warn!(
                     repo_id = %repo_id,
                     repo_name = %repo_name,
                     reason = %failure.reason,
                     "llm_repo::health: auto-disabling unreachable repository",
                 );
-                if let Err(e) =
-                    super::repository::disable_for_health_failure(&pool, repo_id).await
+                if let Err(e) = super::repository::disable_for_health_failure(&pool, repo_id).await
                 {
                     tracing::error!(
                         repo_id = %repo_id,
@@ -624,6 +713,16 @@ mod tests {
                 .unwrap()
                 .push((repo_id, "healthy".into(), None));
         }
+        async fn record_unverified(&self, repo_id: Uuid, reason: &str) {
+            self.recorded
+                .lock()
+                .unwrap()
+                .push((repo_id, "unverified".into(), Some(reason.into())));
+            if let Some(r) = self.repo.lock().unwrap().as_mut() {
+                r.last_health_check_status = "unverified".into();
+                r.last_health_check_reason = Some(reason.into());
+            }
+        }
         async fn record_unhealthy(&self, repo_id: Uuid, reason: &str) {
             self.recorded
                 .lock()
@@ -667,7 +766,7 @@ mod tests {
         let ops = FakeHealthOps::default();
         ops.seed_repo(r.clone());
         let result = enforce_on_create_with_ops(r.clone(), &ops, |_| {
-            Box::pin(async { Ok(()) })
+            Box::pin(async { ProbeVerdict::Healthy })
         })
         .await;
         assert!(result.is_ok());
@@ -690,9 +789,9 @@ mod tests {
         ops.seed_repo(r.clone());
         let result = enforce_on_create_with_ops(r.clone(), &ops, |_| {
             Box::pin(async {
-                Err(ProbeFailure {
+                ProbeVerdict::Unhealthy {
                     reason: "401 Unauthorized verbatim".into(),
-                })
+                }
             })
         })
         .await;
@@ -701,7 +800,10 @@ mod tests {
             wrapper.connection_warning.unwrap().reason,
             "401 Unauthorized verbatim"
         );
-        assert_eq!(ops.recorded()[0].2.as_deref(), Some("401 Unauthorized verbatim"));
+        assert_eq!(
+            ops.recorded()[0].2.as_deref(),
+            Some("401 Unauthorized verbatim")
+        );
         assert_eq!(ops.emitted()[0].1, "401 Unauthorized verbatim");
     }
 
@@ -732,7 +834,7 @@ mod tests {
         let ops = FakeHealthOps::default();
         ops.seed_repo(r.clone());
         let wrapper = enforce_on_create_with_ops(r.clone(), &ops, |_| {
-            Box::pin(async { Ok(()) })
+            Box::pin(async { ProbeVerdict::Healthy })
         })
         .await
         .unwrap();
@@ -753,15 +855,17 @@ mod tests {
         ops.seed_repo(r.clone());
         let wrapper = enforce_on_create_with_ops(r.clone(), &ops, |_| {
             Box::pin(async {
-                Err(ProbeFailure {
+                ProbeVerdict::Unhealthy {
                     reason: "timeout".into(),
-                })
+                }
             })
         })
         .await
         .unwrap();
         assert_eq!(wrapper.repository.enabled, false, "row downgraded");
-        let warning = wrapper.connection_warning.expect("warning present on failure");
+        let warning = wrapper
+            .connection_warning
+            .expect("warning present on failure");
         assert_eq!(warning.reason, "timeout");
         // Side effects, in order: disable → record_unhealthy → emit.
         assert_eq!(ops.disabled(), vec![r.id]);
@@ -787,14 +891,12 @@ mod tests {
             let mut r = repo(new_enabled);
             r.enabled = new_enabled;
             let ops = FakeHealthOps::default();
-            let result = enforce_on_update_transition_with_ops(
-                r.clone(),
-                old_enabled,
-                &ops,
-                |_| Box::pin(async move { panic!("probe must not run for {label}") }),
-            )
-            .await
-            .expect(label);
+            let result =
+                enforce_on_update_transition_with_ops(r.clone(), old_enabled, &ops, |_| {
+                    Box::pin(async move { panic!("probe must not run for {label}") })
+                })
+                .await
+                .expect(label);
             assert_eq!(result.enabled, new_enabled, "scenario {label}");
             assert!(ops.recorded().is_empty(), "scenario {label}");
             assert!(ops.disabled().is_empty(), "scenario {label}");
@@ -811,7 +913,7 @@ mod tests {
             r.clone(),
             false, // old_enabled
             &ops,
-            |_| Box::pin(async { Ok(()) }),
+            |_| Box::pin(async { ProbeVerdict::Healthy }),
         )
         .await
         .expect("false→true with passing probe");
@@ -825,7 +927,7 @@ mod tests {
         let r = repo(false);
         let ops = FakeHealthOps::default();
 
-        let outcome = record_test_outcome(r.id, false, Ok(()), &ops)
+        let outcome = record_test_outcome(r.id, false, ProbeVerdict::Healthy, &ops)
             .await
             .expect("ok outcome returns Ok");
         assert!(outcome.success);
@@ -850,9 +952,9 @@ mod tests {
         let outcome = record_test_outcome(
             r.id,
             true, // was_enabled
-            Err(ProbeFailure {
+            ProbeVerdict::Unhealthy {
                 reason: "401 Unauthorized".into(),
-            }),
+            },
             &ops,
         )
         .await
@@ -865,7 +967,11 @@ mod tests {
         );
         assert_eq!(
             ops.recorded(),
-            vec![(r.id, "unhealthy".to_string(), Some("401 Unauthorized".into()))]
+            vec![(
+                r.id,
+                "unhealthy".to_string(),
+                Some("401 Unauthorized".into())
+            )]
         );
         assert_eq!(ops.disabled(), vec![r.id]);
         assert_eq!(
@@ -890,9 +996,9 @@ mod tests {
         let outcome = record_test_outcome(
             r.id,
             false, // was_enabled
-            Err(ProbeFailure {
+            ProbeVerdict::Unhealthy {
                 reason: "DNS failure".into(),
-            }),
+            },
             &ops,
         )
         .await
@@ -933,16 +1039,16 @@ mod tests {
         async fn record_healthy(&self, repo_id: Uuid) {
             self.inner.record_healthy(repo_id).await
         }
+        async fn record_unverified(&self, repo_id: Uuid, reason: &str) {
+            self.inner.record_unverified(repo_id, reason).await
+        }
         async fn record_unhealthy(&self, repo_id: Uuid, reason: &str) {
             self.inner.record_unhealthy(repo_id, reason).await
         }
         async fn disable_repository(&self, _repo_id: Uuid) -> Result<(), AppError> {
             Err(AppError::internal_error("simulated DB outage"))
         }
-        async fn get_repository(
-            &self,
-            repo_id: Uuid,
-        ) -> Result<Option<LlmRepository>, AppError> {
+        async fn get_repository(&self, repo_id: Uuid) -> Result<Option<LlmRepository>, AppError> {
             self.inner.get_repository(repo_id).await
         }
         fn emit_auto_disabled(&self, repo_id: Uuid, reason: String) {
@@ -964,9 +1070,9 @@ mod tests {
         let outcome = record_test_outcome(
             r.id,
             true, // was_enabled
-            Err(ProbeFailure {
+            ProbeVerdict::Unhealthy {
                 reason: "timeout".into(),
-            }),
+            },
             &ops,
         )
         .await
@@ -986,5 +1092,103 @@ mod tests {
             ops.inner.emitted().is_empty(),
             "disable failed → no auto_disabled emit (would be lying about the row's state)"
         );
+    }
+
+    // ── 11. INV-4 — `unverified` NEVER auto-disables, on any path ─────
+
+    /// The unverified verdict must reach the DB as `unverified` and must
+    /// not touch `enabled` — on the test-button path, the create path, or
+    /// the enable-transition path. Each half ships with the `unhealthy`
+    /// counterpart so a "nothing ever disables now" regression is visible.
+    #[tokio::test]
+    async fn unverified_records_but_never_disables_on_any_path() {
+        // (a) test-button path, on an ENABLED row — the one path that
+        //     auto-disables today.
+        let r = repo(true);
+        let ops = FakeHealthOps::default();
+        ops.seed_repo(r.clone());
+        let outcome = record_test_outcome(
+            r.id,
+            true, // was_enabled
+            ProbeVerdict::Unverified {
+                reason: "not a model listing".into(),
+            },
+            &ops,
+        )
+        .await
+        .expect("unverified is an Ok outcome");
+        assert!(
+            !outcome.success,
+            "unverified must NOT report success — that is the lie being removed"
+        );
+        assert_eq!(outcome.status, RepositoryHealthStatus::Unverified);
+        assert_eq!(outcome.reason.as_deref(), Some("not a model listing"));
+        assert_eq!(
+            ops.recorded(),
+            vec![(
+                r.id,
+                "unverified".to_string(),
+                Some("not a model listing".into())
+            )]
+        );
+        assert!(
+            ops.disabled().is_empty(),
+            "INV-4: an unconfirmable repository must NEVER be auto-disabled"
+        );
+        assert!(ops.emitted().is_empty());
+
+        // Counterpart in the same test: a genuine failure on the SAME
+        // shape of row still auto-disables.
+        let ops2 = FakeHealthOps::default();
+        ops2.seed_repo(r.clone());
+        let unhealthy = record_test_outcome(
+            r.id,
+            true,
+            ProbeVerdict::Unhealthy {
+                reason: "401 Unauthorized".into(),
+            },
+            &ops2,
+        )
+        .await
+        .unwrap();
+        assert_eq!(unhealthy.status, RepositoryHealthStatus::Unhealthy);
+        assert_eq!(
+            ops2.disabled(),
+            vec![r.id],
+            "a genuine failure must still auto-disable"
+        );
+
+        // (b) create path — the row stays enabled and carries no warning.
+        let ops3 = FakeHealthOps::default();
+        ops3.seed_repo(r.clone());
+        let wrapper = enforce_on_create_with_ops(r.clone(), &ops3, |_| {
+            Box::pin(async {
+                ProbeVerdict::Unverified {
+                    reason: "custom host".into(),
+                }
+            })
+        })
+        .await
+        .unwrap();
+        assert!(wrapper.repository.enabled, "create keeps the row enabled");
+        assert!(wrapper.connection_warning.is_none());
+        assert_eq!(ops3.recorded()[0].1, "unverified");
+        assert!(ops3.disabled().is_empty());
+
+        // (c) enable-transition path — the enable is ALLOWED.
+        let ops4 = FakeHealthOps::default();
+        ops4.seed_repo(r.clone());
+        let persisted = enforce_on_update_transition_with_ops(r.clone(), false, &ops4, |_| {
+            Box::pin(async {
+                ProbeVerdict::Unverified {
+                    reason: "custom host".into(),
+                }
+            })
+        })
+        .await
+        .expect("unverified must not block the enable transition");
+        assert!(persisted.enabled);
+        assert_eq!(ops4.recorded()[0].1, "unverified");
+        assert!(ops4.disabled().is_empty());
     }
 }

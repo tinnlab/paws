@@ -48,7 +48,20 @@ async fn test_repository_connection_sends_user_agent() {
     }));
     let endpoint = format!("http://127.0.0.1:{}/whoami", addr.port());
 
-    let server = crate::common::TestServer::start().await;
+    // Point the GitHub capability-probe base at the same loopback (the
+    // debug-only `LLM_REPOSITORY_GITHUB_API_BASE` seam) so this regression
+    // test stays offline while keeping the real `https://api.github.com`
+    // repository URL that gives it its GitHub shape.
+    let server = crate::common::TestServer::start_with_options(
+        crate::common::TestServerOptions {
+            extra_env: vec![(
+                "LLM_REPOSITORY_GITHUB_API_BASE".to_string(),
+                format!("http://127.0.0.1:{}", addr.port()),
+            )],
+            ..Default::default()
+        },
+    )
+    .await;
     let user = crate::common::test_helpers::create_user_with_permissions(
         &server,
         "repo_ua",
@@ -76,10 +89,18 @@ async fn test_repository_connection_sends_user_agent() {
 
     assert_eq!(response.status(), 200);
     let body: serde_json::Value = response.json().await.unwrap();
-    assert_eq!(
-        body["success"].as_bool(),
-        Some(true),
-        "connectivity should succeed against the loopback (HTTP 200): {body}"
+
+    // DEC-15 — this spec's assertion is re-scoped to the User-Agent header it
+    // exists to prove. It used to assert `success: true` because the loopback
+    // answered 200 with the body `"ok"`; that is precisely the "a socket
+    // answered 200 ⇒ healthy" defect. The probe now additionally requires a
+    // confirmed model listing, which a `/whoami` endpoint does not serve, so
+    // the OUTCOME here is deliberately not asserted — the credential step
+    // (which is what carries the User-Agent to the loopback) is what this test
+    // covers. `body` is still parsed so a malformed response is caught.
+    assert!(
+        body.get("status").is_some(),
+        "the probe response must carry a health status: {body}"
     );
 
     let ua = captured

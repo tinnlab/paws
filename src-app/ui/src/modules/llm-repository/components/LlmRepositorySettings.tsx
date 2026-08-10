@@ -1,6 +1,5 @@
 import { CloudDownload, Pencil, Trash2 } from 'lucide-react'
 import {
-  Alert,
   Button,
   Card,
   Empty,
@@ -20,6 +19,7 @@ import { Can, usePermission } from '@/core/permissions'
 import { type LlmRepository } from '@/api-client/types'
 import { Permissions } from '@/api-client/permissions'
 import { SettingsPageContainer } from '@/modules/settings/components/SettingsPageContainer.tsx'
+import { LlmRepositoryHealth } from '@/modules/llm-repository/components/LlmRepositoryHealth'
 import { LlmRepositoryDrawer } from '@/modules/llm-repository/stores/llmRepositoryDrawer'
 import { LlmRepository as LlmRepositoryStore } from '@/modules/llm-repository/stores/llmRepository'
 
@@ -297,35 +297,20 @@ export function LlmRepositorySettings() {
                           </Text>
                         </div>
 
-                        {/* Surface the last probe's failure reason
-                            inline as an Alert so the operator
-                            immediately sees what went wrong without
-                            hovering for a tooltip. Mirrors the
-                            McpServerCard pattern at lines 323-337 of
-                            McpServerCard.tsx — only renders for the
-                            unhealthy case; healthy / untested rows
-                            don't need an attention-grabbing block. */}
-                        {repository.last_health_check_status ===
-                          'unhealthy' && (
-                          <Alert
-                            data-testid={`llmrepo-health-alert-${repository.id}`}
-                            tone="error"
-                            className="!mt-2"
-                            closeLabel="Close"
-                            onClose={() => {}}
-                            title={
-                              repository.last_health_check_at
-                                ? `Connection test failed at ${new Date(
-                                    repository.last_health_check_at,
-                                  ).toLocaleString()}`
-                                : 'Connection test failed'
-                            }
-                            description={
-                              repository.last_health_check_reason ??
-                              'No reason recorded.'
-                            }
-                          />
-                        )}
+                        {/* Surface the last probe's outcome inline so the
+                            operator immediately sees it without hovering
+                            for a tooltip. All THREE outcomes render
+                            distinctly — an `unverified` row that looked
+                            identical to a verified one is exactly the
+                            defect this replaced. */}
+                        <LlmRepositoryHealth
+                          data-testid={`llmrepo-health-alert-${repository.id}`}
+                          healthyTestId={`llmrepo-health-ok-${repository.id}`}
+                          className="!mt-2"
+                          status={repository.last_health_check_status}
+                          reason={repository.last_health_check_reason}
+                          checkedAt={repository.last_health_check_at}
+                        />
                       </div>
                     </div>
                     {index < repositories.length - 1 && (

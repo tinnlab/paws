@@ -2,7 +2,6 @@ import {
   CloudDownload,
 } from 'lucide-react'
 import {
-  Alert,
   Button,
   Form,
   FormField,
@@ -21,6 +20,7 @@ import { Drawer } from '@/modules/layouts/app-layout/components/Drawer'
 import { usePermission } from '@/core/permissions'
 import { type CreateLlmRepositoryRequest, type UpdateLlmRepositoryRequest } from '@/api-client/types'
 import { Permissions } from '@/api-client/permissions'
+import { LlmRepositoryHealth } from '@/modules/llm-repository/components/LlmRepositoryHealth'
 import { LlmRepositoryDrawer as LlmRepositoryDrawerStore } from '@/modules/llm-repository/stores/llmRepositoryDrawer'
 import { LlmRepository as LlmRepositoryStore } from '@/modules/llm-repository/stores/llmRepository'
 
@@ -503,29 +503,21 @@ export function LlmRepositoryDrawer() {
       size={600}
       mask={{ closable: false }}
     >
-      {/* Unhealthy Alert at the top of the body so the operator
+      {/* Last-probe outcome at the top of the body so the operator
           immediately sees why a previously-enabled repository is now
-          disabled. Renders only on `unhealthy` in edit mode (create
-          mode has no probe history to surface). Mirrors the
+          disabled — or that it is enabled but UNVERIFIED. Edit mode only
+          (create mode has no probe history to surface). Mirrors the
           McpServerDrawer pattern. */}
-      {mode === 'edit' &&
-        repository?.last_health_check_status === 'unhealthy' && (
-          <Alert
-            data-testid="llmrepo-drawer-health-alert"
-            tone="error"
-            className="!mb-4"
-            title={
-              repository.last_health_check_at
-                ? `Connection test failed at ${new Date(
-                    repository.last_health_check_at,
-                  ).toLocaleString()}`
-                : 'Connection test failed'
-            }
-            description={
-              repository.last_health_check_reason ?? 'No reason recorded.'
-            }
-          />
-        )}
+      {mode === 'edit' && (
+        <LlmRepositoryHealth
+          data-testid="llmrepo-drawer-health-alert"
+          healthyTestId="llmrepo-drawer-health-ok"
+          className="!mb-4"
+          status={repository?.last_health_check_status}
+          reason={repository?.last_health_check_reason}
+          checkedAt={repository?.last_health_check_at}
+        />
+      )}
       <Form
         data-testid="llmrepo-form"
         name="llm-repository-form"

@@ -25,12 +25,49 @@ async fn pool_for(server: &TestServer) -> sqlx::PgPool {
         .expect("connect to test pool")
 }
 
-/// Stand up a mock that returns 200 OK on any GET. The probe accepts
-/// only 200 as success (per `test_repository_connectivity`).
+/// A Hugging-Face-shaped model listing — the payload the capability probe
+/// requires before it will report `healthy`.
+const MODEL_LISTING_BODY: &str = r#"[
+    {
+        "id": "openai-community/gpt2",
+        "modelId": "openai-community/gpt2",
+        "pipeline_tag": "text-generation",
+        "downloads": 1234,
+        "tags": ["transformers"],
+        "private": false
+    }
+]"#;
+
+/// Stand up a mock that behaves like a WORKING model repository: any GET —
+/// including the `/api/models` capability probe — returns a model listing.
+///
+/// DEC-15: this mock previously returned `200 "{}"` to any GET, and the
+/// suite asserted `healthy`. That was the defect written down as an
+/// expectation — "a socket answered 200" is not a model-serving capability.
+/// The body is corrected here so these tests keep testing what they were
+/// written to test (auth handling, race safety, auto-disable); the NEW
+/// `capability_probe_test.rs` pins that a bare-200 host is no longer
+/// `healthy`.
 async fn mock_ok() -> MockServer {
     let mock = MockServer::start().await;
     Mock::given(method("GET"))
-        .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_string(MODEL_LISTING_BODY),
+        )
+        .mount(&mock)
+        .await;
+    mock
+}
+
+/// Stand up a mock that is REACHABLE but serves no model listing — it 404s
+/// the capability probe. The `unverified` outcome: honest, and never
+/// grounds for auto-disabling.
+async fn mock_no_listing() -> MockServer {
+    let mock = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(404).set_body_string("not found"))
         .mount(&mock)
         .await;
     mock
@@ -1061,3 +1098,143 @@ async fn concurrent_test_connection_probes_same_repo_are_consistent() {
     pool.close().await;
 }
 
+
+// ───────────────────────────────────────────────────────────────────────────
+// TEST-22 (ITEM-12) — the by-id probe keeps its auth gate and its sync emit,
+// and all THREE outcomes now round-trip through `last_health_check_status`.
+//
+// Widening the status vocabulary touches the response type, the DB CHECK
+// constraint and the bookkeeping helper at once; this pins that none of that
+// quietly dropped the permission gate or the cross-device notification.
+// ───────────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_by_id_keeps_auth_gate_and_sync_emit_across_all_three_outcomes() {
+    use crate::common::sync_probe::SyncProbe;
+    use std::time::Duration;
+
+    let server = TestServer::start().await;
+    let admin = create_user_with_permissions(&server, "admin", REPO_ADMIN_PERMS).await;
+    // Holds `read` but NOT `edit` — the by-id probe requires `edit`.
+    let reader = create_user_with_permissions(&server, "reader", &["llm_repositories::read"]).await;
+    let pool = pool_for(&server).await;
+
+    let healthy_upstream = mock_ok().await;
+    let unverified_upstream = mock_no_listing().await;
+    let unhealthy_upstream = mock_401().await;
+
+    let healthy_id = seed_disabled_row(
+        &server,
+        &admin.token,
+        "outcome-healthy",
+        &healthy_upstream.uri(),
+    )
+    .await;
+    let unverified_id = seed_disabled_row(
+        &server,
+        &admin.token,
+        "outcome-unverified",
+        &unverified_upstream.uri(),
+    )
+    .await;
+    let unhealthy_id = seed_disabled_row(
+        &server,
+        &admin.token,
+        "outcome-unhealthy",
+        &unhealthy_upstream.uri(),
+    )
+    .await;
+
+    let probe_url = server.api_url(&format!("/llm-repositories/{healthy_id}/test"));
+
+    // ── auth gate: 401 unauthenticated ──────────────────────────────────
+    let unauth = reqwest::Client::new()
+        .post(&probe_url)
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        unauth.status(),
+        StatusCode::UNAUTHORIZED,
+        "the by-id probe must reject an unauthenticated caller"
+    );
+
+    // ── auth gate: 403 without `llm_repositories::edit` ─────────────────
+    let forbidden = reqwest::Client::new()
+        .post(&probe_url)
+        .header("Authorization", format!("Bearer {}", reader.token))
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        forbidden.status(),
+        StatusCode::FORBIDDEN,
+        "read-only users must not be able to run the probe"
+    );
+
+    // ── positive control + sync emit ───────────────────────────────────
+    let mut probe_stream = SyncProbe::open(&server, &admin.token).await;
+
+    let ok_body: Value = reqwest::Client::new()
+        .post(&probe_url)
+        .header("Authorization", format!("Bearer {}", admin.token))
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        ok_body["success"], true,
+        "permitted caller succeeds: {ok_body}"
+    );
+    assert_eq!(ok_body["status"], "healthy");
+
+    let frame = probe_stream
+        .expect_event("llm_repository", "update", Duration::from_secs(5))
+        .await;
+    assert_eq!(
+        frame.id,
+        healthy_id.to_string(),
+        "the probe must still notify other devices to refetch the row"
+    );
+
+    // ── all three outcomes round-trip ──────────────────────────────────
+    for (repo_id, expected) in [
+        (healthy_id, "healthy"),
+        (unverified_id, "unverified"),
+        (unhealthy_id, "unhealthy"),
+    ] {
+        let body: Value = reqwest::Client::new()
+            .post(server.api_url(&format!("/llm-repositories/{repo_id}/test")))
+            .header("Authorization", format!("Bearer {}", admin.token))
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(
+            body["status"], expected,
+            "response status for {expected} row: {body}"
+        );
+        assert_eq!(
+            body["success"],
+            expected == "healthy",
+            "only a confirmed capability reports success: {body}"
+        );
+
+        let (_, status, reason, at) = read_repo_row(&pool, repo_id).await;
+        assert_eq!(status, expected, "persisted status for the {expected} row");
+        assert!(at.is_some(), "last_health_check_at stamped for {expected}");
+        if expected == "healthy" {
+            assert_eq!(reason, None);
+        } else {
+            assert!(reason.is_some(), "{expected} must record a reason");
+        }
+    }
+}
