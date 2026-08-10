@@ -894,12 +894,44 @@ pub async fn update_download_status(
     // Build update query based on status
     match request.status {
         DownloadStatus::Completed => {
+            // INV-3: a download reported `completed` must not simultaneously
+            // report partial progress. Without this the terminal write left
+            // `progress_data` at whatever the last tick wrote — on the happy
+            // path `{phase: committing, current: 90, total: 100}` — so every
+            // surface computing `current / total` showed 90% forever on
+            // success. Reconciled HERE (the single terminal write) rather than
+            // in each UI, so the REST read, the SSE frame and the hub download
+            // wrapper all inherit it.
+            //
+            // `$5` is the whole snapshot (phase / message / and, as its
+            // current+total, the fallback) built by
+            // `DownloadProgressData::completed` — one source of truth, in Rust.
+            // The SQL only OVERRIDES current+total with the row's OWN stored
+            // total, and only when that total is usable; an absent / null /
+            // non-numeric / non-positive / out-of-i64-range one leaves the
+            // merge empty so the Rust fallback stands. Reading the stored total
+            // in the SAME statement keeps the write atomic (no
+            // read-modify-write, no second round-trip), and the `jsonb_typeof`
+            // + range guard means a corrupt value falls back rather than
+            // aborting the terminal write with a cast error.
+            let terminal_progress = serde_json::to_value(DownloadProgressData::completed(0))
+                .map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
             sqlx::query_as!(
                 DownloadInstance,
                 r#"UPDATE download_instances
                  SET status = $2,
                      error_message = $3,
                      model_id = $4,
+                     progress_data = $5::jsonb || CASE
+                         WHEN jsonb_typeof(progress_data -> 'total') = 'number'
+                          AND (progress_data ->> 'total')::numeric
+                              BETWEEN 1 AND 9223372036854775807
+                         THEN jsonb_build_object(
+                             'current', (progress_data ->> 'total')::numeric::bigint,
+                             'total', (progress_data ->> 'total')::numeric::bigint
+                         )
+                         ELSE '{}'::jsonb
+                     END,
                      completed_at = CURRENT_TIMESTAMP,
                      updated_at = CURRENT_TIMESTAMP
                  WHERE id = $1
@@ -917,7 +949,8 @@ pub async fn update_download_status(
                 download_id,
                 request.status.as_str(),
                 request.error_message,
-                request.model_id
+                request.model_id,
+                terminal_progress
             )
             .fetch_optional(pool)
             .await

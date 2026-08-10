@@ -368,6 +368,15 @@ pub mod test_internals {
         SystemSkillInstallResult, SystemWorkflowInstallResult, install_system_skill_tx,
         install_system_workflow_tx,
     };
+    // The terminal download write, so the download-progress suite can fire the
+    // REAL `update_download_status` against a seeded row instead of mirroring
+    // its SQL. Driving it directly is what makes the completed-vs-failed pair
+    // (INV-3 / DEC-10) deterministic: the only production caller is a
+    // background git+LFS clone task, whose real network timing cannot be made
+    // to stop at a chosen progress point.
+    pub use crate::modules::llm_model::models::DownloadStatus;
+    pub use crate::modules::llm_model::repository::update_download_status;
+    pub use crate::modules::llm_model::types::UpdateDownloadStatusRequest;
     pub use crate::modules::skill::models::CreateSkill;
     pub use crate::modules::skill::repository::insert as skill_repository_insert;
     pub use crate::modules::workflow::models::CreateWorkflow;

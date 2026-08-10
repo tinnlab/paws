@@ -846,6 +846,46 @@ impl Default for DownloadProgressData {
     }
 }
 
+impl DownloadProgressData {
+    /// The `total` a terminal snapshot falls back to when the row never
+    /// recorded a usable one. A completed download with an unknown total must
+    /// still read 100% (`100/100`), never `0/0` — the latter renders as either
+    /// NaN or 0% in every percentage-computing UI.
+    pub const TERMINAL_TOTAL_FALLBACK: i64 = 100;
+
+    /// Resolve the `total` a COMPLETED download reports: the row's own stored
+    /// total when it is usable, otherwise [`Self::TERMINAL_TOTAL_FALLBACK`].
+    /// A stored total of 0 (never known) or a negative one (corrupt) is not
+    /// usable.
+    pub fn terminal_total(stored_total: i64) -> i64 {
+        if stored_total > 0 {
+            stored_total
+        } else {
+            Self::TERMINAL_TOTAL_FALLBACK
+        }
+    }
+
+    /// The progress snapshot a COMPLETED download must report (INV-3: reported
+    /// progress must never contradict reported status).
+    ///
+    /// `stored_total` is the `total` the row last recorded; pass `0` to obtain
+    /// the fallback-total template. `llm_model::repository::update_download_status`
+    /// binds this template into its terminal `UPDATE` and lets SQL substitute
+    /// the row's own stored total in the same statement, so phase, message and
+    /// the fallback total have exactly one source of truth (here).
+    pub fn completed(stored_total: i64) -> Self {
+        let total = Self::terminal_total(stored_total);
+        Self {
+            phase: DownloadPhase::Complete,
+            current: total,
+            total,
+            message: "Download complete".to_string(),
+            speed_bps: 0,
+            eta_seconds: 0,
+        }
+    }
+}
+
 /// Request data for initiating a download (stored as JSON in database)
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub struct DownloadRequestData {
@@ -929,5 +969,106 @@ mod download_status_tests {
         assert_eq!(DownloadStatus::from_str("in_progress"), None);
         assert_eq!(DownloadStatus::from_str(""), None);
         assert_eq!(DownloadStatus::from_str("DOWNLOADING"), None, "case-sensitive");
+    }
+}
+
+/// TEST-15 — the terminal (COMPLETED) progress snapshot.
+///
+/// INV-3: a download reported `completed` must not report partial progress.
+/// `update_download_status`'s terminal `UPDATE` builds its snapshot from
+/// [`DownloadProgressData::completed`] and lets SQL substitute the row's own
+/// stored `total` when it has a usable one; these tests pin the two halves of
+/// that contract the SQL cannot express — the fallback rule, and the exact wire
+/// shape the stored JSON must have to survive a read.
+#[cfg(test)]
+mod terminal_progress_tests {
+    use super::{DownloadPhase, DownloadProgressData};
+
+    #[test]
+    fn terminal_total_prefers_a_usable_stored_total() {
+        // A real download knew its byte/file count — report that, not a
+        // fabricated 100, so the completed bar matches what was shown mid-flight.
+        assert_eq!(DownloadProgressData::terminal_total(7), 7);
+        assert_eq!(
+            DownloadProgressData::terminal_total(4_294_967_296),
+            4_294_967_296
+        );
+    }
+
+    #[test]
+    fn terminal_total_falls_back_when_total_was_never_known() {
+        // 0 is what a download whose size was never resolved stores. Reporting
+        // 0/0 renders as NaN% or 0% on a bar that just succeeded, so it falls
+        // back to a percentage-shaped 100.
+        assert_eq!(
+            DownloadProgressData::terminal_total(0),
+            DownloadProgressData::TERMINAL_TOTAL_FALLBACK
+        );
+        assert_eq!(DownloadProgressData::TERMINAL_TOTAL_FALLBACK, 100);
+    }
+
+    #[test]
+    fn terminal_total_falls_back_on_a_corrupt_negative_total() {
+        // A negative total cannot come from a healthy write; treat it exactly
+        // like "never known" rather than propagating it into `current` too
+        // (which would make the bar read -N/-N).
+        assert_eq!(
+            DownloadProgressData::terminal_total(-1),
+            DownloadProgressData::TERMINAL_TOTAL_FALLBACK
+        );
+        assert_eq!(
+            DownloadProgressData::terminal_total(i64::MIN),
+            DownloadProgressData::TERMINAL_TOTAL_FALLBACK
+        );
+    }
+
+    #[test]
+    fn completed_snapshot_is_100_percent_at_phase_complete() {
+        let snap = DownloadProgressData::completed(512);
+        assert!(matches!(snap.phase, DownloadPhase::Complete));
+        assert_eq!(snap.current, snap.total, "completed must read 100%");
+        assert_eq!(snap.total, 512, "a known total is preserved");
+
+        let unknown = DownloadProgressData::completed(0);
+        assert_eq!(unknown.current, unknown.total);
+        assert_eq!(unknown.total, DownloadProgressData::TERMINAL_TOTAL_FALLBACK);
+    }
+
+    /// The snapshot is stored as JSONB and read back through
+    /// `JsonOption<DownloadProgressData>`. None of the six fields is
+    /// `Option`, so a snapshot missing any key would fail to deserialize and
+    /// the whole download row would read as having no progress at all. This
+    /// pins both directions, including the `complete` lowercase wire value the
+    /// SQL's `jsonb_build_object` has to match.
+    #[test]
+    fn completed_snapshot_round_trips_through_json() {
+        let value = serde_json::to_value(DownloadProgressData::completed(0)).unwrap();
+        let obj = value.as_object().expect("snapshot serializes to an object");
+        for key in [
+            "phase",
+            "current",
+            "total",
+            "message",
+            "speed_bps",
+            "eta_seconds",
+        ] {
+            assert!(
+                obj.contains_key(key),
+                "terminal snapshot must carry `{key}`"
+            );
+        }
+        assert_eq!(obj["phase"], serde_json::json!("complete"));
+
+        // The SQL overrides current/total in-place via `||`; the merged shape
+        // must still deserialize.
+        let mut merged = obj.clone();
+        merged.insert("current".into(), serde_json::json!(2048));
+        merged.insert("total".into(), serde_json::json!(2048));
+        let back: DownloadProgressData =
+            serde_json::from_value(serde_json::Value::Object(merged)).unwrap();
+        assert!(matches!(back.phase, DownloadPhase::Complete));
+        assert_eq!(back.current, 2048);
+        assert_eq!(back.total, 2048);
+        assert!(!back.message.is_empty(), "a completion message is set");
     }
 }
