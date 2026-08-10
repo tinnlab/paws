@@ -319,6 +319,7 @@ export const GALLERY_COVERAGE = {
   "modules/llm-provider/icons/OpenAI": { kind: 'via', reason: 'rendered within the llm-provider module page' },
   "modules/llm-provider/widgets/LLMProviderGroupWidget": { kind: 'via', reason: 'slot-widget in llm-provider' },
   "modules/llm-repository/components/LlmRepositoryDrawer": { kind: 'overlay', states: ['open', 'filled', 'invalid'] },
+  "modules/llm-repository/components/LlmRepositoryHealth": { kind: 'via', reason: 'Per-repository probe-outcome affordance; rendered inside LlmRepositorySettings (all three outcomes are seeded by the module cassette) and inside LlmRepositoryDrawer.' },
   "modules/llm-repository/components/LlmRepositorySettings": { kind: 'data-page', states: ['loaded', 'empty', 'error'] },
   "modules/mcp/chat-extension/components/AskUserWizardContent": { kind: 'via', reason: 'rendered within the mcp module page (ask_user rich wizard) — gallery cell deep-chat-ask-user-wizard' },
   "modules/mcp/chat-extension/components/elicitationFields": { kind: 'via', reason: 'shared non-choice field renderer used by the elicitation form + ask_user wizard' },

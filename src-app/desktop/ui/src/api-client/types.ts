@@ -261,9 +261,31 @@ export interface AvailableSkillsResponse {
 export interface AvailableUpdatesResponse {
   /** Host architecture (`x86_64`/`aarch64`). */
   arch: string
+  /**
+   * RFC3339 timestamp of the fetch that produced `versions`. `None` only
+   *  when `source == "unavailable"`.
+   */
+  checked_at?: string
   engine: string
   /** Host platform the asset-readiness was computed for (`linux`/`macos`/`windows`). */
   platform: string
+  /**
+   * Where this catalogue came from: `live` (fetched now), `cache` (reused
+   *  within the TTL, or retained because a refresh failed), or `unavailable`
+   *  (nothing cached and the refresh failed).
+   */
+  source: string
+  /**
+   * Why the catalogue could not be refreshed. `None` on a clean read. Set
+   *  alongside `source == "cache"` this means "these versions are real but
+   *  possibly out of date"; alongside `source == "unavailable"` it is the
+   *  whole story.
+   *
+   *  This field is what stops an empty `versions` list from being read as
+   *  "upstream has published no versions" when the truth is "we could not
+   *  reach upstream" — the two are otherwise indistinguishable.
+   */
+  unavailable_reason?: string
   versions: AvailableVersion[]
 }
 
@@ -345,6 +367,30 @@ export interface AvailableVersion2 {
   size_bytes?: number
   /** Release tag (e.g. `v0.0.1-alpha`). */
   version: string
+}
+
+/**
+ * Query for the discovery endpoint. `engine` is optional: omitted, every
+ *  engine's catalogue is returned, so a caller that knows nothing at all still
+ *  gets a complete picture in one request.
+ */
+export interface AvailableVersionsQuery {
+  /** Restrict to one engine (`llamacpp` or `mistralrs`). Omit for all. */
+  engine?: string
+}
+
+/**
+ * `GET /local-runtime/versions/available` — everything a caller needs to
+ *  construct a valid `POST /local-runtime/versions/download` body without
+ *  guessing a tag or reading source.
+ */
+export interface AvailableVersionsResponse {
+  /** Host architecture (`x86_64`/`aarch64`). */
+  arch: string
+  /** One entry per engine (filtered when `?engine=` is supplied). */
+  engines: InstallableEngine[]
+  /** Host platform this server runs on (`linux`/`macos`/`windows`). */
+  platform: string
 }
 
 /** Backend status response */
@@ -2853,6 +2899,65 @@ export interface InstallVersionRequest {
   version: string
 }
 
+/** One engine's installable catalogue. */
+export interface InstallableEngine {
+  checked_at?: string
+  /** `llamacpp` / `mistralrs` — the value to pass as `engine`. */
+  engine: string
+  /** See [`AvailableUpdatesResponse::source`]. */
+  source: string
+  /** See [`AvailableUpdatesResponse::unavailable_reason`]. */
+  unavailable_reason?: string
+  versions: InstallableVersion[]
+}
+
+/**
+ * One concrete, installable artifact: the exact tuple
+ *  `POST /local-runtime/versions/download` requires.
+ *
+ *  The download endpoint demands all five of
+ *  `{engine, version, platform, arch, backend}`, so a discovery response that
+ *  reported only host-matching backends would still leave a caller guessing
+ *  `platform` and `arch`. Every published variant is listed here; host-scoped
+ *  convenience (which one to pick on THIS machine) stays on the enclosing
+ *  [`InstallableVersion`].
+ */
+export interface InstallableVariant {
+  /** `x86_64` / `aarch64`. */
+  arch: string
+  /** `cpu` / `cuda12.9` / `metal` / `rocm6.1` / … */
+  backend: string
+  /** True when this variant matches the host this server runs on. */
+  matches_host: boolean
+  /** `linux` / `macos` / `windows`. */
+  platform: string
+  /** Byte size of the release archive, as reported by GitHub. */
+  size_bytes: number
+}
+
+/** One installable release, with every published variant enumerated. */
+export interface InstallableVersion {
+  /** True when ≥1 variant matches this host. */
+  binary_ready: boolean
+  /** True when ≥1 backend of this version is installed for this host. */
+  installed: boolean
+  /** Backends already installed for the host platform/arch. */
+  installed_backends: string[]
+  /** GitHub prerelease flag. */
+  prerelease: boolean
+  /** ISO-8601 publish timestamp, if present. */
+  published_at?: string
+  /** The backend recommended for this host given its detected GPU/driver. */
+  recommended_backend?: string
+  /**
+   * Every `(platform, arch, backend)` this release actually publishes.
+   *  Empty ⇒ the tag exists but no binary has been uploaded yet.
+   */
+  variants: InstallableVariant[]
+  /** The value to pass as `version` (e.g. `v0.0.3-alpha`). */
+  version: string
+}
+
 export interface InstanceResponse {
   base_url: string
   error_message?: string
@@ -3328,11 +3433,22 @@ export interface LlmRepository {
    *  check, create-flow probe, update-flow enable-transition
    *  probe, and the explicit form-based test path.
    *  `last_health_check_at` is NULL on rows that have never been
-   *  probed (default status "untested"). UI renders an Alert
-   *  when `last_health_check_status == "unhealthy"`.
+   *  probed (default status "untested"). The UI renders an error
+   *  Alert on "unhealthy" and a warning Alert on "unverified".
    */
   last_health_check_at?: string
   last_health_check_reason?: string
+  /**
+   * One of `"untested" | "healthy" | "unverified" | "unhealthy"`.
+   *
+   *  `"unverified"` (added by migration
+   *  `202607200600_llm_repository_unverified_status`) means "reachable,
+   *  but model-serving capability not confirmed for this URL shape". It
+   *  is deliberately NOT `"unhealthy"`: an unconfirmable host must never
+   *  auto-disable a working self-hosted deployment (INV-4). `"healthy"`
+   *  now requires positive evidence — a confirmed model listing — so
+   *  reachability alone can never earn it.
+   */
   last_health_check_status: string
   name: string
   updated_at: string
@@ -3366,11 +3482,22 @@ export interface LlmRepositoryWithHealthWarning {
    *  check, create-flow probe, update-flow enable-transition
    *  probe, and the explicit form-based test path.
    *  `last_health_check_at` is NULL on rows that have never been
-   *  probed (default status "untested"). UI renders an Alert
-   *  when `last_health_check_status == "unhealthy"`.
+   *  probed (default status "untested"). The UI renders an error
+   *  Alert on "unhealthy" and a warning Alert on "unverified".
    */
   last_health_check_at?: string
   last_health_check_reason?: string
+  /**
+   * One of `"untested" | "healthy" | "unverified" | "unhealthy"`.
+   *
+   *  `"unverified"` (added by migration
+   *  `202607200600_llm_repository_unverified_status`) means "reachable,
+   *  but model-serving capability not confirmed for this URL shape". It
+   *  is deliberately NOT `"unhealthy"`: an unconfirmable host must never
+   *  auto-disable a working self-hosted deployment (INV-4). `"healthy"`
+   *  now requires positive evidence — a confirmed model listing — so
+   *  reachability alone can never earn it.
+   */
   last_health_check_status: string
   name: string
   updated_at: string
@@ -4713,9 +4840,8 @@ export interface PreviewQuery {
  */
 export interface ProbeFailure {
   /**
-   * Human-readable reason — taken verbatim from
-   *  `test_repository_connectivity`'s `Err(String)` (timeout / 401 /
-   *  DNS / etc.).
+   * Human-readable reason — taken verbatim from the probe's
+   *  [`ProbeVerdict::Unhealthy`] reason (timeout / 401 / DNS / etc.).
    */
   reason: string
 }
@@ -5144,6 +5270,15 @@ export interface RepositoryFilesQuery {
   repository_id: string
 }
 
+/**
+ * The health outcome vocabulary, as an API-facing enum.
+ *
+ *  The DB column is text (it also carries the `"untested"` default, which a
+ *  probe never writes), so this enum covers exactly the three values a probe
+ *  can produce.
+ */
+export type RepositoryHealthStatus = 'healthy' | 'unverified' | 'unhealthy'
+
 export type RepositorySource = 'huggingface' | 'github' | 'unknown'
 
 export interface ResetPasswordRequest {
@@ -5343,6 +5478,13 @@ export interface RuntimeSettings {
   auto_start_timeout_secs: number
   created_at: string
   drain_timeout_secs: number
+  /**
+   * How long a fetched engine release catalogue is reused before the next
+   *  discovery call refreshes it from GitHub. Discovery was previously
+   *  uncached, costing one GitHub API request per call against a 60/hour
+   *  anonymous budget.
+   */
+  engine_release_cache_ttl_secs: number
   idle_unload_secs: number
   updated_at: string
 }
@@ -6766,6 +6908,16 @@ export interface TestRepositoryConnectionRequest {
 
 export interface TestRepositoryConnectionResponse {
   message: string
+  /**
+   * The three-way probe outcome. `unverified` is distinct from
+   *  `unhealthy`: it never auto-disables the repository.
+   */
+  status: RepositoryHealthStatus
+  /**
+   * True ONLY when a model-serving capability was positively confirmed.
+   *  A reachable-but-unconfirmable host reports `success: false` with
+   *  `status: "unverified"` — reachability alone is not a pass.
+   */
   success: boolean
 }
 
@@ -7336,6 +7488,7 @@ export interface UpdateRemoteAccessSettingsRequest {
 export interface UpdateRuntimeSettingsRequest {
   auto_start_timeout_secs?: number
   drain_timeout_secs?: number
+  engine_release_cache_ttl_secs?: number
   idle_unload_secs?: number
 }
 
@@ -8573,6 +8726,7 @@ export type ApiEndpointParameters = {
   'RuntimeVersion.get': { version_id: string }
   'RuntimeVersion.getDownload': { key: string }
   'RuntimeVersion.list': { engine?: string; page?: number; per_page?: number }
+  'RuntimeVersion.listAvailable': { engine?: string }
   'RuntimeVersion.listDownloads': void
   'RuntimeVersion.setDefault': { version_id: string }
   'RuntimeVersion.subscribeDownloadEvents': { key: string }
@@ -9046,6 +9200,7 @@ export type ApiEndpointResponses = {
   'RuntimeVersion.get': RuntimeVersionResponse
   'RuntimeVersion.getDownload': DownloadSnapshot
   'RuntimeVersion.list': RuntimeVersionListResponse
+  'RuntimeVersion.listAvailable': AvailableVersionsResponse
   'RuntimeVersion.listDownloads': DownloadListResponse
   'RuntimeVersion.setDefault': RuntimeVersionResponse
   'RuntimeVersion.subscribeDownloadEvents': SSEEngineDownloadEvent

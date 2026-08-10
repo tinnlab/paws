@@ -5848,6 +5848,76 @@
         ]
       }
     },
+    "/api/local-runtime/versions/available": {
+      "get": {
+        "tags": [
+          "Runtime Versions"
+        ],
+        "description": "List every installable engine version with all published platform/arch/backend variants — the exact tuples POST /local-runtime/versions/download accepts. Answers 200 even when the upstream release feed is unreachable; `source` and `unavailable_reason` state whether the list is live, cached, or unavailable, so an empty list is never mistaken for 'no versions exist'.",
+        "operationId": "RuntimeVersion.listAvailable",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "engine",
+            "description": "Restrict to one engine (`llamacpp` or `mistralrs`). Omit for all.",
+            "schema": {
+              "description": "Restrict to one engine (`llamacpp` or `mistralrs`). Omit for all.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "style": "form"
+          }
+        ],
+        "responses": {
+          "403": {
+            "description": "Forbidden - Missing required permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionError"
+                },
+                "example": {
+                  "details": {
+                    "required_permissions": [
+                      {
+                        "description": "View runtime versions and check for updates",
+                        "name": "RuntimeVersionRead",
+                        "value": "llm_local_runtime::versions_read"
+                      }
+                    ]
+                  },
+                  "error": "Missing required permission: llm_local_runtime::versions_read",
+                  "error_code": "INSUFFICIENT_PERMISSIONS"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "`GET /local-runtime/versions/available` — everything a caller needs to\n construct a valid `POST /local-runtime/versions/download` body without\n guessing a tag or reading source.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AvailableVersionsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown engine"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-required-permissions": [
+          "llm_local_runtime::versions_read"
+        ]
+      }
+    },
     "/api/local-runtime/versions/downloads": {
       "get": {
         "tags": [
@@ -11755,11 +11825,11 @@
               }
             }
           },
-          "400": {
-            "description": "Invalid query parameter (e.g. a NUL byte in a free-text filter)"
-          },
           "401": {
             "description": "Unauthorized"
+          },
+          "400": {
+            "description": "Invalid query parameter (e.g. a NUL byte in a free-text filter)"
           }
         },
         "security": [
@@ -28450,12 +28520,30 @@
             "description": "Host architecture (`x86_64`/`aarch64`).",
             "type": "string"
           },
+          "checked_at": {
+            "description": "RFC3339 timestamp of the fetch that produced `versions`. `None` only\n when `source == \"unavailable\"`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "engine": {
             "type": "string"
           },
           "platform": {
             "description": "Host platform the asset-readiness was computed for (`linux`/`macos`/`windows`).",
             "type": "string"
+          },
+          "source": {
+            "description": "Where this catalogue came from: `live` (fetched now), `cache` (reused\n within the TTL, or retained because a refresh failed), or `unavailable`\n (nothing cached and the refresh failed).",
+            "type": "string"
+          },
+          "unavailable_reason": {
+            "description": "Why the catalogue could not be refreshed. `None` on a clean read. Set\n alongside `source == \"cache\"` this means \"these versions are real but\n possibly out of date\"; alongside `source == \"unavailable\"` it is the\n whole story.\n\n This field is what stops an empty `versions` list from being read as\n \"upstream has published no versions\" when the truth is \"we could not\n reach upstream\" — the two are otherwise indistinguishable.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "versions": {
             "type": "array",
@@ -28468,7 +28556,8 @@
           "engine",
           "platform",
           "arch",
-          "versions"
+          "versions",
+          "source"
         ]
       },
       "AvailableUpdatesResponse2": {
@@ -28628,6 +28717,45 @@
           "binary_ready",
           "available_backends",
           "prerelease"
+        ]
+      },
+      "AvailableVersionsQuery": {
+        "description": "Query for the discovery endpoint. `engine` is optional: omitted, every\n engine's catalogue is returned, so a caller that knows nothing at all still\n gets a complete picture in one request.",
+        "type": "object",
+        "properties": {
+          "engine": {
+            "description": "Restrict to one engine (`llamacpp` or `mistralrs`). Omit for all.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "AvailableVersionsResponse": {
+        "description": "`GET /local-runtime/versions/available` — everything a caller needs to\n construct a valid `POST /local-runtime/versions/download` body without\n guessing a tag or reading source.",
+        "type": "object",
+        "properties": {
+          "arch": {
+            "description": "Host architecture (`x86_64`/`aarch64`).",
+            "type": "string"
+          },
+          "engines": {
+            "description": "One entry per engine (filtered when `?engine=` is supplied).",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InstallableEngine"
+            }
+          },
+          "platform": {
+            "description": "Host platform this server runs on (`linux`/`macos`/`windows`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "platform",
+          "arch",
+          "engines"
         ]
       },
       "BackendStatusResponse": {
@@ -35058,6 +35186,137 @@
           "package"
         ]
       },
+      "InstallableEngine": {
+        "description": "One engine's installable catalogue.",
+        "type": "object",
+        "properties": {
+          "checked_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "engine": {
+            "description": "`llamacpp` / `mistralrs` — the value to pass as `engine`.",
+            "type": "string"
+          },
+          "source": {
+            "description": "See [`AvailableUpdatesResponse::source`].",
+            "type": "string"
+          },
+          "unavailable_reason": {
+            "description": "See [`AvailableUpdatesResponse::unavailable_reason`].",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "versions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InstallableVersion"
+            }
+          }
+        },
+        "required": [
+          "engine",
+          "versions",
+          "source"
+        ]
+      },
+      "InstallableVariant": {
+        "description": "One concrete, installable artifact: the exact tuple\n `POST /local-runtime/versions/download` requires.\n\n The download endpoint demands all five of\n `{engine, version, platform, arch, backend}`, so a discovery response that\n reported only host-matching backends would still leave a caller guessing\n `platform` and `arch`. Every published variant is listed here; host-scoped\n convenience (which one to pick on THIS machine) stays on the enclosing\n [`InstallableVersion`].",
+        "type": "object",
+        "properties": {
+          "arch": {
+            "description": "`x86_64` / `aarch64`.",
+            "type": "string"
+          },
+          "backend": {
+            "description": "`cpu` / `cuda12.9` / `metal` / `rocm6.1` / …",
+            "type": "string"
+          },
+          "matches_host": {
+            "description": "True when this variant matches the host this server runs on.",
+            "type": "boolean"
+          },
+          "platform": {
+            "description": "`linux` / `macos` / `windows`.",
+            "type": "string"
+          },
+          "size_bytes": {
+            "description": "Byte size of the release archive, as reported by GitHub.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "platform",
+          "arch",
+          "backend",
+          "size_bytes",
+          "matches_host"
+        ]
+      },
+      "InstallableVersion": {
+        "description": "One installable release, with every published variant enumerated.",
+        "type": "object",
+        "properties": {
+          "binary_ready": {
+            "description": "True when ≥1 variant matches this host.",
+            "type": "boolean"
+          },
+          "installed": {
+            "description": "True when ≥1 backend of this version is installed for this host.",
+            "type": "boolean"
+          },
+          "installed_backends": {
+            "description": "Backends already installed for the host platform/arch.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "prerelease": {
+            "description": "GitHub prerelease flag.",
+            "type": "boolean"
+          },
+          "published_at": {
+            "description": "ISO-8601 publish timestamp, if present.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "recommended_backend": {
+            "description": "The backend recommended for this host given its detected GPU/driver.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "variants": {
+            "description": "Every `(platform, arch, backend)` this release actually publishes.\n Empty ⇒ the tag exists but no binary has been uploaded yet.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InstallableVariant"
+            }
+          },
+          "version": {
+            "description": "The value to pass as `version` (e.g. `v0.0.3-alpha`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "variants",
+          "binary_ready",
+          "installed_backends",
+          "installed",
+          "prerelease"
+        ]
+      },
       "InstanceResponse": {
         "type": "object",
         "properties": {
@@ -36442,7 +36701,7 @@
             "format": "uuid"
           },
           "last_health_check_at": {
-            "description": "Connection-health columns (migration 83). Populated by\n `connection_health::probe` at four points: boot startup\n check, create-flow probe, update-flow enable-transition\n probe, and the explicit form-based test path.\n `last_health_check_at` is NULL on rows that have never been\n probed (default status \"untested\"). UI renders an Alert\n when `last_health_check_status == \"unhealthy\"`.",
+            "description": "Connection-health columns (migration 83). Populated by\n `connection_health::probe` at four points: boot startup\n check, create-flow probe, update-flow enable-transition\n probe, and the explicit form-based test path.\n `last_health_check_at` is NULL on rows that have never been\n probed (default status \"untested\"). The UI renders an error\n Alert on \"unhealthy\" and a warning Alert on \"unverified\".",
             "type": [
               "string",
               "null"
@@ -36456,6 +36715,7 @@
             ]
           },
           "last_health_check_status": {
+            "description": "One of `\"untested\" | \"healthy\" | \"unverified\" | \"unhealthy\"`.\n\n `\"unverified\"` (added by migration\n `202607200600_llm_repository_unverified_status`) means \"reachable,\n but model-serving capability not confirmed for this URL shape\". It\n is deliberately NOT `\"unhealthy\"`: an unconfirmable host must never\n auto-disable a working self-hosted deployment (INV-4). `\"healthy\"`\n now requires positive evidence — a confirmed model listing — so\n reachability alone can never earn it.",
             "type": "string"
           },
           "name": {
@@ -36546,7 +36806,7 @@
             "format": "uuid"
           },
           "last_health_check_at": {
-            "description": "Connection-health columns (migration 83). Populated by\n `connection_health::probe` at four points: boot startup\n check, create-flow probe, update-flow enable-transition\n probe, and the explicit form-based test path.\n `last_health_check_at` is NULL on rows that have never been\n probed (default status \"untested\"). UI renders an Alert\n when `last_health_check_status == \"unhealthy\"`.",
+            "description": "Connection-health columns (migration 83). Populated by\n `connection_health::probe` at four points: boot startup\n check, create-flow probe, update-flow enable-transition\n probe, and the explicit form-based test path.\n `last_health_check_at` is NULL on rows that have never been\n probed (default status \"untested\"). The UI renders an error\n Alert on \"unhealthy\" and a warning Alert on \"unverified\".",
             "type": [
               "string",
               "null"
@@ -36560,6 +36820,7 @@
             ]
           },
           "last_health_check_status": {
+            "description": "One of `\"untested\" | \"healthy\" | \"unverified\" | \"unhealthy\"`.\n\n `\"unverified\"` (added by migration\n `202607200600_llm_repository_unverified_status`) means \"reachable,\n but model-serving capability not confirmed for this URL shape\". It\n is deliberately NOT `\"unhealthy\"`: an unconfirmable host must never\n auto-disable a working self-hosted deployment (INV-4). `\"healthy\"`\n now requires positive evidence — a confirmed model listing — so\n reachability alone can never earn it.",
             "type": "string"
           },
           "name": {
@@ -39788,7 +40049,7 @@
         "type": "object",
         "properties": {
           "reason": {
-            "description": "Human-readable reason — taken verbatim from\n `test_repository_connectivity`'s `Err(String)` (timeout / 401 /\n DNS / etc.).",
+            "description": "Human-readable reason — taken verbatim from the probe's\n [`ProbeVerdict::Unhealthy`] reason (timeout / 401 / DNS / etc.).",
             "type": "string"
           }
         },
@@ -40867,6 +41128,26 @@
           "path"
         ]
       },
+      "RepositoryHealthStatus": {
+        "description": "The health outcome vocabulary, as an API-facing enum.\n\n The DB column is text (it also carries the `\"untested\"` default, which a\n probe never writes), so this enum covers exactly the three values a probe\n can produce.",
+        "oneOf": [
+          {
+            "description": "A model-serving capability was positively confirmed.",
+            "type": "string",
+            "const": "healthy"
+          },
+          {
+            "description": "Reachable, but the capability could not be confirmed for this URL\n shape. Never auto-disables the repository.",
+            "type": "string",
+            "const": "unverified"
+          },
+          {
+            "description": "Unreachable, or the credentials were rejected.",
+            "type": "string",
+            "const": "unhealthy"
+          }
+        ]
+      },
       "RepositorySource": {
         "type": "string",
         "enum": [
@@ -41293,6 +41574,11 @@
             "type": "integer",
             "format": "int32"
           },
+          "engine_release_cache_ttl_secs": {
+            "description": "How long a fetched engine release catalogue is reused before the next\n discovery call refreshes it from GitHub. Discovery was previously\n uncached, costing one GitHub API request per call against a 60/hour\n anonymous budget.",
+            "type": "integer",
+            "format": "int32"
+          },
           "idle_unload_secs": {
             "type": "integer",
             "format": "int32"
@@ -41306,6 +41592,7 @@
           "idle_unload_secs",
           "auto_start_timeout_secs",
           "drain_timeout_secs",
+          "engine_release_cache_ttl_secs",
           "created_at",
           "updated_at"
         ]
@@ -45661,13 +45948,23 @@
           "message": {
             "type": "string"
           },
+          "status": {
+            "description": "The three-way probe outcome. `unverified` is distinct from\n `unhealthy`: it never auto-disables the repository.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RepositoryHealthStatus"
+              }
+            ]
+          },
           "success": {
+            "description": "True ONLY when a model-serving capability was positively confirmed.\n A reachable-but-unconfirmable host reports `success: false` with\n `status: \"unverified\"` — reachability alone is not a pass.",
             "type": "boolean"
           }
         },
         "required": [
           "success",
-          "message"
+          "message",
+          "status"
         ]
       },
       "TestRunResponse": {
@@ -47459,6 +47756,13 @@
             "format": "int32"
           },
           "drain_timeout_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "engine_release_cache_ttl_secs": {
             "type": [
               "integer",
               "null"

@@ -345,6 +345,17 @@ pub fn repository_kind(url: &str) -> RepositoryKind {
     }
 }
 
+/// Is this URL a GitHub origin a model download can actually CLONE from?
+///
+/// `GitService::build_repository_url` turns a GitHub-kind repository row into
+/// `{url}/{path}.git`, so only the web origin works as a git remote. The API
+/// host (`api.github.com`) answers the REST catalogue but is not a git remote,
+/// and it shares the `.github.com` suffix that decides the kind — so without
+/// this the capability probe would confirm the API and call the row verified.
+fn is_clonable_github_origin(url: &str) -> bool {
+    host_of(url).is_some_and(|h| h == "github.com" || h == "www.github.com")
+}
+
 /// Hugging Face API base for the capability probe.
 ///
 /// `LLM_REPOSITORY_HF_API_BASE` is a **debug-only** test seam (mirrors
@@ -668,6 +679,26 @@ pub async fn test_repository_connectivity(
 
     // ── Step 2: model-registry capability ────────────────────────────
     let kind = repository_kind(&request.url);
+
+    // A GitHub-kind row whose own URL is NOT a clonable origin cannot serve
+    // models even though the GitHub REST API answers for it. `api.github.com`
+    // is the reported case: it shares the `.github.com` suffix, so the kind
+    // probe would confirm the REST catalogue and report `healthy` — while the
+    // download path builds `{repo.url}/{path}.git`, i.e.
+    // `https://api.github.com/owner/repo.git`, which is not a git remote.
+    // Confirming the API here would reproduce exactly the lie INV-4 forbids,
+    // so the row is reported `unverified` rather than verified-and-broken.
+    if kind == RepositoryKind::Github && !is_clonable_github_origin(&request.url) {
+        return ProbeVerdict::Unverified {
+            reason: format!(
+                "{} is a GitHub API host, not a clonable repository origin — model \
+                 downloads clone from https://github.com/<owner>/<repo>.git, so this \
+                 URL could not be confirmed as a model repository",
+                redact_url_userinfo(&request.url)
+            ),
+        };
+    }
+
     let Some(capability_url) = capability_probe_url(kind, &request.url) else {
         return ProbeVerdict::Unverified {
             reason: format!(
@@ -908,6 +939,42 @@ mod tests {
             &serde_json::json!({"repository_url": 7})
         ));
         assert!(!is_github_api_catalog(&serde_json::json!({"ok": true})));
+    }
+
+    #[test]
+    /// The reported `https://api.github.com` row. It shares the `.github.com`
+    /// suffix that selects the GitHub kind, and the GitHub REST catalogue it
+    /// probes genuinely answers — so without an origin guard the capability
+    /// probe CONFIRMS it and the row reads "Verified as a model repository",
+    /// while `{url}/{path}.git` is not a git remote and no download can work.
+    ///
+    /// The true-positive half is in the same test so a guard that rejected
+    /// every GitHub row would not pass.
+    #[test]
+    fn only_a_clonable_github_origin_can_be_verified() {
+        // Clonable — the seeded GitHub row, and its www alias.
+        assert!(is_clonable_github_origin("https://github.com"));
+        assert!(is_clonable_github_origin("https://github.com/"));
+        assert!(is_clonable_github_origin("https://www.github.com"));
+
+        // NOT clonable — API/other subdomains. These still classify as the
+        // GitHub KIND (that is what makes the guard necessary).
+        for url in [
+            "https://api.github.com",
+            "https://api.github.com/",
+            "https://raw.github.com",
+            "https://gist.github.com",
+        ] {
+            assert_eq!(
+                repository_kind(url),
+                RepositoryKind::Github,
+                "{url} must still classify as the GitHub kind"
+            );
+            assert!(
+                !is_clonable_github_origin(url),
+                "{url} is not a git remote and must not be verifiable"
+            );
+        }
     }
 
     #[test]

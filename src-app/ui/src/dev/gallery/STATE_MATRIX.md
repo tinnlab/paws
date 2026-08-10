@@ -7,8 +7,8 @@
 
 ## Summary
 
-- **352** surfaces carry at least one renderable-state signal.
-- **2170** signals total: 1704 branch, 140 empty, 126 error, 93 loading, 102 overlay, 5 panel.
+- **353** surfaces carry at least one renderable-state signal.
+- **2174** signals total: 1707 branch, 141 empty, 126 error, 93 loading, 102 overlay, 5 panel.
 - **5** right-panel renderers registered (each a right-panel-open state).
 - **35** slot registrations (sidebar / settings / chat mount points).
 
@@ -2492,22 +2492,24 @@ Required states: `empty`, `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!platform \|\| !arch` | 99 |
-| branch | `isChecking && !updateCheck` | 168 |
-| branch | `updateError && !updateCheck` | 170 |
-| branch | `!updateCheck` | 180 |
-| empty | `readyUpstream.length === 0` | 184 |
-| branch | `readyUpstream.length > 10` | 199 |
-| branch | `loadingGpu && !gpu` | 218 |
-| branch | `!gpu` | 226 |
-| branch | `loadingGpu && !gpu` | 244 |
-| branch | `!gpu` | 252 |
-| branch | `v.size_bytes != null && !v.installed` | 296 |
-| branch | `isLatest` | 301 |
-| branch | `v.installed` | 302 |
-| branch | `v.prerelease` | 303 |
-| branch | `progress` | 322 |
-| error | `failed && progress?.error` | 323 |
+| branch | `!platform \|\| !arch` | 109 |
+| branch | `isChecking && !updateCheck` | 185 |
+| branch | `updateError && !updateCheck` | 187 |
+| branch | `!updateCheck` | 195 |
+| empty | `feedUnreachable && readyUpstream.length === 0` | 199 |
+| empty | `readyUpstream.length === 0` | 212 |
+| branch | `feedUnreachable` | 218 |
+| branch | `readyUpstream.length > 10` | 236 |
+| branch | `loadingGpu && !gpu` | 255 |
+| branch | `!gpu` | 263 |
+| branch | `loadingGpu && !gpu` | 281 |
+| branch | `!gpu` | 289 |
+| branch | `v.size_bytes != null && !v.installed` | 333 |
+| branch | `isLatest` | 338 |
+| branch | `v.installed` | 339 |
+| branch | `v.prerelease` | 340 |
+| branch | `progress` | 359 |
+| error | `failed && progress?.error` | 360 |
 
 ### `modules/llm-local-runtime/components/InstalledVersionsCard`
 
@@ -2536,9 +2538,9 @@ Required states: `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `loadingSettings && !settings` | 68 |
-| error | `error && !settings` | 79 |
-| branch | `canManage` | 97 |
+| branch | `loadingSettings && !settings` | 72 |
+| error | `error && !settings` | 83 |
+| branch | `canManage` | 101 |
 
 ### `modules/llm-local-runtime/components/RuntimeVersionCard`
 
@@ -2861,11 +2863,21 @@ Required states: `open`
 | overlay | `<Drawer open>` | 456 |
 | branch | `showTestButton` | 469 |
 | branch | `canSave` | 490 |
-| branch | `mode === 'edit' && repository?.last_health_check_status === 'unhealthy'` | 511 |
-| branch | `mode === 'edit'` | 563 |
-| branch | `authType === 'api_key'` | 599 |
-| branch | `authType === 'basic_auth'` | 610 |
-| branch | `authType === 'bearer_token'` | 626 |
+| branch | `mode === 'edit'` | 511 |
+| branch | `mode === 'edit'` | 555 |
+| branch | `authType === 'api_key'` | 591 |
+| branch | `authType === 'basic_auth'` | 602 |
+| branch | `authType === 'bearer_token'` | 618 |
+
+### `modules/llm-repository/components/LlmRepositoryHealth`
+
+Required states: _(branch-only — proven via dynamic coverage)_
+
+| kind | condition | line |
+|---|---|---|
+| branch | `status === 'unhealthy'` | 65 |
+| branch | `status === 'unverified'` | 77 |
+| branch | `status === 'healthy'` | 100 |
 
 ### `modules/llm-repository/components/LlmRepositorySettings`
 
@@ -2879,9 +2891,8 @@ Required states: `empty`, `error`
 | empty | `repositories.length === 0` | 240 |
 | branch | `repository.built_in` | 265 |
 | branch | `!repository.enabled` | 270 |
-| branch | `repository.last_health_check_status === 'unhealthy'` | 308 |
-| branch | `index < repositories.length - 1` | 331 |
-| branch | `totalRepositories > 0` | 340 |
+| branch | `index < repositories.length - 1` | 316 |
+| branch | `totalRepositories > 0` | 325 |
 
 ### `modules/mcp/chat-extension/components/AskUserWizardContent`
 

@@ -322,6 +322,7 @@ export const ApiEndpoints = {
   'RuntimeVersion.get': 'GET /api/local-runtime/versions/{version_id}',
   'RuntimeVersion.getDownload': 'GET /api/local-runtime/versions/downloads/{key}',
   'RuntimeVersion.list': 'GET /api/local-runtime/versions',
+  'RuntimeVersion.listAvailable': 'GET /api/local-runtime/versions/available',
   'RuntimeVersion.listDownloads': 'GET /api/local-runtime/versions/downloads',
   'RuntimeVersion.setDefault': 'POST /api/local-runtime/versions/{version_id}/set-default',
   'RuntimeVersion.subscribeDownloadEvents': 'GET /api/local-runtime/versions/downloads/{key}/events',

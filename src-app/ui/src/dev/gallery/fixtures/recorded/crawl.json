@@ -189,7 +189,7 @@
       {
         "id": "11111111-1111-1111-1111-111111111111",
         "user_id": "a5d6fdad-b3b1-4d5a-bd5d-25223536e415",
-        "title": "Rendering Showcase \u2014 every block type",
+        "title": "Rendering Showcase — every block type",
         "active_branch_id": "22222222-2222-2222-2222-222222222222",
         "created_at": "2026-07-01T12:00:00Z",
         "updated_at": "2026-07-05T20:15:38.391820Z",
@@ -528,7 +528,7 @@
       "display_name": "Deep Researcher",
       "version": "1.0.0",
       "$schema": "/schemas/2026-06-12/assistant.schema.json",
-      "description": "Multi-step research assistant. Pinned to a future ziee-chat that ships the parallel sub-agent runtime \u2014 used to exercise the compat gate.",
+      "description": "Multi-step research assistant. Pinned to a future ziee-chat that ships the parallel sub-agent runtime — used to exercise the compat gate.",
       "instructions": "You are a meticulous research assistant. Decompose the question into\nsub-questions, gather evidence for each, cite sources, and synthesize a\nbalanced answer. Flag uncertainty explicitly and distinguish established\nfacts from speculation.\n",
       "parameters": {
         "max_tokens": 4096,
@@ -608,7 +608,7 @@
       "version": "1.0.0",
       "$schema": "/schemas/2026-06-12/assistant.schema.json",
       "description": "Specialized assistant for image and visual content analysis.",
-      "instructions": "You are an expert in visual content analysis. Help users understand images,\nextract information, and provide detailed visual descriptions. When analyzing,\ndescribe composition, subject, mood, and notable details \u2014 then answer the\nuser's specific question.\n",
+      "instructions": "You are an expert in visual content analysis. Help users understand images,\nextract information, and provide detailed visual descriptions. When analyzing,\ndescribe composition, subject, mood, and notable details — then answer the\nuser's specific question.\n",
       "parameters": {
         "max_tokens": 2048,
         "temperature": 0.4
@@ -914,7 +914,7 @@
         "name": "io.github.ziee-ai/qwen2.5-coder-7b-instruct",
         "category": "model",
         "title": "Qwen2.5-Coder 7B",
-        "summary": "Alibaba's Qwen2.5-Coder 7B \u2014 code generation, completion, and reasoning across 40+ languages.",
+        "summary": "Alibaba's Qwen2.5-Coder 7B — code generation, completion, and reasoning across 40+ languages.",
         "tags": [
           "code",
           "instruct",
@@ -1094,7 +1094,7 @@
         "name": "io.github.ziee/effective-prompting",
         "category": "skill",
         "title": "Effective Prompting",
-        "summary": "Model-agnostic techniques for clearer, more reliable LLM prompts \u2014 structure, output shaping, few-shot, and hallucination control.",
+        "summary": "Model-agnostic techniques for clearer, more reliable LLM prompts — structure, output shaping, few-shot, and hallucination control.",
         "tags": [
           "prompting",
           "prompt-engineering",
@@ -1353,7 +1353,7 @@
       "display_name": "DeepSeek-R1 70B",
       "version": "1.0.0",
       "$schema": "/schemas/2026-06-12/model.schema.json",
-      "description": "Large reasoning model. Flagged as requiring a future ziee-chat for its tensor-parallel runtime support \u2014 used to exercise the compat gate.",
+      "description": "Large reasoning model. Flagged as requiring a future ziee-chat for its tensor-parallel runtime support — used to exercise the compat gate.",
       "repository": {
         "url": "https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Llama-70B",
         "source": "huggingface",
@@ -1747,7 +1747,7 @@
       "display_name": "Qwen2.5-Coder 7B",
       "version": "1.0.0",
       "$schema": "/schemas/2026-06-12/model.schema.json",
-      "description": "Alibaba's Qwen2.5-Coder 7B \u2014 code generation, completion, and reasoning across 40+ languages.",
+      "description": "Alibaba's Qwen2.5-Coder 7B — code generation, completion, and reasoning across 40+ languages.",
       "repository": {
         "url": "https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct",
         "source": "huggingface",
@@ -1896,7 +1896,7 @@
       {
         "key": "europepmc",
         "display_name": "Europe PMC",
-        "keyless_note": "Works without a key \u2014 biomedical literature + preprints.",
+        "keyless_note": "Works without a key — biomedical literature + preprints.",
         "config_fields": [],
         "enabled": true,
         "configured": true,
@@ -1910,7 +1910,7 @@
         "key_field": {
           "required": false,
           "label": "Crossref Plus token",
-          "help": "Optional \u2014 Crossref Plus subscribers get higher rate limits.",
+          "help": "Optional — Crossref Plus subscribers get higher rate limits.",
           "docs_url": "https://www.crossref.org/documentation/metadata-plus/"
         },
         "config_fields": [
@@ -1919,7 +1919,7 @@
             "label": "Contact email (polite pool)",
             "required": false,
             "placeholder": "you@example.org",
-            "help": "Joins Crossref's polite pool (~10 req/s vs ~5 anonymous) AND enables Unpaywall, the DOI\u2192open-access-PDF resolver used by fetch_paper_fulltext \u2014 without it, DOI-only papers can't resolve full text."
+            "help": "Joins Crossref's polite pool (~10 req/s vs ~5 anonymous) AND enables Unpaywall, the DOI→open-access-PDF resolver used by fetch_paper_fulltext — without it, DOI-only papers can't resolve full text."
           }
         ],
         "enabled": true,
@@ -1930,7 +1930,7 @@
       {
         "key": "semanticscholar",
         "display_name": "Semantic Scholar",
-        "keyless_note": "Works without a key (shared pool \u2014 may rate-limit); add a free key for a dedicated rate.",
+        "keyless_note": "Works without a key (shared pool — may rate-limit); add a free key for a dedicated rate.",
         "key_field": {
           "required": false,
           "label": "Semantic Scholar API key",
@@ -1950,7 +1950,7 @@
         "key_field": {
           "required": false,
           "label": "NCBI API key",
-          "help": "Free \u2014 raises the rate limit from 3 to 10 req/s.",
+          "help": "Free — raises the rate limit from 3 to 10 req/s.",
           "docs_url": "https://www.ncbi.nlm.nih.gov/account/settings/"
         },
         "config_fields": [
@@ -1970,7 +1970,7 @@
       {
         "key": "arxiv",
         "display_name": "arXiv",
-        "keyless_note": "Works without a key \u2014 CS / methods / quant-bio preprints.",
+        "keyless_note": "Works without a key — CS / methods / quant-bio preprints.",
         "config_fields": [],
         "enabled": true,
         "configured": true,
@@ -1984,7 +1984,7 @@
         "key_field": {
           "required": true,
           "label": "CORE API key",
-          "help": "Free \u2014 register at core.ac.uk; sent as a bearer token.",
+          "help": "Free — register at core.ac.uk; sent as a bearer token.",
           "docs_url": "https://core.ac.uk/services/api"
         },
         "config_fields": [],
@@ -2018,7 +2018,7 @@
         "key_field": {
           "required": false,
           "label": "Crossref Plus token",
-          "help": "Optional \u2014 Crossref Plus subscribers get higher rate limits.",
+          "help": "Optional — Crossref Plus subscribers get higher rate limits.",
           "docs_url": "https://www.crossref.org/documentation/metadata-plus/"
         },
         "system_key_set": false
@@ -2040,7 +2040,7 @@
         "key_field": {
           "required": false,
           "label": "NCBI API key",
-          "help": "Free \u2014 raises the rate limit from 3 to 10 req/s.",
+          "help": "Free — raises the rate limit from 3 to 10 req/s.",
           "docs_url": "https://www.ncbi.nlm.nih.gov/account/settings/"
         },
         "system_key_set": false
@@ -2051,7 +2051,7 @@
         "key_field": {
           "required": true,
           "label": "CORE API key",
-          "help": "Free \u2014 register at core.ac.uk; sent as a bearer token.",
+          "help": "Free — register at core.ac.uk; sent as a bearer token.",
           "docs_url": "https://core.ac.uk/services/api"
         },
         "system_key_set": false
@@ -2453,7 +2453,8 @@
     "auto_start_timeout_secs": 30,
     "drain_timeout_secs": 30,
     "created_at": "2026-07-05T20:15:33.458227Z",
-    "updated_at": "2026-07-05T20:15:33.458227Z"
+    "updated_at": "2026-07-05T20:15:33.458227Z",
+    "engine_release_cache_ttl_secs": 3600
   },
   "Mcp.getDefaults": {
     "default_approval_mode": "manual_approve"

@@ -4,7 +4,7 @@
 // renders + overlay triggers + panel/slot registrations) that the reconciliation
 // gate (scripts/reconcile-state-matrix.mjs) checks the gallery entries against.
 //
-// 352 surfaces carry renderable-state signals; 2170 signals total.
+// 353 surfaces carry renderable-state signals; 2174 signals total.
 
 /** A signal is one mechanically-detected render fork (a state the surface can be in). */
 export interface StateSignal {
@@ -2258,22 +2258,24 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/llm-local-runtime/components/AvailableVersionsCard",
     requiredStates: ["empty","error"],
     signals: [
-      { kind: "branch", condition: "!platform || !arch", line: 99 },
-      { kind: "branch", condition: "isChecking && !updateCheck", line: 168 },
-      { kind: "branch", condition: "updateError && !updateCheck", line: 170 },
-      { kind: "branch", condition: "!updateCheck", line: 180 },
-      { kind: "empty", condition: "readyUpstream.length === 0", line: 184 },
-      { kind: "branch", condition: "readyUpstream.length > 10", line: 199 },
-      { kind: "branch", condition: "loadingGpu && !gpu", line: 218 },
-      { kind: "branch", condition: "!gpu", line: 226 },
-      { kind: "branch", condition: "loadingGpu && !gpu", line: 244 },
-      { kind: "branch", condition: "!gpu", line: 252 },
-      { kind: "branch", condition: "v.size_bytes != null && !v.installed", line: 296 },
-      { kind: "branch", condition: "isLatest", line: 301 },
-      { kind: "branch", condition: "v.installed", line: 302 },
-      { kind: "branch", condition: "v.prerelease", line: 303 },
-      { kind: "branch", condition: "progress", line: 322 },
-      { kind: "error", condition: "failed && progress?.error", line: 323 },
+      { kind: "branch", condition: "!platform || !arch", line: 109 },
+      { kind: "branch", condition: "isChecking && !updateCheck", line: 185 },
+      { kind: "branch", condition: "updateError && !updateCheck", line: 187 },
+      { kind: "branch", condition: "!updateCheck", line: 195 },
+      { kind: "empty", condition: "feedUnreachable && readyUpstream.length === 0", line: 199 },
+      { kind: "empty", condition: "readyUpstream.length === 0", line: 212 },
+      { kind: "branch", condition: "feedUnreachable", line: 218 },
+      { kind: "branch", condition: "readyUpstream.length > 10", line: 236 },
+      { kind: "branch", condition: "loadingGpu && !gpu", line: 255 },
+      { kind: "branch", condition: "!gpu", line: 263 },
+      { kind: "branch", condition: "loadingGpu && !gpu", line: 281 },
+      { kind: "branch", condition: "!gpu", line: 289 },
+      { kind: "branch", condition: "v.size_bytes != null && !v.installed", line: 333 },
+      { kind: "branch", condition: "isLatest", line: 338 },
+      { kind: "branch", condition: "v.installed", line: 339 },
+      { kind: "branch", condition: "v.prerelease", line: 340 },
+      { kind: "branch", condition: "progress", line: 359 },
+      { kind: "error", condition: "failed && progress?.error", line: 360 },
     ],
   },
   "modules/llm-local-runtime/components/InstalledVersionsCard": {
@@ -2299,9 +2301,9 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/llm-local-runtime/components/RuntimeConfigCard",
     requiredStates: ["error"],
     signals: [
-      { kind: "branch", condition: "loadingSettings && !settings", line: 68 },
-      { kind: "error", condition: "error && !settings", line: 79 },
-      { kind: "branch", condition: "canManage", line: 97 },
+      { kind: "branch", condition: "loadingSettings && !settings", line: 72 },
+      { kind: "error", condition: "error && !settings", line: 83 },
+      { kind: "branch", condition: "canManage", line: 101 },
     ],
   },
   "modules/llm-local-runtime/components/RuntimeVersionCard": {
@@ -2601,11 +2603,20 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
       { kind: "overlay", condition: "<Drawer open>", line: 456 },
       { kind: "branch", condition: "showTestButton", line: 469 },
       { kind: "branch", condition: "canSave", line: 490 },
-      { kind: "branch", condition: "mode === 'edit' && repository?.last_health_check_status === 'unhealthy'", line: 511 },
-      { kind: "branch", condition: "mode === 'edit'", line: 563 },
-      { kind: "branch", condition: "authType === 'api_key'", line: 599 },
-      { kind: "branch", condition: "authType === 'basic_auth'", line: 610 },
-      { kind: "branch", condition: "authType === 'bearer_token'", line: 626 },
+      { kind: "branch", condition: "mode === 'edit'", line: 511 },
+      { kind: "branch", condition: "mode === 'edit'", line: 555 },
+      { kind: "branch", condition: "authType === 'api_key'", line: 591 },
+      { kind: "branch", condition: "authType === 'basic_auth'", line: 602 },
+      { kind: "branch", condition: "authType === 'bearer_token'", line: 618 },
+    ],
+  },
+  "modules/llm-repository/components/LlmRepositoryHealth": {
+    surface: "modules/llm-repository/components/LlmRepositoryHealth",
+    requiredStates: [],
+    signals: [
+      { kind: "branch", condition: "status === 'unhealthy'", line: 65 },
+      { kind: "branch", condition: "status === 'unverified'", line: 77 },
+      { kind: "branch", condition: "status === 'healthy'", line: 100 },
     ],
   },
   "modules/llm-repository/components/LlmRepositorySettings": {
@@ -2618,9 +2629,8 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
       { kind: "empty", condition: "repositories.length === 0", line: 240 },
       { kind: "branch", condition: "repository.built_in", line: 265 },
       { kind: "branch", condition: "!repository.enabled", line: 270 },
-      { kind: "branch", condition: "repository.last_health_check_status === 'unhealthy'", line: 308 },
-      { kind: "branch", condition: "index < repositories.length - 1", line: 331 },
-      { kind: "branch", condition: "totalRepositories > 0", line: 340 },
+      { kind: "branch", condition: "index < repositories.length - 1", line: 316 },
+      { kind: "branch", condition: "totalRepositories > 0", line: 325 },
     ],
   },
   "modules/mcp/chat-extension/components/AskUserWizardContent": {

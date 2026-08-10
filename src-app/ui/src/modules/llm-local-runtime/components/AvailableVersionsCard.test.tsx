@@ -21,8 +21,7 @@
  *
  *   npx vitest run src/modules/llm-local-runtime/components/AvailableVersionsCard.test.tsx
  */
-import { afterEach, beforeEach, describe, expect, test } from 'vitest'
-import * as React from 'react'
+import { afterEach, describe, expect, test } from 'vitest'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 
@@ -77,8 +76,35 @@ type CatalogState = {
 let root: Root | null = null
 let host: HTMLElement | null = null
 
+/**
+ * Register a real Auth-shaped store proxy for the permission primitives.
+ *
+ * The card renders `<Can permission=...>` and reads the download-progress
+ * store, whose `init` calls `hasPermissionNow` — which throws
+ * "[permissions] Auth view not registered" unless an app has injected one.
+ * Mirrors the same setup in `modules/file-rag/pages/FileRagAdminPage.test.tsx`.
+ * The user is an admin so the Install affordances render; a permission-gating
+ * assertion is not what these tests are for.
+ */
+async function registerAuthView() {
+  const { defineStore, registerLazyStore } = await import('@ziee/framework/store-kit')
+  const { setAuthView } = await import('@ziee/framework/permissions')
+  const AuthDef = defineStore<
+    { user: { id: string; is_admin: boolean } | null; permissions: string[] },
+    Record<string, never>
+  >('TestAuthAvailableVersions', {
+    state: {
+      user: { id: 'test-admin', is_admin: true },
+      permissions: [],
+    },
+    actions: () => ({}),
+  })
+  setAuthView(registerLazyStore(AuthDef) as never)
+}
+
 /** Mount the REAL card with the store seeded to a given catalogue state. */
 async function mountWithCatalog(state: CatalogState) {
+  await registerAuthView()
   const { RuntimeUpdateRaw } = await import(
     '@/modules/llm-local-runtime/stores/runtimeUpdate'
   )
