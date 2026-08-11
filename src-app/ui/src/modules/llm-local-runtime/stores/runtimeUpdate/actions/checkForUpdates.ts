@@ -11,8 +11,17 @@ export default (set: RuntimeUpdateSet, _get: RuntimeUpdateGet) =>
     })
     try {
       const response = await ApiClient.RuntimeVersion.checkUpdates({ engine })
-      // Get current default version for this engine
-      const currentVersion = RuntimeVersion.versions.find(
+      // Get current default version for this engine.
+      //
+      // `.$` — the SOLE hook-free snapshot escape — not the reactive proxy.
+      // A bare `RuntimeVersion.versions` read IS a hook, and this is an async
+      // action, not a render: React throws #321 ("invalid hook call"), the
+      // catch below swallows it into `s.error`, `updateChecks` is never set,
+      // and the card renders "Couldn't load available versions — couldn't
+      // reach the upstream release feed" over a catalogue the server returned
+      // perfectly. That message blamed GitHub for a client-side bug; the real
+      // reason was only visible behind the collapsed "Details" disclosure.
+      const currentVersion = RuntimeVersion.$.versions.find(
         v => v.engine === engine && v.is_system_default,
       ) || null
       // Releases come newest-first. The "latest" we can actually install is the

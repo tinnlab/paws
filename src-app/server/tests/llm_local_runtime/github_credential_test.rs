@@ -66,6 +66,10 @@ enum AuthBehavior {
     /// proves the fallback TERMINATES (rather than looping) and that the
     /// rejection is explained in the reason text.
     RejectAll,
+    /// `403` with NO SSO header to every request — GitHub ANSWERED, but did
+    /// not serve the request and did not identify a credential problem.
+    /// Evidence of nothing: the verdict must stay `unverified`.
+    Forbidden403,
     /// `500` to the first request, then serve normally. Exercises the
     /// pre-existing transient-retry path, whose counter this change
     /// restructured.
@@ -115,6 +119,20 @@ async fn releases(State(st): State<MockState>, headers: HeaderMap) -> Response {
 
     // `RejectAll` refuses the anonymous re-issue too, so the fallback cannot
     // rescue the read — the terminating case.
+    if st.behavior == AuthBehavior::Forbidden403 {
+        return (
+            AxumStatus::FORBIDDEN,
+            [
+                ("content-type", "application/json"),
+                // Budget REMAINING and no retry-after: not a rate limit
+                // either. This is the genuinely ambiguous 403.
+                ("x-ratelimit-remaining", "4231"),
+            ],
+            r#"{"message":"Resource not accessible by personal access token"}"#,
+        )
+            .into_response();
+    }
+
     if st.behavior == AuthBehavior::RejectAll {
         return (
             AxumStatus::UNAUTHORIZED,
@@ -146,7 +164,10 @@ async fn releases(State(st): State<MockState>, headers: HeaderMap) -> Response {
                 )
                     .into_response();
             }
-            AuthBehavior::Accept | AuthBehavior::RejectAll | AuthBehavior::TransientThen200 => {}
+            AuthBehavior::Accept
+            | AuthBehavior::RejectAll
+            | AuthBehavior::Forbidden403
+            | AuthBehavior::TransientThen200 => {}
         }
     }
 
@@ -647,5 +668,45 @@ async fn a_token_present_through_a_total_outage_is_unverified_not_used() {
     assert!(
         !reason.contains("GITHUB_TOKEN"),
         "an outage must not be blamed on a credential that was never judged: {reason}"
+    );
+}
+
+/// TEST-19 `[acceptance]` for **INV-2** — an answered-but-unserved request
+/// leaves the credential `unverified`, never `used`.
+///
+/// The corroborated round-2 defect: the promotion guard was "a response
+/// arrived", which is true of a 403, a 404 and a persistent 5xx. A revoked or
+/// SAML-blocked token answers 403 — and since a bare 403 deliberately does NOT
+/// trigger the anonymous fallback, that operator got an empty catalogue AND a
+/// UI asserting their token was accepted. The original defect with the blame
+/// inverted. Reverting the guard to `result.is_ok()` turns this red.
+#[tokio::test]
+async fn an_answered_but_unserved_request_leaves_the_credential_unverified() {
+    let mock = setup(AuthBehavior::Forbidden403, Some(FAKE_TOKEN)).await;
+    let admin =
+        create_user_with_permissions(&mock.server, "admin", LOCAL_RUNTIME_ADMIN_PERMS).await;
+
+    let (status, body) = check_updates(&mock, &admin.token).await;
+    assert_eq!(status, StatusCode::OK, "still a degraded 200");
+
+    let (total, log) = mock.observed();
+    assert_eq!(
+        total, 1,
+        "an unclassifiable 403 must not spend the anonymous budget"
+    );
+    assert_eq!(log, vec![true], "and the credential stays on the request");
+
+    assert_eq!(body["source"], "unavailable");
+    assert_eq!(
+        body["credential_status"], "unverified",
+        "GitHub answered but did not SERVE the request, so its verdict on the \
+         credential is unknown — `used` would claim an acceptance that never \
+         happened, and would tell an operator with a revoked token it is fine"
+    );
+    let reason = body["unavailable_reason"].as_str().expect("reason");
+    assert!(reason.contains("403"), "the status is named: {reason}");
+    assert!(
+        !reason.contains("GITHUB_TOKEN"),
+        "and an unclassifiable 403 is not blamed on the credential: {reason}"
     );
 }

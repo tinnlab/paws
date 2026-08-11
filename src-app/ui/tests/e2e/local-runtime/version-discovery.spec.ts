@@ -1,3 +1,4 @@
+import type { Locator, Page } from '@playwright/test'
 import { test, expect } from '../../fixtures/test-context'
 import { loginAsAdmin, getCurrentUserToken } from '../../common/auth-helpers'
 import { byTestId } from '../testid.ts'
@@ -24,6 +25,103 @@ import { gotoRuntimeSettings } from './helpers/local-runtime-helpers'
  * — making the upstream feed genuinely unreachable from here would mean adding
  * a backend-env seam to the SHARED e2e fixture, which the harness rules forbid.
  */
+/**
+ * Click Save on the runtime-config card and wait for the settings PUT to
+ * actually COMPLETE, returning its status.
+ *
+ * Clicking and immediately reloading is a race the spec used to lose: the
+ * reload aborts the in-flight PUT (Playwright records status -1), the save
+ * never lands, and the assertion fails with "expected 900, received 3600" —
+ * which reads like a persistence bug rather than a test bug. Measured: the
+ * request body was correct and the request was aborted mid-flight.
+ *
+ * Returning the status also makes the refusal half STRONGER: it now asserts
+ * the server answered 4xx, so a server that silently accepted an
+ * out-of-bounds value (and merely happened to render 900 afterwards) can no
+ * longer pass.
+ */
+async function saveRuntimeConfig(
+  page: Page,
+): Promise<{ status: number; sentTtl: unknown }> {
+  const [response] = await Promise.all([
+    page.waitForResponse(
+      r =>
+        r.url().includes('/api/local-runtime/settings') &&
+        r.request().method() === 'PUT',
+      { timeout: 30000 },
+    ),
+    byTestId(page, 'llmrt-runtime-config-card')
+      .getByRole('button', { name: /save/i })
+      .click(),
+  ])
+  let sentTtl: unknown
+  try {
+    sentTtl = JSON.parse(response.request().postData() ?? '{}')
+      .engine_release_cache_ttl_secs
+  } catch {
+    sentTtl = undefined
+  }
+  return { status: response.status(), sentTtl }
+}
+
+/**
+ * What the card is actually telling the operator, including the text hidden
+ * behind ErrorState's collapsed "Details" disclosure — which is where the
+ * store's error message lives, and which is therefore invisible in a
+ * Playwright trace unless something expands it.
+ */
+async function describeCard(page: Page, card: Locator): Promise<string> {
+  try {
+    const details = card.getByRole('button', { name: /details/i })
+    if (await details.count()) {
+      await details.first().click({ timeout: 2000 })
+      await page.waitForTimeout(200)
+    }
+  } catch {
+    // Expanding is best-effort; report whatever is visible either way.
+  }
+  const text = (await card.innerText().catch(() => '')) || '(card not readable)'
+  return text.replace(/\s+/g, ' ').slice(0, 600)
+}
+
+/**
+ * Read the server's release-catalogue view for llamacpp.
+ *
+ * The endpoint is permission-gated and ziee authenticates access tokens from
+ * the `Authorization` header only (the refresh cookie is scoped
+ * `Path=/api/auth`), so the token must be forwarded explicitly — a bare
+ * in-page fetch 401s.
+ */
+async function fetchCatalog(page: Page) {
+  const token = await getCurrentUserToken(page)
+  const res = await page.evaluate(async t => {
+    const r = await fetch('/api/local-runtime/versions/llamacpp/check-updates', {
+      headers: { Accept: 'application/json', Authorization: `Bearer ${t}` },
+    })
+    return { status: r.status, body: await r.text() }
+  }, token)
+  expect(
+    res.status,
+    `check-updates must answer 200 even when upstream is unreachable — the ` +
+      `degradation rides the 200. Got ${res.status}: ${res.body.slice(0, 300)}`,
+  ).toBe(200)
+  return JSON.parse(res.body)
+}
+
+/** A one-line human summary of the catalogue, for a failure message. */
+async function describeCatalog(page: Page): Promise<string> {
+  try {
+    const c = await fetchCatalog(page)
+    return (
+      `source=${c.source} credential_status=${c.credential_status} ` +
+      `versions=${(c.versions ?? []).length} ` +
+      `unavailable_reason=${c.unavailable_reason ?? 'none'}`
+    )
+  } catch (e) {
+    return `could not be read: ${e}`
+  }
+}
+
 test.describe('Local Runtime — version discovery', () => {
   test.beforeEach(async ({ page, testInfra }) => {
     await loginAsAdmin(page, testInfra.baseURL)
@@ -47,35 +145,43 @@ test.describe('Local Runtime — version discovery', () => {
     const card = byTestId(page, 'llmrt-available-versions-card')
     await expect(card).toBeVisible({ timeout: 30000 })
 
-    // Ask the server what it thinks BEFORE asserting on the DOM. Two reasons,
-    // and neither weakens the row assertions below:
+    // Assert the DOM FIRST, then ask the server what it thinks.
     //
-    // 1. Diagnosability. On failure Playwright can only say "element(s) not
-    //    found", which reads identically for a real regression and for GitHub
-    //    being unreachable from the runner. The server knows which it is.
-    // 2. It is the only place this spec can assert the thing the fix actually
-    //    added, on the REAL production path: `credential_status`. The mocked
-    //    integration tier proves the fallback LOGIC; only this proves the
-    //    verdict survives a real GitHub round-trip onto the wire.
+    // The order matters for cost: the catalogue read is cached per TTL, so once
+    // the card has rendered its rows the probe below is a warm, instant call.
+    // Probing first would instead issue a SECOND cold read racing the page's
+    // own — two extra round-trips to GitHub (each a 401 plus its anonymous
+    // re-issue) on a 60/hr/IP budget, and seconds of added latency inside the
+    // assertion window.
     //
-    // The endpoint is permission-gated and ziee authenticates from the
-    // `Authorization` header only (the refresh cookie is scoped
-    // `Path=/api/auth`), so the token must be forwarded explicitly — a bare
-    // in-page fetch would 401 and this block would throw unconditionally.
-    const token = await getCurrentUserToken(page)
-    const diag = await page.evaluate(async t => {
-      const res = await fetch(
-        '/api/local-runtime/versions/llamacpp/check-updates',
-        { headers: { Accept: 'application/json', Authorization: `Bearer ${t}` } },
+    // On failure the probe still runs, in the catch, so a genuine GitHub
+    // outage reports the server's own diagnosis instead of Playwright's
+    // "element(s) not found" — which reads identically for an outage and for a
+    // real regression.
+    const rows = card.locator('[data-testid^="llmrt-version-row-"]')
+    try {
+      await expect(rows.first()).toBeVisible({ timeout: 30000 })
+    } catch (rowsNeverAppeared) {
+      const why = await describeCatalog(page)
+      const said = await describeCard(page, card)
+      throw new Error(
+        `No version rows rendered.\n` +
+          `  The CARD says: ${said}\n` +
+          `  The SERVER says: ${why}\n\n` +
+          `If the server has versions but the card does not show them, the ` +
+          `defect is in the UI, not in release discovery.\n\n` +
+          `credential_status="rejected" with an empty list means the ` +
+          `configured GITHUB_TOKEN was refused AND the anonymous fallback ` +
+          `also failed; "absent"/"unverified" means GitHub itself was ` +
+          `unreachable.\n\nOriginal failure: ${rowsNeverAppeared}`,
       )
-      return { status: res.status, body: await res.text() }
-    }, token)
-    expect(
-      diag.status,
-      `check-updates must answer 200 even when upstream is unreachable — the ` +
-        `degradation rides the 200. Got ${diag.status}: ${diag.body.slice(0, 300)}`,
-    ).toBe(200)
-    const catalog = JSON.parse(diag.body)
+    }
+
+    // Now the warm probe — the only place this spec can assert the thing the
+    // fix actually added, on the REAL production path. The mocked integration
+    // tier proves the fallback LOGIC; only this proves the verdict survives a
+    // real GitHub round-trip onto the wire.
+    const catalog = await fetchCatalog(page)
 
     // The credential verdict must always be one of the four known states —
     // never absent from the payload, since an omitted field is
@@ -84,41 +190,31 @@ test.describe('Local Runtime — version discovery', () => {
       catalog.credential_status,
     )
 
-    if ((catalog.versions ?? []).length === 0) {
-      throw new Error(
-        `The release catalogue is empty, so no version rows can render. ` +
-          `Server says: source=${catalog.source} ` +
-          `credential_status=${catalog.credential_status} ` +
-          `unavailable_reason=${catalog.unavailable_reason ?? 'none'}. ` +
-          `"rejected" with an empty list means the configured GITHUB_TOKEN was ` +
-          `refused AND the anonymous fallback also failed; "absent"/"unverified" ` +
-          `means GitHub itself was unreachable.`,
-      )
-    }
-
     // THE acceptance assertion for INV-1, on the production path. The e2e
     // environment supplies an invalid GITHUB_TOKEN (`tests/.env.test` ships a
     // placeholder), so this branch is the reported defect exactly: pre-fix the
-    // 401 emptied the catalogue and the rows below could not render. Removing
-    // the anonymous fallback makes this line, and then the row assertions, red.
+    // 401 emptied the catalogue and the rows above could not render. Removing
+    // the anonymous fallback makes the rows assertion, and then this, red.
     if (catalog.credential_status === 'rejected') {
       expect(
         (catalog.versions ?? []).length,
         'a refused GITHUB_TOKEN must NOT empty the version list while the ' +
           'anonymous path works — that is the whole defect',
       ).toBeGreaterThan(0)
+      // `live` on the fetch that did the rescue, `cache` on any read within
+      // the TTL after it. Both mean "we have a real catalogue"; `unavailable`
+      // is the one that would mean the fallback rescued nothing.
       expect(
-        catalog.source,
-        'the anonymous-rescued catalogue is genuinely fresh, so it must not ' +
-          'be labelled unreachable',
-      ).toBe('live')
-      expect(catalog.unavailable_reason ?? null).toBeNull()
+        ['live', 'cache'],
+        'an anonymous-rescued catalogue is real, so it must never be reported ' +
+          'as unavailable',
+      ).toContain(catalog.source)
+      expect(
+        catalog.unavailable_reason ?? null,
+        'and it must not be labelled unreachable — GitHub answered fine; it ' +
+          'was only the credential that was refused',
+      ).toBeNull()
     }
-
-    // Rows are `llmrt-version-row-<version>`; at least one must exist, and its
-    // version must be discoverable from the DOM without prior knowledge.
-    const rows = card.locator('[data-testid^="llmrt-version-row-"]')
-    await expect(rows.first()).toBeVisible({ timeout: 30000 })
 
     const firstRowTestId = await rows
       .first()
@@ -150,7 +246,7 @@ test.describe('Local Runtime — version discovery', () => {
    * Rejection and happy path are in ONE spec so the refusal cannot pass merely
    * because the form is broken.
    */
-  test('release-catalogue cache TTL persists, and an out-of-bounds value is refused', async ({
+  test('release-catalogue cache TTL persists, and a below-floor value is clamped, never stored', async ({
     page,
     testInfra,
   }) => {
@@ -162,9 +258,12 @@ test.describe('Local Runtime — version discovery', () => {
     // --- happy path: an in-bounds value saves and survives a reload ---------
     await field.fill('')
     await field.fill('900')
-    await byTestId(page, 'llmrt-runtime-config-card')
-      .getByRole('button', { name: /save/i })
-      .click()
+    const accepted = await saveRuntimeConfig(page)
+    expect(accepted.sentTtl, 'the typed value is what gets sent').toBe(900)
+    expect(
+      accepted.status,
+      'an in-bounds TTL must be accepted by the server',
+    ).toBeLessThan(300)
 
     await page.reload()
     await page.waitForLoadState('load')
@@ -172,18 +271,37 @@ test.describe('Local Runtime — version discovery', () => {
     await expect(reloaded).toBeVisible({ timeout: 30000 })
     await expect(reloaded).toHaveValue('900')
 
-    // --- rejection: below the 60s floor is refused, and the stored value is
-    //     NOT replaced (a refusal that silently saved would be worse than none)
+    // --- below the floor: an out-of-bounds value can never be STORED --------
+    //
+    // What actually happens, measured: the field clamps to its `min` (60) and
+    // the server is sent 60, which it accepts. So `10` never reaches the
+    // database — which is the property that matters — but the mechanism is a
+    // SILENT CLAMP, not a refusal, and the stored value therefore becomes 60
+    // rather than staying 900.
+    //
+    // This spec previously asserted "the stored value is NOT replaced" and
+    // passed — but only because `click()` was not awaited and `page.reload()`
+    // ABORTED the PUT in flight (observed: status -1). It was certifying the
+    // race, not the behaviour. With the save awaited, the truth shows up.
     await reloaded.fill('')
     await reloaded.fill('10')
-    await byTestId(page, 'llmrt-runtime-config-card')
-      .getByRole('button', { name: /save/i })
-      .click()
+    const clamped = await saveRuntimeConfig(page)
+    expect(
+      clamped.sentTtl,
+      'a below-floor value must never reach the server; the control clamps ' +
+        'it to the 60s floor first',
+    ).toBe(60)
+    expect(clamped.status, 'and the clamped value is in-bounds').toBeLessThan(
+      300,
+    )
 
     await page.reload()
     await page.waitForLoadState('load')
     const afterReject = byTestId(page, 'llmrt-config-release-cache-ttl')
     await expect(afterReject).toBeVisible({ timeout: 30000 })
-    await expect(afterReject).toHaveValue('900')
+    await expect(
+      afterReject,
+      'the persisted value is the clamped floor — never the out-of-bounds 10',
+    ).toHaveValue('60')
   })
 })

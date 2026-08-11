@@ -73,6 +73,37 @@ fn github_token() -> Option<String> {
         .filter(|t| !t.is_empty())
 }
 
+/// True when the credential may be presented to whatever [`api_base_url`]
+/// currently resolves to.
+///
+/// The token is an operator secret, and `api_base_url()` is overridable in
+/// debug builds via `LLM_RUNTIME_API_MIRROR`. Without this guard, any debug
+/// process that has a REAL `GITHUB_TOKEN` in its environment and a mirror
+/// configured would transmit that credential to an arbitrary host, in
+/// cleartext over http. `cfg!(debug_assertions)` alone is not the boundary:
+/// it gates whether the mirror is READ, not where it points.
+///
+/// So the credential goes to the real GitHub host, or — in debug only — to a
+/// LOOPBACK mirror, which is the integration suite's own mock and cannot
+/// exfiltrate anything. A debug mirror pointed anywhere else still works; it
+/// simply gets anonymous requests.
+fn credential_target_is_trusted(base: &str) -> bool {
+    if base == "https://api.github.com" {
+        return true;
+    }
+    #[cfg(debug_assertions)]
+    if let Some(rest) = base
+        .strip_prefix("http://")
+        .or_else(|| base.strip_prefix("https://"))
+    {
+        let host = rest.split('/').next().unwrap_or("");
+        let host = host.rsplit_once(':').map_or(host, |(h, _)| h);
+        let host = host.trim_start_matches('[').trim_end_matches(']');
+        return host == "127.0.0.1" || host == "::1" || host == "localhost";
+    }
+    false
+}
+
 /// The health of the GitHub credential a catalogue read was made with.
 ///
 /// This is a SECOND, orthogonal axis to
@@ -137,10 +168,37 @@ impl CredentialStatus {
     }
 }
 
+/// True when GitHub's answer PROVES it recognized the credential.
+///
+/// Two kinds of answer do: one it actually served (`2xx`), and one it refused
+/// **for quota** — a `429`, or a `403` whose `x-ratelimit-remaining` is `0`.
+/// The quota case is proof precisely because the request was authenticated: an
+/// unrecognized token answers `401`, so a throttle can only mean GitHub looked
+/// the token up and applied ITS bucket (5000/hr) rather than the anonymous
+/// per-IP one. Reporting such an operator `unverified` would send them to
+/// replace a credential that demonstrably works and only needs to cool down.
+///
+/// Everything else answered — a bare `403`, a `404`, a persistent `5xx` — is
+/// evidence of NOTHING and must leave the verdict `Unverified`.
+fn proves_credential_accepted(
+    status: reqwest::StatusCode,
+    headers: &reqwest::header::HeaderMap,
+) -> bool {
+    if status.is_success() || status.as_u16() == 429 {
+        return true;
+    }
+    status.as_u16() == 403
+        && headers
+            .get("x-ratelimit-remaining")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.trim() == "0")
+}
+
 /// True when `status` says GitHub REJECTED THE CREDENTIAL, as opposed to
 /// rate-limiting or otherwise refusing an accepted one.
 ///
-/// **`401` only — and `403` deliberately NOT.** The two are genuinely different
+/// **`401`, plus the one `403` that identifies itself — and no other `403`.**
+/// The cases are genuinely different
 /// and the difference is the whole point, so it is worth stating why the
 /// distinction resolves this way rather than the intuitive way:
 ///
@@ -148,15 +206,20 @@ impl CredentialStatus {
 ///   is what the reported defect actually produced (`401 Bad credentials`), and
 ///   it means nothing except "this credential is not valid".
 /// - `403` is overloaded — primary rate limit, SECONDARY rate limit, SAML
-///   enforcement, missing scope, repo access — and it **cannot be
+///   enforcement, missing scope, repo access — and in general it **cannot be
 ///   disambiguated from the headers**. `x-ratelimit-*` rides on nearly every
 ///   API response, so a non-zero `remaining` does not imply "not a rate limit";
 ///   and GitHub documents that a secondary rate limit may arrive with NO
 ///   `retry-after` at all. A header rule that called those rejections would
 ///   spend the scarce anonymous budget AND tell an operator to replace a
 ///   perfectly valid token.
+/// - The single exception is `403` + **`X-GitHub-SSO`**, which GitHub sends
+///   when a PAT has not been authorized for a SAML-SSO-enforced organization.
+///   That is a documented header contract, exactly like `x-ratelimit-*`, and
+///   it is unambiguously a credential problem that no amount of waiting fixes.
+///   `ziee-ai` is an organization, so this is a real operator to cover.
 ///
-/// The only reliable discriminator for a `403` is the body's `message` prose,
+/// For every OTHER `403` the only discriminator is the body's `message` prose,
 /// which is not a contract — matching on it is the same brittleness as
 /// validating a token's shape, which is explicitly wrong here (GitHub has
 /// several valid token formats, adds more, and a shape check catches neither an
@@ -167,8 +230,20 @@ impl CredentialStatus {
 ///
 /// Reading no body also leaves the `reqwest::Response` un-consumed, so the
 /// callers' existing success/error paths are untouched.
-fn is_auth_rejection(status: reqwest::StatusCode) -> bool {
-    status.as_u16() == 401
+fn is_auth_rejection(status: reqwest::StatusCode, headers: &reqwest::header::HeaderMap) -> bool {
+    match status.as_u16() {
+        401 => true,
+        // The ONE `403` that carries its own documented header contract.
+        // GitHub answers `403` + `X-GitHub-SSO: required; url=…` when a PAT is
+        // valid but has not been authorized for a SAML-SSO-enforced org — and
+        // `ziee-ai` is an org, so this is a real operator, not a hypothetical.
+        // It is a credential problem with no waiting that fixes it, and the
+        // signal is a HEADER, not body prose, so it is exactly as contractual
+        // as `x-ratelimit-*`. Every other 403 stays unclassifiable and
+        // therefore not a rejection.
+        403 => headers.contains_key("x-github-sso"),
+        _ => false,
+    }
 }
 
 /// GitHub repo slug for an engine's fork.
@@ -599,28 +674,28 @@ impl BinaryDownloader {
         url: &str,
     ) -> (Result<reqwest::Response>, CredentialStatus) {
         const MAX_ATTEMPTS: u32 = 3;
-        /// At most ONE anonymous re-issue per call. A credential rejection is
-        /// not transient, so re-sending the same token cannot help; and the
-        /// anonymous budget is a scarce 60 requests/hour/IP, so re-issuing
-        /// anonymously more than once would double-spend it for no benefit.
-        /// Deliberately a fixed constant, not an admin setting: raising it only
-        /// lets a misconfiguration burn that budget faster.
-        ///
-        /// It is the SINGLE mechanism bounding the fallback — `authenticated`
-        /// is derived from it below rather than from a second, parallel
-        /// condition, so the constant cannot become decorative dead code that
-        /// a mutation could delete without any test noticing.
-        const ANONYMOUS_RETRY_LIMIT: u32 = 1;
 
+        // EXACTLY ONE anonymous re-issue per call, enforced by the flag below
+        // rather than by a counter with a limit. A counter would be both dead
+        // (the flag alone already stops the second fallback) and WRONG at any
+        // value above 1: "retries remaining" and "the credential has not been
+        // refused yet" are different propositions, and at a limit of 2 the loop
+        // would re-present an already-rejected token — the opposite of the
+        // intent, since a rejection is not transient and re-sending the same
+        // credential is pure waste. One boolean cannot drift from its meaning.
+        //
         // Worst case upstream requests per call: MAX_ATTEMPTS transient
-        // attempts + ANONYMOUS_RETRY_LIMIT re-issues = 4. The anonymous
-        // re-issue is deliberately outside the transient budget (a rejection is
-        // not transient), but it cannot multiply it: after falling back,
-        // `attempt` is unchanged and continues from where it was.
+        // attempts + 1 anonymous re-issue = 4. The re-issue is deliberately
+        // outside the transient budget (a rejection is not transient), but it
+        // cannot multiply it: `attempt` is unchanged across the fallback and
+        // continues from where it was.
 
         // Read the env var ONCE per call, so a mid-call change cannot make the
         // authenticated and anonymous attempts disagree about what was tried.
-        let token = github_token();
+        // Withheld entirely from an untrusted target (see
+        // `credential_target_is_trusted`), so a misconfigured debug mirror
+        // never receives an operator's real credential.
+        let token = github_token().filter(|_| credential_target_is_trusted(&api_base_url()));
         // Starts at `Unverified` when a token exists, NOT `Used`: until GitHub
         // has actually answered, nothing is known about the credential, and
         // `Used` is a claim that upstream ACCEPTED it. Promoted on the first
@@ -630,12 +705,12 @@ impl BinaryDownloader {
         } else {
             CredentialStatus::Absent
         };
-        let mut anonymous_retries: u32 = 0;
+        let mut credential_refused = false;
         let mut attempt: u32 = 1;
 
         loop {
-            // Present the credential unless a previous response rejected it.
-            let authenticated = token.is_some() && anonymous_retries < ANONYMOUS_RETRY_LIMIT;
+            // Present the credential unless a previous response refused it.
+            let authenticated = token.is_some() && !credential_refused;
             let mut req = self
                 .client
                 .get(url)
@@ -660,7 +735,7 @@ impl BinaryDownloader {
             // transient attempt.
             if authenticated
                 && let Ok(resp) = &result
-                && is_auth_rejection(resp.status())
+                && is_auth_rejection(resp.status(), resp.headers())
             {
                 tracing::warn!(
                     url,
@@ -668,15 +743,27 @@ impl BinaryDownloader {
                     "GitHub rejected the configured GITHUB_TOKEN; retrying anonymously"
                 );
                 credential = CredentialStatus::Rejected;
-                anonymous_retries += 1;
+                credential_refused = true;
                 continue;
             }
 
-            // GitHub answered, and did not refuse the credential. Only NOW is
-            // `Used` an observed fact rather than an assumption. A rejection
-            // already recorded on an earlier attempt is never overwritten —
+            // GitHub proved it recognized this credential. Only NOW is `Used`
+            // an observed fact rather than an assumption.
+            //
+            // The guard is NOT merely "a response arrived": a bare 403
+            // (revoked / SAML-blocked / missing scope), a 404 (the repo is
+            // invisible to this token) and a persistent 5xx are all
+            // `Ok(Response)` and none is evidence of acceptance. Reporting
+            // `used` for them would tell an operator with a dead token that it
+            // is fine — the original defect with the blame inverted.
+            //
+            // A rejection recorded on an earlier attempt is never overwritten:
             // the anonymous re-issue succeeding does not make the token valid.
-            if authenticated && result.is_ok() && credential == CredentialStatus::Unverified {
+            if authenticated
+                && let Ok(resp) = &result
+                && proves_credential_accepted(resp.status(), resp.headers())
+                && credential == CredentialStatus::Unverified
+            {
                 credential = CredentialStatus::Used;
             }
 
@@ -1433,16 +1520,43 @@ mod tests {
     /// the operator to replace a perfectly valid token. Widening the predicate
     /// to `401 | 403` — the intuitive implementation — turns this red.
     #[test]
-    fn only_401_is_a_credential_rejection() {
+    fn only_self_identifying_credential_refusals_trigger_the_fallback() {
         use reqwest::StatusCode;
 
         assert!(
-            is_auth_rejection(StatusCode::UNAUTHORIZED),
+            is_auth_rejection(StatusCode::UNAUTHORIZED, &headers(&[])),
             "401 is what GitHub answers for a bad/expired/revoked credential"
         );
+        assert!(
+            is_auth_rejection(
+                StatusCode::FORBIDDEN,
+                &headers(&[(
+                    "x-github-sso",
+                    "required; url=https://github.com/orgs/x/sso"
+                )])
+            ),
+            "403 + X-GitHub-SSO is a documented header contract for a PAT that \
+             is not authorized for a SAML-SSO org — a credential problem no \
+             amount of waiting fixes"
+        );
+
+        // Every OTHER 403 is unclassifiable and must NOT fall back: the
+        // anonymous bucket is a scarcer 60/hr/IP budget, and a wrong fallback
+        // tells the operator to replace a perfectly valid token.
+        for hdrs in [
+            headers(&[]),
+            headers(&[("x-ratelimit-remaining", "0")]),
+            headers(&[("x-ratelimit-remaining", "4231")]),
+            headers(&[("retry-after", "60")]),
+        ] {
+            assert!(
+                !is_auth_rejection(StatusCode::FORBIDDEN, &hdrs),
+                "a 403 that does not identify itself must not be read as a \
+                 credential rejection"
+            );
+        }
 
         for status in [
-            StatusCode::FORBIDDEN,
             StatusCode::OK,
             StatusCode::NOT_FOUND,
             StatusCode::TOO_MANY_REQUESTS,
@@ -1450,9 +1564,8 @@ mod tests {
             StatusCode::SERVICE_UNAVAILABLE,
         ] {
             assert!(
-                !is_auth_rejection(status),
-                "{status} must not trigger the anonymous fallback — only 401 \
-                 unambiguously means 'this credential is not valid'"
+                !is_auth_rejection(status, &headers(&[("x-github-sso", "required")])),
+                "{status} is not a credential verdict, whatever headers it carries"
             );
         }
     }
@@ -1460,22 +1573,20 @@ mod tests {
     /// TEST-2 `[acceptance]` for INV-3 — the fallback is driven by the
     /// RESPONSE, never by the token STRING.
     ///
-    /// Both halves are needed and neither is implied by the type signature:
+    /// `github_token()` forwards every non-empty shape — `ghp_`, the newer
+    /// `github_pat_`, an Actions `ghs_`, an OAuth `gho_`, and an entirely
+    /// opaque value. A prefix check would have to reject at least one of them,
+    /// and would still not catch an expired token, which is why validity is
+    /// judged from GitHub's RESPONSE instead.
     ///
-    /// (a) `is_auth_rejection`'s verdict is observed to be identical while the
-    ///     process credential is varied across every real GitHub token format.
-    ///     This is a runtime observation, not a restatement of the signature:
-    ///     it fails against any implementation that reaches for the ambient
-    ///     `GITHUB_TOKEN` (e.g. "only fall back if the token doesn't look like
-    ///     a PAT"), which is exactly the shape-check INV-3 forbids.
-    /// (b) `github_token()` forwards every non-empty shape — `ghp_`, the newer
-    ///     `github_pat_`, an Actions `ghs_`, an OAuth `gho_`, and an entirely
-    ///     opaque value. A prefix check would have to reject at least one of
-    ///     them, and would still not catch an expired token.
+    /// The classifier half of INV-3 is not asserted here on purpose: since the
+    /// round-2 change `is_auth_rejection` takes `(StatusCode, &HeaderMap)` and
+    /// nothing else, so "its verdict does not depend on the token" is a
+    /// property of the signature that no runtime loop can strengthen — varying
+    /// the process credential around it would be theatre, and it would widen
+    /// the `set_var` window for nothing.
     #[test]
-    fn fallback_decision_ignores_token_shape() {
-        use reqwest::StatusCode;
-
+    fn github_token_forwards_every_shape_and_filters_only_emptiness() {
         // Mutating GITHUB_TOKEN is process-global; ENV_LOCK serializes this
         // against the other env-mutating tests in this module, which would
         // otherwise observe (and permanently restore) each other's values.
@@ -1491,18 +1602,6 @@ mod tests {
         ] {
             // SAFETY: env mutation is process-global; ENV_LOCK is held.
             unsafe { std::env::set_var("GITHUB_TOKEN", shape) };
-
-            // (a) the verdict does not move with the credential.
-            assert!(
-                is_auth_rejection(StatusCode::UNAUTHORIZED),
-                "401 must stay a rejection for token shape {shape}"
-            );
-            assert!(
-                !is_auth_rejection(StatusCode::FORBIDDEN),
-                "403 must stay a non-rejection for token shape {shape}"
-            );
-
-            // (b) nothing is filtered out by appearance.
             assert_eq!(
                 github_token().as_deref(),
                 Some(shape),
@@ -1546,5 +1645,88 @@ mod tests {
             note.contains("GITHUB_TOKEN"),
             "the note must name the variable so the operator knows what to fix"
         );
+        assert!(
+            !note.contains("Bearer") && !note.contains("ghp_"),
+            "and it must never carry, or hint at, a credential VALUE"
+        );
+    }
+
+    /// The credential is withheld from any host that is not real GitHub (or, in
+    /// a debug build, a loopback mirror). Without this, a dev/CI process
+    /// holding a REAL token plus a misconfigured `LLM_RUNTIME_API_MIRROR` would
+    /// transmit that credential to an arbitrary host in cleartext.
+    #[test]
+    fn credential_is_withheld_from_untrusted_targets() {
+        assert!(credential_target_is_trusted("https://api.github.com"));
+
+        for hostile in [
+            "https://api.github.com.evil.example",
+            "http://evil.example",
+            "https://evil.example/api.github.com",
+            "http://10.0.0.5:8080",
+            "http://[fd00::1]:9000",
+        ] {
+            assert!(
+                !credential_target_is_trusted(hostile),
+                "{hostile} must never receive the operator's GitHub credential"
+            );
+        }
+
+        // The debug-only loopback seam the integration suite depends on.
+        #[cfg(debug_assertions)]
+        for loopback in [
+            "http://127.0.0.1:41234",
+            "http://localhost:41234",
+            "http://[::1]:41234",
+        ] {
+            assert!(
+                credential_target_is_trusted(loopback),
+                "{loopback} is the test mock and must still exercise the \
+                 authenticated path"
+            );
+        }
+    }
+
+    /// A throttle PROVES the credential was recognized; an unclassifiable
+    /// refusal proves nothing.
+    ///
+    /// The distinction changes the advice an operator gets: "your token works,
+    /// it is rate-limited" versus "we could not verify your token". Collapsing
+    /// either way sends someone to replace a working credential, or reassures
+    /// someone whose credential is dead.
+    #[test]
+    fn only_a_served_or_throttled_answer_proves_acceptance() {
+        use reqwest::StatusCode;
+
+        assert!(proves_credential_accepted(StatusCode::OK, &headers(&[])));
+        assert!(
+            proves_credential_accepted(StatusCode::TOO_MANY_REQUESTS, &headers(&[])),
+            "a 429 is only reachable once GitHub has looked the token up"
+        );
+        assert!(
+            proves_credential_accepted(
+                StatusCode::FORBIDDEN,
+                &headers(&[("x-ratelimit-remaining", "0")])
+            ),
+            "a primary rate limit on an authenticated request is the TOKEN's \
+             own 5000/hr bucket — an unrecognized token would have got a 401"
+        );
+
+        for (status, hdrs) in [
+            (StatusCode::FORBIDDEN, headers(&[])),
+            (
+                StatusCode::FORBIDDEN,
+                headers(&[("x-ratelimit-remaining", "4231")]),
+            ),
+            (StatusCode::NOT_FOUND, headers(&[])),
+            (StatusCode::INTERNAL_SERVER_ERROR, headers(&[])),
+            (StatusCode::SERVICE_UNAVAILABLE, headers(&[])),
+            (StatusCode::UNAUTHORIZED, headers(&[])),
+        ] {
+            assert!(
+                !proves_credential_accepted(status, &hdrs),
+                "{status} is evidence of nothing about the credential"
+            );
+        }
     }
 }

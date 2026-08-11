@@ -5,7 +5,7 @@ would FAIL if the invariant were violated.
 
 ## Tier-1 unit (in-source `#[cfg(test)]`, no network)
 
-- **TEST-1** (tier: unit) [acceptance] [invariant: INV-1] [covers: ITEM-2] file: `src-app/server/src/modules/llm_local_runtime/engine/download.rs` — asserts: `is_auth_rejection` is true for 401 and FALSE for 403 (and for 200/404/429/500/503) — i.e. a credential rejection and a refusal of an accepted credential are two outcomes, not one. Widening the predicate to `401 | 403` (the intuitive implementation, which the audit showed is unsound) turns this red.
+- **TEST-1** (tier: unit) [acceptance] [invariant: INV-1] [covers: ITEM-2] file: `src-app/server/src/modules/llm_local_runtime/engine/download.rs` — asserts: `is_auth_rejection` is true for 401 and for `403` + `X-GitHub-SSO`, and FALSE for every other 403 (bare, rate-limited, budget-remaining, retry-after) and for 200/404/429/500/503 — i.e. a credential rejection and a refusal of an ACCEPTED credential are two outcomes, not one. Widening the predicate to all of `401 | 403` (the intuitive implementation) turns this red, and so does narrowing it back to `401` alone (which would leave a SAML-SSO operator with the original defect).
 - **TEST-2** (tier: unit) [acceptance] [invariant: INV-3] [covers: ITEM-2] file: `src-app/server/src/modules/llm_local_runtime/engine/download.rs` — asserts: with the process credential VARIED across five real GitHub token formats (`ghp_`/`github_pat_`/`ghs_`/`gho_`/opaque), the classifier's verdict is observed not to move (a runtime observation that fails against any implementation reaching for the ambient token — the shape check INV-3 forbids), AND `github_token()` forwards every one of those shapes. A shape-validating implementation cannot satisfy both halves. Takes `ENV_LOCK`, since `GITHUB_TOKEN` is process-global.
 - **TEST-8** (tier: unit) [covers: ITEM-1] file: `src-app/server/src/modules/llm_local_runtime/engine/download.rs` — asserts: `CredentialStatus::as_str()` maps to exactly `absent|used|unverified|rejected` (the wire vocabulary, duplicated in three places that cannot import each other: this enum, the OpenAPI doc-comment, and the TS union), and that only a rejection annotates a failing read's reason, naming the VARIABLE.
 - **TEST-7** (tier: unit) [covers: ITEM-5] file: `src-app/server/src/modules/llm_local_runtime/engine/release_cache.rs` — asserts: a fetch that reports `Rejected` stores that on the entry, and BOTH cache-serving paths (fresh-hit within TTL, and retain-on-failure after a failed refresh) report `rejected` rather than reverting to `absent`; and the pre-existing retain-on-failure + genuinely-empty-vs-unavailable behaviour is unchanged.
@@ -19,12 +19,19 @@ would FAIL if the invariant were violated.
 
 - **TEST-14** (tier: integration) [covers: ITEM-3, ITEM-4, ITEM-12] file: `src-app/server/tests/llm_local_runtime/github_credential_test.rs` — asserts: against a mock that answers 401 to BOTH the authenticated request and the anonymous re-issue, the loop stops at exactly two requests, the second carries NO `Authorization` header, and the reason names `GITHUB_TOKEN` + the status but never the value. The only path where `ANONYMOUS_RETRY_LIMIT` is observable (in the rescued case the loop exits anyway) and the only path that reaches `failure_note()`'s interpolation with a `Rejected` credential — blanking both call sites survived the whole suite without it.
 - **TEST-15** (tier: integration) [covers: ITEM-3] file: `src-app/server/tests/llm_local_runtime/github_credential_test.rs` — asserts: a 500 followed by a 200 costs two requests, BOTH authenticated (a 5xx must not drop the credential), and reports `used`. Pins the restructured transient-retry counter: reverting `attempt` to 0 makes `2u64.pow(attempt - 1)` underflow and PANIC in debug, which nothing else in the suite would catch.
+- **TEST-19** (tier: integration) [acceptance] [invariant: INV-2] [covers: ITEM-13] file: `src-app/server/tests/llm_local_runtime/github_credential_test.rs` — asserts: a token that meets a PERSISTENT non-success answer (403 without an SSO header) is reported `unverified`, never `used`. GitHub answered but did not serve the request, so it is evidence of nothing; reporting `used` there told an operator with a revoked or SAML-blocked token that their credential was fine — the original defect with the blame inverted. Mutating the guard back to `result.is_ok()` turns this red.
+- **TEST-20** (tier: unit) [covers: ITEM-14] file: `src-app/server/src/modules/llm_local_runtime/engine/download.rs` — asserts: `credential_target_is_trusted` accepts real GitHub and (debug only) loopback, and REFUSES `api.github.com.evil.example`, a plain external host, an RFC1918 address and an IPv6 host — so a misconfigured `LLM_RUNTIME_API_MIRROR` can never receive an operator's real token.
 - **TEST-16** (tier: integration) [acceptance] [invariant: INV-2] [covers: ITEM-1, ITEM-4] file: `src-app/server/tests/llm_local_runtime/github_credential_test.rs` — asserts: a token present through a TOTAL outage reports `unverified`, not `used` — GitHub never answered, so claiming acceptance would be unfounded — and the reason does not blame a credential that was never judged. With TEST-3 (`used`), TEST-6 (`absent`) and TEST-4/14 (`rejected`), all four vocabulary values are reachable and mutually distinguishable.
 
 ## Tier-3 e2e (real backend, no `page.route` mocking — repo rule)
 
 - **TEST-9** (tier: e2e) [covers: ITEM-7, ITEM-9] file: `src-app/ui/tests/e2e/local-runtime/version-discovery.spec.ts` — asserts: with the invalid `GITHUB_TOKEN` from `tests/.env.test` present in the backend environment, an admin opening Settings → Local Runtimes sees installable version rows with an Install control and a size, and the unreachable state is absent. This is the reported failing spec, unweakened; it fails RED on current main and passes only because the anonymous fallback works end-to-end. ITEM-9 additionally asserts, on the REAL production path (which no mock can stand in for), that `credential_status` is one of the four known values and that when it is `rejected` the list is non-empty, `source` is `live`, and `unavailable_reason` is null — INV-1 end-to-end. The probe is authenticated with `getCurrentUserToken` (the endpoint is permission-gated; an unauthenticated in-page fetch 401s and would throw unconditionally — the round-1 corroborated defect).
 - **TEST-10** (tier: e2e) [covers: ITEM-9] file: `src-app/ui/tests/e2e/local-runtime/version-discovery.spec.ts` — asserts: the release-catalogue TTL admin setting persists across a reload and an out-of-bounds value is refused (the second declared test in the reported-failing spec). Included because the report says BOTH tests in the file fail on main; its status must be established rather than assumed.
+
+## Frontend defect found by RUNNING the stack
+
+- **TEST-21** (tier: e2e) [covers: ITEM-15] file: `src-app/ui/tests/e2e/local-runtime/version-discovery.spec.ts` — asserts: (as part of TEST-9) the card actually RENDERS the version rows when the server has them. This is what caught React #321 — a reactive store-proxy read inside the async `checkForUpdates` action, whose throw the action's own catch swallowed into `state.error`, making the card claim the release feed was unreachable over a catalogue the server returned fine. No static angle saw it; only driving the real stack did. The spec's failure path now expands `ErrorState`'s collapsed "Details" disclosure and reports the card's own text, which is the only reason the cause was identifiable.
+- **TEST-22** (tier: e2e) [covers: ITEM-16] file: `src-app/ui/tests/e2e/local-runtime/version-discovery.spec.ts` — asserts: the runtime-config save is AWAITED (its PUT status and body are read), an in-bounds TTL persists across a reload, and a below-floor value is clamped to the 60s minimum and stored as 60 — never as the typed 10. Replaces an assertion that passed only because `page.reload()` aborted the PUT in flight.
 
 ## Component / gallery
 
@@ -53,11 +60,15 @@ would FAIL if the invariant were violated.
 | ITEM-10 | TEST-13 |
 | ITEM-11 | TEST-18 |
 | ITEM-12 | TEST-14 |
+| ITEM-13 | TEST-19 |
+| ITEM-14 | TEST-20 |
+| ITEM-15 | TEST-21 |
+| ITEM-16 | TEST-22 |
 
 | INV | acceptance test |
 |---|---|
 | INV-1 | TEST-1, TEST-4 |
-| INV-2 | TEST-6, TEST-16 |
+| INV-2 | TEST-6, TEST-16, TEST-19 |
 | INV-3 | TEST-2 |
 | INV-4 | TEST-3 |
 
