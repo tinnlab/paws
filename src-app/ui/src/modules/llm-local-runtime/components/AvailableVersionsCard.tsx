@@ -105,6 +105,16 @@ export function AvailableVersionsCard({ engine }: { engine: RuntimeEngine }) {
     ? new Date(updateCheck.checked_at).toLocaleString()
     : undefined
 
+  // A configured GITHUB_TOKEN that GitHub REFUSED. Deliberately independent of
+  // `feedUnreachable`: the server retries anonymously, so the common outcome is
+  // a perfectly fresh list served on the 60/hr anonymous budget — nothing is
+  // broken, but the operator would otherwise have no way to learn their
+  // credential is dead, and no way to tell this apart from "GitHub is down".
+  // Rendered above the list rather than inside any one branch, because it is
+  // equally true when versions render, when the cache is stale, and when the
+  // feed is unreachable.
+  const credentialRejected = updateCheck?.credential_status === 'rejected'
+
   const handleDownload = async (v: RuntimeAvailableVersion) => {
     if (!platform || !arch) {
       message.error(
@@ -191,6 +201,17 @@ export function AvailableVersionsCard({ engine }: { engine: RuntimeEngine }) {
         <BackendsRow gpu={gpu} loadingGpu={gpuLoading} />
 
         <Separator className="!my-2" />
+
+        {credentialRejected && (
+          // Not an error state: the versions below (if any) are real. This is
+          // the one thing the operator cannot discover any other way — their
+          // token is being refused, so they are silently on the 60/hr
+          // anonymous budget instead of 5000/hr.
+          <Text type="secondary" data-testid="llmrt-available-credential-rejected">
+            GitHub refused the configured GITHUB_TOKEN, so releases were fetched
+            anonymously (a lower rate limit). Check or unset the token.
+          </Text>
+        )}
 
         {isChecking && !updateCheck ? (
           <Spin label="Checking for updates" />

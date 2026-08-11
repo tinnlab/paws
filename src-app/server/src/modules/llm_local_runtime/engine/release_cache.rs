@@ -32,7 +32,7 @@ use std::time::{Duration, Instant};
 
 use once_cell::sync::Lazy;
 
-use super::download::ReleaseInfo;
+use super::download::{CredentialStatus, ReleaseInfo};
 use super::types::EngineType;
 
 /// Where the catalogue in a response came from.
@@ -70,6 +70,13 @@ pub struct Catalog {
     /// real but possibly out of date"; alongside `source == Unavailable` it is
     /// the whole story.
     pub unavailable_reason: Option<String>,
+    /// Health of the GitHub credential the catalogue was fetched with — an axis
+    /// ORTHOGONAL to `source`. `Rejected` alongside `source == Live` is the
+    /// case this exists for: the operator's token was refused, the read was
+    /// rescued anonymously, and the catalogue below is genuinely fresh. On a
+    /// cache read this is the status of the fetch that PRODUCED the entry (the
+    /// same rule `checked_at` follows), not of this read.
+    pub credential_status: CredentialStatus,
 }
 
 impl Catalog {
@@ -94,6 +101,11 @@ struct Entry {
     releases: Vec<ReleaseInfo>,
     fetched_at: Instant,
     checked_at_rfc3339: String,
+    /// Credential health at the moment this entry was fetched. Echoed on every
+    /// cache read rather than recomputed, so the rejection notice does not
+    /// flicker off on the second page load within the TTL — an intermittent
+    /// warning reads as a glitch, which is worse than never showing it.
+    credential_status: CredentialStatus,
 }
 
 static CACHE: Lazy<RwLock<HashMap<EngineType, Entry>>> = Lazy::new(|| RwLock::new(HashMap::new()));
@@ -126,11 +138,14 @@ pub fn clear() {
 /// `fetch` is injected rather than called directly so this module never
 /// depends on `BinaryDownloader` (and so the tests below can drive every
 /// branch deterministically). It returns the same `Result` shape
-/// `list_releases` does, reduced to a `String` reason.
+/// `list_releases` does, reduced to a `String` reason — PAIRED with the
+/// credential status, which is known whether the fetch succeeded or failed. A
+/// status carried *inside* the `Ok` would be lost on exactly the failure the
+/// operator most needs explained.
 pub async fn get_or_refresh<F, Fut>(engine: EngineType, ttl: Duration, fetch: F) -> Catalog
 where
     F: FnOnce() -> Fut,
-    Fut: std::future::Future<Output = Result<Vec<ReleaseInfo>, String>>,
+    Fut: std::future::Future<Output = (Result<Vec<ReleaseInfo>, String>, CredentialStatus)>,
 {
     // Fast path: a fresh entry needs no upstream call at all. The read guard
     // is dropped before the await — holding a std RwLock across an await would
@@ -146,11 +161,13 @@ where
                 source: CatalogSource::Cache,
                 checked_at: Some(entry.checked_at_rfc3339.clone()),
                 unavailable_reason: None,
+                credential_status: entry.credential_status,
             };
         }
     }
 
-    match fetch().await {
+    let (result, credential_status) = fetch().await;
+    match result {
         Ok(releases) => {
             let checked_at = chrono::Utc::now().to_rfc3339();
             if let Ok(mut guard) = CACHE.write() {
@@ -160,6 +177,7 @@ where
                         releases: releases.clone(),
                         fetched_at: Instant::now(),
                         checked_at_rfc3339: checked_at.clone(),
+                        credential_status,
                     },
                 );
             }
@@ -168,6 +186,7 @@ where
                 source: CatalogSource::Live,
                 checked_at: Some(checked_at),
                 unavailable_reason: None,
+                credential_status,
             }
         }
         Err(reason) => {
@@ -187,6 +206,11 @@ where
                     source: CatalogSource::Cache,
                     checked_at: Some(entry.checked_at_rfc3339.clone()),
                     unavailable_reason: Some(reason),
+                    // The FAILED refresh's credential verdict, not the stored
+                    // entry's: a token revoked since the entry was cached must
+                    // be reported NOW, and a refresh that failed for an
+                    // unrelated reason must not resurrect a stale `Rejected`.
+                    credential_status,
                 };
             }
             tracing::warn!(
@@ -199,6 +223,7 @@ where
                 source: CatalogSource::Unavailable,
                 checked_at: None,
                 unavailable_reason: Some(reason),
+                credential_status,
             }
         }
     }
@@ -216,6 +241,17 @@ mod tests {
     /// retain-on-failure case intermittently saw `Unavailable` because a
     /// sibling test cleared its seed during the sleep.) Serialize them.
     static CACHE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// A successful fetch that used no credential — the shape every
+    /// pre-existing case implicitly assumed.
+    fn ok(releases: Vec<ReleaseInfo>) -> (Result<Vec<ReleaseInfo>, String>, CredentialStatus) {
+        (Ok(releases), CredentialStatus::Absent)
+    }
+
+    /// A failed fetch that used no credential.
+    fn err(reason: &str) -> (Result<Vec<ReleaseInfo>, String>, CredentialStatus) {
+        (Err(reason.to_string()), CredentialStatus::Absent)
+    }
 
     fn rel(tag: &str) -> ReleaseInfo {
         ReleaseInfo {
@@ -238,6 +274,7 @@ mod tests {
             releases: vec![rel("v1")],
             fetched_at: base,
             checked_at_rfc3339: "2026-01-01T00:00:00Z".to_string(),
+            credential_status: CredentialStatus::Absent,
         };
         let ttl = Duration::from_secs(60);
         assert!(
@@ -262,7 +299,7 @@ mod tests {
 
         let first = get_or_refresh(EngineType::Llamacpp, ttl, || {
             calls.fetch_add(1, Ordering::SeqCst);
-            async { Ok(vec![rel("v0.0.3-alpha")]) }
+            async { ok(vec![rel("v0.0.3-alpha")]) }
         })
         .await;
         assert_eq!(first.source, CatalogSource::Live);
@@ -270,7 +307,7 @@ mod tests {
 
         let second = get_or_refresh(EngineType::Llamacpp, ttl, || {
             calls.fetch_add(1, Ordering::SeqCst);
-            async { Ok(vec![rel("v0.0.3-alpha")]) }
+            async { ok(vec![rel("v0.0.3-alpha")]) }
         })
         .await;
         assert_eq!(second.source, CatalogSource::Cache);
@@ -294,7 +331,7 @@ mod tests {
         let ttl = Duration::from_millis(1);
 
         let seeded = get_or_refresh(EngineType::Mistralrs, ttl, || async {
-            Ok(vec![rel("v0.0.3-alpha"), rel("v0.0.2-alpha")])
+            ok(vec![rel("v0.0.3-alpha"), rel("v0.0.2-alpha")])
         })
         .await;
         assert_eq!(seeded.source, CatalogSource::Live);
@@ -303,7 +340,7 @@ mod tests {
         // Let the entry age past the (deliberately tiny) TTL, then fail.
         tokio::time::sleep(Duration::from_millis(5)).await;
         let degraded = get_or_refresh(EngineType::Mistralrs, ttl, || async {
-            Err("HTTP 403 rate limit exceeded".to_string())
+            err("HTTP 403 rate limit exceeded")
         })
         .await;
 
@@ -335,7 +372,7 @@ mod tests {
         let _guard = CACHE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         clear();
         let cat = get_or_refresh(EngineType::Llamacpp, Duration::from_secs(60), || async {
-            Err("dns error: failed to lookup address".to_string())
+            err("dns error: failed to lookup address")
         })
         .await;
         assert_eq!(cat.source, CatalogSource::Unavailable);
@@ -352,12 +389,88 @@ mod tests {
         // catalogues are distinguishable, which is what INV-2 requires.
         let genuinely_empty =
             get_or_refresh(EngineType::Llamacpp, Duration::from_secs(60), || async {
-                Ok(Vec::new())
+                ok(Vec::new())
             })
             .await;
         assert_eq!(genuinely_empty.source, CatalogSource::Live);
         assert!(genuinely_empty.releases.is_empty());
         assert!(genuinely_empty.unavailable_reason.is_none());
+        clear();
+    }
+
+    /// TEST-7 — a rejected credential survives BOTH cache-serving paths.
+    ///
+    /// The failure this pins: if a cache hit reported `Absent` instead of the
+    /// stored verdict, the "your token was rejected" notice would appear on the
+    /// first page load inside the TTL and vanish on the second — an
+    /// intermittent warning reads as a glitch, which is worse than never
+    /// showing it. The positive control at the end is that a credential-free
+    /// fetch still reports `Absent`, so nothing here can pass by hardcoding
+    /// `Rejected`.
+    #[tokio::test]
+    async fn rejected_credential_survives_cache_hit_and_retain_on_failure() {
+        let _guard = CACHE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear();
+        let ttl = Duration::from_millis(1);
+
+        // A LIVE read whose credential was rejected but whose anonymous retry
+        // succeeded: real versions, `Live`, no unavailable_reason, `Rejected`.
+        let live = get_or_refresh(EngineType::Llamacpp, Duration::from_secs(3600), || async {
+            (Ok(vec![rel("v0.0.3-alpha")]), CredentialStatus::Rejected)
+        })
+        .await;
+        assert_eq!(live.source, CatalogSource::Live);
+        assert_eq!(live.credential_status, CredentialStatus::Rejected);
+        assert!(
+            live.unavailable_reason.is_none(),
+            "an anonymous-rescued read is genuinely fresh — flagging it \
+             unreachable would render 'couldn't reach GitHub' over a full list"
+        );
+
+        // Path 1: a fresh cache HIT must echo the stored verdict, not reset it.
+        let hit = get_or_refresh(EngineType::Llamacpp, Duration::from_secs(3600), || async {
+            panic!("must not refetch within the TTL")
+        })
+        .await;
+        assert_eq!(hit.source, CatalogSource::Cache);
+        assert_eq!(
+            hit.credential_status,
+            CredentialStatus::Rejected,
+            "a cache hit must report the credential status of the fetch that \
+             produced it, exactly as it already does for checked_at"
+        );
+
+        // Path 2: retain-on-failure must report the FAILED refresh's verdict.
+        clear();
+        let seeded = get_or_refresh(EngineType::Mistralrs, ttl, || async {
+            (Ok(vec![rel("v1")]), CredentialStatus::Used)
+        })
+        .await;
+        assert_eq!(seeded.credential_status, CredentialStatus::Used);
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        let degraded = get_or_refresh(EngineType::Mistralrs, ttl, || async {
+            (
+                Err("Failed to list releases: HTTP 401 Unauthorized".to_string()),
+                CredentialStatus::Rejected,
+            )
+        })
+        .await;
+        assert_eq!(degraded.source, CatalogSource::Cache);
+        assert_eq!(degraded.releases.len(), 1, "retain-on-failure still holds");
+        assert_eq!(
+            degraded.credential_status,
+            CredentialStatus::Rejected,
+            "a token revoked since the entry was cached must be reported NOW, \
+             not masked by the stored 'used' verdict"
+        );
+
+        // Positive control: a credential-free fetch still reports Absent.
+        clear();
+        let anon = get_or_refresh(EngineType::Llamacpp, Duration::from_secs(3600), || async {
+            ok(vec![rel("v1")])
+        })
+        .await;
+        assert_eq!(anon.credential_status, CredentialStatus::Absent);
         clear();
     }
 }

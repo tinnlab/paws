@@ -266,6 +266,22 @@ export interface AvailableUpdatesResponse {
    *  when `source == "unavailable"`.
    */
   checked_at?: string
+  /**
+   * Health of the GitHub credential this catalogue was fetched with:
+   *  `absent` (no `GITHUB_TOKEN` configured — anonymous by design, 60
+   *  requests/hour), `used` (a token was configured and GitHub accepted it —
+   *  5000/hour), or `rejected` (a token was configured and GitHub REFUSED it,
+   *  so the read was re-issued anonymously).
+   *
+   *  Orthogonal to `source`, and that is the point: `rejected` alongside
+   *  `source == "live"` means the versions below are genuinely fresh AND the
+   *  operator's token is bad. Without this field the two situations "GitHub
+   *  is down" and "your token is wrong" are indistinguishable, and an invalid
+   *  token silently costs the operator the anonymous path they had before
+   *  they pasted it. Always present — an omitted field would be
+   *  indistinguishable from `absent`, which is itself a real state.
+   */
+  credential_status: string
   engine: string
   /** Host platform the asset-readiness was computed for (`linux`/`macos`/`windows`). */
   platform: string
@@ -2902,6 +2918,8 @@ export interface InstallVersionRequest {
 /** One engine's installable catalogue. */
 export interface InstallableEngine {
   checked_at?: string
+  /** See [`AvailableUpdatesResponse::credential_status`]. */
+  credential_status: string
   /** `llamacpp` / `mistralrs` — the value to pass as `engine`. */
   engine: string
   /** See [`AvailableUpdatesResponse::source`]. */

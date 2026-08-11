@@ -35,6 +35,11 @@ export default (set: RuntimeUpdateSet, _get: RuntimeUpdateGet) =>
         source: (response.source ?? 'live') as RuntimeUpdateCheck['source'],
         checked_at: response.checked_at,
         unavailable_reason: response.unavailable_reason,
+        // Credential health rides the same 200 as the catalogue provenance.
+        // Defaulted defensively so an older/partial payload reads as "no
+        // token configured" rather than crashing the card.
+        credential_status: (response.credential_status ??
+          'absent') as RuntimeUpdateCheck['credential_status'],
         current_version: currentVersion?.version,
         latest_version: latestVersion,
         has_updates: hasUpdates,

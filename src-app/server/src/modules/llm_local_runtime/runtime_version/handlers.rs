@@ -657,6 +657,7 @@ pub async fn check_for_updates(
         source: catalog.source.as_str().to_string(),
         checked_at: catalog.checked_at,
         unavailable_reason: catalog.unavailable_reason,
+        credential_status: catalog.credential_status.as_str().to_string(),
     };
 
     Ok((StatusCode::OK, Json(response)))

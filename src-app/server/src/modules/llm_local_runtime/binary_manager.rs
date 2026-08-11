@@ -340,10 +340,10 @@ impl BinaryManager {
         let ttl = std::time::Duration::from_secs(ttl_secs.max(1) as u64);
 
         release_cache::get_or_refresh(engine_type, ttl, || async {
-            self.downloader
-                .list_releases(engine_type)
-                .await
-                .map_err(|e| e.to_string())
+            // The credential verdict rides ALONGSIDE the result, not inside it:
+            // a rejected token is exactly what a failed read needs to report.
+            let (result, credential) = self.downloader.list_releases(engine_type).await;
+            (result.map_err(|e| e.to_string()), credential)
         })
         .await
     }
@@ -427,6 +427,7 @@ impl BinaryManager {
             source: catalog.source.as_str().to_string(),
             checked_at: catalog.checked_at,
             unavailable_reason: catalog.unavailable_reason,
+            credential_status: catalog.credential_status.as_str().to_string(),
         })
     }
 

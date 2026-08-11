@@ -28527,6 +28527,10 @@
               "null"
             ]
           },
+          "credential_status": {
+            "description": "Health of the GitHub credential this catalogue was fetched with:\n `absent` (no `GITHUB_TOKEN` configured — anonymous by design, 60\n requests/hour), `used` (a token was configured and GitHub accepted it —\n 5000/hour), or `rejected` (a token was configured and GitHub REFUSED it,\n so the read was re-issued anonymously).\n\n Orthogonal to `source`, and that is the point: `rejected` alongside\n `source == \"live\"` means the versions below are genuinely fresh AND the\n operator's token is bad. Without this field the two situations \"GitHub\n is down\" and \"your token is wrong\" are indistinguishable, and an invalid\n token silently costs the operator the anonymous path they had before\n they pasted it. Always present — an omitted field would be\n indistinguishable from `absent`, which is itself a real state.",
+            "type": "string"
+          },
           "engine": {
             "type": "string"
           },
@@ -28557,7 +28561,8 @@
           "platform",
           "arch",
           "versions",
-          "source"
+          "source",
+          "credential_status"
         ]
       },
       "AvailableUpdatesResponse2": {
@@ -35196,6 +35201,10 @@
               "null"
             ]
           },
+          "credential_status": {
+            "description": "See [`AvailableUpdatesResponse::credential_status`].",
+            "type": "string"
+          },
           "engine": {
             "description": "`llamacpp` / `mistralrs` — the value to pass as `engine`.",
             "type": "string"
@@ -35221,7 +35230,8 @@
         "required": [
           "engine",
           "versions",
-          "source"
+          "source",
+          "credential_status"
         ]
       },
       "InstallableVariant": {

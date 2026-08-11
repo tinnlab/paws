@@ -47,6 +47,33 @@ test.describe('Local Runtime — version discovery', () => {
     const card = byTestId(page, 'llmrt-available-versions-card')
     await expect(card).toBeVisible({ timeout: 30000 })
 
+    // Diagnosability, not a weaker assertion: the row assertions below are
+    // unchanged, but on failure Playwright can only say "element(s) not found",
+    // which is the same message for a real regression and for GitHub simply
+    // being unreachable from the runner. Ask the server what it thinks FIRST so
+    // the failure names the actual cause — including a rejected GITHUB_TOKEN,
+    // which is the defect this spec exists to catch (the invalid placeholder in
+    // `tests/.env.test` used to 401 the discovery call and empty this list).
+    const diag = await page.evaluate(async () => {
+      const res = await fetch(
+        '/api/local-runtime/versions/llamacpp/check-updates',
+        { headers: { Accept: 'application/json' } },
+      )
+      return { status: res.status, body: await res.text() }
+    })
+    const catalog = diag.status === 200 ? JSON.parse(diag.body) : null
+    if (!catalog || (catalog.versions ?? []).length === 0) {
+      throw new Error(
+        `The release catalogue is empty, so no version rows can render. ` +
+          `Server says: HTTP ${diag.status} source=${catalog?.source} ` +
+          `credential_status=${catalog?.credential_status} ` +
+          `unavailable_reason=${catalog?.unavailable_reason ?? 'none'}. ` +
+          `credential_status="rejected" with an empty list means the ` +
+          `configured GITHUB_TOKEN was refused AND the anonymous fallback ` +
+          `also failed; "absent" means GitHub itself was unreachable.`,
+      )
+    }
+
     // Rows are `llmrt-version-row-<version>`; at least one must exist, and its
     // version must be discoverable from the DOM without prior knowledge.
     const rows = card.locator('[data-testid^="llmrt-version-row-"]')

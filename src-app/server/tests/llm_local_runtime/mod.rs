@@ -11,6 +11,7 @@ mod engine_args_test;
 mod nul_query_param_test;
 mod available_versions_test;
 mod engine_download_test;
+mod github_credential_test;
 mod release_cache_test;
 mod gold_smoke;
 mod gpu_detect_test;

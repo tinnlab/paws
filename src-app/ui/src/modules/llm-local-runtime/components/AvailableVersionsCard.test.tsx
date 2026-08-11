@@ -71,6 +71,7 @@ type CatalogState = {
   source: 'live' | 'cache' | 'unavailable'
   checked_at?: string
   unavailable_reason?: string
+  credential_status?: 'absent' | 'used' | 'rejected'
 }
 
 let root: Root | null = null
@@ -238,5 +239,73 @@ describe('AvailableVersionsCard — catalogue states', () => {
     expect(text()).toContain('No published binaries')
     expect(testId('llmrt-available-unreachable')).toBeNull()
     expect(testId('llmrt-available-stale-notice')).toBeNull()
+  })
+
+  /**
+   * TEST-11 (credential half) — a REJECTED GITHUB_TOKEN is reported as a
+   * rejected token, independently of whether the feed was reachable.
+   *
+   * The load-bearing pairing is that the rejection notice renders ALONGSIDE a
+   * full, installable list and WITHOUT the unreachable/stale notices. That is
+   * the state the fix creates: the server retried anonymously and got real
+   * versions, so claiming "couldn't reach GitHub" here would be false — yet
+   * saying nothing would leave the operator silently on the 60/hr budget with
+   * a dead credential and no way to find out.
+   */
+  test('a rejected credential is reported alongside a live, installable list', async () => {
+    await mountWithCatalog({
+      versions: [READY_VERSION],
+      source: 'live',
+      credential_status: 'rejected',
+    })
+
+    // The catalogue is real and actionable — nothing is degraded.
+    expect(text()).toContain('v0.0.3-alpha')
+    expect(testId('llmrt-version-install-v0.0.3-alpha')).not.toBeNull()
+
+    // The credential notice is present and names the variable to fix.
+    expect(testId('llmrt-available-credential-rejected')).not.toBeNull()
+    expect(text()).toContain('GITHUB_TOKEN')
+
+    // ...and it is NOT the feed-unreachable or stale-cache notice. Conflating
+    // them would tell the operator GitHub is down while it plainly is not.
+    expect(testId('llmrt-available-unreachable')).toBeNull()
+    expect(testId('llmrt-available-stale-notice')).toBeNull()
+  })
+
+  /**
+   * Negative control for the test above: an ACCEPTED credential must produce no
+   * notice at all. Without this, the assertion above would pass against a card
+   * that nagged about GITHUB_TOKEN unconditionally.
+   */
+  test('an accepted credential produces no credential notice', async () => {
+    await mountWithCatalog({
+      versions: [READY_VERSION],
+      source: 'live',
+      credential_status: 'used',
+    })
+
+    expect(text()).toContain('v0.0.3-alpha')
+    expect(testId('llmrt-available-credential-rejected')).toBeNull()
+    expect(text()).not.toContain('GITHUB_TOKEN')
+  })
+
+  /**
+   * A rejected credential AND an unreachable feed can co-occur (the token was
+   * refused and the anonymous retry also failed). Both must be stated: the
+   * outage explains the empty list, the credential explains what to fix.
+   */
+  test('a rejected credential and an unreachable feed are BOTH reported', async () => {
+    await mountWithCatalog({
+      versions: [],
+      source: 'unavailable',
+      unavailable_reason:
+        'Failed to list releases: HTTP 401 Unauthorized (GitHub rejected the configured GITHUB_TOKEN, and the anonymous retry also failed — check or unset the token)',
+      credential_status: 'rejected',
+    })
+
+    expect(testId('llmrt-available-unreachable')).not.toBeNull()
+    expect(testId('llmrt-available-credential-rejected')).not.toBeNull()
+    expect(text()).not.toContain('No published binaries')
   })
 })

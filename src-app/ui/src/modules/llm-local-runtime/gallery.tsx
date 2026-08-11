@@ -222,6 +222,72 @@ export const gallery: ModuleGallery = {
         })
       },
     },
+    // ── AvailableVersionsCard: the operator's GITHUB_TOKEN was REJECTED and the
+    //    read was rescued anonymously. The list is real and installable; the
+    //    only thing wrong is the credential, which is otherwise undiscoverable
+    //    — and which must NOT be rendered as "GitHub is unreachable". ────────
+    {
+      slug: 'seeded-s3-available-versions-credential-rejected',
+      title: 'Available runtime versions — GITHUB_TOKEN rejected',
+      note: 'credential_status=rejected + source=live → rows list normally PLUS a credential notice; no unreachable/stale notice',
+      path: '/',
+      initialPath: '/',
+      component: lazyProps(
+        () => import('@/modules/llm-local-runtime/components/AvailableVersionsCard'),
+        'AvailableVersionsCard',
+        { engine: 'llamacpp' },
+      ),
+      setup: async () => {
+        const { RuntimeUpdateRaw } = await import(
+          '@/modules/llm-local-runtime/stores/runtimeUpdate'
+        )
+        const { RuntimeConfigRaw } = await import(
+          '@/modules/llm-local-runtime/stores/runtimeConfig'
+        )
+        await holdPatch(() => {
+          RuntimeConfigRaw.setState({
+            gpu: {
+              platform: 'linux',
+              arch: 'x86_64',
+              available: ['cpu'],
+              recommended: 'cpu',
+            },
+            loadingGpu: false,
+          } as any)
+          RuntimeUpdateRaw.setState({
+            checking: new Map(),
+            updateChecks: new Map([
+              [
+                'llamacpp',
+                {
+                  engine: 'llamacpp',
+                  platform: 'linux',
+                  arch: 'x86_64',
+                  versions: [
+                    {
+                      version: 'v0.0.3-alpha',
+                      installed: false,
+                      installed_backends: [],
+                      binary_ready: true,
+                      available_backends: ['cpu'],
+                      recommended_backend: 'cpu',
+                      size_bytes: 12928771,
+                      prerelease: false,
+                      published_at: '2026-05-30T15:53:54Z',
+                    },
+                  ],
+                  source: 'live',
+                  checked_at: '2026-08-10T09:15:00Z',
+                  credential_status: 'rejected',
+                  latest_version: 'v0.0.3-alpha',
+                  has_updates: true,
+                },
+              ],
+            ]),
+          } as any)
+        })
+      },
+    },
     // ── AvailableVersionsCard: a ready version WITH a FAILED download snapshot →
     //    the inline progress line (:300) + the failed-error text (:301,302). ───────
     {

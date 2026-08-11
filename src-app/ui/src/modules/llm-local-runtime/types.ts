@@ -44,6 +44,13 @@ export interface RuntimeAvailableVersion {
 // genuinely publishing no versions.
 export type RuntimeCatalogSource = 'live' | 'cache' | 'unavailable'
 
+// Health of the GitHub credential the catalogue was fetched with — an axis
+// ORTHOGONAL to `RuntimeCatalogSource`. `rejected` alongside `source: 'live'`
+// is the case this exists for: the operator's GITHUB_TOKEN was refused, the
+// read was rescued anonymously, and the versions below are genuinely fresh.
+// Without it, "GitHub is down" and "your token is wrong" look identical.
+export type RuntimeCredentialStatus = 'absent' | 'used' | 'rejected'
+
 // From backend - releases diffed against installed, scoped to host platform/arch.
 export interface RuntimeUpdateCheckRaw {
   engine: string
@@ -53,6 +60,7 @@ export interface RuntimeUpdateCheckRaw {
   source: RuntimeCatalogSource
   checked_at?: string
   unavailable_reason?: string
+  credential_status: RuntimeCredentialStatus
 }
 
 // Enhanced type with computed properties

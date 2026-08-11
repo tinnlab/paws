@@ -195,6 +195,20 @@ pub struct AvailableUpdatesResponse {
     /// reach upstream" — the two are otherwise indistinguishable.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unavailable_reason: Option<String>,
+    /// Health of the GitHub credential this catalogue was fetched with:
+    /// `absent` (no `GITHUB_TOKEN` configured — anonymous by design, 60
+    /// requests/hour), `used` (a token was configured and GitHub accepted it —
+    /// 5000/hour), or `rejected` (a token was configured and GitHub REFUSED it,
+    /// so the read was re-issued anonymously).
+    ///
+    /// Orthogonal to `source`, and that is the point: `rejected` alongside
+    /// `source == "live"` means the versions below are genuinely fresh AND the
+    /// operator's token is bad. Without this field the two situations "GitHub
+    /// is down" and "your token is wrong" are indistinguishable, and an invalid
+    /// token silently costs the operator the anonymous path they had before
+    /// they pasted it. Always present — an omitted field would be
+    /// indistinguishable from `absent`, which is itself a real state.
+    pub credential_status: String,
 }
 
 /// One concrete, installable artifact: the exact tuple
@@ -257,6 +271,8 @@ pub struct InstallableEngine {
     /// See [`AvailableUpdatesResponse::unavailable_reason`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unavailable_reason: Option<String>,
+    /// See [`AvailableUpdatesResponse::credential_status`].
+    pub credential_status: String,
 }
 
 /// `GET /local-runtime/versions/available` — everything a caller needs to
