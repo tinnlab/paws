@@ -70,11 +70,25 @@ sandbox-test:
 
 # Run everything before pushing changes that touch the sandbox.
 # Skips bwrap tests if no rootfs is mounted (prints a hint).
-check: check-schema-sync check-deadcode-blankets openapi-check check-sandbox-unit check-mcp-approval
+check: check-schema-sync check-deadcode-blankets openapi-check check-packages check-sandbox-unit check-mcp-approval
     @echo "✓ pre-push checks passed (cheap layer)"
     @echo
     @echo "Run \`just check-sandbox\` next if you've mounted a rootfs"
     @echo "(builds + runs Tier 4 + 6 — takes ~1 min)."
+
+# Every workspace package's own test suite has a runner, and — when this branch
+# moves the `sdk` submodule — those suites actually RUN here.
+#
+# `@ziee/framework` (8 test files) and `@ziee/gallery` (12) shipped with no `test`
+# script at all, so they had never executed anywhere; `@ziee/config` had one that
+# hand-listed half its files. Nothing in this repo would have noticed: `just check`
+# is cargo-only, and the UI `check` chain runs a hand-picked list of gallery
+# scripts. See the header of scripts/check-package-suites.mjs for the full rules.
+#
+# Cheap (~30 s) and needs no database, no rootfs and no server — it is `npm run
+# test` per workspace. `--list` enumerates without running.
+check-packages:
+    @node scripts/check-package-suites.mjs
 
 # Catches the case where `compat.toml::current_schema` and
 # `SANDBOX_ROOTFS_SCHEMA_VERSION` in mod.rs drift apart. A mismatch

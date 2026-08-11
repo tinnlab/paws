@@ -73,7 +73,6 @@ export function CapabilitySelect({
       value={value || undefined}
       onChange={onChange}
       placeholder={options.length === 0 ? 'No servers available' : placeholder}
-      popupMatchSelectWidth={false}
     />
   )
 }
