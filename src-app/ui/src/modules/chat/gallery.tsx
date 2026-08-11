@@ -364,7 +364,8 @@ export const gallery: ModuleGallery = {
         {
           // Open the picker so review + the spec can see that a truncated
           // trigger never leaves the model unreadable — the popup sizes past
-          // the trigger (popupMatchSelectWidth={false}).
+          // the trigger, which is now the kit's DEFAULT for every option list
+          // (`w-auto min-w-(--anchor-width)`), not a per-call-site opt-out.
           name: 'open-model-select',
           note: 'click the composer model select → the open listbox showing the over-long model name in full',
           steps: async d => {

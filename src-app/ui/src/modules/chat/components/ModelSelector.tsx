@@ -61,7 +61,6 @@ export function ModelSelector({
     >
       <Select
         data-testid="chat-model-select"
-        popupMatchSelectWidth={false}
         placeholder="Model"
         disabled={isDisabled}
         options={availableModels}

@@ -281,7 +281,6 @@ function GeneratedField({
             value={optionKeyForValue(rendered, value)}
             onChange={v => commit(optionValueForKey(rendered, v))}
             placeholder="Choose a value"
-            popupMatchSelectWidth={false}
           />
         )
       }

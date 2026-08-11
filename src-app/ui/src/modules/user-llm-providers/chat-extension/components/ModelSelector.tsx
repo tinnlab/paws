@@ -157,7 +157,6 @@ export function ModelSelector() {
         data-testid="ullm-model-select"
         value={selectedModelId ?? undefined}
         onChange={handleChange}
-        popupMatchSelectWidth={false}
         placeholder={loading && providers.length === 0 ? 'Loading…' : 'Select Model'}
         aria-label="Model"
         loading={loading && providers.length === 0}

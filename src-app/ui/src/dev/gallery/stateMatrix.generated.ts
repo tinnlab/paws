@@ -3650,8 +3650,8 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
       { kind: "branch", condition: "!value", line: 91 },
       { kind: "branch", condition: "model", line: 97 },
       { kind: "error", condition: "error && providers.length === 0", line: 118 },
-      { kind: "branch", condition: "opt", line: 181 },
-      { kind: "branch", condition: "pendingProviderForKey", line: 201 },
+      { kind: "branch", condition: "opt", line: 180 },
+      { kind: "branch", condition: "pendingProviderForKey", line: 200 },
     ],
   },
   "modules/user-llm-providers/chat-extension/components/ProviderApiKeyModal": {
@@ -4118,7 +4118,7 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
       { kind: "branch", condition: "structured", line: 188 },
       { kind: "branch", condition: "jsonError", line: 214 },
       { kind: "branch", condition: "!conversationId", line: 217 },
-      { kind: "branch", condition: "conversationId", line: 243 },
+      { kind: "branch", condition: "conversationId", line: 242 },
     ],
   },
   "modules/workflow/components/WorkflowRunProgressView": {
@@ -4257,8 +4257,8 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
       { kind: "branch", condition: "v === undefined", line: 251 },
       { kind: "branch", condition: "!pendingNumberClear.current", line: 259 },
       { kind: "branch", condition: "(numberInput.current?.value ?? '').trim() !== ''", line: 263 },
-      { kind: "branch", condition: "templated", line: 350 },
-      { kind: "branch", condition: "spec.overflowNames.length > 0", line: 399 },
+      { kind: "branch", condition: "templated", line: 349 },
+      { kind: "branch", condition: "spec.overflowNames.length > 0", line: 398 },
     ],
   },
   "modules/workflow/components/builder/ToolStepForm": {

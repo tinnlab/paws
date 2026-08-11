@@ -124,7 +124,6 @@ export const ModelField = forwardRef<HTMLButtonElement, StringControlProps>(
         placeholder={
           loading && options.length === 0 ? 'Loading models…' : 'Select a model'
         }
-        popupMatchSelectWidth={false}
         aria-describedby={aria['aria-describedby']}
         aria-labelledby={aria['aria-labelledby']}
         aria-required={aria['aria-required']}

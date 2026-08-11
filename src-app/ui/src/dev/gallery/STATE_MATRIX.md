@@ -3991,8 +3991,8 @@ Required states: `error`
 | branch | `!value` | 91 |
 | branch | `model` | 97 |
 | error | `error && providers.length === 0` | 118 |
-| branch | `opt` | 181 |
-| branch | `pendingProviderForKey` | 201 |
+| branch | `opt` | 180 |
+| branch | `pendingProviderForKey` | 200 |
 
 ### `modules/user-llm-providers/chat-extension/components/ProviderApiKeyModal`
 
@@ -4497,7 +4497,7 @@ Required states: `open`
 | branch | `structured` | 188 |
 | branch | `jsonError` | 214 |
 | branch | `!conversationId` | 217 |
-| branch | `conversationId` | 243 |
+| branch | `conversationId` | 242 |
 
 ### `modules/workflow/components/WorkflowRunProgressView`
 
@@ -4647,8 +4647,8 @@ Required states: _(branch-only — proven via dynamic coverage)_
 | branch | `v === undefined` | 251 |
 | branch | `!pendingNumberClear.current` | 259 |
 | branch | `(numberInput.current?.value ?? '').trim() !== ''` | 263 |
-| branch | `templated` | 350 |
-| branch | `spec.overflowNames.length > 0` | 399 |
+| branch | `templated` | 349 |
+| branch | `spec.overflowNames.length > 0` | 398 |
 
 ### `modules/workflow/components/builder/ToolStepForm`
 

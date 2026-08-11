@@ -230,7 +230,6 @@ export function WorkflowRunDialog({
             // surfaces the placeholder rather than a stuck empty control.
             loading={modelsLoading && modelOptions.length === 0}
             placeholder={modelsLoading && modelOptions.length === 0 ? 'Loading models…' : 'Select a model'}
-            popupMatchSelectWidth={false}
           />
         </div>
       )}
