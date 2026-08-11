@@ -270,8 +270,10 @@ export interface AvailableUpdatesResponse {
    * Health of the GitHub credential this catalogue was fetched with:
    *  `absent` (no `GITHUB_TOKEN` configured — anonymous by design, 60
    *  requests/hour), `used` (a token was configured and GitHub accepted it —
-   *  5000/hour), or `rejected` (a token was configured and GitHub REFUSED it,
-   *  so the read was re-issued anonymously).
+   *  5000/hour), `unverified` (a token was configured and presented, but
+   *  GitHub never answered, so its validity is unknown), or `rejected` (a
+   *  token was configured and GitHub REFUSED it, so the read was re-issued
+   *  anonymously).
    *
    *  Orthogonal to `source`, and that is the point: `rejected` alongside
    *  `source == "live"` means the versions below are genuinely fresh AND the

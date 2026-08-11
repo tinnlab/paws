@@ -49,7 +49,11 @@ export type RuntimeCatalogSource = 'live' | 'cache' | 'unavailable'
 // is the case this exists for: the operator's GITHUB_TOKEN was refused, the
 // read was rescued anonymously, and the versions below are genuinely fresh.
 // Without it, "GitHub is down" and "your token is wrong" look identical.
-export type RuntimeCredentialStatus = 'absent' | 'used' | 'rejected'
+export type RuntimeCredentialStatus =
+  | 'absent'
+  | 'used'
+  | 'unverified'
+  | 'rejected'
 
 // From backend - releases diffed against installed, scoped to host platform/arch.
 export interface RuntimeUpdateCheckRaw {

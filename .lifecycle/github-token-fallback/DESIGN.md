@@ -55,22 +55,31 @@ design removes.
    downgraded to anonymous, which would quietly cut an operator's rate limit
    from 5000/hr to 60/hr.
 
-## §4 Classifying the response — headers, not prose
+## §4 Classifying the response — status, not prose
 
-GitHub's REST API documents the `x-ratelimit-*` response headers as the
-rate-limit contract; the JSON body's `message` prose is not a contract and is
-exactly the kind of string-matching §3.3 forbids for tokens. So the classifier
-reads **status + headers only**, and never the body:
+The classifier reads the **status only**, and never the body (the JSON
+`message` prose is not a contract and is exactly the kind of string-matching
+§3.3 forbids for tokens):
 
 | observed | classification | action |
 |---|---|---|
 | `401` | auth rejection | retry once, anonymously |
-| `403` with `x-ratelimit-remaining: 0` | primary rate limit | no anonymous retry |
-| `403` with `retry-after` present | secondary rate limit | no anonymous retry |
-| `403` otherwise (revoked / lacks scope / SAML) | auth rejection | retry once, anonymously |
+| `403` (any) | NOT a credential verdict | no anonymous retry |
 | any other status | not credential-related | unchanged |
 
-Reading headers (rather than the body) also keeps the `reqwest::Response`
+**Revised after the phase-6 audit: `403` never triggers the fallback.** The
+first cut split `403` on the rate-limit headers. That cannot work: `x-ratelimit-*`
+rides on nearly every GitHub API response, so a non-zero `remaining` does not
+imply "not a rate limit", and GitHub documents that a **secondary** rate limit
+may arrive with no `retry-after` at all. Both gaps made a bare `403` classify as
+a rejection, which would spend the scarce anonymous budget AND tell an operator
+to replace a valid token. The only reliable discriminator for a `403` is the
+body's `message` prose — not a contract, and the same brittleness class §3.3
+forbids for token shapes. So the rule is conservative, and the asymmetry
+justifies it: NOT falling back on an exotic `403` leaves the pre-fix behaviour
+(no worse than today); falling back WRONGLY actively misleads.
+
+Reading neither headers nor body also keeps the `reqwest::Response`
 un-consumed, so the existing success and error paths are untouched.
 
 **Why a rate limit must NOT fall back.** The two buckets are different (token =
@@ -79,7 +88,9 @@ would spend the box's scarce 60/hr IP budget to paper over an operator problem
 that has a correct remedy (wait, or raise the quota), and it would mask the
 `403` the operator needs to see. Auth rejection is different in kind: there is
 no waiting that fixes it, and the anonymous path is the one the operator had
-before they pasted the bad token.
+before they pasted the bad token. Since `403` covers BOTH rate limits and some
+credential problems and cannot be told apart, it lands on the conservative side
+of exactly this argument.
 
 **Retry exactly once.** The anonymous retry is a distinct request, not an extra
 attempt of the existing transient-failure backoff loop: a credential rejection
@@ -97,13 +108,18 @@ reach GitHub" while it is happily listing versions.
 So the same degradation struct gains one field:
 
 ```
-credential_status: "absent" | "used" | "rejected"
+credential_status: "absent" | "used" | "unverified" | "rejected"
 ```
 
 - `absent` — no `GITHUB_TOKEN` was configured; the request was anonymous by
   design. (Not a problem; the operator simply has the 60/hr budget.)
 - `used` — a token was configured and GitHub accepted it. The operator has the
-  5000/hr budget. This is the state INV-4 protects.
+  5000/hr budget. This is the state INV-4 protects. Only reachable once GitHub
+  has actually ANSWERED: it is a claim about what upstream DID.
+- `unverified` — a token was configured and presented, but GitHub never answered
+  (every attempt failed at the transport layer), so its validity is unknown.
+  Added after the phase-6 audit: without it, a total outage reported `used` and
+  asserted an acceptance that never happened.
 - `rejected` — a token was configured and GitHub rejected it; the request was
   re-issued anonymously. **This is the state that was previously indescribable**
   and it is reportable whether the fallback then succeeded (`source: live`) or

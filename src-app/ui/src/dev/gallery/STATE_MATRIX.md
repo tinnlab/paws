@@ -2492,25 +2492,26 @@ Required states: `empty`, `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!platform \|\| !arch` | 109 |
-| branch | `result?.unavailable_reason` | 147 |
-| branch | `isChecking && !updateCheck` | 195 |
-| branch | `updateError && !updateCheck` | 197 |
-| branch | `!updateCheck` | 205 |
-| empty | `feedUnreachable && (updateCheck.versions?.length ?? 0) === 0` | 209 |
-| empty | `readyUpstream.length === 0` | 222 |
-| branch | `feedUnreachable` | 228 |
-| branch | `readyUpstream.length > 10` | 246 |
-| branch | `loadingGpu && !gpu` | 265 |
-| branch | `!gpu` | 273 |
-| branch | `loadingGpu && !gpu` | 291 |
-| branch | `!gpu` | 299 |
-| branch | `v.size_bytes != null && !v.installed` | 343 |
-| branch | `isLatest` | 348 |
-| branch | `v.installed` | 349 |
-| branch | `v.prerelease` | 350 |
-| branch | `progress` | 369 |
-| error | `failed && progress?.error` | 370 |
+| branch | `!platform \|\| !arch` | 119 |
+| branch | `result?.unavailable_reason` | 157 |
+| branch | `credentialRejected` | 205 |
+| branch | `isChecking && !updateCheck` | 216 |
+| branch | `updateError && !updateCheck` | 218 |
+| branch | `!updateCheck` | 226 |
+| empty | `feedUnreachable && (updateCheck.versions?.length ?? 0) === 0` | 230 |
+| empty | `readyUpstream.length === 0` | 243 |
+| branch | `feedUnreachable` | 249 |
+| branch | `readyUpstream.length > 10` | 267 |
+| branch | `loadingGpu && !gpu` | 286 |
+| branch | `!gpu` | 294 |
+| branch | `loadingGpu && !gpu` | 312 |
+| branch | `!gpu` | 320 |
+| branch | `v.size_bytes != null && !v.installed` | 364 |
+| branch | `isLatest` | 369 |
+| branch | `v.installed` | 370 |
+| branch | `v.prerelease` | 371 |
+| branch | `progress` | 390 |
+| error | `failed && progress?.error` | 391 |
 
 ### `modules/llm-local-runtime/components/InstalledVersionsCard`
 

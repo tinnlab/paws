@@ -93,7 +93,19 @@ pub enum CredentialStatus {
     /// Not a problem — it simply means the 60 requests/hour/IP budget applies.
     Absent,
     /// A token was configured and GitHub accepted it (5000 requests/hour).
+    ///
+    /// Only reachable once GitHub has actually ANSWERED with something other
+    /// than a rejection. It is a claim about what upstream DID, so it must
+    /// never be reported for a request upstream never answered.
     Used,
+    /// A token was configured and presented, but GitHub never answered — every
+    /// attempt failed at the transport layer — so its validity is unknown.
+    ///
+    /// Exists because the honest answer to "does my token work?" after a total
+    /// outage is "we could not find out". Reporting `Used` there would assert
+    /// an acceptance that never happened and tell the operator they are on the
+    /// 5000/hour budget on no evidence at all.
+    Unverified,
     /// A token was configured and GitHub REJECTED it; the request was re-issued
     /// anonymously. Reportable whether that retry then succeeded or not.
     Rejected,
@@ -104,6 +116,7 @@ impl CredentialStatus {
         match self {
             Self::Absent => "absent",
             Self::Used => "used",
+            Self::Unverified => "unverified",
             Self::Rejected => "rejected",
         }
     }
@@ -119,48 +132,43 @@ impl CredentialStatus {
                 " (GitHub rejected the configured GITHUB_TOKEN, and the \
                   anonymous retry also failed — check or unset the token)"
             }
-            Self::Absent | Self::Used => "",
+            Self::Absent | Self::Used | Self::Unverified => "",
         }
     }
 }
 
-/// True when `status` + `headers` say GitHub REJECTED THE CREDENTIAL, as
-/// opposed to rate-limiting an accepted one.
+/// True when `status` says GitHub REJECTED THE CREDENTIAL, as opposed to
+/// rate-limiting or otherwise refusing an accepted one.
 ///
-/// Deliberately reads the **status and headers only, never the response body**:
-/// GitHub documents the `x-ratelimit-*` headers as the rate-limit contract,
-/// while the body's `message` prose ("Bad credentials") is not a contract, and
-/// matching on it would be the same brittleness as validating a token's shape —
-/// which is explicitly wrong here, because GitHub has several valid token
-/// formats, adds more, and a shape check catches neither an expired nor a
-/// revoked one. Not reading the body also leaves the `reqwest::Response`
-/// un-consumed, so the callers' existing success/error paths are untouched.
+/// **`401` only — and `403` deliberately NOT.** The two are genuinely different
+/// and the difference is the whole point, so it is worth stating why the
+/// distinction resolves this way rather than the intuitive way:
 ///
-/// | observed | verdict |
-/// |---|---|
-/// | `401` | rejection |
-/// | `403` + `x-ratelimit-remaining: 0` | primary rate limit — NOT a rejection |
-/// | `403` + `retry-after` | secondary rate limit — NOT a rejection |
-/// | `403` otherwise (revoked / lacks scope / SAML) | rejection |
-/// | anything else | not credential-related |
+/// - `401` is what GitHub answers for a bad, expired or revoked credential. It
+///   is what the reported defect actually produced (`401 Bad credentials`), and
+///   it means nothing except "this credential is not valid".
+/// - `403` is overloaded — primary rate limit, SECONDARY rate limit, SAML
+///   enforcement, missing scope, repo access — and it **cannot be
+///   disambiguated from the headers**. `x-ratelimit-*` rides on nearly every
+///   API response, so a non-zero `remaining` does not imply "not a rate limit";
+///   and GitHub documents that a secondary rate limit may arrive with NO
+///   `retry-after` at all. A header rule that called those rejections would
+///   spend the scarce anonymous budget AND tell an operator to replace a
+///   perfectly valid token.
 ///
-/// A rate limit must NOT trigger the anonymous fallback: the anonymous bucket
-/// is a different, far scarcer 60/hr/IP budget, spending it would paper over an
-/// operator problem that has a correct remedy (wait, or raise the quota), and
-/// it would hide the `403` the operator needs to see.
-fn is_auth_rejection(status: reqwest::StatusCode, headers: &reqwest::header::HeaderMap) -> bool {
-    match status.as_u16() {
-        401 => true,
-        403 => {
-            let primary_rate_limited = headers
-                .get("x-ratelimit-remaining")
-                .and_then(|v| v.to_str().ok())
-                .is_some_and(|v| v.trim() == "0");
-            let secondary_rate_limited = headers.contains_key("retry-after");
-            !(primary_rate_limited || secondary_rate_limited)
-        }
-        _ => false,
-    }
+/// The only reliable discriminator for a `403` is the body's `message` prose,
+/// which is not a contract — matching on it is the same brittleness as
+/// validating a token's shape, which is explicitly wrong here (GitHub has
+/// several valid token formats, adds more, and a shape check catches neither an
+/// expired nor a revoked one). So the rule is conservative, and the asymmetry
+/// justifies it: NOT falling back on an exotic `403` leaves the pre-fix
+/// behaviour, which is no worse than today; falling back WRONGLY actively
+/// misleads the operator and burns the 60/hr/IP budget.
+///
+/// Reading no body also leaves the `reqwest::Response` un-consumed, so the
+/// callers' existing success/error paths are untouched.
+fn is_auth_rejection(status: reqwest::StatusCode) -> bool {
+    status.as_u16() == 401
 }
 
 /// GitHub repo slug for an engine's fork.
@@ -597,13 +605,28 @@ impl BinaryDownloader {
         /// anonymously more than once would double-spend it for no benefit.
         /// Deliberately a fixed constant, not an admin setting: raising it only
         /// lets a misconfiguration burn that budget faster.
+        ///
+        /// It is the SINGLE mechanism bounding the fallback — `authenticated`
+        /// is derived from it below rather than from a second, parallel
+        /// condition, so the constant cannot become decorative dead code that
+        /// a mutation could delete without any test noticing.
         const ANONYMOUS_RETRY_LIMIT: u32 = 1;
+
+        // Worst case upstream requests per call: MAX_ATTEMPTS transient
+        // attempts + ANONYMOUS_RETRY_LIMIT re-issues = 4. The anonymous
+        // re-issue is deliberately outside the transient budget (a rejection is
+        // not transient), but it cannot multiply it: after falling back,
+        // `attempt` is unchanged and continues from where it was.
 
         // Read the env var ONCE per call, so a mid-call change cannot make the
         // authenticated and anonymous attempts disagree about what was tried.
         let token = github_token();
+        // Starts at `Unverified` when a token exists, NOT `Used`: until GitHub
+        // has actually answered, nothing is known about the credential, and
+        // `Used` is a claim that upstream ACCEPTED it. Promoted on the first
+        // real response; downgraded to `Rejected` if that response refuses it.
         let mut credential = if token.is_some() {
-            CredentialStatus::Used
+            CredentialStatus::Unverified
         } else {
             CredentialStatus::Absent
         };
@@ -612,7 +635,7 @@ impl BinaryDownloader {
 
         loop {
             // Present the credential unless a previous response rejected it.
-            let authenticated = token.is_some() && anonymous_retries == 0;
+            let authenticated = token.is_some() && anonymous_retries < ANONYMOUS_RETRY_LIMIT;
             let mut req = self
                 .client
                 .get(url)
@@ -636,9 +659,8 @@ impl BinaryDownloader {
             // try of the same one, so it deliberately does not consume a
             // transient attempt.
             if authenticated
-                && anonymous_retries < ANONYMOUS_RETRY_LIMIT
                 && let Ok(resp) = &result
-                && is_auth_rejection(resp.status(), resp.headers())
+                && is_auth_rejection(resp.status())
             {
                 tracing::warn!(
                     url,
@@ -648,6 +670,14 @@ impl BinaryDownloader {
                 credential = CredentialStatus::Rejected;
                 anonymous_retries += 1;
                 continue;
+            }
+
+            // GitHub answered, and did not refuse the credential. Only NOW is
+            // `Used` an observed fact rather than an assumption. A rejection
+            // already recorded on an earlier attempt is never overwritten —
+            // the anonymous re-issue succeeding does not make the token valid.
+            if authenticated && result.is_ok() && credential == CredentialStatus::Unverified {
+                credential = CredentialStatus::Used;
             }
 
             let transient = match &result {
@@ -672,7 +702,18 @@ impl BinaryDownloader {
         let url = format!("{}/repos/{}/releases/latest", api_base_url(), repo);
 
         let (result, credential) = self.github_get_with_retry(&url).await;
-        let response = result?;
+        // Not `result?` — a transport failure on the anonymous re-issue would
+        // drop the credential verdict on exactly the failure the operator most
+        // needs explained.
+        let response = match result {
+            Ok(response) => response,
+            Err(e) => {
+                return Err(RuntimeError::network(format!(
+                    "Failed to get latest release: {e}{}",
+                    credential.failure_note()
+                )));
+            }
+        };
 
         if !response.status().is_success() {
             return Err(RuntimeError::network(format!(
@@ -712,7 +753,16 @@ impl BinaryDownloader {
         result: Result<reqwest::Response>,
         credential: CredentialStatus,
     ) -> Result<Vec<ReleaseInfo>> {
-        let response = result?;
+        // Not `result?` — see the sibling note in `get_latest_version`.
+        let response = match result {
+            Ok(response) => response,
+            Err(e) => {
+                return Err(RuntimeError::network(format!(
+                    "Failed to list releases: {e}{}",
+                    credential.failure_note()
+                )));
+            }
+        };
 
         if !response.status().is_success() {
             return Err(RuntimeError::network(format!(
@@ -1373,60 +1423,26 @@ mod tests {
         h
     }
 
-    /// TEST-1 `[acceptance]` for INV-1 — an auth rejection and a rate limit are
-    /// TWO OUTCOMES, not one.
+    /// TEST-1 `[acceptance]` for INV-1 — a credential rejection and a refusal
+    /// of an ACCEPTED credential are two different outcomes.
     ///
-    /// A 401, and a 403 that is not accompanied by a rate-limit header, are
-    /// credential rejections and must trigger the anonymous fallback. A 403
-    /// that IS a rate limit must not: the anonymous bucket is a different,
-    /// scarcer 60/hr/IP budget, and spending it would mask the 403 the operator
-    /// needs to see. Collapsing the two arms to one verdict turns this red.
+    /// `401` triggers the anonymous fallback; nothing else does. The `403`
+    /// cases are the load-bearing half: a rate limit (primary OR secondary,
+    /// with or without headers) must NOT be read as a rejection, because
+    /// falling back would spend the scarce 60/hr/IP anonymous budget and tell
+    /// the operator to replace a perfectly valid token. Widening the predicate
+    /// to `401 | 403` — the intuitive implementation — turns this red.
     #[test]
-    fn auth_rejection_is_distinguished_from_rate_limit() {
+    fn only_401_is_a_credential_rejection() {
         use reqwest::StatusCode;
 
-        // --- rejections -----------------------------------------------------
         assert!(
-            is_auth_rejection(StatusCode::UNAUTHORIZED, &headers(&[])),
-            "401 is always a credential rejection"
-        );
-        assert!(
-            // A 401 carrying rate-limit headers is STILL a rejection: a
-            // depleted budget does not make a refused credential a quota
-            // problem.
-            is_auth_rejection(
-                StatusCode::UNAUTHORIZED,
-                &headers(&[("x-ratelimit-remaining", "0")])
-            ),
-            "401 outranks any rate-limit header"
-        );
-        assert!(
-            is_auth_rejection(StatusCode::FORBIDDEN, &headers(&[])),
-            "a bare 403 (revoked token / missing scope / SAML) is a rejection"
-        );
-        assert!(
-            is_auth_rejection(
-                StatusCode::FORBIDDEN,
-                &headers(&[("x-ratelimit-remaining", "37")])
-            ),
-            "a 403 with budget REMAINING cannot be a rate limit"
+            is_auth_rejection(StatusCode::UNAUTHORIZED),
+            "401 is what GitHub answers for a bad/expired/revoked credential"
         );
 
-        // --- rate limits (NOT rejections) -----------------------------------
-        assert!(
-            !is_auth_rejection(
-                StatusCode::FORBIDDEN,
-                &headers(&[("x-ratelimit-remaining", "0")])
-            ),
-            "403 + exhausted budget is the PRIMARY rate limit — no fallback"
-        );
-        assert!(
-            !is_auth_rejection(StatusCode::FORBIDDEN, &headers(&[("retry-after", "60")])),
-            "403 + retry-after is the SECONDARY rate limit — no fallback"
-        );
-
-        // --- everything else is not credential-related ----------------------
         for status in [
+            StatusCode::FORBIDDEN,
             StatusCode::OK,
             StatusCode::NOT_FOUND,
             StatusCode::TOO_MANY_REQUESTS,
@@ -1434,36 +1450,38 @@ mod tests {
             StatusCode::SERVICE_UNAVAILABLE,
         ] {
             assert!(
-                !is_auth_rejection(status, &headers(&[])),
-                "{status} must not be read as a credential rejection"
+                !is_auth_rejection(status),
+                "{status} must not trigger the anonymous fallback — only 401 \
+                 unambiguously means 'this credential is not valid'"
             );
         }
     }
 
-    /// TEST-2 `[acceptance]` for INV-3 — the decision is made on the RESPONSE,
-    /// never on the token STRING.
+    /// TEST-2 `[acceptance]` for INV-3 — the fallback is driven by the
+    /// RESPONSE, never by the token STRING.
     ///
-    /// Two halves, and a shape-validating implementation cannot satisfy both:
-    /// (a) the classifier's verdict is a pure function of status + headers, so
-    /// it cannot even see a token; (b) `github_token()` accepts every non-empty
-    /// shape — `ghp_`, the newer `github_pat_`, an Actions `ghs_`, an OAuth
-    /// `gho_`, and an entirely opaque value — so nothing is filtered by
-    /// appearance. A prefix check would have to reject at least one of them,
-    /// and would still not catch an expired token.
+    /// Both halves are needed and neither is implied by the type signature:
+    ///
+    /// (a) `is_auth_rejection`'s verdict is observed to be identical while the
+    ///     process credential is varied across every real GitHub token format.
+    ///     This is a runtime observation, not a restatement of the signature:
+    ///     it fails against any implementation that reaches for the ambient
+    ///     `GITHUB_TOKEN` (e.g. "only fall back if the token doesn't look like
+    ///     a PAT"), which is exactly the shape-check INV-3 forbids.
+    /// (b) `github_token()` forwards every non-empty shape — `ghp_`, the newer
+    ///     `github_pat_`, an Actions `ghs_`, an OAuth `gho_`, and an entirely
+    ///     opaque value. A prefix check would have to reject at least one of
+    ///     them, and would still not catch an expired token.
     #[test]
-    fn classification_ignores_token_shape_and_no_shape_filter_exists() {
+    fn fallback_decision_ignores_token_shape() {
         use reqwest::StatusCode;
 
-        // (a) Same inputs ⇒ same verdict, whatever credential was presented:
-        //     the token is not an input at all.
-        assert!(is_auth_rejection(StatusCode::UNAUTHORIZED, &headers(&[])));
-        assert!(!is_auth_rejection(
-            StatusCode::FORBIDDEN,
-            &headers(&[("x-ratelimit-remaining", "0")])
-        ));
-
-        // (b) No shape is filtered out by `github_token()`.
+        // Mutating GITHUB_TOKEN is process-global; ENV_LOCK serializes this
+        // against the other env-mutating tests in this module, which would
+        // otherwise observe (and permanently restore) each other's values.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let prior = std::env::var("GITHUB_TOKEN").ok();
+
         for shape in [
             "ghp_0123456789abcdefghijklmnopqrstuvwxyz",
             "github_pat_11ABCDEFG0abcdefghijkl_ABCDEFGHIJKLMNOP",
@@ -1471,7 +1489,20 @@ mod tests {
             "gho_oauthTokenLooksLikeThis0123456789",
             "an-entirely-opaque-value",
         ] {
+            // SAFETY: env mutation is process-global; ENV_LOCK is held.
             unsafe { std::env::set_var("GITHUB_TOKEN", shape) };
+
+            // (a) the verdict does not move with the credential.
+            assert!(
+                is_auth_rejection(StatusCode::UNAUTHORIZED),
+                "401 must stay a rejection for token shape {shape}"
+            );
+            assert!(
+                !is_auth_rejection(StatusCode::FORBIDDEN),
+                "403 must stay a non-rejection for token shape {shape}"
+            );
+
+            // (b) nothing is filtered out by appearance.
             assert_eq!(
                 github_token().as_deref(),
                 Some(shape),
@@ -1480,6 +1511,7 @@ mod tests {
                  reject valid credentials while still missing an expired one"
             );
         }
+
         // Padding is trimmed; emptiness remains the ONLY rejection rule.
         unsafe { std::env::set_var("GITHUB_TOKEN", "  ghp_padded  ") };
         assert_eq!(github_token().as_deref(), Some("ghp_padded"));
@@ -1492,26 +1524,27 @@ mod tests {
         }
     }
 
-    /// TEST-8 — the wire vocabulary is exactly `absent|used|rejected`, and the
-    /// failure note names the VARIABLE without ever carrying a value.
+    /// TEST-8 — the wire vocabulary is exactly `absent|used|unverified|rejected`.
+    ///
+    /// The vocabulary is duplicated in three places that cannot import each
+    /// other (this enum, the OpenAPI doc comment, and the TS union), so the
+    /// strings are pinned here. Only a rejection annotates a failing read, so
+    /// an ordinary outage message is not padded with irrelevant advice — and
+    /// the note names the VARIABLE, never a value.
     #[test]
     fn credential_status_wire_vocabulary_and_failure_note() {
         assert_eq!(CredentialStatus::Absent.as_str(), "absent");
         assert_eq!(CredentialStatus::Used.as_str(), "used");
+        assert_eq!(CredentialStatus::Unverified.as_str(), "unverified");
         assert_eq!(CredentialStatus::Rejected.as_str(), "rejected");
 
-        // Only a rejection annotates a failing read, so an ordinary outage
-        // message is not padded with irrelevant advice.
         assert_eq!(CredentialStatus::Absent.failure_note(), "");
         assert_eq!(CredentialStatus::Used.failure_note(), "");
+        assert_eq!(CredentialStatus::Unverified.failure_note(), "");
         let note = CredentialStatus::Rejected.failure_note();
         assert!(
             note.contains("GITHUB_TOKEN"),
             "the note must name the variable so the operator knows what to fix"
-        );
-        assert!(
-            !note.contains("Bearer") && !note.contains("ghp_"),
-            "the note must never carry, or hint at, a credential VALUE"
         );
     }
 }

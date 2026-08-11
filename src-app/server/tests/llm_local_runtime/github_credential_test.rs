@@ -61,11 +61,25 @@ enum AuthBehavior {
     /// `403` + `x-ratelimit-remaining: 0` — an ACCEPTED credential whose quota
     /// is exhausted. Must NOT trigger the anonymous fallback.
     RateLimit403,
+    /// `401` to the authenticated request AND `401` to the anonymous re-issue.
+    /// The token is bad and the fallback does not save it — the case that
+    /// proves the fallback TERMINATES (rather than looping) and that the
+    /// rejection is explained in the reason text.
+    RejectAll,
+    /// `500` to the first request, then serve normally. Exercises the
+    /// pre-existing transient-retry path, whose counter this change
+    /// restructured.
+    TransientThen200,
 }
 
 #[derive(Clone)]
 struct MockState {
     behavior: AuthBehavior,
+    /// Every `Authorization` header value seen, in order (`None` = the request
+    /// was anonymous). Recording the VALUE, not just presence, is what makes
+    /// "the configured token was sent" distinguishable from "some token was
+    /// sent" — the latter would survive a mutation that hardcoded a literal.
+    bearers: Arc<std::sync::Mutex<Vec<Option<String>>>>,
     /// Every request, recorded as `true` when it carried an `Authorization`
     /// header. The order and length are the assertions.
     requests: Arc<std::sync::Mutex<Vec<bool>>>,
@@ -76,10 +90,38 @@ struct MockState {
 /// of an `Authorization` header — mirroring the measured live behaviour, where
 /// the anonymous request succeeded and the credentialed one did not.
 async fn releases(State(st): State<MockState>, headers: HeaderMap) -> Response {
-    let authenticated = headers.contains_key("authorization");
-    st.hits.fetch_add(1, Ordering::SeqCst);
+    let bearer = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.to_string());
+    let authenticated = bearer.is_some();
+    let n = st.hits.fetch_add(1, Ordering::SeqCst);
     if let Ok(mut log) = st.requests.lock() {
         log.push(authenticated);
+    }
+    if let Ok(mut log) = st.bearers.lock() {
+        log.push(bearer);
+    }
+
+    // A transient 5xx on the FIRST request only, regardless of credential.
+    if st.behavior == AuthBehavior::TransientThen200 && n == 0 {
+        return (
+            AxumStatus::INTERNAL_SERVER_ERROR,
+            [("content-type", "application/json")],
+            r#"{"message":"Server Error"}"#,
+        )
+            .into_response();
+    }
+
+    // `RejectAll` refuses the anonymous re-issue too, so the fallback cannot
+    // rescue the read — the terminating case.
+    if st.behavior == AuthBehavior::RejectAll {
+        return (
+            AxumStatus::UNAUTHORIZED,
+            [("content-type", "application/json")],
+            r#"{"message":"Bad credentials","status":"401"}"#,
+        )
+            .into_response();
     }
 
     if authenticated {
@@ -104,7 +146,7 @@ async fn releases(State(st): State<MockState>, headers: HeaderMap) -> Response {
                 )
                     .into_response();
             }
-            AuthBehavior::Accept => {}
+            AuthBehavior::Accept | AuthBehavior::RejectAll | AuthBehavior::TransientThen200 => {}
         }
     }
 
@@ -138,7 +180,11 @@ async fn releases(State(st): State<MockState>, headers: HeaderMap) -> Response {
 
 struct MockGithub {
     server: TestServer,
+    /// `http://127.0.0.1:<port>` — kept so a test can prove the listener is
+    /// really gone rather than sleeping and hoping.
+    mirror: String,
     requests: Arc<std::sync::Mutex<Vec<bool>>>,
+    bearers: Arc<std::sync::Mutex<Vec<Option<String>>>>,
     hits: Arc<AtomicUsize>,
     _handle: JoinHandle<()>,
 }
@@ -152,6 +198,14 @@ impl MockGithub {
             .map(|g| g.clone())
             .unwrap_or_else(|e| e.into_inner().clone());
         (self.hits.load(Ordering::SeqCst), log)
+    }
+
+    /// The `Authorization` header VALUE of each request, in order.
+    fn bearers(&self) -> Vec<Option<String>> {
+        self.bearers
+            .lock()
+            .map(|g| g.clone())
+            .unwrap_or_else(|e| e.into_inner().clone())
     }
 }
 
@@ -168,6 +222,7 @@ impl Drop for MockGithub {
 /// real operator (and `tests/.env.test`) supplies it.
 async fn setup(behavior: AuthBehavior, token: Option<&str>) -> MockGithub {
     let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let bearers = Arc::new(std::sync::Mutex::new(Vec::new()));
     let hits = Arc::new(AtomicUsize::new(0));
 
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -184,13 +239,14 @@ async fn setup(behavior: AuthBehavior, token: Option<&str>) -> MockGithub {
         .with_state(MockState {
             behavior,
             requests: Arc::clone(&requests),
+            bearers: Arc::clone(&bearers),
             hits: Arc::clone(&hits),
         });
     let handle = tokio::spawn(async move {
         let _ = axum::serve(listener, app.into_make_service()).await;
     });
 
-    let mut extra_env = vec![("LLM_RUNTIME_API_MIRROR".to_string(), mirror)];
+    let mut extra_env = vec![("LLM_RUNTIME_API_MIRROR".to_string(), mirror.clone())];
     match token {
         Some(t) => extra_env.push(("GITHUB_TOKEN".to_string(), t.to_string())),
         // The harness inherits the test process's environment, which on a
@@ -208,10 +264,48 @@ async fn setup(behavior: AuthBehavior, token: Option<&str>) -> MockGithub {
 
     MockGithub {
         server,
+        mirror,
         requests,
+        bearers,
         hits,
         _handle: handle,
     }
+}
+
+/// Make upstream genuinely unreachable, and PROVE it before returning.
+///
+/// `abort()` alone is asynchronous, so a bare sleep afterwards is a
+/// timing-dependent flake on a busy box: the request can still land on a
+/// listener that has not stopped accepting yet. Poll until a direct connect is
+/// actually refused, so "GitHub is down" is an observed fact rather than a
+/// hopeful one.
+async fn take_upstream_down(mock: &MockGithub) {
+    mock._handle.abort();
+    let addr = mock.mirror.trim_start_matches("http://").to_string();
+    for _ in 0..100 {
+        if tokio::net::TcpStream::connect(&addr).await.is_err() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    panic!("mock upstream at {addr} still accepting connections after abort");
+}
+
+/// `GET /local-runtime/versions/available?engine=llamacpp` — the OTHER
+/// discovery endpoint, built by different code (`binary_manager.rs`) than
+/// `check-updates` (`handlers.rs`).
+async fn available(mock: &MockGithub, token: &str) -> (StatusCode, Value) {
+    let resp = reqwest::Client::new()
+        .get(
+            mock.server
+                .api_url("/local-runtime/versions/available?engine=llamacpp"),
+        )
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .expect("available request");
+    let status = resp.status();
+    (status, resp.json().await.expect("json body"))
 }
 
 async fn check_updates(mock: &MockGithub, token: &str) -> (StatusCode, Value) {
@@ -258,6 +352,12 @@ async fn valid_token_stays_authenticated_with_exactly_one_request() {
          silently going anonymous cuts the operator from 5000/hr to 60/hr"
     );
     assert_eq!(
+        mock.bearers(),
+        vec![Some(format!("Bearer {FAKE_TOKEN}"))],
+        "the CONFIGURED token must be what was sent — asserting only that some \
+         Authorization header was present would survive a hardcoded literal"
+    );
+    assert_eq!(
         body["credential_status"], "used",
         "an accepted token reports `used`, so an operator can confirm their \
          credential is actually in effect"
@@ -267,6 +367,16 @@ async fn valid_token_stays_authenticated_with_exactly_one_request() {
     assert!(
         !body["versions"].as_array().expect("versions").is_empty(),
         "the catalogue must be served"
+    );
+
+    // The OTHER discovery endpoint must agree. This is the `used` control that
+    // stops a hardcoded `"rejected"` in binary_manager.rs from passing every
+    // test — TEST-6 takes the `rejected` half on this same endpoint.
+    let (status, avail) = available(&mock, &admin.token).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        avail["engines"][0]["credential_status"], "used",
+        "/versions/available must report the same verdict as check-updates"
     );
 }
 
@@ -382,19 +492,9 @@ async fn rejected_credential_is_distinguishable_from_an_outage() {
     assert_eq!(updates["credential_status"], "rejected");
     assert_eq!(updates["source"], "live");
 
-    let resp = reqwest::Client::new()
-        .get(
-            rejected
-                .server
-                .api_url("/local-runtime/versions/available?engine=llamacpp"),
-        )
-        .header("Authorization", format!("Bearer {}", admin_a.token))
-        .send()
-        .await
-        .expect("available request");
-    assert_eq!(resp.status(), StatusCode::OK);
-    let available: Value = resp.json().await.expect("json");
-    let engine = &available["engines"][0];
+    let (status, listing) = available(&rejected, &admin_a.token).await;
+    assert_eq!(status, StatusCode::OK);
+    let engine = &listing["engines"][0];
     assert_eq!(
         engine["credential_status"], "rejected",
         "the discovery endpoint must carry the same verdict as check-updates \
@@ -407,9 +507,7 @@ async fn rejected_credential_is_distinguishable_from_an_outage() {
     let outage = setup(AuthBehavior::Accept, None).await;
     let admin_b =
         create_user_with_permissions(&outage.server, "admin", LOCAL_RUNTIME_ADMIN_PERMS).await;
-    outage._handle.abort();
-    // Give the aborted listener a moment to stop accepting.
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    take_upstream_down(&outage).await;
 
     let (status, down) = check_updates(&outage, &admin_b.token).await;
     assert_eq!(status, StatusCode::OK, "an outage is still a degraded 200");
@@ -434,5 +532,120 @@ async fn rejected_credential_is_distinguishable_from_an_outage() {
     assert!(
         !reason.contains(FAKE_TOKEN) && !reason.contains("Bearer"),
         "no reason string may ever carry a credential value"
+    );
+}
+
+/// TEST-14 — the fallback TERMINATES, and a rejection that the fallback cannot
+/// rescue is EXPLAINED.
+///
+/// Two things no other test can prove. (a) With the anonymous re-issue also
+/// refused, the loop must stop at exactly two requests — `ANONYMOUS_RETRY_LIMIT`
+/// is the only thing bounding it, so a mutation deleting that bound shows up
+/// here as a spin or an extra request, whereas in the rescued case the loop
+/// exits anyway because the second request succeeds. (b) This is the only path
+/// that reaches `failure_note()`'s interpolation with a `Rejected` credential:
+/// without this test, blanking BOTH call sites in `download.rs` would survive
+/// the entire suite.
+#[tokio::test]
+async fn rejection_the_fallback_cannot_rescue_terminates_and_is_explained() {
+    let mock = setup(AuthBehavior::RejectAll, Some(FAKE_TOKEN)).await;
+    let admin =
+        create_user_with_permissions(&mock.server, "admin", LOCAL_RUNTIME_ADMIN_PERMS).await;
+
+    let (status, body) = check_updates(&mock, &admin.token).await;
+    assert_eq!(status, StatusCode::OK, "still a degraded 200, not a 500");
+
+    let (total, log) = mock.observed();
+    assert_eq!(
+        total, 2,
+        "exactly one authenticated attempt and ONE anonymous re-issue — a 401 \
+         is not transient, so neither may be retried further"
+    );
+    assert_eq!(log, vec![true, false]);
+    assert_eq!(
+        mock.bearers()[1],
+        None,
+        "the re-issue must carry NO Authorization header — that is the whole \
+         mechanism, and a header left on would be invisible to a count alone"
+    );
+
+    assert_eq!(body["source"], "unavailable");
+    assert_eq!(body["credential_status"], "rejected");
+    let reason = body["unavailable_reason"]
+        .as_str()
+        .expect("a failed refresh must always carry a reason");
+    assert!(
+        reason.contains("GITHUB_TOKEN"),
+        "the reason must NAME the credential, so an operator reading only this \
+         string learns what to fix: {reason}"
+    );
+    assert!(
+        reason.contains("401"),
+        "and it must still name the status: {reason}"
+    );
+    assert!(
+        !reason.contains(FAKE_TOKEN) && !reason.contains("Bearer"),
+        "but it must never carry the credential VALUE: {reason}"
+    );
+}
+
+/// TEST-15 — the pre-existing transient-retry path still works.
+///
+/// This change restructured the retry counter (init/increment moved), and
+/// `2u64.pow(attempt - 1)` underflows and PANICS in debug if `attempt` starts
+/// at 0. No other test in the suite makes upstream fail transiently, so without
+/// this a production panic on the retry path would be invisible. Also pins that
+/// a 5xx is NOT read as a credential problem.
+#[tokio::test]
+async fn a_transient_failure_is_retried_and_is_not_a_credential_problem() {
+    let mock = setup(AuthBehavior::TransientThen200, Some(FAKE_TOKEN)).await;
+    let admin =
+        create_user_with_permissions(&mock.server, "admin", LOCAL_RUNTIME_ADMIN_PERMS).await;
+
+    let (status, body) = check_updates(&mock, &admin.token).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (total, log) = mock.observed();
+    assert_eq!(total, 2, "one 500, then one successful retry");
+    assert_eq!(
+        log,
+        vec![true, true],
+        "a 5xx must NOT drop the credential — retrying anonymously would spend \
+         the scarce anonymous budget on a server-side hiccup"
+    );
+    assert_eq!(
+        body["credential_status"], "used",
+        "the token was presented and ultimately accepted"
+    );
+    assert!(!body["versions"].as_array().expect("versions").is_empty());
+}
+
+/// TEST-16 — a token present through a TOTAL outage reports `unverified`, not
+/// `used`.
+///
+/// GitHub never answered, so nothing is known about the credential. Reporting
+/// `used` there would assert an acceptance that never happened and tell the
+/// operator they are on the 5000/hour budget on no evidence. Paired with
+/// TEST-6's no-token outage (`absent`) and TEST-3's accepted token (`used`),
+/// this makes all four vocabulary values reachable and distinct.
+#[tokio::test]
+async fn a_token_present_through_a_total_outage_is_unverified_not_used() {
+    let mock = setup(AuthBehavior::Accept, Some(FAKE_TOKEN)).await;
+    let admin =
+        create_user_with_permissions(&mock.server, "admin", LOCAL_RUNTIME_ADMIN_PERMS).await;
+    take_upstream_down(&mock).await;
+
+    let (status, body) = check_updates(&mock, &admin.token).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["source"], "unavailable");
+    assert_eq!(
+        body["credential_status"], "unverified",
+        "upstream never answered, so the credential's validity is UNKNOWN — \
+         `used` would be an unfounded claim of acceptance"
+    );
+    let reason = body["unavailable_reason"].as_str().expect("reason");
+    assert!(
+        !reason.contains("GITHUB_TOKEN"),
+        "an outage must not be blamed on a credential that was never judged: {reason}"
     );
 }

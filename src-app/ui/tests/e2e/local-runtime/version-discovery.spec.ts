@@ -1,5 +1,5 @@
 import { test, expect } from '../../fixtures/test-context'
-import { loginAsAdmin } from '../../common/auth-helpers'
+import { loginAsAdmin, getCurrentUserToken } from '../../common/auth-helpers'
 import { byTestId } from '../testid.ts'
 import { gotoRuntimeSettings } from './helpers/local-runtime-helpers'
 
@@ -47,31 +47,72 @@ test.describe('Local Runtime — version discovery', () => {
     const card = byTestId(page, 'llmrt-available-versions-card')
     await expect(card).toBeVisible({ timeout: 30000 })
 
-    // Diagnosability, not a weaker assertion: the row assertions below are
-    // unchanged, but on failure Playwright can only say "element(s) not found",
-    // which is the same message for a real regression and for GitHub simply
-    // being unreachable from the runner. Ask the server what it thinks FIRST so
-    // the failure names the actual cause — including a rejected GITHUB_TOKEN,
-    // which is the defect this spec exists to catch (the invalid placeholder in
-    // `tests/.env.test` used to 401 the discovery call and empty this list).
-    const diag = await page.evaluate(async () => {
+    // Ask the server what it thinks BEFORE asserting on the DOM. Two reasons,
+    // and neither weakens the row assertions below:
+    //
+    // 1. Diagnosability. On failure Playwright can only say "element(s) not
+    //    found", which reads identically for a real regression and for GitHub
+    //    being unreachable from the runner. The server knows which it is.
+    // 2. It is the only place this spec can assert the thing the fix actually
+    //    added, on the REAL production path: `credential_status`. The mocked
+    //    integration tier proves the fallback LOGIC; only this proves the
+    //    verdict survives a real GitHub round-trip onto the wire.
+    //
+    // The endpoint is permission-gated and ziee authenticates from the
+    // `Authorization` header only (the refresh cookie is scoped
+    // `Path=/api/auth`), so the token must be forwarded explicitly — a bare
+    // in-page fetch would 401 and this block would throw unconditionally.
+    const token = await getCurrentUserToken(page)
+    const diag = await page.evaluate(async t => {
       const res = await fetch(
         '/api/local-runtime/versions/llamacpp/check-updates',
-        { headers: { Accept: 'application/json' } },
+        { headers: { Accept: 'application/json', Authorization: `Bearer ${t}` } },
       )
       return { status: res.status, body: await res.text() }
-    })
-    const catalog = diag.status === 200 ? JSON.parse(diag.body) : null
-    if (!catalog || (catalog.versions ?? []).length === 0) {
+    }, token)
+    expect(
+      diag.status,
+      `check-updates must answer 200 even when upstream is unreachable — the ` +
+        `degradation rides the 200. Got ${diag.status}: ${diag.body.slice(0, 300)}`,
+    ).toBe(200)
+    const catalog = JSON.parse(diag.body)
+
+    // The credential verdict must always be one of the four known states —
+    // never absent from the payload, since an omitted field is
+    // indistinguishable from "no token configured", which is a real state.
+    expect(['absent', 'used', 'unverified', 'rejected']).toContain(
+      catalog.credential_status,
+    )
+
+    if ((catalog.versions ?? []).length === 0) {
       throw new Error(
         `The release catalogue is empty, so no version rows can render. ` +
-          `Server says: HTTP ${diag.status} source=${catalog?.source} ` +
-          `credential_status=${catalog?.credential_status} ` +
-          `unavailable_reason=${catalog?.unavailable_reason ?? 'none'}. ` +
-          `credential_status="rejected" with an empty list means the ` +
-          `configured GITHUB_TOKEN was refused AND the anonymous fallback ` +
-          `also failed; "absent" means GitHub itself was unreachable.`,
+          `Server says: source=${catalog.source} ` +
+          `credential_status=${catalog.credential_status} ` +
+          `unavailable_reason=${catalog.unavailable_reason ?? 'none'}. ` +
+          `"rejected" with an empty list means the configured GITHUB_TOKEN was ` +
+          `refused AND the anonymous fallback also failed; "absent"/"unverified" ` +
+          `means GitHub itself was unreachable.`,
       )
+    }
+
+    // THE acceptance assertion for INV-1, on the production path. The e2e
+    // environment supplies an invalid GITHUB_TOKEN (`tests/.env.test` ships a
+    // placeholder), so this branch is the reported defect exactly: pre-fix the
+    // 401 emptied the catalogue and the rows below could not render. Removing
+    // the anonymous fallback makes this line, and then the row assertions, red.
+    if (catalog.credential_status === 'rejected') {
+      expect(
+        (catalog.versions ?? []).length,
+        'a refused GITHUB_TOKEN must NOT empty the version list while the ' +
+          'anonymous path works — that is the whole defect',
+      ).toBeGreaterThan(0)
+      expect(
+        catalog.source,
+        'the anonymous-rescued catalogue is genuinely fresh, so it must not ' +
+          'be labelled unreachable',
+      ).toBe('live')
+      expect(catalog.unavailable_reason ?? null).toBeNull()
     }
 
     // Rows are `llmrt-version-row-<version>`; at least one must exist, and its

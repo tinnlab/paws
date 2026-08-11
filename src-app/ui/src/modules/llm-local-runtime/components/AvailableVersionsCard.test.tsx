@@ -71,7 +71,7 @@ type CatalogState = {
   source: 'live' | 'cache' | 'unavailable'
   checked_at?: string
   unavailable_reason?: string
-  credential_status?: 'absent' | 'used' | 'rejected'
+  credential_status?: 'absent' | 'used' | 'unverified' | 'rejected'
 }
 
 let root: Root | null = null
@@ -307,5 +307,13 @@ describe('AvailableVersionsCard — catalogue states', () => {
     expect(testId('llmrt-available-unreachable')).not.toBeNull()
     expect(testId('llmrt-available-credential-rejected')).not.toBeNull()
     expect(text()).not.toContain('No published binaries')
+    // The credential instruction must be visible WITHOUT interaction. The
+    // server's `unavailable_reason` (which also names GITHUB_TOKEN) is only
+    // reachable behind ErrorState's collapsed "Details" disclosure — verified
+    // by this test: the rendered text contains "Details" but not the 401 the
+    // reason carries. So the notice is not redundant with it; it is the only
+    // unconditional statement of what to fix.
+    expect(text()).toMatch(/check or unset the token/i)
+    expect(text()).not.toContain('401')
   })
 })
