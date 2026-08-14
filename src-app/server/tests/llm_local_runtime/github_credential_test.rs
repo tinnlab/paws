@@ -66,6 +66,10 @@ enum AuthBehavior {
     /// proves the fallback TERMINATES (rather than looping) and that the
     /// rejection is explained in the reason text.
     RejectAll,
+    /// `403` + `X-GitHub-SSO` to an authenticated request (a PAT that is not
+    /// authorized for a SAML-SSO-enforced org), `200` anonymously. The one
+    /// `403` GitHub identifies, so it MUST fall back.
+    SsoForbidden,
     /// `403` with NO SSO header to every request — GitHub ANSWERED, but did
     /// not serve the request and did not identify a credential problem.
     /// Evidence of nothing: the verdict must stay `unverified`.
@@ -164,6 +168,20 @@ async fn releases(State(st): State<MockState>, headers: HeaderMap) -> Response {
                 )
                     .into_response();
             }
+            AuthBehavior::SsoForbidden => {
+                return (
+                    AxumStatus::FORBIDDEN,
+                    [
+                        ("content-type", "application/json"),
+                        (
+                            "x-github-sso",
+                            "required; url=https://github.com/orgs/ziee-ai/sso",
+                        ),
+                    ],
+                    r#"{"message":"Resource protected by organization SAML enforcement."}"#,
+                )
+                    .into_response();
+            }
             AuthBehavior::Accept
             | AuthBehavior::RejectAll
             | AuthBehavior::Forbidden403
@@ -242,15 +260,26 @@ impl Drop for MockGithub {
 /// `GITHUB_TOKEN` into the spawned server's environment, which is exactly how a
 /// real operator (and `tests/.env.test`) supplies it.
 async fn setup(behavior: AuthBehavior, token: Option<&str>) -> MockGithub {
+    setup_on(behavior, token, "127.0.0.1").await
+}
+
+/// Like [`setup`] but binds and addresses the mock on `host`.
+///
+/// `0.0.0.0` is the lever for the untrusted-target test: it is reachable
+/// locally, but `Url::host_str()` reports `0.0.0.0`, which is NOT one of the
+/// loopback names the credential guard allows — so the request must go out
+/// anonymously. Without this the guard is only ever exercised on its `true`
+/// branch and deleting it entirely would pass every tier.
+async fn setup_on(behavior: AuthBehavior, token: Option<&str>, host: &str) -> MockGithub {
     let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
     let bearers = Arc::new(std::sync::Mutex::new(Vec::new()));
     let hits = Arc::new(AtomicUsize::new(0));
 
-    let listener = TcpListener::bind("127.0.0.1:0")
+    let listener = TcpListener::bind(format!("{host}:0"))
         .await
         .expect("bind mock github");
     let port = listener.local_addr().expect("local_addr").port();
-    let mirror = format!("http://127.0.0.1:{port}");
+    let mirror = format!("http://{host}:{port}");
 
     let app = axum::Router::new()
         .route(
@@ -479,9 +508,11 @@ async fn rate_limited_token_does_not_trigger_anonymous_retry() {
         "nothing cached and the refresh failed"
     );
     assert_eq!(
-        body["credential_status"], "used",
-        "the token was ACCEPTED and merely throttled — reporting it as \
-         `rejected` would send the operator to replace a working credential"
+        body["credential_status"], "unverified",
+        "a throttle is NOT proof of acceptance: on a shared egress IP whose \
+         anonymous budget is spent, an invalid token can be throttled before \
+         it is ever judged, so `used` would be an unfounded claim. It is \
+         equally not `rejected` — nothing refused the credential."
     );
     let reason = body["unavailable_reason"]
         .as_str()
@@ -562,8 +593,11 @@ async fn rejected_credential_is_distinguishable_from_an_outage() {
 /// Two things no other test can prove. (a) With the anonymous re-issue also
 /// refused, the loop must stop at exactly two requests — `ANONYMOUS_RETRY_LIMIT`
 /// is the only thing bounding it, so a mutation deleting that bound shows up
-/// here as a spin or an extra request, whereas in the rescued case the loop
-/// exits anyway because the second request succeeds. (b) This is the only path
+/// here as a spin or an extra request: the fallback's only bound is the
+/// `credential_refused` flag on the `authenticated` guard, and removing it
+/// makes this test hang rather than merely over-count. In the rescued case the
+/// loop exits anyway because the second request succeeds, so only this path
+/// can observe the bound at all. (b) This is the only path
 /// that reaches `failure_note()`'s interpolation with a `Rejected` credential:
 /// without this test, blanking BOTH call sites in `download.rs` would survive
 /// the entire suite.
@@ -709,4 +743,79 @@ async fn an_answered_but_unserved_request_leaves_the_credential_unverified() {
         !reason.contains("GITHUB_TOKEN"),
         "and an unclassifiable 403 is not blamed on the credential: {reason}"
     );
+}
+
+/// TEST-23 `[acceptance]` for **INV-1** — the ONE `403` GitHub identifies does
+/// fall back.
+///
+/// `403` + `X-GitHub-SSO` is what a PAT that has not been authorized for a
+/// SAML-SSO-enforced organization receives. It is a credential problem no
+/// amount of waiting fixes, and the header is a documented contract — so it
+/// must behave exactly like a 401. Narrowing the classifier back to `401` only
+/// (an earlier draft did exactly that) leaves this operator with the original
+/// inversion, and turns this test red.
+#[tokio::test]
+async fn an_sso_forbidden_token_falls_back_and_discovery_succeeds() {
+    let mock = setup(AuthBehavior::SsoForbidden, Some(FAKE_TOKEN)).await;
+    let admin =
+        create_user_with_permissions(&mock.server, "admin", LOCAL_RUNTIME_ADMIN_PERMS).await;
+
+    let (status, body) = check_updates(&mock, &admin.token).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (total, log) = mock.observed();
+    assert_eq!(
+        total, 2,
+        "authenticated attempt, then one anonymous re-issue"
+    );
+    assert_eq!(log, vec![true, false]);
+
+    assert_eq!(body["credential_status"], "rejected");
+    assert_eq!(body["source"], "live");
+    assert!(body["unavailable_reason"].is_null());
+    assert!(
+        !body["versions"].as_array().expect("versions").is_empty(),
+        "an SSO-unauthorized PAT must not empty the version list while the \
+         anonymous path works"
+    );
+}
+
+/// TEST-24 — the credential is WITHHELD from a non-loopback target, on the
+/// wire.
+///
+/// `credential_target_is_trusted` was otherwise proven only as a pure
+/// function, and every other fixture addresses the mock as `127.0.0.1` — its
+/// `true` branch. That is the classic dead-guard shape: deleting the
+/// `.filter(credential_target_is_trusted)` from the request path passed every
+/// tier. Here the mock is bound and addressed as `0.0.0.0`, which is reachable
+/// but is not a loopback NAME, so the request must go out with no
+/// `Authorization` header at all.
+#[tokio::test]
+async fn the_credential_is_withheld_from_a_non_loopback_target() {
+    let mock = setup_on(AuthBehavior::Accept, Some(FAKE_TOKEN), "0.0.0.0").await;
+    let admin =
+        create_user_with_permissions(&mock.server, "admin", LOCAL_RUNTIME_ADMIN_PERMS).await;
+
+    let (status, body) = check_updates(&mock, &admin.token).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (total, log) = mock.observed();
+    assert_eq!(total, 1, "one request, and it reached the mock");
+    assert_eq!(
+        log,
+        vec![false],
+        "NO Authorization header may be sent to a host that is neither real \
+         GitHub nor loopback — a misconfigured mirror must never receive an \
+         operator's credential"
+    );
+    assert_eq!(
+        mock.bearers(),
+        vec![None],
+        "and nothing token-shaped reached the wire at all"
+    );
+    assert_eq!(
+        body["credential_status"], "absent",
+        "no credential was used, so `absent` is the honest report"
+    );
+    assert!(!body["versions"].as_array().expect("versions").is_empty());
 }

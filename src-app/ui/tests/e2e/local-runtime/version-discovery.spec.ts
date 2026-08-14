@@ -35,10 +35,9 @@ import { gotoRuntimeSettings } from './helpers/local-runtime-helpers'
  * which reads like a persistence bug rather than a test bug. Measured: the
  * request body was correct and the request was aborted mid-flight.
  *
- * Returning the status also makes the refusal half STRONGER: it now asserts
- * the server answered 4xx, so a server that silently accepted an
- * out-of-bounds value (and merely happened to render 900 afterwards) can no
- * longer pass.
+ * Returning the status and the sent body is also what lets the caller assert
+ * WHAT was submitted, not merely that something was — which is how the
+ * client-side clamp (10 -> 60) became visible at all.
  */
 async function saveRuntimeConfig(
   page: Page,
@@ -190,6 +189,33 @@ test.describe('Local Runtime — version discovery', () => {
       catalog.credential_status,
     )
 
+    // Record which branch this run exercised, so a green result STATES whether
+    // it covered the rejected-credential path rather than leaving it implicit.
+    // The path is only taken when the backend environment carries an invalid
+    // GITHUB_TOKEN — which `src-app/server/tests/.env.test` supplies, but only
+    // if the runner exported it (the Playwright harness passes `...process.env`
+    // through to the spawned server; it does not source that file itself). The
+    // fallback LOGIC is proven hermetically in
+    // `server/tests/llm_local_runtime/github_credential_test.rs`; what this
+    // spec adds is the real-GitHub round trip.
+    test.info().annotations.push({
+      type: 'credential_status',
+      description: String(catalog.credential_status),
+    })
+
+    // UNCONDITIONAL — true on every path, and the observable core of INV-1: a
+    // credential problem must never leave the operator with nothing to install
+    // while GitHub itself is reachable.
+    expect(
+      (catalog.versions ?? []).length,
+      `discovery returned no versions (source=${catalog.source}, ` +
+        `credential_status=${catalog.credential_status})`,
+    ).toBeGreaterThan(0)
+    expect(
+      catalog.unavailable_reason ?? null,
+      'GitHub answered, so nothing may be labelled unreachable',
+    ).toBeNull()
+
     // THE acceptance assertion for INV-1, on the production path. The e2e
     // environment supplies an invalid GITHUB_TOKEN (`tests/.env.test` ships a
     // placeholder), so this branch is the reported defect exactly: pre-fix the
@@ -260,10 +286,7 @@ test.describe('Local Runtime — version discovery', () => {
     await field.fill('900')
     const accepted = await saveRuntimeConfig(page)
     expect(accepted.sentTtl, 'the typed value is what gets sent').toBe(900)
-    expect(
-      accepted.status,
-      'an in-bounds TTL must be accepted by the server',
-    ).toBeLessThan(300)
+    expect(accepted.status, 'an in-bounds TTL must be accepted').toBe(200)
 
     await page.reload()
     await page.waitForLoadState('load')
@@ -291,9 +314,7 @@ test.describe('Local Runtime — version discovery', () => {
       'a below-floor value must never reach the server; the control clamps ' +
         'it to the 60s floor first',
     ).toBe(60)
-    expect(clamped.status, 'and the clamped value is in-bounds').toBeLessThan(
-      300,
-    )
+    expect(clamped.status, 'and the clamped value is in-bounds').toBe(200)
 
     await page.reload()
     await page.waitForLoadState('load')
@@ -303,5 +324,41 @@ test.describe('Local Runtime — version discovery', () => {
       afterReject,
       'the persisted value is the clamped floor — never the out-of-bounds 10',
     ).toHaveValue('60')
+
+    // --- and the SERVER enforces the floor independently ---------------------
+    //
+    // The clamp above is a client-side control affordance; any API client
+    // bypasses it. Asserting only the clamp would delete all coverage of the
+    // backend bound, so drive the endpoint directly with the out-of-bounds
+    // value the UI refuses to send.
+    const token = await getCurrentUserToken(page)
+    const direct = await page.evaluate(async t => {
+      const r = await fetch('/api/local-runtime/settings', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${t}`,
+        },
+        body: JSON.stringify({
+          idle_unload_secs: 1800,
+          auto_start_timeout_secs: 30,
+          drain_timeout_secs: 30,
+          engine_release_cache_ttl_secs: 10,
+        }),
+      })
+      return { status: r.status, body: (await r.text()).slice(0, 300) }
+    }, token)
+    expect(
+      direct.status,
+      `the server must refuse a below-floor TTL on its own, not rely on the ` +
+        `control clamping first. Got ${direct.status}: ${direct.body}`,
+    ).toBeGreaterThanOrEqual(400)
+
+    // ...and the refusal must not have replaced the stored value.
+    await page.reload()
+    await page.waitForLoadState('load')
+    const afterServerReject = byTestId(page, 'llmrt-config-release-cache-ttl')
+    await expect(afterServerReject).toBeVisible({ timeout: 30000 })
+    await expect(afterServerReject).toHaveValue('60')
   })
 })

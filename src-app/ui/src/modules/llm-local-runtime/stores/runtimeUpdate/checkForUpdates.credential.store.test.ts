@@ -25,10 +25,27 @@ vi.mock('@/api-client', () => ({
   },
 }))
 
-// The action reads the current default version off the sibling store; stub it
-// to a quiescent shape so the test is about credential_status and nothing else.
+// The action reads the current default version off the sibling store.
+//
+// The stub deliberately MIMICS THE PROXY'S CONTRACT rather than being a plain
+// object: a bare field read is a React hook and is illegal outside render, so
+// here it THROWS, while `.$` returns the snapshot. A plain-object stub makes
+// the two indistinguishable — which is precisely why the real defect (a
+// reactive `RuntimeVersion.versions` read inside this async action, throwing
+// React #321 and being swallowed into `state.error`) was invisible to this
+// tier and shipped. With this stub, reverting the action to the reactive read
+// turns these tests red instead of silently passing.
+const runtimeVersionSnapshot = { versions: [] as unknown[] }
 vi.mock('@/modules/llm-local-runtime/stores/runtimeVersion', () => ({
-  RuntimeVersion: { versions: [] },
+  RuntimeVersion: new Proxy({} as Record<string, unknown>, {
+    get: (_t, prop) => {
+      if (prop === '$') return runtimeVersionSnapshot
+      throw new Error(
+        `[test] reactive read of RuntimeVersion.${String(prop)} outside ` +
+          `render — that is a hook call (React #321). Use RuntimeVersion.$.`,
+      )
+    },
+  }),
 }))
 
 const RESPONSE = {

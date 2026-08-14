@@ -73,8 +73,7 @@ fn github_token() -> Option<String> {
         .filter(|t| !t.is_empty())
 }
 
-/// True when the credential may be presented to whatever [`api_base_url`]
-/// currently resolves to.
+/// True when the credential may be presented to `url`.
 ///
 /// The token is an operator secret, and `api_base_url()` is overridable in
 /// debug builds via `LLM_RUNTIME_API_MIRROR`. Without this guard, any debug
@@ -87,20 +86,36 @@ fn github_token() -> Option<String> {
 /// LOOPBACK mirror, which is the integration suite's own mock and cannot
 /// exfiltrate anything. A debug mirror pointed anywhere else still works; it
 /// simply gets anonymous requests.
-fn credential_target_is_trusted(base: &str) -> bool {
-    if base == "https://api.github.com" {
+fn credential_target_is_trusted(url: &str) -> bool {
+    // Parse, never string-surgery. A hand-rolled `split('/')` +
+    // `rsplit_once(':')` authority parser walks straight through
+    // `http://localhost:8080@evil.example` — it reads the userinfo as the host
+    // and `8080@evil.example` as the port — and would hand the operator's real
+    // token to `evil.example` in cleartext. That is the exact scenario this
+    // function exists to prevent, so it must use a real URL parser.
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+    // `host_str()` is already lowercased and userinfo-free, and IPv6 literals
+    // arrive without brackets. A trailing root dot names the same host.
+    let host = host.trim_end_matches('.');
+
+    if parsed.scheme() == "https" && host == "api.github.com" {
         return true;
     }
+
+    // The debug-only loopback seam the integration suite drives. Release builds
+    // compile this away, so production can only ever authenticate to GitHub.
     #[cfg(debug_assertions)]
-    if let Some(rest) = base
-        .strip_prefix("http://")
-        .or_else(|| base.strip_prefix("https://"))
+    if matches!(parsed.scheme(), "http" | "https")
+        && matches!(host, "127.0.0.1" | "::1" | "localhost")
     {
-        let host = rest.split('/').next().unwrap_or("");
-        let host = host.rsplit_once(':').map_or(host, |(h, _)| h);
-        let host = host.trim_start_matches('[').trim_end_matches(']');
-        return host == "127.0.0.1" || host == "::1" || host == "localhost";
+        return true;
     }
+
     false
 }
 
@@ -129,8 +144,10 @@ pub enum CredentialStatus {
     /// than a rejection. It is a claim about what upstream DID, so it must
     /// never be reported for a request upstream never answered.
     Used,
-    /// A token was configured and presented, but GitHub never answered — every
-    /// attempt failed at the transport layer — so its validity is unknown.
+    /// A token was configured and presented, but GitHub never SERVED the
+    /// request, so its validity is unknown. Reached both when nothing came
+    /// back at all (transport failure) and when what came back proves nothing:
+    /// a bare `403`, a `404`, a persistent `5xx`, a throttle.
     ///
     /// Exists because the honest answer to "does my token work?" after a total
     /// outage is "we could not find out". Reporting `Used` there would assert
@@ -166,32 +183,6 @@ impl CredentialStatus {
             Self::Absent | Self::Used | Self::Unverified => "",
         }
     }
-}
-
-/// True when GitHub's answer PROVES it recognized the credential.
-///
-/// Two kinds of answer do: one it actually served (`2xx`), and one it refused
-/// **for quota** — a `429`, or a `403` whose `x-ratelimit-remaining` is `0`.
-/// The quota case is proof precisely because the request was authenticated: an
-/// unrecognized token answers `401`, so a throttle can only mean GitHub looked
-/// the token up and applied ITS bucket (5000/hr) rather than the anonymous
-/// per-IP one. Reporting such an operator `unverified` would send them to
-/// replace a credential that demonstrably works and only needs to cool down.
-///
-/// Everything else answered — a bare `403`, a `404`, a persistent `5xx` — is
-/// evidence of NOTHING and must leave the verdict `Unverified`.
-fn proves_credential_accepted(
-    status: reqwest::StatusCode,
-    headers: &reqwest::header::HeaderMap,
-) -> bool {
-    if status.is_success() || status.as_u16() == 429 {
-        return true;
-    }
-    status.as_u16() == 403
-        && headers
-            .get("x-ratelimit-remaining")
-            .and_then(|v| v.to_str().ok())
-            .is_some_and(|v| v.trim() == "0")
 }
 
 /// True when `status` says GitHub REJECTED THE CREDENTIAL, as opposed to
@@ -694,8 +685,18 @@ impl BinaryDownloader {
         // authenticated and anonymous attempts disagree about what was tried.
         // Withheld entirely from an untrusted target (see
         // `credential_target_is_trusted`), so a misconfigured debug mirror
-        // never receives an operator's real credential.
-        let token = github_token().filter(|_| credential_target_is_trusted(&api_base_url()));
+        // never receives an operator's real credential. The check is against
+        // `url` — the string actually being requested — not a re-derived
+        // `api_base_url()`, so the value guarded is the value used.
+        //
+        // A token that cannot become a header value is treated as unusable
+        // rather than attached: reqwest defers that failure to `send()`, where
+        // the loop would misfile it as a transient error, burn every attempt,
+        // and NEVER reach the anonymous fallback — an invalid credential
+        // failing worse than no credential, the exact inversion this fixes.
+        let token = github_token()
+            .filter(|_| credential_target_is_trusted(url))
+            .filter(|t| reqwest::header::HeaderValue::from_str(&format!("Bearer {t}")).is_ok());
         // Starts at `Unverified` when a token exists, NOT `Used`: until GitHub
         // has actually answered, nothing is known about the credential, and
         // `Used` is a claim that upstream ACCEPTED it. Promoted on the first
@@ -759,9 +760,18 @@ impl BinaryDownloader {
             //
             // A rejection recorded on an earlier attempt is never overwritten:
             // the anonymous re-issue succeeding does not make the token valid.
+            // ONLY a SERVED request proves acceptance. An earlier draft also
+            // counted a throttle (429, or 403 with an exhausted budget) as
+            // proof, on the premise that GitHub must authenticate a request
+            // before rate-limiting it. That premise is undocumented, and if it
+            // is wrong — a shared egress IP whose ANONYMOUS budget is spent may
+            // be throttled before the credential is judged at all — it reports
+            // `used` for a dead token: the original defect with the blame
+            // inverted. `Unverified` is never wrong, and the reason string
+            // still names the 403/429, so being careful hides nothing.
             if authenticated
                 && let Ok(resp) = &result
-                && proves_credential_accepted(resp.status(), resp.headers())
+                && resp.status().is_success()
                 && credential == CredentialStatus::Unverified
             {
                 credential = CredentialStatus::Used;
@@ -1657,14 +1667,41 @@ mod tests {
     /// transmit that credential to an arbitrary host in cleartext.
     #[test]
     fn credential_is_withheld_from_untrusted_targets() {
-        assert!(credential_target_is_trusted("https://api.github.com"));
+        for github in [
+            "https://api.github.com",
+            "https://api.github.com/repos/ziee-ai/llama.cpp/releases",
+            "https://API.GITHUB.COM/repos/x/y/releases",
+            "https://api.github.com./repos/x/y/releases",
+        ] {
+            assert!(
+                credential_target_is_trusted(github),
+                "{github} is the real GitHub API and must be authenticated"
+            );
+        }
 
         for hostile in [
+            // Look-alike hosts.
             "https://api.github.com.evil.example",
             "http://evil.example",
             "https://evil.example/api.github.com",
             "http://10.0.0.5:8080",
             "http://[fd00::1]:9000",
+            // Hosts that CONTAIN a loopback token — these are what a
+            // `contains()` implementation would wrongly trust.
+            "http://127.0.0.1.evil.example",
+            "http://evil.localhost.example",
+            "http://localhost.evil.com",
+            // USERINFO smuggling: the real host is `evil.example`. A
+            // split/rsplit authority parser reads the host as `localhost` and
+            // the port as `8080@evil.example`, and ships the token offsite.
+            "http://localhost:8080@evil.example",
+            "http://127.0.0.1:9@evil.example/x",
+            "https://api.github.com@evil.example",
+            // Plain-http GitHub is not GitHub.
+            "http://api.github.com",
+            // Not a URL at all.
+            "api.github.com",
+            "",
         ] {
             assert!(
                 !credential_target_is_trusted(hostile),
@@ -1678,54 +1715,18 @@ mod tests {
             "http://127.0.0.1:41234",
             "http://localhost:41234",
             "http://[::1]:41234",
+            // Port-less and path-bearing forms must work too — the earlier
+            // string-surgery version mis-parsed a bracketed IPv6 with no port.
+            "http://[::1]",
+            "http://127.0.0.1",
+            "http://127.0.0.1:41234/repos/x/y/releases",
+            // Case is not significant in a host.
+            "http://LOCALHOST:41234",
         ] {
             assert!(
                 credential_target_is_trusted(loopback),
                 "{loopback} is the test mock and must still exercise the \
                  authenticated path"
-            );
-        }
-    }
-
-    /// A throttle PROVES the credential was recognized; an unclassifiable
-    /// refusal proves nothing.
-    ///
-    /// The distinction changes the advice an operator gets: "your token works,
-    /// it is rate-limited" versus "we could not verify your token". Collapsing
-    /// either way sends someone to replace a working credential, or reassures
-    /// someone whose credential is dead.
-    #[test]
-    fn only_a_served_or_throttled_answer_proves_acceptance() {
-        use reqwest::StatusCode;
-
-        assert!(proves_credential_accepted(StatusCode::OK, &headers(&[])));
-        assert!(
-            proves_credential_accepted(StatusCode::TOO_MANY_REQUESTS, &headers(&[])),
-            "a 429 is only reachable once GitHub has looked the token up"
-        );
-        assert!(
-            proves_credential_accepted(
-                StatusCode::FORBIDDEN,
-                &headers(&[("x-ratelimit-remaining", "0")])
-            ),
-            "a primary rate limit on an authenticated request is the TOKEN's \
-             own 5000/hr bucket — an unrecognized token would have got a 401"
-        );
-
-        for (status, hdrs) in [
-            (StatusCode::FORBIDDEN, headers(&[])),
-            (
-                StatusCode::FORBIDDEN,
-                headers(&[("x-ratelimit-remaining", "4231")]),
-            ),
-            (StatusCode::NOT_FOUND, headers(&[])),
-            (StatusCode::INTERNAL_SERVER_ERROR, headers(&[])),
-            (StatusCode::SERVICE_UNAVAILABLE, headers(&[])),
-            (StatusCode::UNAUTHORIZED, headers(&[])),
-        ] {
-            assert!(
-                !proves_credential_accepted(status, &hdrs),
-                "{status} is evidence of nothing about the credential"
             );
         }
     }
