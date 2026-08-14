@@ -4,7 +4,7 @@
 // renders + overlay triggers + panel/slot registrations) that the reconciliation
 // gate (scripts/reconcile-state-matrix.mjs) checks the gallery entries against.
 //
-// 353 surfaces carry renderable-state signals; 2175 signals total.
+// 353 surfaces carry renderable-state signals; 2176 signals total.
 
 /** A signal is one mechanically-detected render fork (a state the surface can be in). */
 export interface StateSignal {
@@ -2789,22 +2789,23 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/mcp/components/common/McpServerCard",
     requiredStates: [],
     signals: [
-      { kind: "branch", condition: "!isEditable && server.is_system", line: 171 },
-      { kind: "branch", condition: "server.supports_sampling", line: 186 },
-      { kind: "branch", condition: "server.usage_mode === 'always'", line: 191 },
-      { kind: "branch", condition: "status === 'unhealthy'", line: 203 },
-      { kind: "branch", condition: "status === 'healthy'", line: 226 },
-      { kind: "branch", condition: "canViewHistory", line: 254 },
-      { kind: "branch", condition: "isEditable", line: 270 },
-      { kind: "branch", condition: "canEdit", line: 272 },
-      { kind: "branch", condition: "canTest", line: 285 },
-      { kind: "branch", condition: "canEdit", line: 301 },
-      { kind: "branch", condition: "canDelete && !server.is_built_in", line: 313 },
-      { kind: "branch", condition: "server.last_health_check_status === 'unhealthy'", line: 357 },
-      { kind: "branch", condition: "server.url", line: 380 },
-      { kind: "branch", condition: "server.command", line: 397 },
-      { kind: "branch", condition: "Array.isArray(server.args) && server.args.length > 0", line: 401 },
-      { kind: "branch", condition: "bordered", line: 417 },
+      { kind: "branch", condition: "server.is_built_in", line: 181 },
+      { kind: "branch", condition: "!isEditable && server.is_system", line: 186 },
+      { kind: "branch", condition: "server.supports_sampling", line: 201 },
+      { kind: "branch", condition: "server.usage_mode === 'always'", line: 206 },
+      { kind: "branch", condition: "status === 'unhealthy'", line: 218 },
+      { kind: "branch", condition: "status === 'healthy'", line: 241 },
+      { kind: "branch", condition: "canViewHistory", line: 269 },
+      { kind: "branch", condition: "isEditable", line: 285 },
+      { kind: "branch", condition: "canEdit", line: 287 },
+      { kind: "branch", condition: "canTest", line: 300 },
+      { kind: "branch", condition: "canEdit", line: 316 },
+      { kind: "branch", condition: "canDelete && !server.is_built_in", line: 328 },
+      { kind: "branch", condition: "server.last_health_check_status === 'unhealthy'", line: 372 },
+      { kind: "branch", condition: "server.url", line: 395 },
+      { kind: "branch", condition: "server.command", line: 412 },
+      { kind: "branch", condition: "Array.isArray(server.args) && server.args.length > 0", line: 416 },
+      { kind: "branch", condition: "bordered", line: 432 },
     ],
   },
   "modules/mcp/components/common/McpServerDrawer": {

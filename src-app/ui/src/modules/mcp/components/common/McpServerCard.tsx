@@ -168,6 +168,21 @@ export function McpServerCard({
             <div className="flex-1 min-w-48">
               <Flex className="gap-2 items-center flex-wrap">
                 <Text className="font-semibold text-base">{server.display_name}</Text>
+                {/* A built-in is a deterministic-UUID row the chat auto-attach
+                    path resolves by id. Names are NOT unique (duplicates are
+                    allowed by design), so an admin can create a system server
+                    called `control` that sits in this same list next to the
+                    real built-in. The only prior difference between them was
+                    the ABSENCE of a Delete button — an absence is not a signal
+                    an operator can read. This tag is the positive signal, and
+                    it is deliberately NOT gated on `isEditable`: the admin
+                    System MCP page renders editable cards, which is exactly
+                    where the two are confusable. */}
+                {server.is_built_in && (
+                  <Tag variant="outline" tone="success" data-testid="mcp-server-builtin-tag">
+                    Built-in
+                  </Tag>
+                )}
                 {!isEditable && server.is_system && (
                   <Tag variant="outline" tone="info" data-testid="mcp-server-system-tag">System</Tag>
                 )}

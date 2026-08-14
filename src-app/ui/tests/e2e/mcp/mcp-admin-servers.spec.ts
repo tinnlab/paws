@@ -577,6 +577,51 @@ test.describe('MCP - Admin System Servers', () => {
     await expect(sandboxHelp).toContainText(/isolated workspace/i)
     await expect(sandboxHelp).toContainText(/filesystem-oriented/i)
   })
+
+  /**
+   * A genuine built-in is DISTINGUISHABLE from a user-made system server in the
+   * admin list.
+   *
+   * Server names are not unique (duplicates are allowed by design — see
+   * `mcp/mod.rs::test_duplicate_server_name_allowed`), so an admin can create a
+   * system server named exactly like a built-in and it lands in this same list.
+   * Before the `Built-in` tag the only difference between the two rows was the
+   * ABSENCE of a Delete button, and an absence is not a signal an operator can
+   * read.
+   *
+   * Both halves are asserted together: the tag being present on the built-in is
+   * meaningless unless it is also absent on the user-made row — a tag rendered
+   * unconditionally would satisfy the first assertion while differentiating
+   * nothing.
+   */
+  test('a built-in is tagged Built-in and a user-made system server is not', async ({
+    page,
+  }) => {
+    // `fetch` / "Web Fetch" is the seeded admin-configurable built-in
+    // (is_built_in = true, per migration 25). "Disabled Fixture" is the
+    // user-made system server this describe's beforeEach creates.
+    const builtInCard = page
+      .getByTestId(/^mcp-system-server-card-/)
+      .filter({ hasText: 'Web Fetch' })
+      .first()
+    const userMadeCard = page
+      .getByTestId(/^mcp-system-server-card-/)
+      .filter({ hasText: 'Disabled Fixture' })
+      .first()
+
+    // Positive control: both rows actually rendered. Without it the
+    // "tag is absent" assertion below would also pass on a page that never
+    // listed anything at all.
+    await expect(builtInCard).toBeVisible()
+    await expect(userMadeCard).toBeVisible()
+
+    await expect(byTestId(builtInCard, 'mcp-server-builtin-tag')).toBeVisible()
+    await expect(byTestId(userMadeCard, 'mcp-server-builtin-tag')).toHaveCount(0)
+
+    // The built-in also exposes no delete affordance — the behavioural
+    // difference the tag now makes legible.
+    await expect(byTestId(builtInCard, 'mcp-server-delete-btn')).toHaveCount(0)
+  })
 })
 
 test.describe('MCP - Admin System Servers: sandbox flavor + command tiers', () => {

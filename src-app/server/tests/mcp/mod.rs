@@ -15,6 +15,9 @@ mod run_in_sandbox_test;
 // import bridge code directly (rely on `crate::chat::helpers::*` for
 // model fixtures + SSE parsing, same pattern as project tests).
 mod approval_claim_test;
+// Route-level coverage for the built-in DELETE guard (is_built_in → 400
+// BUILT_IN_SERVER) plus its user-made-server happy path and auth/perm gates.
+mod builtin_delete_guard_test;
 mod conversation_settings_default_test;
 mod elicitation_mcp_test;
 mod mcp_approval_loop_test;

@@ -8,7 +8,7 @@
 ## Summary
 
 - **353** surfaces carry at least one renderable-state signal.
-- **2175** signals total: 1708 branch, 141 empty, 126 error, 93 loading, 102 overlay, 5 panel.
+- **2176** signals total: 1709 branch, 141 empty, 126 error, 93 loading, 102 overlay, 5 panel.
 - **5** right-panel renderers registered (each a right-panel-open state).
 - **35** slot registrations (sidebar / settings / chat mount points).
 
@@ -3063,22 +3063,23 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!isEditable && server.is_system` | 171 |
-| branch | `server.supports_sampling` | 186 |
-| branch | `server.usage_mode === 'always'` | 191 |
-| branch | `status === 'unhealthy'` | 203 |
-| branch | `status === 'healthy'` | 226 |
-| branch | `canViewHistory` | 254 |
-| branch | `isEditable` | 270 |
-| branch | `canEdit` | 272 |
-| branch | `canTest` | 285 |
-| branch | `canEdit` | 301 |
-| branch | `canDelete && !server.is_built_in` | 313 |
-| branch | `server.last_health_check_status === 'unhealthy'` | 357 |
-| branch | `server.url` | 380 |
-| branch | `server.command` | 397 |
-| branch | `Array.isArray(server.args) && server.args.length > 0` | 401 |
-| branch | `bordered` | 417 |
+| branch | `server.is_built_in` | 181 |
+| branch | `!isEditable && server.is_system` | 186 |
+| branch | `server.supports_sampling` | 201 |
+| branch | `server.usage_mode === 'always'` | 206 |
+| branch | `status === 'unhealthy'` | 218 |
+| branch | `status === 'healthy'` | 241 |
+| branch | `canViewHistory` | 269 |
+| branch | `isEditable` | 285 |
+| branch | `canEdit` | 287 |
+| branch | `canTest` | 300 |
+| branch | `canEdit` | 316 |
+| branch | `canDelete && !server.is_built_in` | 328 |
+| branch | `server.last_health_check_status === 'unhealthy'` | 372 |
+| branch | `server.url` | 395 |
+| branch | `server.command` | 412 |
+| branch | `Array.isArray(server.args) && server.args.length > 0` | 416 |
+| branch | `bordered` | 432 |
 
 ### `modules/mcp/components/common/McpServerDrawer`
 
