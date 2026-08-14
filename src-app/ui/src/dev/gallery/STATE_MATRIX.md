@@ -8,7 +8,7 @@
 ## Summary
 
 - **353** surfaces carry at least one renderable-state signal.
-- **2176** signals total: 1709 branch, 141 empty, 126 error, 93 loading, 102 overlay, 5 panel.
+- **2177** signals total: 1710 branch, 141 empty, 126 error, 93 loading, 102 overlay, 5 panel.
 - **5** right-panel renderers registered (each a right-panel-open state).
 - **35** slot registrations (sidebar / settings / chat mount points).
 
