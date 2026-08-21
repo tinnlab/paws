@@ -138,6 +138,7 @@
     "test:hook-gates": "node --test scripts/lint-hooks-top-level.test.mjs",
     "check:case-collisions": "node scripts/lint-case-collisions.mjs",
     "test:case-collisions": "node --test scripts/lint-case-collisions.test.mjs",
+    "test:case-collisions:tsc": "node --test scripts/lint-case-collisions.tsc.test.mjs",
     "lint:logical-direction": "node ../../sdk/packages/config/src/lint/logical-direction.mjs",
     "lint:tooltip-placement": "node ../../sdk/packages/config/src/lint/tooltip-placement.mjs --root=src --root=../desktop/ui/src",
     "lint:native-scroll": "node scripts/lint-native-scroll.mjs",

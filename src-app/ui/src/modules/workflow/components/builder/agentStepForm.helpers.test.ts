@@ -9,7 +9,7 @@ import {
   effortToMaxSteps,
   isCustomMaxSteps,
   maxStepsToEffort,
-} from './agentStepForm.ts'
+} from './agentStepForm.helpers.ts'
 
 // TEST-15 — friendly agent-step helpers: the effort<->max_steps round-trip
 // (Quick/Balanced/Thorough <-> 10/30/60), off-preset nearest-label mapping, the

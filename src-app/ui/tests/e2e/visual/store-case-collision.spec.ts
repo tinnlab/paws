@@ -8,166 +8,193 @@
  * COMPONENT file. They now live under a `stores/` parent.
  *
  * `tsc` proves the specifiers still RESOLVE. It cannot prove WHAT they resolve to at
- * runtime, nor that `appLayout`'s module-scope `appLayoutSeam.set(...)` side effect
- * still fires. This spec does both, in a real browser:
+ * runtime. This spec does, in a real browser, two ways:
  *
- *   1. every relocated store module is imported and asserted to be a STORE module —
- *      it must NOT export its component's name as a React component (which is
- *      exactly what a case-collided resolve returns);
+ *   1. every relocated store is imported through a BARE directory specifier — the
+ *      exact shape the bug lives in, so Vite performs the same extension-probe-then-
+ *      `/index` walk the compiler does — and the resulting module is asserted to be
+ *      the STORE and not its sibling component, per store, against that component's
+ *      own exports;
  *   2. every relocated store that backs a gallery overlay is OPENED through its own
- *      store action and the drawer is asserted to render.
+ *      store action, and the drawer that renders is asserted to be the RIGHT one.
  *
- * Backend-free: runs against the gallery Vite server (playwright.visual.config.ts).
+ * Backend-free: runs against the gallery Vite server (playwright.visual.config.ts),
+ * and listed in `gallery.config.json`'s `visualSpecs` so `gate:ui` runs it.
+ *
+ * Note on what this spec canNOT do: it runs on whatever filesystem CI gives it, and
+ * on a case-SENSITIVE one a collision cannot reproduce at all. Clause 1 is a
+ * module-identity assertion, not a case-sensitivity simulation. The only true oracle
+ * for the macOS behaviour is a macOS build; `lint-case-collisions.mjs` is what keeps
+ * the shape from returning in between.
  */
 import { expect, test } from '@playwright/test'
 import { openGallery } from './_gallery'
 
 /**
- * The 24 store directories this branch relocated, as paths relative to
- * `src-app/ui/src`. Enumerated explicitly: this list IS the claim under test, so
- * deriving it from the filesystem at runtime would make the spec agree with
- * whatever the tree happens to contain.
+ * The 24 store directories this branch relocated, each paired with the component it
+ * sits beside. Enumerated explicitly: the PAIRING is the claim under test, so
+ * deriving it at runtime would make the spec agree with whatever the tree contains.
  *
  * These double as dev-server URLs: `vite.config.ts` sets `root: 'src'`, so
  * `src/modules/x` is served at `/modules/x` (NOT `/src/modules/x` — that 404s).
+ * The store paths carry NO `/index.ts` suffix on purpose — see clause 1.
  */
-const RELOCATED_STORES = [
-  'modules/hub/modules/llm-models/components/stores/modelDetailsDrawer',
-  'modules/hub/modules/mcp/components/stores/mcpServerDetailsDrawer',
-  'modules/layouts/app-layout/stores/appLayout',
-  'modules/llm-provider/components/stores/groupLlmProvidersAssignmentDrawer',
-  'modules/llm-provider/components/stores/llmProviderDrawer',
-  'modules/llm-provider/components/stores/providerGroupAssignmentCard',
-  'modules/llm-provider/widgets/stores/llmProviderGroupWidget',
-  'modules/mcp/components/system/stores/groupSystemMcpServersAssignmentDrawer',
-  'modules/mcp/components/system/stores/mcpServerGroupsAssignmentCard',
-  'modules/mcp/widgets/stores/groupSystemMcpServersWidget',
-  'modules/onboarding/guides/getting-started/components/stores/apiKeysStep',
-  'modules/onboarding/guides/getting-started/components/stores/mcpServersStep',
-  'modules/onboarding/guides/getting-started/components/stores/memorySetupStep',
-  'modules/skill/widgets/stores/groupSystemSkillsAssignmentDrawer',
-  'modules/skill/widgets/stores/groupSystemSkillsWidget',
-  'modules/user/components/group/stores/editUserGroupDrawer',
-  'modules/user/components/group/stores/groupMembersDrawer',
-  'modules/user/components/user/stores/assignGroupDrawer',
-  'modules/user/components/user/stores/createUserDrawer',
-  'modules/user/components/user/stores/editUserDrawer',
-  'modules/user/components/user/stores/resetPasswordDrawer',
-  'modules/user/components/user/stores/userGroupsDrawer',
-  'modules/workflow/widgets/stores/groupSystemWorkflowsAssignmentDrawer',
-  'modules/workflow/widgets/stores/groupSystemWorkflowsWidget',
+const RELOCATED = [
+  { store: 'modules/hub/modules/llm-models/components/stores/modelDetailsDrawer', component: 'modules/hub/modules/llm-models/components/ModelDetailsDrawer.tsx' },
+  { store: 'modules/hub/modules/mcp/components/stores/mcpServerDetailsDrawer', component: 'modules/hub/modules/mcp/components/McpServerDetailsDrawer.tsx' },
+  { store: 'modules/layouts/app-layout/stores/appLayout', component: 'modules/layouts/app-layout/AppLayout.tsx' },
+  { store: 'modules/llm-provider/components/stores/groupLlmProvidersAssignmentDrawer', component: 'modules/llm-provider/components/GroupLlmProvidersAssignmentDrawer.tsx' },
+  { store: 'modules/llm-provider/components/stores/llmProviderDrawer', component: 'modules/llm-provider/components/LlmProviderDrawer.tsx' },
+  { store: 'modules/llm-provider/components/stores/providerGroupAssignmentCard', component: 'modules/llm-provider/components/ProviderGroupAssignmentCard.tsx' },
+  // The one pair whose component is not the store name in PascalCase (LLM, not Llm).
+  { store: 'modules/llm-provider/widgets/stores/llmProviderGroupWidget', component: 'modules/llm-provider/widgets/LLMProviderGroupWidget.tsx' },
+  { store: 'modules/mcp/components/system/stores/groupSystemMcpServersAssignmentDrawer', component: 'modules/mcp/components/system/GroupSystemMcpServersAssignmentDrawer.tsx' },
+  { store: 'modules/mcp/components/system/stores/mcpServerGroupsAssignmentCard', component: 'modules/mcp/components/system/McpServerGroupsAssignmentCard.tsx' },
+  { store: 'modules/mcp/widgets/stores/groupSystemMcpServersWidget', component: 'modules/mcp/widgets/GroupSystemMcpServersWidget.tsx' },
+  { store: 'modules/onboarding/guides/getting-started/components/stores/apiKeysStep', component: 'modules/onboarding/guides/getting-started/components/ApiKeysStep.tsx' },
+  { store: 'modules/onboarding/guides/getting-started/components/stores/mcpServersStep', component: 'modules/onboarding/guides/getting-started/components/McpServersStep.tsx' },
+  { store: 'modules/onboarding/guides/getting-started/components/stores/memorySetupStep', component: 'modules/onboarding/guides/getting-started/components/MemorySetupStep.tsx' },
+  { store: 'modules/skill/widgets/stores/groupSystemSkillsAssignmentDrawer', component: 'modules/skill/widgets/GroupSystemSkillsAssignmentDrawer.tsx' },
+  { store: 'modules/skill/widgets/stores/groupSystemSkillsWidget', component: 'modules/skill/widgets/GroupSystemSkillsWidget.tsx' },
+  { store: 'modules/user/components/group/stores/editUserGroupDrawer', component: 'modules/user/components/group/EditUserGroupDrawer.tsx' },
+  { store: 'modules/user/components/group/stores/groupMembersDrawer', component: 'modules/user/components/group/GroupMembersDrawer.tsx' },
+  { store: 'modules/user/components/user/stores/assignGroupDrawer', component: 'modules/user/components/user/AssignGroupDrawer.tsx' },
+  { store: 'modules/user/components/user/stores/createUserDrawer', component: 'modules/user/components/user/CreateUserDrawer.tsx' },
+  { store: 'modules/user/components/user/stores/editUserDrawer', component: 'modules/user/components/user/EditUserDrawer.tsx' },
+  { store: 'modules/user/components/user/stores/resetPasswordDrawer', component: 'modules/user/components/user/ResetPasswordDrawer.tsx' },
+  { store: 'modules/user/components/user/stores/userGroupsDrawer', component: 'modules/user/components/user/UserGroupsDrawer.tsx' },
+  { store: 'modules/workflow/widgets/stores/groupSystemWorkflowsAssignmentDrawer', component: 'modules/workflow/widgets/GroupSystemWorkflowsAssignmentDrawer.tsx' },
+  { store: 'modules/workflow/widgets/stores/groupSystemWorkflowsWidget', component: 'modules/workflow/widgets/GroupSystemWorkflowsWidget.tsx' },
 ] as const
 
 /**
- * The relocated stores that back a gallery overlay, as `slug`s the gallery opens via
- * `?surface=<slug>&state=open` — which calls the entry's `open()`, i.e. the STORE's
- * own action (`EditUserDrawer.openEditUserDrawer(user)` and friends).
+ * The relocated stores that back a gallery overlay, with a string that identifies
+ * WHICH drawer opened. Without the identity check, all 12 cases would pass
+ * identically if the gallery mounted the wrong overlay.
  *
- * The other 10 relocated stores back pages/widgets rather than overlays; they are
- * covered by clause 1 above and by the gallery runtime-health pass in `gate:ui`.
+ * The gallery opens an overlay surface by calling the entry's `open()` — i.e. the
+ * STORE's own action (`EditUserDrawer.openEditUserDrawer(user)` and friends). A
+ * component module exposes no such action, so a collided specifier would throw and
+ * nothing would mount.
  *
  * `overlay-hub-model-details-drawer` and `overlay-hub-mcp-details-drawer` are
- * deliberately EXCLUDED. Their gallery entries render the component with **no
- * props** (`component: lazyNamed(() => import('…/ModelDetailsDrawer'), …)`), and
- * both components begin `if (!model) return null` / `if (!server) return null` —
- * so nothing mounts no matter what the store says. That is a pre-existing gallery
- * defect (contrast the sibling `overlay-hub-assistant-details-drawer`, which passes
- * `{ open: true, onClose, assistant }` explicitly); neither component file is
- * touched by this branch. Fixing those entries is out of scope here. Both stores
- * are still covered by clause 1.
+ * deliberately EXCLUDED: their gallery entries render the component with **no
+ * props**, and both components begin `if (!model) return null` / `if (!server)
+ * return null`, so nothing mounts no matter what the store says. That is a
+ * pre-existing gallery defect (contrast `overlay-hub-assistant-details-drawer`,
+ * which passes `{ open: true, onClose, assistant }`); neither component file is
+ * touched by this branch. Both stores are still covered by clause 1.
  */
-const OVERLAY_SLUGS = [
-  'overlay-create-user-drawer',
-  'overlay-edit-user-drawer',
-  'overlay-reset-password-drawer',
-  'overlay-edit-user-group-drawer',
-  'overlay-assign-group-drawer',
-  'overlay-user-groups-drawer',
-  'overlay-group-members-drawer',
-  'overlay-llm-provider-drawer',
-  'overlay-group-llm-providers-assignment',
-  'overlay-group-mcp-servers-assignment',
-  'overlay-group-skills-assignment',
-  'overlay-group-workflows-assignment',
+const OVERLAYS = [
+  { slug: 'overlay-create-user-drawer', expect: /create user/i },
+  { slug: 'overlay-edit-user-drawer', expect: /edit user/i },
+  { slug: 'overlay-reset-password-drawer', expect: /reset password/i },
+  { slug: 'overlay-edit-user-group-drawer', expect: /group/i },
+  { slug: 'overlay-assign-group-drawer', expect: /group/i },
+  { slug: 'overlay-user-groups-drawer', expect: /group/i },
+  { slug: 'overlay-group-members-drawer', expect: /member/i },
+  { slug: 'overlay-llm-provider-drawer', expect: /provider/i },
+  { slug: 'overlay-group-llm-providers-assignment', expect: /provider/i },
+  { slug: 'overlay-group-mcp-servers-assignment', expect: /mcp|server/i },
+  { slug: 'overlay-group-skills-assignment', expect: /skill/i },
+  { slug: 'overlay-group-workflows-assignment', expect: /workflow/i },
 ] as const
 
-/**
- * The control target for clause 1: a real component module. Passed in as a VARIABLE
- * rather than written as a literal `import('…')`, so TypeScript treats it as a
- * runtime path (the gallery's Vite dev server resolves it) instead of trying to
- * resolve `/src/…` against the tsconfig at compile time.
- */
-const CONTROL_COMPONENT = '/modules/user/components/user/EditUserDrawer.tsx'
-
 test.describe('store case-collision fix', () => {
-  test('every relocated store path resolves to the STORE module, not its component', async ({
+  test('every relocated store resolves to the STORE module, not its sibling component', async ({
     page,
   }) => {
     await openGallery(page, 'light', 'blue')
 
-    const results = await page.evaluate(async (paths: readonly string[]) => {
-      const out: { path: string; ok: boolean; exports: string[]; kind: string; error?: string }[] = []
-      for (const p of paths) {
-        try {
-          const mod: Record<string, unknown> = await import(/* @vite-ignore */ `/${p}/index.ts`)
-          const name = p.split('/').pop() as string
-          const pascal = name[0].toUpperCase() + name.slice(1)
-          out.push({
-            path: p,
-            ok: true,
-            exports: Object.keys(mod),
-            kind: pascal in mod ? typeof mod[pascal] : 'absent',
-          })
-        } catch (e) {
-          out.push({
-            path: p,
-            ok: false,
-            exports: [],
-            kind: 'error',
-            error: e instanceof Error ? e.message : String(e),
-          })
-        }
-      }
-      return out
-    }, RELOCATED_STORES as unknown as string[])
-
-    expect(results).toHaveLength(RELOCATED_STORES.length)
-
-    for (const r of results) {
-      // It must load at all — a broken specifier fails here.
-      expect(r.ok, `${r.path} failed to import: ${r.error}`).toBe(true)
-      expect(r.exports.length, `${r.path} exported nothing`).toBeGreaterThan(0)
-
-      // The discriminator. A store's `registerLazyStore(...)` proxy is built over a
-      // plain object (`new Proxy({}, …)`), so it is an OBJECT. The sibling component
-      // exports the same PascalCase name as a FUNCTION. If the specifier had
-      // case-collided onto `EditUserDrawer.tsx`, this would read 'function'.
-      expect(
-        r.kind,
-        `${r.path} resolved to a React component — the case collision is back (exports: ${r.exports.join(', ')})`,
-      ).not.toBe('function')
-
-      // And a store module never has a default export; a lazily-imported component
-      // module frequently does.
-      expect(r.exports, `${r.path} has a default export — that is a component module`).not.toContain(
-        'default',
-      )
+    type Row = {
+      store: string
+      ok: boolean
+      error?: string
+      storeExports: string[]
+      storeKinds: Record<string, string>
+      componentExports: string[]
+      componentFns: string[]
     }
 
-    // Positive control: the SAME assertion, aimed at a real component module, must
-    // see 'function'. Without this, "not a function" would pass for any path that
-    // simply failed to expose the symbol, and the check above would be vacuous.
-    const control = await page.evaluate(async (specifier: string) => {
-      const mod: Record<string, unknown> = await import(/* @vite-ignore */ specifier)
-      return typeof mod.EditUserDrawer
-    }, CONTROL_COMPONENT)
-    expect(
-      control,
-      'the control component module must expose EditUserDrawer as a function, or this test proves nothing',
-    ).toBe('function')
+    const results: Row[] = await page.evaluate(
+      async (pairs: { store: string; component: string }[]) => {
+        const out: Row[] = []
+        for (const p of pairs) {
+          try {
+            // BARE directory specifier — no `/index.ts`. This is the whole point:
+            // Vite runs the same probe walk the compiler does (`x.ts`, `x.tsx`, …,
+            // then `x/index.ts`), which is where the collision used to bite. An
+            // explicit `/index.ts` would skip probing entirely and prove nothing
+            // about resolution.
+            const s: Record<string, unknown> = await import(/* @vite-ignore */ `/${p.store}`)
+            const c: Record<string, unknown> = await import(/* @vite-ignore */ `/${p.component}`)
+            const storeKinds: Record<string, string> = {}
+            for (const k of Object.keys(s)) storeKinds[k] = typeof s[k]
+            out.push({
+              store: p.store,
+              ok: true,
+              storeExports: Object.keys(s),
+              storeKinds,
+              componentExports: Object.keys(c),
+              componentFns: Object.keys(c).filter(k => typeof c[k] === 'function'),
+            })
+          } catch (e) {
+            out.push({
+              store: p.store,
+              ok: false,
+              error: e instanceof Error ? e.message : String(e),
+              storeExports: [],
+              storeKinds: {},
+              componentExports: [],
+              componentFns: [],
+            })
+          }
+        }
+        return out
+      },
+      RELOCATED as unknown as { store: string; component: string }[],
+    )
+
+    expect(results).toHaveLength(RELOCATED.length)
+
+    for (const r of results) {
+      expect(r.ok, `${r.store} failed to import: ${r.error}`).toBe(true)
+      expect(r.storeExports.length, `${r.store} exported nothing`).toBeGreaterThan(0)
+
+      // The control, applied PER STORE rather than once: the component module must
+      // itself expose at least one function export. If it did not, "the store is not
+      // the component" would be unfalsifiable for that pair.
+      expect(
+        r.componentFns.length,
+        `${r.store}'s sibling component exports no function — the discriminator below would be vacuous for this pair`,
+      ).toBeGreaterThan(0)
+
+      // The discriminator. If the bare specifier had resolved to the component, the
+      // two namespaces would be IDENTICAL. Requiring the store to export something
+      // the component does not makes that indistinguishable case impossible.
+      const onlyInStore = r.storeExports.filter(k => !r.componentExports.includes(k))
+      expect(
+        onlyInStore,
+        `${r.store} exports nothing its component does not — it resolved to the component (store: ${r.storeExports.join(', ')} | component: ${r.componentExports.join(', ')})`,
+      ).not.toEqual([])
+
+      // …and where the two DO share a name — which is the norm, since a store
+      // deliberately exports its `registerLazyStore` proxy under the component's
+      // name — the store's value must not be the component. A proxy is built over a
+      // plain object (`new Proxy({}, …)`), so it reads as `object`; the component is
+      // a `function`. This is the assertion that would flip if a bare specifier
+      // resolved to the `.tsx`.
+      for (const fn of r.componentFns) {
+        if (!(fn in r.storeKinds)) continue
+        expect(
+          r.storeKinds[fn],
+          `${r.store} exports \`${fn}\` as a React component rather than a store handle — the case collision is back`,
+        ).not.toBe('function')
+      }
+    }
   })
 
-  for (const slug of OVERLAY_SLUGS) {
+  for (const { slug, expect: titleRe } of OVERLAYS) {
     test(`overlay opens through its relocated store action: ${slug}`, async ({ page }) => {
       const pageErrors: string[] = []
       page.on('pageerror', e => pageErrors.push(e.message))
@@ -175,21 +202,29 @@ test.describe('store case-collision fix', () => {
         if (m.type() === 'error') pageErrors.push(m.text())
       })
 
-      await page.goto(`/gallery.html?surface=${slug}&state=open&theme=light`)
+      // No `&state=open`: `OverlayFrame` fires the entry's `open()` unconditionally
+      // and hardcodes `data-gallery-state="open"`, so the param is inert and would
+      // read as load-bearing.
+      await page.goto(`/gallery.html?surface=${slug}&theme=light`)
       await page.getByTestId('gallery-root').waitFor({ state: 'visible' })
 
-      // The overlay's content is portaled out of the gallery canvas. Its presence is
-      // the proof that the entry's `open()` — a call into the relocated STORE —
-      // actually ran: a component module exposes no such action, so `open()` would
-      // have thrown and nothing would be mounted.
       const dialog = page
         .locator('[role="dialog"]:not([data-testid="gallery-root"] *)')
         .filter({ visible: true })
         .first()
       await expect(dialog).toBeVisible({ timeout: 15_000 })
+      // …and it is THIS drawer, not merely some drawer.
+      await expect(dialog).toHaveText(titleRe)
 
+      // Narrow on purpose: a bare `undefined` would match benign gallery mock-API
+      // chatter and produce false REDs. These four are the shapes a bad specifier
+      // actually produces.
       expect(
-        pageErrors.filter(e => /Cannot read|is not a function|undefined|Failed to fetch dynamically/i.test(e)),
+        pageErrors.filter(e =>
+          /Failed to fetch dynamically imported module|Failed to resolve import|is not a function|Cannot read propert/i.test(
+            e,
+          ),
+        ),
         `${slug} raised a module/resolution error: ${pageErrors.join(' | ')}`,
       ).toEqual([])
     })
