@@ -3,7 +3,15 @@
 Round 3: a blind re-audit of round 2's diff only (`correctness` + `tests-quality`).
 **22 findings, 21 confirmed, 1 rejected.**
 
-## Termination: this round ends the loop. GUARD-SUB, in substance.
+> **CORRECTION, written after the phase-7 gate refused this round.** I originally
+> concluded here that GUARD-SUB meant *stop and escalate*, and said so. That is a
+> misreading. GUARD-SUB's remedy is: replace the syntactic guard with a test asserting
+> the BEHAVIOUR it stood in for, **and then restart the loop against the new artifact**
+> — which is what the gate's own message says, and what the skill says. This round
+> performed the remedy; it does not end the loop. Round 4 audits the new artifact.
+> The distribution analysis below stands; only the conclusion drawn from it was wrong.
+
+## The distribution that triggered the remedy: GUARD-SUB, in substance.
 
 The phase-7 tripwire is "≥60% of a round's confirmed findings target ONE test/guard
 file (round ≥2)". By the letter this round does not trip it — the largest single file is
@@ -96,19 +104,20 @@ fourth rule.
 **Rejected (1):** Turkish dotted-I / eszett folding. APFS and NTFS do not equate those
 either, so matching their folding is correct rather than a gap — the auditor agreed.
 
-## Why I am not running round 4
+## What happens next
 
-Not because nothing would be found — something would; that is the point. Three rounds of
-evidence say the remaining findings are in the checking apparatus, that the apparatus is
-now anchored by a behavioural oracle rather than a growing rule set, and that the product
-change is independently verified. Another round would buy more polish on a lint script
-for a 25-collision path-rename, and the lifecycle explicitly calls that unsound rather
-than merely slow.
+Round 4 audits **the new artifact** — the behavioural oracle, the simplified guard, and
+this round's test corrections — which is what GUARD-SUB's remedy prescribes and what I
+initially got wrong (see the correction at the top). The relevant question for round 4 is
+no longer "how many findings" but "does the profile finally decay now that the artifact
+under audit is anchored in behaviour rather than in a rule set". If round 4 is flat again
+at ~20, that is the ABORT state and it goes to the human rather than to round 5.
 
-**This is an escalation point, and it is recorded as one** in `HUMAN_FEEDBACK.md` and the
-PR body: the human should know the loop was stopped deliberately, on which rule, and with
-what still open (the Tier-1 cross-tree limit, documented with zero occupants; and the
-three out-of-scope items from round 1).
+Standing items either way, recorded so they are not lost: the Tier-1 cross-tree limit
+(documented in the guard's header, zero occupants today, backstopped by the resolution
+oracle), and the three out-of-scope items from round 1 (no CI runs the guard; two hub
+gallery entries mount nothing; the `surface:` typo whose fix cascades through six
+generated registries).
 
 ## Verification of this round
 
