@@ -31,8 +31,8 @@ const GUARD = path.join(HERE, 'lint-case-collisions.mjs')
 const runGuard = (args = [], cwd = UI) =>
   spawnSync(process.execPath, [GUARD, ...args], { cwd, encoding: 'utf8' })
 
-/** Total directories the guard reports having walked, from its own output. */
-const scannedFrom = out => Number(/scanned (\d+) director/.exec(out)?.[1] ?? -1)
+/** Total ENTRIES the guard reports having analysed, from its own output. */
+const scannedFrom = out => Number(/analysed (\d+) entr/.exec(out)?.[1] ?? -1)
 /** Per-root counts the guard reports, as {relPath: n}. */
 function perRootFrom(out) {
   const tail = /root\(s\): (.*?)\)\.?\s*$/m.exec(out)?.[1] ?? ''
@@ -45,15 +45,13 @@ function perRootFrom(out) {
 }
 
 /**
- * The roots the guard is CONTRACTED to scan, and an INDEPENDENT count of the
- * directories under them.
+ * The roots the guard is CONTRACTED to scan, and an INDEPENDENT count of the entries
+ * it must ANALYSE under them.
  *
  * This is the anti-vacuity mechanism, and it is deliberately a re-implementation
  * rather than a threshold. A loose floor ("scanned > 300") is satisfied by a guard
- * that skips the very subtree the bug lived in — adding `components` to the guard's
- * SKIP_DIRS drops the real 728 to ~490 and a floor of 300 stays green. It is also
- * satisfied by a guard that simply LIES, since the number is self-reported. Counting
- * the tree here, from this file, makes both mutations RED.
+ * that skips the very subtree the bug lived in, and by a guard that simply LIES, since
+ * the number is self-reported. Recounting the tree here, from this file, kills both.
  */
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', '.git'])
 function expectedRoots() {
@@ -70,6 +68,10 @@ function expectedRoots() {
   ].map(dir => ({ dir, advisory: false }))
   // ADVISORY roots — the read-only sdk submodule, reported but not blocking.
   const sdkPackages = path.join(REPO, 'sdk', 'packages')
+  assert.ok(
+    fs.existsSync(sdkPackages),
+    `sdk/packages is missing — run \`git submodule update --init\`. (The guard itself degrades with a NOTE; this test needs the submodule to know what the contracted roots ARE.)`,
+  )
   const pkgs = fs
     .readdirSync(sdkPackages, { withFileTypes: true })
     .filter(e => e.isDirectory() && fs.existsSync(path.join(sdkPackages, e.name, 'src')))
@@ -77,11 +79,23 @@ function expectedRoots() {
   assert.ok(pkgs.length >= 5, `expected the sdk to expose several package srcs, found ${pkgs.length}`)
   return [...roots, ...pkgs]
 }
-function countDirs(dir) {
-  let n = 1
-  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (!e.isDirectory() || SKIP_DIRS.has(e.name)) continue
-    n += countDirs(path.join(dir, e.name))
+/**
+ * Independently count the entries the guard's rules must LOOK AT under `dir`.
+ *
+ * Deliberately counts analysed entries rather than directories traversed. When this
+ * counted directories, a mutation that recursed into `components/` but performed no
+ * collision analysis there left the number byte-identical and this comparison stayed
+ * green while a planted collision went undetected. "Walked past it" and "checked it"
+ * have to be different numbers for an external recount to mean anything.
+ */
+function countEntries(dir) {
+  let n = 0
+  const entries = fs.readdirSync(dir, { withFileTypes: true })
+  for (const e of entries) {
+    if (e.isDirectory()) {
+      if (SKIP_DIRS.has(e.name)) continue
+      n += 1 + countEntries(path.join(dir, e.name))
+    } else if (e.isFile()) n += 1
   }
   return n
 }
@@ -118,7 +132,7 @@ describe('lint-case-collisions', () => {
     assert.match(r.stdout, /no sibling names differ only by case/)
 
     // Anti-vacuity, part 1: it walked EXACTLY the contracted trees. Not a floor —
-    // an independent recount (see expectedRoots/countDirs above).
+    // an independent recount of ANALYSED entries (see expectedRoots/countEntries above).
     const roots = expectedRoots()
     const reported = perRootFrom(r.stdout)
     const expected = {}
@@ -129,7 +143,7 @@ describe('lint-case-collisions', () => {
       // contract: silently reclassifying the owned trees as advisory would otherwise
       // turn every blocking finding into a report and pass this assertion.
       const rel = `${path.relative(REPO, dir)}${advisory ? '(advisory)' : ''}`
-      const n = countDirs(dir)
+      const n = countEntries(dir)
       expected[rel] = n
       expectedTotal += n
     }
@@ -143,8 +157,8 @@ describe('lint-case-collisions', () => {
     // Anti-vacuity, part 2: the contracted set includes the trees a collision would
     // actually break the build in — both app srcs, both test dirs, and the sdk
     // packages both tsconfigs compile through `@ziee/*`.
-    assert.ok(reported[path.relative(REPO, path.join(UI, 'src'))] > 400)
-    assert.ok(reported[path.relative(REPO, path.join(DESKTOP_UI, 'src'))] > 10)
+    assert.ok(reported[path.relative(REPO, path.join(UI, "src"))] > 2000)
+    assert.ok(reported[path.relative(REPO, path.join(DESKTOP_UI, "src"))] > 100)
     assert.ok(Object.keys(reported).some(k => k.startsWith('sdk/packages/')))
     // The owned trees must be BLOCKING, not advisory — otherwise a real collision in
     // them would print and exit 0.
@@ -286,7 +300,7 @@ describe('lint-case-collisions', () => {
       withFixture({ [file]: 'x\n', [`${dir}/index.ts`]: 'y\n' }, root => {
         const r = runGuard([`--root=${root}`])
         assert.equal(r.status, 1, `${file} beside ${dir}/ must exit 1, got ${r.status}:\n${r.stdout}`)
-        assert.match(r.stdout, new RegExp(file.replace('.', '\\.')))
+        assert.match(r.stdout, new RegExp(file.replaceAll('.', '\\.')))
       })
     }
 
@@ -314,36 +328,155 @@ describe('lint-case-collisions', () => {
       assert.match(r.stdout, /NOTE:.*symlinked directory.*NOT walked/s)
       assert.match(r.stdout, /linked/)
     })
+
+    // …and the other half of that claim: a symlinked directory is still NAMED, so it
+    // can collide with a sibling file's stem. Testing only the notice would let the
+    // naming half be deleted silently.
+    withFixture({ 'target/keep.ts': 'z\n', 'root/Linked.tsx': 'x\n' }, root => {
+      fs.symlinkSync(path.join(root, 'target'), path.join(root, 'root', 'linked'), 'dir')
+      const r = runGuard([`--root=${path.join(root, 'root')}`])
+      assert.equal(r.status, 1, `a symlinked dir must still collide with a sibling stem:\n${r.stdout}`)
+      assert.match(r.stdout, /Linked\.tsx/)
+    })
   })
 
-  // TEST-12 — the durable half of the convention claim, true on this branch AND on
-  // main (the branch-scoped provenance assertions live in
-  // `lint-case-collisions.provenance.test.mjs`, deliberately outside `check`).
-  test('TEST-12: the `stores/` convention is the dominant one and every store under it is real', () => {
-    const underStores = []
-    const outsideStores = []
+  // TEST-15 — the guard, invoked EXACTLY as `npm run check` invokes it (no args, its
+  // own default roots), finds a real collision at a realistic nested path, and gets
+  // the blocking/advisory split right.
+  //
+  // This closes the gap every other RED fixture leaves open. They all pass `--root=`,
+  // which is a different code path (hardcoded mandatory) pointed at a flat, randomly
+  // named temp dir. Nothing proved that the DEFAULT-root classification blocks, nor
+  // that a collision survives a deep walk through realistically named directories. An
+  // auditor demonstrated the hole twice: a mutation that traverses `components/` but
+  // skips analysing it kept every directory count byte-identical and stayed green,
+  // and a mutation that decoupled "blocking" from the `(advisory)` label let a
+  // planted collision in `src-app/ui/src` exit 0 — with the full suite passing both
+  // times.
+  //
+  // So: build a synthetic repo with the real script at the real relative path, and
+  // run it with no arguments.
+  test('TEST-15: with its DEFAULT roots, the guard blocks on an owned-tree collision and only reports an sdk one', () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-default-roots-'))
+    try {
+      const uiScripts = path.join(repo, 'src-app', 'ui', 'scripts')
+      const mk = p => fs.mkdirSync(p, { recursive: true })
+      // Every mandatory root must exist, or the guard correctly FATALs before it can
+      // demonstrate anything.
+      const deep = path.join(repo, 'src-app/ui/src/modules/user/components/user')
+      mk(deep)
+      for (const d of [
+        'src-app/ui/tests',
+        'src-app/ui/plugins',
+        'src-app/desktop/ui/src',
+        'src-app/desktop/ui/tests',
+        'src-app/desktop/ui/plugins',
+        'src-app/desktop/ui/scripts',
+        'sdk/packages/alpha/src',
+      ])
+        mk(path.join(repo, d))
+      mk(uiScripts)
+      fs.copyFileSync(GUARD, path.join(uiScripts, 'lint-case-collisions.mjs'))
+      const guard = path.join(uiScripts, 'lint-case-collisions.mjs')
+      const run = () => spawnSync(process.execPath, [guard], { cwd: path.join(repo, 'src-app', 'ui'), encoding: 'utf8' })
+
+      // (a) clean → exit 0, and it really walked the deep path.
+      const clean = run()
+      assert.equal(clean.status, 0, `a clean synthetic repo must pass:\n${clean.stdout}${clean.stderr}`)
+      assert.match(clean.stdout, /src-app\/ui\/src=\d+/, 'the guard must report the nested tree it analysed')
+
+      // (b) a collision buried FIVE levels down, inside `components/` — where the 24
+      //     real ones lived — must BLOCK.
+      fs.writeFileSync(path.join(deep, 'EditUserDrawer.tsx'), 'x\n')
+      mk(path.join(deep, 'editUserDrawer'))
+      fs.writeFileSync(path.join(deep, 'editUserDrawer', 'index.ts'), 'y\n')
+      const blocked = run()
+      assert.equal(blocked.status, 1, `a default-root collision must exit 1:\n${blocked.stdout}`)
+      assert.match(blocked.stdout, /EditUserDrawer\.tsx/)
+      assert.doesNotMatch(blocked.stdout, /ADVISORY/, 'an owned-tree finding must not be filed as advisory')
+      fs.rmSync(path.join(deep, 'EditUserDrawer.tsx'))
+      fs.rmSync(path.join(deep, 'editUserDrawer'), { recursive: true })
+
+      // (c) the SAME collision under sdk must be reported and NOT block — the whole
+      //     point of the advisory split, and previously untestable.
+      const sdk = path.join(repo, 'sdk/packages/alpha/src')
+      fs.writeFileSync(path.join(sdk, 'Widget.tsx'), 'x\n')
+      mk(path.join(sdk, 'widget'))
+      fs.writeFileSync(path.join(sdk, 'widget', 'index.ts'), 'y\n')
+      const advisory = run()
+      assert.equal(advisory.status, 0, `an sdk-only finding must NOT block:\n${advisory.stdout}`)
+      assert.match(advisory.stdout, /ADVISORY/)
+      assert.match(advisory.stdout, /Widget\.tsx/)
+      // …and it must not then claim the tree is clean.
+      assert.doesNotMatch(
+        advisory.stdout,
+        /OK - no sibling names differ only by case/,
+        'the unqualified green line must not follow an advisory report',
+      )
+
+      // (d) both at once → blocks, and still reports the advisory one.
+      fs.writeFileSync(path.join(deep, 'EditUserDrawer.tsx'), 'x\n')
+      mk(path.join(deep, 'editUserDrawer'))
+      fs.writeFileSync(path.join(deep, 'editUserDrawer', 'index.ts'), 'y\n')
+      const both = run()
+      assert.equal(both.status, 1, `a blocking finding must win:\n${both.stdout}`)
+      assert.match(both.stdout, /ADVISORY/)
+      assert.match(both.stdout, /EditUserDrawer\.tsx/)
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true })
+    }
+  })
+
+  // TEST-12 — the durable half of the convention claim.
+  //
+  // Scope note, arrived at by being wrong twice. This started as a count (`>= 110`),
+  // which would go red the day someone legitimately consolidated six stores. It became
+  // a ratio, and an auditor then showed the ratio is satisfiable with the convention
+  // fully violated: moving all 24 relocated stores back OUT of `stores/` leaves
+  // 95-vs-36, which still clears `> 2x`. A population statistic simply cannot express
+  // "these particular stores are in the right place" — that claim is per-store and
+  // branch-scoped, and it lives in the provenance suite (TEST-7).
+  //
+  // So this asserts only what a whole-tree check can honestly assert: every directory
+  // sitting under a `stores/` ancestor really is a store, and no store's directory
+  // name collides with a sibling component. That is durable, true on main, and cannot
+  // be satisfied vacuously.
+  test('TEST-12: every store under a `stores/` ancestor is real and collides with nothing', () => {
+    const stores = []
     const walk = (dir, insideStores) => {
       for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
         if (!e.isDirectory() || SKIP_DIRS.has(e.name)) continue
         const full = path.join(dir, e.name)
-        if (fs.existsSync(path.join(full, 'index.ts')) && fs.existsSync(path.join(full, 'actions')))
-          (insideStores ? underStores : outsideStores).push(full)
+        // `index.ts` only — the same predicate the task brief used to count the 91
+        // pre-existing stores. Requiring `actions/` too would silently drop ~45 store
+        // directories from the population and make this measure something else.
+        if (insideStores && fs.existsSync(path.join(full, 'index.ts'))) stores.push(full)
         walk(full, insideStores || e.name === 'stores')
       }
     }
     walk(path.join(UI, 'src'), false)
     walk(path.join(DESKTOP_UI, 'src'), false)
+    assert.ok(stores.length > 100, `expected the stores/ convention to be populated, found ${stores.length}`)
 
-    assert.ok(underStores.length > 0, 'expected stores under a `stores/` ancestor')
-    for (const d of underStores)
-      assert.ok(fs.existsSync(path.join(d, 'index.ts')), `${d} is not a real store`)
+    let defining = 0
+    for (const dir of stores) {
+      // Not every `index.ts` under a `stores/` ancestor DEFINES a store — a few are
+      // grouping barrels that re-export a family (`stores/llmModelDrawers/index.ts`).
+      // Count the defining ones, and collision-check them all either way.
+      const index = fs.readFileSync(path.join(dir, 'index.ts'), 'utf8')
+      if (/defineStore|defineLocalStore|registerLazyStore/.test(index)) defining++
 
-    // A RATIO, not a magic threshold. The claim is "this is the majority convention",
-    // and a count like `>= 110` would go red the day someone legitimately consolidates
-    // six stores, with a message about case collisions that had nothing to do with it.
+      // Its directory name must not collide with any sibling — the property the whole
+      // branch exists to establish, asserted per store rather than as a population
+      // statistic, so a regression names the store instead of moving a count.
+      const name = path.basename(dir)
+      for (const sib of fs.readdirSync(path.dirname(dir)))
+        if (sib !== name && sib.toLowerCase() === name.toLowerCase())
+          assert.fail(`${path.relative(REPO, dir)} collides with sibling ${sib}`)
+    }
     assert.ok(
-      underStores.length > outsideStores.length * 2,
-      `\`stores/\` should be the dominant convention: ${underStores.length} under it vs ${outsideStores.length} outside`,
+      defining > 100,
+      `expected most dirs under a stores/ ancestor to define a store, only ${defining} of ${stores.length} do`,
     )
   })
 
@@ -382,6 +515,11 @@ describe('lint-case-collisions', () => {
       'node --test scripts/lint-case-collisions.tsc.test.mjs',
       'the tsc oracle must have a named runner, or nothing can ever run it',
     )
+    assert.equal(
+      uiPkg.scripts['test:case-collisions:resolution'],
+      'node --test scripts/lint-case-collisions.resolution.test.mjs',
+      'the behavioural resolution oracle must have a named runner, or it is dead code',
+    )
 
     // The provenance suite asserts facts about THIS branch's diff, so it must have a
     // runner but must NOT be chained: on any later branch that relocates a store, its
@@ -391,12 +529,27 @@ describe('lint-case-collisions', () => {
       'node --test scripts/lint-case-collisions.provenance.test.mjs',
       'the provenance suite must be runnable by name',
     )
-    assert.doesNotMatch(
-      uiPkg.scripts.check,
-      /npm run test:case-collisions:provenance\b/,
-      'the provenance suite must NOT be chained into `check` — it is a one-time claim about one diff',
-    )
-    assert.doesNotMatch(dtPkg.scripts.check, /npm run test:case-collisions:provenance\b/)
+    // Reachability, not a literal-string match. A regex on the `check` string is
+    // bypassed by an indirection (`"check:prov": "npm run test:case-collisions:provenance"`
+    // chained as `npm run check:prov`) or by invoking the file directly — both of
+    // which put the provenance suite back inside `check` while satisfying a naive
+    // `doesNotMatch`. Expanding the chain transitively closes both.
+    const reachable = (pkg, entry, seen = new Set()) => {
+      const body = pkg.scripts?.[entry]
+      if (!body || seen.has(entry)) return []
+      seen.add(entry)
+      const out = [body]
+      for (const m of body.matchAll(/npm run ([\w:-]+)/g)) out.push(...reachable(pkg, m[1], seen))
+      return out
+    }
+    for (const [label, pkg] of [['ui', uiPkg], ['desktop/ui', dtPkg]]) {
+      const chain = reachable(pkg, 'check').join('\n')
+      assert.doesNotMatch(
+        chain,
+        /test:case-collisions:provenance|lint-case-collisions\.provenance\.test\.mjs/,
+        `${label}: the provenance suite must NOT be reachable from \`check\` — it is a one-time claim about one diff, and would fail for any later branch that relocates a store`,
+      )
+    }
 
     // The gallery spec must be in the visual set gate:ui actually runs, for the same
     // reason: a spec no runner names will rot.

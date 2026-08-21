@@ -28,6 +28,16 @@
  * Each rule maps to a real resolver probe, which is why the rule set is BOUNDED
  * rather than a growing pile of predicates.
  *
+ * KNOWN LIMIT, stated rather than implied: all three rules compare SIBLINGS INSIDE ONE
+ * DIRECTORY. The desktop resolver's Tier 1 (`probeFileOrIndex(localSrc, relative)` in
+ * vite-plugin-local-override.ts) resolves a core-tree specifier against the DESKTOP
+ * tree, so `desktop/ui/src/x/Foo.tsx` beside `ui/src/x/foo/` diverges the same way and
+ * no rule here sees it. There are zero such pairs today (checked across both trees).
+ * The behavioural backstop is `lint-case-collisions.resolution.test.mjs`, which
+ * resolves every real import specifier twice — once case-sensitively, once as a
+ * case-insensitive filesystem would — and diffs the results; it catches divergence by
+ * OUTCOME rather than by shape, so it is not blind to this the way a sibling rule is.
+ *
  *   1. file-vs-directory — a file's RESOLVER STEM is case-insensitively EQUAL to,
  *      but case-sensitively DIFFERENT from, a sibling directory's name. This is the
  *      bug above: `EditUserDrawer.tsx` (stem `EditUserDrawer`) beside `editUserDrawer/`.
@@ -166,15 +176,28 @@ function defaultRoots() {
   return [...mandatory, ...advisory]
 }
 
-// `--root=<dir>` REPLACES the defaults and is always MANDATORY; it exists for this
-// guard's own fixture tests. Roots are deduped by REAL path, and a root nested inside
-// another is dropped, so a repeated or overlapping root cannot inflate the counts.
-const rootArgs = process.argv
-  .filter(a => a.startsWith('--root='))
-  .map(a => ({ dir: path.resolve(process.cwd(), a.slice('--root='.length)), advisory: false }))
+/**
+ * `--root=<dir>` REPLACES the defaults with ONE mandatory root. It exists only so the
+ * guard's own fixture tests can point it at a throwaway tree.
+ *
+ * It accepts exactly one, deliberately. An earlier revision took a repeatable
+ * `--root=` and grew realpath dedup plus a "drop a root nested inside another" rule to
+ * keep the counts honest — and that machinery then produced two of its own defects: a
+ * mandatory root whose realpath fell inside an advisory root was silently reclassified
+ * as advisory (fail-OPEN), and a root under another root's `SKIP_DIRS` was dropped and
+ * then scanned by nobody. Neither shape had a real caller: the defaults are disjoint
+ * by construction and every test passes a single root. Removing the feature removes
+ * both defects outright, which is a better answer than a third predicate guarding the
+ * second predicate.
+ */
+const rootArgs = process.argv.filter(a => a.startsWith('--root='))
+if (rootArgs.length > 1) fail('--root= accepts exactly one directory (pass one root, or none for the defaults)')
 
-const rawRoots = rootArgs.length ? rootArgs : defaultRoots()
-const byReal = new Map()
+const rawRoots = rootArgs.length
+  ? [{ dir: path.resolve(process.cwd(), rootArgs[0].slice('--root='.length)), advisory: false }]
+  : defaultRoots()
+
+const ROOTS = []
 for (const r of rawRoots) {
   let real
   try {
@@ -183,12 +206,8 @@ for (const r of rawRoots) {
     if (r.advisory) continue
     fail(`root does not exist: ${r.dir} (${e.code ?? e.message})`)
   }
-  const prev = byReal.get(real)
-  // Keep the stricter (mandatory) classification if the same tree arrives twice.
-  if (!prev || (prev.advisory && !r.advisory)) byReal.set(real, { ...r, real })
+  ROOTS.push({ ...r, real })
 }
-const all = [...byReal.values()]
-const ROOTS = all.filter(r => !all.some(o => o !== r && r.real.startsWith(`${o.real}${path.sep}`)))
 
 /**
  * Every specifier stem this filename answers to. `EditUserDrawer.tsx` → `EditUserDrawer`;
@@ -209,8 +228,18 @@ function resolverStems(name) {
 
 const findings = []
 const seen = new Set() // dedupe: one finding per (dir, name set)
-/** Directories walked, PER ROOT — an aggregate would hide a root that resolved to nothing. */
-const scannedPerRoot = new Map()
+/**
+ * Entries ANALYSED, per root — not directories traversed.
+ *
+ * This distinction is load-bearing, and it was learned the hard way. When this counter
+ * measured directories walked, a mutation that recursed into a subtree but performed
+ * no collision analysis inside it kept the count byte-identical, so the test comparing
+ * the guard's self-report against an independent recount stayed green while a planted
+ * collision went undetected. Counting the entries the rules actually looked at makes
+ * "walked past it" and "checked it" different numbers, which is the only way an
+ * external recount can tell them apart.
+ */
+const analysedPerRoot = new Map()
 
 function addFinding(rule, root, dir, names, why) {
   const key = `${dir} ${[...names].sort().join(' ')}`
@@ -228,8 +257,6 @@ function scan(dir, root) {
     // `catch { return }`, and reporting it clean is the worst possible answer.
     fail(`cannot read ${dir}: ${e.code ?? e.message}`)
   }
-  scannedPerRoot.set(root.real, (scannedPerRoot.get(root.real) ?? 0) + 1)
-
   const files = []
   const dirs = []
   for (const e of entries) {
@@ -262,6 +289,11 @@ function scan(dir, root) {
       } else if (st.isFile()) files.push(e.name)
     }
   }
+
+  // Every entry below this line is one the rules actually LOOK at. Counted here, at
+  // the point of analysis, so a subtree that is traversed but not analysed changes the
+  // number — see analysedPerRoot.
+  analysedPerRoot.set(root.real, (analysedPerRoot.get(root.real) ?? 0) + files.length + dirs.length)
 
   // Rule 3 FIRST — a full-name case duplicate is strictly the worst diagnosis (the two
   // entries cannot both exist on a case-insensitive checkout, so one is LOST, not
@@ -356,15 +388,17 @@ for (const root of ROOTS) {
     fail(`root does not exist: ${root.dir} (${e.code ?? e.message})`)
   }
   if (!st.isDirectory()) fail(`root is not a directory: ${root.dir}`)
-  scannedPerRoot.set(root.real, 0)
+  analysedPerRoot.set(root.real, 0)
+  // No post-scan "did it scan anything?" check: the only readdir failure path inside
+  // `scan()` is `fail()`, so such a check could never fire. A fail-closed guard that
+  // cannot fire reads as safety it does not provide; the real protections are the root
+  // `statSync` above and TEST-1's independent recount of the ANALYSED entries.
   scan(root.real, root)
-  if ((scannedPerRoot.get(root.real) ?? 0) === 0 && !root.advisory)
-    fail(`root scanned 0 directories: ${root.dir}`)
 }
 
 const rel = r => path.relative(REPO, r) || r
-const totalScanned = [...scannedPerRoot.values()].reduce((a, b) => a + b, 0)
-const scope = `scanned ${totalScanned} director${totalScanned === 1 ? 'y' : 'ies'} across ${ROOTS.length} root(s): ${ROOTS.map(r => `${rel(r.real)}${r.advisory ? '(advisory)' : ''}=${scannedPerRoot.get(r.real) ?? 0}`).join(' ')}`
+const totalAnalysed = [...analysedPerRoot.values()].reduce((a, b) => a + b, 0)
+const scope = `analysed ${totalAnalysed} entr${totalAnalysed === 1 ? 'y' : 'ies'} across ${ROOTS.length} root(s): ${ROOTS.map(r => `${rel(r.real)}${r.advisory ? '(advisory)' : ''}=${analysedPerRoot.get(r.real) ?? 0}`).join(' ')}`
 
 const blocking = findings.filter(f => !f.root.advisory)
 const advisoryFindings = findings.filter(f => f.root.advisory)
@@ -406,6 +440,13 @@ if (blocking.length) {
       'then update its import sites. Never rely on a case-sensitive filesystem.',
   )
   process.exit(1)
+} else if (advisoryFindings.length) {
+  // NOT "OK". There ARE collisions; they are simply in a tree this repo cannot fix.
+  // Printing the unqualified green line here would contradict the report directly
+  // above it, and that line is what a reader skims for.
+  console.log(
+    `[case-collisions] no BLOCKING collisions in the trees this repo owns, but ${advisoryFindings.length} advisory finding(s) remain upstream — see above (${scope}).`,
+  )
 } else {
   console.log(`[case-collisions] OK - no sibling names differ only by case (${scope}).`)
 }

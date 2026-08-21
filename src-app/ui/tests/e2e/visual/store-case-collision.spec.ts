@@ -92,18 +92,23 @@ const RELOCATED = [
  * touched by this branch. Both stores are still covered by clause 1.
  */
 const OVERLAYS = [
+  // Form testids: these render unconditionally inside their drawer.
   { slug: 'overlay-create-user-drawer', testid: 'user-create-form' },
   { slug: 'overlay-edit-user-drawer', testid: 'user-edit-form' },
   { slug: 'overlay-reset-password-drawer', testid: 'user-reset-password-form' },
   { slug: 'overlay-edit-user-group-drawer', testid: 'user-edit-group-form' },
   { slug: 'overlay-assign-group-drawer', testid: 'user-assign-group-form' },
-  { slug: 'overlay-user-groups-drawer', testid: 'user-groups-drawer-list' },
   { slug: 'overlay-group-members-drawer', testid: 'user-group-members-list' },
   { slug: 'overlay-llm-provider-drawer', testid: 'llm-provider-form' },
-  { slug: 'overlay-group-skills-assignment', testid: 'skill-group-assign-save-btn' },
-  { slug: 'overlay-group-workflows-assignment', testid: 'workflow-group-assign-save-btn' },
-  // These two expose no stable testid on their content (their inner testids embed a
-  // fixture UUID), so they are identified by a title unique across this whole table.
+  // Title text for the five whose only stable testids are CONDITIONAL, so a marker
+  // built on them would be a case-collision spec that goes red for an unrelated
+  // reason: `user-groups-drawer-list` renders only on the `groups.length > 0` branch,
+  // the `*-group-assign-*-btn` pair only inside `{canManage && …}`, and the two
+  // assignment cards embed a fixture UUID. A drawer title depends on neither the
+  // seeded data nor the seeded permissions.
+  { slug: 'overlay-user-groups-drawer', text: 'Groups for' },
+  { slug: 'overlay-group-skills-assignment', text: 'Assign System Skills' },
+  { slug: 'overlay-group-workflows-assignment', text: 'Assign System Workflows' },
   { slug: 'overlay-group-llm-providers-assignment', text: 'Assign LLM Providers' },
   { slug: 'overlay-group-mcp-servers-assignment', text: 'Assign System MCP Servers' },
 ] as const
@@ -202,19 +207,46 @@ test.describe('store case-collision fix', () => {
     }
   })
 
-  test('the overlay identity markers are mutually exclusive', () => {
-    // Without this, the 12 cases below could drift back into markers that several
-    // drawers satisfy, and each would keep passing while asserting nothing about
-    // WHICH drawer opened. Testids are unique by construction; the two text markers
-    // must not be substrings of each other or of any testid.
-    const markers = OVERLAYS.map(o => ('testid' in o ? o.testid : o.text))
-    expect(new Set(markers).size, 'duplicate identity markers').toBe(markers.length)
-    for (const a of markers)
-      for (const b of markers)
-        if (a !== b)
-          expect(b.includes(a), `marker "${a}" is a substring of "${b}" — it cannot identify one drawer`).toBe(
-            false,
-          )
+  test('each identity marker appears in ITS drawer and in no other', async ({ page }) => {
+    // The property the per-overlay assertions need is "marker M appears in drawer D
+    // and nowhere else". An earlier version checked the marker STRINGS against each
+    // other — uniqueness and substrings — which is not the same thing and would not
+    // notice two drawers that genuinely render the same testid (both assignment
+    // drawers come from one shared component via a `testidPrefix` prop, so that is
+    // the realistic way this regresses).
+    //
+    // So: open every drawer and cross-check every marker against it. This is the
+    // adversarial pairing the loose regexes failed — 8 of 10 cross-pairings passed
+    // then; every off-diagonal cell must fail now.
+    const satisfied = async (marker: { testid?: string; text?: string }) => {
+      const dialog = page
+        .locator('[role="dialog"]:not([data-testid="gallery-root"] *)')
+        .filter({ visible: true })
+        .first()
+      if (marker.testid) return await dialog.getByTestId(marker.testid).first().isVisible().catch(() => false)
+      return ((await dialog.textContent().catch(() => '')) ?? '').includes(marker.text as string)
+    }
+
+    const crossMatches: string[] = []
+    for (const open of OVERLAYS) {
+      await page.goto(`/gallery.html?surface=${open.slug}&theme=light`)
+      await page.getByTestId('gallery-root').waitFor({ state: 'visible' })
+      await page
+        .locator('[role="dialog"]:not([data-testid="gallery-root"] *)')
+        .filter({ visible: true })
+        .first()
+        .waitFor({ state: 'visible', timeout: 15_000 })
+
+      for (const candidate of OVERLAYS) {
+        const hit = await satisfied(candidate)
+        if (candidate.slug === open.slug) {
+          expect(hit, `${open.slug} does not satisfy its OWN marker — the marker is wrong`).toBe(true)
+        } else if (hit) {
+          crossMatches.push(`${open.slug} also satisfies ${candidate.slug}'s marker`)
+        }
+      }
+    }
+    expect(crossMatches, 'markers must identify exactly one drawer each').toEqual([])
   })
 
   for (const entry of OVERLAYS) {

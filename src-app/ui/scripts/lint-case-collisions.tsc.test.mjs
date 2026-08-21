@@ -16,12 +16,13 @@
  * files, and that file list contains named relocated stores plus their sibling
  * components.
  *
- * Not chained into `npm run check`: `tsc` is already that script's FIRST step in each
- * workspace, so wiring this in would run the same compile three times for no extra
- * signal. It has its own runner (`npm run test:case-collisions:tsc`) so it is not
- * dead code, is enumerated in TESTS.md, and runs once at phase 8.
+ * IS chained into `npm run check`. An earlier revision was not, on the reasoning that
+ * `tsc` is already that script's first step — true of the exit-code assertion, false
+ * of the two above it, which are the whole point of the file. Outside the chain they
+ * ran nowhere, so the guard against a silently-empty compile did not exist on main.
+ * The duplicated compile (~45 s on a multi-minute gate) is the right price.
  *
- * Run:  npm run test:case-collisions:tsc      (~2-4 min)
+ * Run:  npm run test:case-collisions:tsc      (~45 s)
  */
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
@@ -40,15 +41,43 @@ const WORKSPACES = [
 
 const TSC = path.resolve(REPO, 'node_modules/typescript/bin/tsc')
 
-/** Relocated stores + their sibling components, as substrings that MUST be compiled. */
-const MUST_COMPILE = [
-  'modules/user/components/user/stores/editUserDrawer/index.ts',
-  'modules/user/components/user/EditUserDrawer.tsx',
-  'modules/layouts/app-layout/stores/appLayout/index.ts',
-  'modules/layouts/app-layout/AppLayout.tsx',
-  'modules/workflow/components/builder/agentStepForm.helpers.ts',
-  'modules/workflow/components/builder/AgentStepForm.tsx',
-]
+/**
+ * Paths that MUST appear in the compiled program, DERIVED from the tree rather than
+ * hardcoded.
+ *
+ * An earlier revision listed specific branch paths (`.../stores/editUserDrawer/index.ts`,
+ * `agentStepForm.helpers.ts`). That is the same defect as putting a one-time claim in
+ * a permanent gate: this file is chained into `npm run check`, so a future branch that
+ * legitimately renamed or consolidated `editUserDrawer` would get a red build with a
+ * case-collision message about a change it knew nothing about. Discovering the sample
+ * at runtime keeps the anti-vacuity property (the program really contains relocated
+ * stores and their components) without pinning it to this diff's filenames.
+ */
+function mustCompile(uiSrc) {
+  const found = []
+  const walk = (dir, underStores) => {
+    if (found.length >= 3) return
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (!e.isDirectory() || ['node_modules', 'dist', 'build', '.git'].includes(e.name)) continue
+      const full = path.join(dir, e.name)
+      if (underStores && fs.existsSync(path.join(full, 'index.ts'))) {
+        // A store under `stores/`, plus the component it sits beside — the exact pair
+        // the move created, whatever it happens to be called.
+        const componentDir = path.dirname(path.dirname(full))
+        const pascal = e.name[0].toUpperCase() + e.name.slice(1)
+        const sibling = fs
+          .readdirSync(componentDir)
+          .find(n => n === `${pascal}.tsx` || n.toLowerCase() === `${e.name.toLowerCase()}.tsx`)
+        if (sibling)
+          found.push(path.join(full, 'index.ts'), path.join(componentDir, sibling))
+      }
+      walk(full, underStores || e.name === 'stores')
+    }
+  }
+  walk(uiSrc, false)
+  assert.ok(found.length >= 2, 'expected to find at least one relocated store beside its component')
+  return found
+}
 
 const runTsc = (dir, extraArgs = []) =>
   spawnSync(process.execPath, [TSC, '-p', 'tsconfig.json', ...extraArgs], {
@@ -81,9 +110,9 @@ describe('case-collision fix — import sites', () => {
         `${ws.label} compiled only ${files.length} files — its tsconfig include/files no longer covers the app, so a green exit proves nothing`,
       )
 
-      // 3. …and that program includes the files this branch actually moved.
+      // 3. …and that program includes relocated stores and their sibling components.
       const joined = files.join('\n')
-      for (const needle of MUST_COMPILE) {
+      for (const needle of mustCompile(path.resolve(HERE, '../src'))) {
         assert.ok(
           joined.includes(needle),
           `${ws.label}'s program does not include ${needle} — the moved module is outside the compile surface, so tsc cannot be vouching for its import sites`,

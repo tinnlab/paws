@@ -80,17 +80,38 @@ const componentExists = (abs, storeName) => {
     .some(n => n.toLowerCase() === `${storeName.toLowerCase()}.tsx` || n === `${pascal}.tsx`)
 }
 
+/**
+ * Refuse to certify an invariant this tree cannot evaluate.
+ *
+ * The earlier fallback here asserted `fs.existsSync(<UI>/src)` and returned — which
+ * cannot be false in any tree where this file exists. So on a shallow checkout, a
+ * clone with no `origin/main`, or after a squash that defeats rename detection, both
+ * tests reported `ok` having verified nothing, and the only signal was a `console.log`
+ * buried in TAP output. That is a green certificate for INV-4/INV-7 backed by no
+ * evidence — worse than a failure, because it reads as proof.
+ *
+ * This suite is deliberately manual and run once, at phase 8, precisely to certify
+ * those two invariants. If it cannot, the honest answer is to say so loudly and fail,
+ * not to pass quietly.
+ */
+function requireEvaluable(id, available, relocatedCount) {
+  assert.ok(
+    available,
+    `${id} cannot be evaluated: \`origin/main\` is unresolvable, or \`git diff\` failed. This suite exists to certify a claim about this branch's diff — refusing rather than reporting a green it did not earn. Fetch origin/main (and ensure the clone is not shallow), then re-run.`,
+  )
+  assert.ok(
+    relocatedCount > 0,
+    `${id} cannot be evaluated: the diff against origin/main relocates no store directory. Either the branch does not contain the move, or rename detection was defeated (a squash, or a low \`diff.renameLimit\`). Refusing rather than reporting a green it did not earn.`,
+  )
+}
+
 describe('case-collision fix — branch provenance', () => {
   // TEST-6 [acceptance] [invariant: INV-4]
   test('TEST-6: the stores MOVED (git renames) — history follows the files', () => {
     const { available, renames, addedOrDeleted } = branchRenames()
     const storeRenames = storeRenamesOf(renames)
 
-    if (!available || storeRenames.length === 0) {
-      console.log('TEST-6: no base ref, or this diff relocates no store — provenance claim does not apply here.')
-      assert.ok(fs.existsSync(path.join(UI, 'src')), 'the web app tree must still exist')
-      return
-    }
+    requireEvaluable('TEST-6', available, storeRenames.length)
 
     // Each rename must be exactly "insert /stores before the last directory segment".
     for (const r of storeRenames) {
@@ -103,9 +124,20 @@ describe('case-collision fix — branch provenance', () => {
       )
     }
 
-    // A copy-then-delete would show up as A/D pairs instead of R.
-    const srcAD = addedOrDeleted.filter(x => x.file.startsWith('src-app/ui/src/'))
-    assert.deepEqual(srcAD, [], `src-app/ui/src must contain only renames, saw: ${JSON.stringify(srcAD)}`)
+    // A copy-then-delete would show up as A/D pairs instead of R. Scoped to files
+    // inside the relocated store directories, which is the claim being made — an
+    // earlier version asserted "nothing anywhere under src-app/ui/src is added or
+    // deleted", which is a much wider statement than INV-4 and broke under a low
+    // `diff.renameLimit`: an unrelated helper test that was renamed WITH content
+    // changes degrades to A/D, while the (byte-identical) store files still report R.
+    const storeDirs = new Set(storeRenames.flatMap(r => [storeDirOf(r.to), storeDirOf(r.to).replace('/stores/', '/')]))
+    const inAStore = f => [...storeDirs].some(d => f.startsWith(`${d}/`))
+    const storeAD = addedOrDeleted.filter(x => inAStore(x.file))
+    assert.deepEqual(
+      storeAD,
+      [],
+      `the relocated stores must appear as renames, not add/delete: ${JSON.stringify(storeAD)}`,
+    )
 
     assert.equal(
       new Set(storeRenames.map(r => storeDirOf(r.to))).size,
@@ -119,11 +151,7 @@ describe('case-collision fix — branch provenance', () => {
     const { available, renames } = branchRenames()
     const relocated = new Set(storeRenamesOf(renames).map(r => path.join(REPO, storeDirOf(r.to))))
 
-    if (!available || relocated.size === 0) {
-      console.log('TEST-7: no base ref, or this diff relocates no store — provenance claim does not apply here.')
-      assert.ok(fs.existsSync(path.join(UI, 'src')), 'the web app tree must still exist')
-      return
-    }
+    requireEvaluable('TEST-7', available, relocated.size)
 
     assert.equal(relocated.size, RELOCATED_COUNT)
     for (const abs of relocated) {
