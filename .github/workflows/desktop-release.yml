@@ -15,6 +15,19 @@ on:
   push:
     tags:
       - 'v*'
+  # Manual dev build: produces a downloadable artifact for ONE target with no
+  # tag, no GitHub Release and no gh-pages publish. This is the loop for
+  # testing a change on a real machine when you have no local macOS host.
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Target triple to build'
+        required: true
+        default: aarch64-apple-darwin
+        type: choice
+        options:
+          - aarch64-apple-darwin
+          - x86_64-apple-darwin
 
 permissions:
   contents: write
@@ -22,6 +35,8 @@ permissions:
 jobs:
   build:
     name: build ${{ matrix.target }}
+    # Tag pushes only — a manual dispatch runs `devbuild` below instead.
+    if: startsWith(github.ref, 'refs/tags/')
     strategy:
       fail-fast: false
       matrix:
@@ -134,6 +149,7 @@ jobs:
 
   publish-manifest:
     name: publish latest.json to gh-pages
+    if: startsWith(github.ref, 'refs/tags/')
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -172,3 +188,70 @@ jobs:
         env:
           GH_PAGES_REMOTE: https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
         run: bash scripts/updater/publish-pages.sh latest.json
+
+  # ---------------------------------------------------------------------------
+  # Manual dev build (workflow_dispatch). Builds ONE macOS target and uploads
+  # the bundle as a run artifact. Deliberately does NOT create a tag, a Release,
+  # or a gh-pages manifest — this exists so a change can be tested on a real Mac
+  # without cutting a public release, which matters when no local macOS host is
+  # available. Mirrors the macOS half of the `build` job above.
+  # ---------------------------------------------------------------------------
+  devbuild:
+    name: dev build ${{ inputs.target }}
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ inputs.target }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # The desktop build compiles the whole server, whose SQLx macros need a
+      # live pgvector Postgres at the URL in .cargo/config.toml (127.0.0.1:54321).
+      - name: Setup Postgres + pgvector
+        run: |
+          brew install postgresql@18 pgvector
+          PG_PREFIX="$(brew --prefix postgresql@18)"
+          export PATH="$PG_PREFIX/bin:$PATH"
+          PGDATA="$RUNNER_TEMP/pgdata"
+          initdb -D "$PGDATA" --username=postgres --auth=trust
+          pg_ctl -D "$PGDATA" -o "-p 54321" -l "$RUNNER_TEMP/pg.log" -w start
+          createdb -p 54321 -U postgres postgres || true
+          psql -p 54321 -U postgres -c "ALTER USER postgres WITH PASSWORD 'password';"
+
+      - name: Install npm deps (workspace hoist at repo root)
+        run: npm ci
+
+      # No tagName → tauri-action builds and reports artifactPaths without
+      # creating or uploading to a Release.
+      - name: Build
+        id: tauri
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: src-app/desktop/tauri
+          args: --target ${{ inputs.target }}
+
+      - name: Upload bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: ziee-desktop-${{ inputs.target }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            src-app/target/${{ inputs.target }}/release/bundle/dmg/*.dmg
+            src-app/target/${{ inputs.target }}/release/bundle/macos/*.app.tar.gz
+            src-app/target/${{ inputs.target }}/release/bundle/macos/*.app.tar.gz.sig
