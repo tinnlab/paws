@@ -165,6 +165,53 @@ for zero added signal. It exists as a separate file solely because A11 requires 
 `TEST-8` id to appear on an added line of this branch's diff, and a `package.json`
 chain entry cannot carry one.
 
+## DEC-13 CORRECTION — the tsc oracle IS chained into `npm run check` after all
+
+**Resolution:** reversed. `test:case-collisions:tsc` is now part of `src-app/ui`'s
+`check` chain.
+**Basis:** a blind auditor reproduced the hole DEC-13's reasoning missed. DEC-13
+argued the file only duplicates `check`'s own first step — true of its *exit-code*
+assertion, false of everything else it does. Its unique value is the anti-vacuity
+half: `--listFilesOnly` showing a >1000-file program, and that program containing the
+specific relocated modules. Those exist precisely because a `tsconfig` whose `include`
+was narrowed type-checks NOTHING and exits 0 — demonstrated by replacing
+`src-app/ui/tsconfig.json` with `{"compilerOptions":{"noEmit":true},"files":[]}`,
+which left an exit-code-only version of the test green. Outside `check`, nothing ever
+ran those assertions, so the guard against a silently-empty compile did not exist on
+main. The duplicated `tsc` cost (~40 s on a multi-minute gate) is the right price.
+
+### DEC-15: The guard scans `sdk/packages/*/src`, which this repo cannot fix. Block on findings there, or report them?
+
+**Resolution:** **Report, do not block.** sdk roots are marked `advisory`: their
+findings print in full, name the upstream repo, and do not set a non-zero exit. The
+eight trees this repo owns stay fail-closed. If the submodule is not checked out, the
+guard says so explicitly instead of silently scanning 8 roots instead of 15 and still
+printing OK.
+**Basis:** the design's own read-only constraint, applied consistently. Both
+workspaces compile sdk through their `@ziee/*` path mappings, so a collision there
+genuinely would break the macOS build and is worth surfacing. But `ziee-ai/sdk` is not
+pushable from here and the guard deliberately has no allowlist — so a blocking sdk
+finding would make `npm run check` unpassable in this repo until an upstream release,
+with no action anyone here could take to clear it. A gate nobody can clear is a gate
+people learn to bypass, which costs more than the finding it was protecting. Advisory
+keeps the signal and drops the hostage-taking. Raised by a blind auditor as MEDIUM.
+
+### DEC-16: Where do the branch-provenance assertions (TEST-6 / TEST-7) live?
+
+**Resolution:** in their own file, `lint-case-collisions.provenance.test.mjs`, with its
+own runner (`test:case-collisions:provenance`), **deliberately NOT chained into
+`check`** — and the chained suite is now entirely git-independent (grepping it for
+`origin/main` returns only comments).
+**Basis:** a permanent gate cannot carry a one-time claim. These two tests assert facts
+about *this* diff — that 24 store directories moved as renames, each landing under a
+`stores/` parent. My first fix guarded only the post-merge case (empty diff); an
+auditor then reproduced two more with a `git` shim: **any future branch that relocates
+a store** takes the branch path and fails `assert.equal(dirs.size, 24)`, and **any
+branch cut from a stale base** re-sees these 24 renames plus its own additions and
+fails the "only renames" assertion. Both would have broken `npm run check` for changes
+that knew nothing about this work. TEST-3 now asserts the provenance suite is runnable
+by name AND absent from both `check` chains, so the separation cannot quietly erode.
+
 ### DEC-14: At each rewritten import site, may the specifier form change (alias ⇄ relative)?
 
 **Resolution:** No. Each site keeps its existing form — the 95 `@/…` sites stay

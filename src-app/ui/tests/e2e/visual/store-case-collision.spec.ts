@@ -68,9 +68,15 @@ const RELOCATED = [
 ] as const
 
 /**
- * The relocated stores that back a gallery overlay, with a string that identifies
- * WHICH drawer opened. Without the identity check, all 12 cases would pass
- * identically if the gallery mounted the wrong overlay.
+ * The relocated stores that back a gallery overlay, each with a marker that
+ * identifies WHICH drawer opened.
+ *
+ * The markers must be MUTUALLY EXCLUSIVE, and that is asserted below rather than
+ * assumed. An earlier version used loose title regexes and was not: `/group/i`
+ * matched three different drawers and `/provider/i` matched two, so 8 of 10
+ * adversarial cross-pairings passed — i.e. swapping two gallery entries, exactly the
+ * "wrong store resolved" outcome this spec exists to catch, would have kept it green.
+ * A `data-testid` is used wherever the drawer exposes a stable one.
  *
  * The gallery opens an overlay surface by calling the entry's `open()` — i.e. the
  * STORE's own action (`EditUserDrawer.openEditUserDrawer(user)` and friends). A
@@ -86,18 +92,20 @@ const RELOCATED = [
  * touched by this branch. Both stores are still covered by clause 1.
  */
 const OVERLAYS = [
-  { slug: 'overlay-create-user-drawer', expect: /create user/i },
-  { slug: 'overlay-edit-user-drawer', expect: /edit user/i },
-  { slug: 'overlay-reset-password-drawer', expect: /reset password/i },
-  { slug: 'overlay-edit-user-group-drawer', expect: /group/i },
-  { slug: 'overlay-assign-group-drawer', expect: /group/i },
-  { slug: 'overlay-user-groups-drawer', expect: /group/i },
-  { slug: 'overlay-group-members-drawer', expect: /member/i },
-  { slug: 'overlay-llm-provider-drawer', expect: /provider/i },
-  { slug: 'overlay-group-llm-providers-assignment', expect: /provider/i },
-  { slug: 'overlay-group-mcp-servers-assignment', expect: /mcp|server/i },
-  { slug: 'overlay-group-skills-assignment', expect: /skill/i },
-  { slug: 'overlay-group-workflows-assignment', expect: /workflow/i },
+  { slug: 'overlay-create-user-drawer', testid: 'user-create-form' },
+  { slug: 'overlay-edit-user-drawer', testid: 'user-edit-form' },
+  { slug: 'overlay-reset-password-drawer', testid: 'user-reset-password-form' },
+  { slug: 'overlay-edit-user-group-drawer', testid: 'user-edit-group-form' },
+  { slug: 'overlay-assign-group-drawer', testid: 'user-assign-group-form' },
+  { slug: 'overlay-user-groups-drawer', testid: 'user-groups-drawer-list' },
+  { slug: 'overlay-group-members-drawer', testid: 'user-group-members-list' },
+  { slug: 'overlay-llm-provider-drawer', testid: 'llm-provider-form' },
+  { slug: 'overlay-group-skills-assignment', testid: 'skill-group-assign-save-btn' },
+  { slug: 'overlay-group-workflows-assignment', testid: 'workflow-group-assign-save-btn' },
+  // These two expose no stable testid on their content (their inner testids embed a
+  // fixture UUID), so they are identified by a title unique across this whole table.
+  { slug: 'overlay-group-llm-providers-assignment', text: 'Assign LLM Providers' },
+  { slug: 'overlay-group-mcp-servers-assignment', text: 'Assign System MCP Servers' },
 ] as const
 
 test.describe('store case-collision fix', () => {
@@ -194,7 +202,23 @@ test.describe('store case-collision fix', () => {
     }
   })
 
-  for (const { slug, expect: titleRe } of OVERLAYS) {
+  test('the overlay identity markers are mutually exclusive', () => {
+    // Without this, the 12 cases below could drift back into markers that several
+    // drawers satisfy, and each would keep passing while asserting nothing about
+    // WHICH drawer opened. Testids are unique by construction; the two text markers
+    // must not be substrings of each other or of any testid.
+    const markers = OVERLAYS.map(o => ('testid' in o ? o.testid : o.text))
+    expect(new Set(markers).size, 'duplicate identity markers').toBe(markers.length)
+    for (const a of markers)
+      for (const b of markers)
+        if (a !== b)
+          expect(b.includes(a), `marker "${a}" is a substring of "${b}" — it cannot identify one drawer`).toBe(
+            false,
+          )
+  })
+
+  for (const entry of OVERLAYS) {
+    const { slug } = entry
     test(`overlay opens through its relocated store action: ${slug}`, async ({ page }) => {
       const pageErrors: string[] = []
       page.on('pageerror', e => pageErrors.push(e.message))
@@ -214,7 +238,8 @@ test.describe('store case-collision fix', () => {
         .first()
       await expect(dialog).toBeVisible({ timeout: 15_000 })
       // …and it is THIS drawer, not merely some drawer.
-      await expect(dialog).toHaveText(titleRe)
+      if ('testid' in entry) await expect(dialog.getByTestId(entry.testid)).toBeVisible()
+      else await expect(dialog).toContainText(entry.text)
 
       // Narrow on purpose: a bare `undefined` would match benign gallery mock-API
       // chatter and produce false REDs. These four are the shapes a bad specifier

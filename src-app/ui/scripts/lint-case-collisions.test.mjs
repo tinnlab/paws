@@ -57,17 +57,23 @@ function perRootFrom(out) {
  */
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', '.git'])
 function expectedRoots() {
+  // MANDATORY roots — trees this repo owns, where a finding blocks.
   const roots = [
     path.join(UI, 'src'),
     path.join(UI, 'tests'),
+    path.join(UI, 'plugins'),
+    path.join(UI, 'scripts'),
     path.join(DESKTOP_UI, 'src'),
     path.join(DESKTOP_UI, 'tests'),
-  ]
+    path.join(DESKTOP_UI, 'plugins'),
+    path.join(DESKTOP_UI, 'scripts'),
+  ].map(dir => ({ dir, advisory: false }))
+  // ADVISORY roots — the read-only sdk submodule, reported but not blocking.
   const sdkPackages = path.join(REPO, 'sdk', 'packages')
   const pkgs = fs
     .readdirSync(sdkPackages, { withFileTypes: true })
     .filter(e => e.isDirectory() && fs.existsSync(path.join(sdkPackages, e.name, 'src')))
-    .map(e => path.join(sdkPackages, e.name, 'src'))
+    .map(e => ({ dir: path.join(sdkPackages, e.name, 'src'), advisory: true }))
   assert.ok(pkgs.length >= 5, `expected the sdk to expose several package srcs, found ${pkgs.length}`)
   return [...roots, ...pkgs]
 }
@@ -117,10 +123,13 @@ describe('lint-case-collisions', () => {
     const reported = perRootFrom(r.stdout)
     const expected = {}
     let expectedTotal = 0
-    for (const root of roots) {
-      assert.ok(fs.existsSync(root), `contracted root is missing: ${root}`)
-      const rel = path.relative(REPO, root)
-      const n = countDirs(root)
+    for (const { dir, advisory } of roots) {
+      assert.ok(fs.existsSync(dir), `contracted root is missing: ${dir}`)
+      // The guard tags advisory roots in its own output, so the label is part of the
+      // contract: silently reclassifying the owned trees as advisory would otherwise
+      // turn every blocking finding into a report and pass this assertion.
+      const rel = `${path.relative(REPO, dir)}${advisory ? '(advisory)' : ''}`
+      const n = countDirs(dir)
       expected[rel] = n
       expectedTotal += n
     }
@@ -137,6 +146,10 @@ describe('lint-case-collisions', () => {
     assert.ok(reported[path.relative(REPO, path.join(UI, 'src'))] > 400)
     assert.ok(reported[path.relative(REPO, path.join(DESKTOP_UI, 'src'))] > 10)
     assert.ok(Object.keys(reported).some(k => k.startsWith('sdk/packages/')))
+    // The owned trees must be BLOCKING, not advisory — otherwise a real collision in
+    // them would print and exit 0.
+    for (const k of Object.keys(reported))
+      if (!k.startsWith('sdk/')) assert.ok(!k.includes('(advisory)'), `${k} must not be advisory`)
   })
 
   // TEST-2 — the no-op proof, in every direction that matters.
@@ -259,6 +272,79 @@ describe('lint-case-collisions', () => {
         fs.chmodSync(locked, 0o755)
       }
     })
+
+    // (g) The suffix comparisons must themselves be CASE-INSENSITIVE. Modelling a
+    //     case-insensitive filesystem with case-sensitive `endsWith` is the same
+    //     mistake the guard exists to catch, and it produced two real false
+    //     negatives: `Foo.Desktop.tsx` (probeDesktopInfix builds the literal
+    //     `foo.desktop.tsx`, which stats as this on macOS) and `Widget.TSX`.
+    for (const [file, dir] of [
+      ['Foo.Desktop.tsx', 'foo'],
+      ['Widget.TSX', 'widget'],
+      ['Thing.MTS', 'thing'],
+    ]) {
+      withFixture({ [file]: 'x\n', [`${dir}/index.ts`]: 'y\n' }, root => {
+        const r = runGuard([`--root=${root}`])
+        assert.equal(r.status, 1, `${file} beside ${dir}/ must exit 1, got ${r.status}:\n${r.stdout}`)
+        assert.match(r.stdout, new RegExp(file.replace('.', '\\.')))
+      })
+    }
+
+    // (h) When several files answer to the SAME stem, ALL of them must be named. A
+    //     last-writer-wins map reported only one, so the operator fixed half a pair
+    //     and re-ran into the other half. This exact shape (a component plus its
+    //     `.desktop` override, both beside the store dir) was live on origin/main.
+    withFixture(
+      { 'Foo.tsx': 'x\n', 'Foo.desktop.tsx': 'x\n', 'foo/index.ts': 'y\n' },
+      root => {
+        const r = runGuard([`--root=${root}`])
+        assert.equal(r.status, 1, `must exit 1:\n${r.stdout}`)
+        assert.match(r.stdout, /Foo\.tsx/)
+        assert.match(r.stdout, /Foo\.desktop\.tsx/)
+      },
+    )
+
+    // (i) A subtree the guard did NOT walk must never be reported clean by omission.
+    //     Symlinked directories are named (so they can still collide) but not walked,
+    //     to keep the walk acyclic — the guard has to SAY so.
+    withFixture({ 'real/inner/Widget.tsx': 'x\n', 'real/inner/widget/index.ts': 'y\n', 'root/keep.ts': 'z\n' }, root => {
+      fs.symlinkSync(path.join(root, 'real'), path.join(root, 'root', 'linked'), 'dir')
+      const r = runGuard([`--root=${path.join(root, 'root')}`])
+      assert.equal(r.status, 0, 'the walked tree is clean')
+      assert.match(r.stdout, /NOTE:.*symlinked directory.*NOT walked/s)
+      assert.match(r.stdout, /linked/)
+    })
+  })
+
+  // TEST-12 — the durable half of the convention claim, true on this branch AND on
+  // main (the branch-scoped provenance assertions live in
+  // `lint-case-collisions.provenance.test.mjs`, deliberately outside `check`).
+  test('TEST-12: the `stores/` convention is the dominant one and every store under it is real', () => {
+    const underStores = []
+    const outsideStores = []
+    const walk = (dir, insideStores) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (!e.isDirectory() || SKIP_DIRS.has(e.name)) continue
+        const full = path.join(dir, e.name)
+        if (fs.existsSync(path.join(full, 'index.ts')) && fs.existsSync(path.join(full, 'actions')))
+          (insideStores ? underStores : outsideStores).push(full)
+        walk(full, insideStores || e.name === 'stores')
+      }
+    }
+    walk(path.join(UI, 'src'), false)
+    walk(path.join(DESKTOP_UI, 'src'), false)
+
+    assert.ok(underStores.length > 0, 'expected stores under a `stores/` ancestor')
+    for (const d of underStores)
+      assert.ok(fs.existsSync(path.join(d, 'index.ts')), `${d} is not a real store`)
+
+    // A RATIO, not a magic threshold. The claim is "this is the majority convention",
+    // and a count like `>= 110` would go red the day someone legitimately consolidates
+    // six stores, with a message about case collisions that had nothing to do with it.
+    assert.ok(
+      underStores.length > outsideStores.length * 2,
+      `\`stores/\` should be the dominant convention: ${underStores.length} under it vs ${outsideStores.length} outside`,
+    )
   })
 
   // TEST-3 [acceptance] [invariant: INV-5]
@@ -278,6 +364,11 @@ describe('lint-case-collisions', () => {
     assert.match(uiPkg.scripts.check, /npm run check:case-collisions\b/)
     assert.match(dtPkg.scripts.check, /npm run check:case-collisions\b/)
     assert.match(uiPkg.scripts.check, /npm run test:case-collisions\b/)
+    assert.match(
+      uiPkg.scripts.check,
+      /npm run test:case-collisions:tsc\b/,
+      "the tsc oracle's unique value is its non-empty-program assertions; outside `check` nothing ever runs them",
+    )
 
     // One harness, not several.
     assert.equal(
@@ -286,19 +377,35 @@ describe('lint-case-collisions', () => {
       'the guard must NOT be forked into the desktop scripts dir',
     )
 
-    // The tsc oracle is intentionally outside `check` (tsc is already check's first
-    // step per workspace) — but it must still be runnable by name, or it is dead code.
     assert.equal(
       uiPkg.scripts['test:case-collisions:tsc'],
       'node --test scripts/lint-case-collisions.tsc.test.mjs',
       'the tsc oracle must have a named runner, or nothing can ever run it',
     )
 
+    // The provenance suite asserts facts about THIS branch's diff, so it must have a
+    // runner but must NOT be chained: on any later branch that relocates a store, its
+    // "exactly 24" claim would fail `npm run check` for a change it knows nothing about.
+    assert.equal(
+      uiPkg.scripts['test:case-collisions:provenance'],
+      'node --test scripts/lint-case-collisions.provenance.test.mjs',
+      'the provenance suite must be runnable by name',
+    )
+    assert.doesNotMatch(
+      uiPkg.scripts.check,
+      /npm run test:case-collisions:provenance\b/,
+      'the provenance suite must NOT be chained into `check` — it is a one-time claim about one diff',
+    )
+    assert.doesNotMatch(dtPkg.scripts.check, /npm run test:case-collisions:provenance\b/)
+
     // The gallery spec must be in the visual set gate:ui actually runs, for the same
     // reason: a spec no runner names will rot.
+    // `visualConfig` is a STRING (the playwright config path), not an object — an
+    // earlier `galleryCfg.visualConfig?.visualSpecs ?? …` first branch was dead.
     const galleryCfg = JSON.parse(fs.readFileSync(path.join(UI, 'gallery.config.json'), 'utf8'))
+    assert.equal(typeof galleryCfg.visualConfig, 'string', 'visualConfig is the config PATH')
     assert.ok(
-      (galleryCfg.visualConfig?.visualSpecs ?? galleryCfg.visualSpecs ?? []).some(s =>
+      (galleryCfg.visualSpecs ?? []).some(s =>
         String(s).includes('store-case-collision'),
       ),
       'store-case-collision.spec.ts must be listed in gallery.config.json visualSpecs so gate:ui runs it',
@@ -401,163 +508,4 @@ describe('lint-case-collisions', () => {
     assert.equal(check.status, 0, `check:store-actions must be green:\n${check.stdout}${check.stderr}`)
   })
 
-  // ---- shared git-rename analysis for TEST-6 / TEST-7 ----------------------
-  /**
-   * Renames this branch makes relative to its base.
-   *
-   * `available` is false when there is no base to diff against — which is the NORMAL
-   * state once this work merges (`HEAD === origin/main`, so the diff is empty) and in
-   * a clone with no `origin/main`. TEST-6/TEST-7 must stay green there: a gate wired
-   * into `npm run check` that asserts "this branch relocated stores" would go red on
-   * main the day it lands, permanently. That is rule B6's failure mode reached
-   * through a branch-relative git assumption instead of a `.lifecycle/` path, and it
-   * is why both tests fall back to a tree-shape assertion below.
-   */
-  function branchRenames() {
-    const base = spawnSync('git', ['-C', REPO, 'rev-parse', '--verify', '--quiet', 'origin/main'], {
-      encoding: 'utf8',
-    })
-    if (base.status !== 0) return { available: false, renames: [], addedOrDeleted: [] }
-    const d = spawnSync(
-      'git',
-      ['-C', REPO, 'diff', '--find-renames', '--name-status', 'origin/main...HEAD'],
-      { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
-    )
-    if (d.status !== 0) return { available: false, renames: [], addedOrDeleted: [] }
-    const renames = []
-    const addedOrDeleted = []
-    for (const line of d.stdout.split('\n')) {
-      if (!line.trim()) continue
-      const cols = line.split('\t')
-      if (cols[0].startsWith('R')) renames.push({ from: cols[1], to: cols[2] })
-      else if (cols[0] === 'A' || cols[0] === 'D') addedOrDeleted.push({ status: cols[0], file: cols[1] })
-    }
-    return { available: true, renames, addedOrDeleted }
-  }
-
-  const storeRenamesOf = renames =>
-    renames.filter(
-      r => r.to.startsWith('src-app/ui/src/') && r.to.includes('/stores/') && !r.from.includes('/stores/'),
-    )
-  const storeDirOf = p => {
-    const parts = p.split('/')
-    return parts.slice(0, parts.lastIndexOf('stores') + 2).join('/')
-  }
-  /**
-   * Every store directory currently under a `stores/` parent — i.e. every
-   * `**\/stores/<name>/index.ts`, which is exactly how the task brief counted the
-   * 91 pre-existing stores. (Not every store has an `actions/` folder, so requiring
-   * one here would under-count the convention by ~24 and make the "is it the
-   * majority?" assertion measure something else.)
-   */
-  function storeDirsInTree(root, underStores = false, acc = []) {
-    for (const e of fs.readdirSync(root, { withFileTypes: true })) {
-      if (!e.isDirectory() || ['node_modules', 'dist', 'build', '.git'].includes(e.name)) continue
-      const full = path.join(root, e.name)
-      const inside = underStores || e.name === 'stores'
-      if (underStores && fs.existsSync(path.join(full, 'index.ts'))) acc.push(full)
-      storeDirsInTree(full, inside, acc)
-    }
-    return acc
-  }
-
-  // TEST-6 [acceptance] [invariant: INV-4]
-  test('TEST-6: the stores MOVED (git renames) — history follows the files', () => {
-    const { available, renames, addedOrDeleted } = branchRenames()
-    const storeRenames = storeRenamesOf(renames)
-
-    if (!available || storeRenames.length === 0) {
-      // Post-merge (or no base ref): the diff this assertion is ABOUT no longer
-      // exists. Assert the durable consequence instead — every store the move
-      // produced is still a well-formed store under a `stores/` parent — so the test
-      // stays meaningful without going red on main. See branchRenames()'s note.
-      const dirs = storeDirsInTree(path.join(UI, 'src'))
-      assert.ok(dirs.length >= 110, `expected the relocated stores to still be present, found ${dirs.length}`)
-      for (const d of dirs) {
-        assert.ok(
-          path.relative(path.join(UI, 'src'), d).split(path.sep).includes('stores'),
-          `${d} is not under a stores/ ancestor`,
-        )
-        assert.ok(fs.existsSync(path.join(d, 'index.ts')), `${d} is not a store`)
-      }
-      return
-    }
-
-    // Each rename must be exactly "insert /stores before the last directory segment".
-    for (const r of storeRenames) {
-      const parts = r.to.split('/')
-      const i = parts.lastIndexOf('stores')
-      assert.equal(r.from, [...parts.slice(0, i), ...parts.slice(i + 1)].join('/'), `unexpected rename shape: ${r.from} -> ${r.to}`)
-    }
-
-    // A copy-then-delete would show up as A/D pairs instead of R. Nothing under the
-    // web app's src/ is added or deleted by this branch — every path change is a move.
-    const srcAD = addedOrDeleted.filter(x => x.file.startsWith('src-app/ui/src/'))
-    assert.deepEqual(srcAD, [], `src-app/ui/src must contain only renames, saw: ${JSON.stringify(srcAD)}`)
-
-    assert.equal(
-      new Set(storeRenames.map(r => storeDirOf(r.to))).size,
-      24,
-      'expected 24 relocated store directories',
-    )
-  })
-
-  // TEST-7 [acceptance] [invariant: INV-7]
-  test('TEST-7: every relocated store joined the existing `stores/` convention', () => {
-    const { available, renames } = branchRenames()
-    const relocated = new Set(storeRenamesOf(renames).map(r => path.join(REPO, storeDirOf(r.to))))
-
-    // Durable half — true on the branch AND on main. Every store directory in the
-    // web tree lives under a `stores/` ancestor (not a bespoke suffix) and is a real
-    // store. A handful nest one level deeper (`stores/llmModelDrawers/<name>/`),
-    // which is why this asserts an ANCESTOR rather than an immediate parent; the
-    // stricter immediate-parent check applies to the dirs this branch moved, below.
-    const dirs = storeDirsInTree(path.join(UI, 'src'))
-    assert.ok(dirs.length >= 110, `expected the stores/ convention to be populated, found ${dirs.length}`)
-    let coLocated = 0
-    for (const abs of dirs) {
-      assert.ok(
-        path.relative(path.join(UI, 'src'), abs).split(path.sep).includes('stores'),
-        `${abs} is not under a stores/ ancestor`,
-      )
-      const storeName = path.basename(abs)
-      const componentDir = path.dirname(path.dirname(abs))
-      const pascal = storeName[0].toUpperCase() + storeName.slice(1)
-      if (fs.readdirSync(componentDir).some(n => n.toLowerCase() === `${storeName.toLowerCase()}.tsx` || n === `${pascal}.tsx`))
-        coLocated++
-    }
-
-    if (!available || relocated.size === 0) {
-      // Post-merge: nothing to attribute to this diff. The assertions above already
-      // hold, and are the property that actually matters going forward.
-      assert.ok(coLocated > 0, 'expected at least some stores to sit beside their component')
-      return
-    }
-
-    // Branch half — every store THIS branch moved kept its component sibling, which
-    // is what makes this the minimal move rather than a re-architecture.
-    assert.equal(relocated.size, 24)
-    for (const abs of relocated) {
-      assert.equal(
-        path.basename(path.dirname(abs)),
-        'stores',
-        `${path.relative(REPO, abs)} is not under a parent literally named stores/`,
-      )
-      const storeName = path.basename(abs)
-      const componentDir = path.dirname(path.dirname(abs))
-      const pascal = storeName[0].toUpperCase() + storeName.slice(1)
-      assert.ok(
-        fs.readdirSync(componentDir).some(n => n.toLowerCase() === `${storeName.toLowerCase()}.tsx` || n === `${pascal}.tsx`),
-        `${path.relative(REPO, abs)} lost co-location: no component matching ${pascal}.tsx`,
-      )
-    }
-
-    // The convention it joined must be the pre-existing majority, not one this branch
-    // invented — so count the stores that were ALREADY there, excluding its own 24.
-    const preExisting = dirs.filter(d => !relocated.has(d)).length
-    assert.ok(
-      preExisting >= 90,
-      `expected the **/stores/<name>/ convention to pre-date this branch, counted only ${preExisting} pre-existing`,
-    )
-  })
 })

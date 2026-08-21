@@ -138,6 +138,5 @@ All three are in `HUMAN_FEEDBACK.md` and go in the PR body.
 - `node scripts/lint-case-collisions.mjs` — 0 findings across 11 roots / 728 dirs; **25**
   findings when aimed at the unfixed parent clone
 
-**New confirmed findings:** PENDING — round 2 (blind, over THIS round's diff) has not
-run yet. This number is written only after it does; anything else here would be a
-number I made up.
+**New confirmed findings:** 20 — round 2 (blind, over THIS round's diff) found them,
+and three were MEDIUM+ defects in round 1's own fixes. See `FIX_ROUND-2.md`.
