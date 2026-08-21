@@ -27,6 +27,9 @@ import { openGallery } from './_gallery'
  * `src-app/ui/src`. Enumerated explicitly: this list IS the claim under test, so
  * deriving it from the filesystem at runtime would make the spec agree with
  * whatever the tree happens to contain.
+ *
+ * These double as dev-server URLs: `vite.config.ts` sets `root: 'src'`, so
+ * `src/modules/x` is served at `/modules/x` (NOT `/src/modules/x` — that 404s).
  */
 const RELOCATED_STORES = [
   'modules/hub/modules/llm-models/components/stores/modelDetailsDrawer',
@@ -62,6 +65,16 @@ const RELOCATED_STORES = [
  *
  * The other 10 relocated stores back pages/widgets rather than overlays; they are
  * covered by clause 1 above and by the gallery runtime-health pass in `gate:ui`.
+ *
+ * `overlay-hub-model-details-drawer` and `overlay-hub-mcp-details-drawer` are
+ * deliberately EXCLUDED. Their gallery entries render the component with **no
+ * props** (`component: lazyNamed(() => import('…/ModelDetailsDrawer'), …)`), and
+ * both components begin `if (!model) return null` / `if (!server) return null` —
+ * so nothing mounts no matter what the store says. That is a pre-existing gallery
+ * defect (contrast the sibling `overlay-hub-assistant-details-drawer`, which passes
+ * `{ open: true, onClose, assistant }` explicitly); neither component file is
+ * touched by this branch. Fixing those entries is out of scope here. Both stores
+ * are still covered by clause 1.
  */
 const OVERLAY_SLUGS = [
   'overlay-create-user-drawer',
@@ -76,8 +89,6 @@ const OVERLAY_SLUGS = [
   'overlay-group-mcp-servers-assignment',
   'overlay-group-skills-assignment',
   'overlay-group-workflows-assignment',
-  'overlay-hub-model-details-drawer',
-  'overlay-hub-mcp-details-drawer',
 ] as const
 
 /**
@@ -86,7 +97,7 @@ const OVERLAY_SLUGS = [
  * runtime path (the gallery's Vite dev server resolves it) instead of trying to
  * resolve `/src/…` against the tsconfig at compile time.
  */
-const CONTROL_COMPONENT = '/src/modules/user/components/user/EditUserDrawer.tsx'
+const CONTROL_COMPONENT = '/modules/user/components/user/EditUserDrawer.tsx'
 
 test.describe('store case-collision fix', () => {
   test('every relocated store path resolves to the STORE module, not its component', async ({
@@ -98,9 +109,7 @@ test.describe('store case-collision fix', () => {
       const out: { path: string; ok: boolean; exports: string[]; kind: string; error?: string }[] = []
       for (const p of paths) {
         try {
-          const mod: Record<string, unknown> = await import(
-            /* @vite-ignore */ `/src/${p}/index.ts`
-          )
+          const mod: Record<string, unknown> = await import(/* @vite-ignore */ `/${p}/index.ts`)
           const name = p.split('/').pop() as string
           const pascal = name[0].toUpperCase() + name.slice(1)
           out.push({
