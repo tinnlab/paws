@@ -8,13 +8,17 @@
  * prove the claim — a grep only finds the specifiers it was told to look for.
  *
  * Exit code alone is NOT sufficient evidence, and this file does not rely on it. A
- * `tsconfig` whose `include` was narrowed (or whose `files` is `[]`) type-checks
- * nothing and exits 0 just as happily as a clean full compile — verified: replacing
- * `src-app/ui/tsconfig.json` with `{"compilerOptions":{"noEmit":true},"files":[]}`
- * left an exit-code-only version of this test green. So each workspace is asserted
- * three ways: it exits 0, `--listFilesOnly` shows it really pulled in thousands of
- * files, and that file list contains named relocated stores plus their sibling
- * components.
+ * `tsconfig` whose `include` was NARROWED type-checks almost nothing and exits 0 just
+ * as happily as a clean full compile. So each workspace is asserted three ways: it
+ * exits 0, `--listFilesOnly` shows it really pulled in thousands of files, and that
+ * file list contains relocated stores plus their sibling components.
+ *
+ * (An earlier version of this paragraph cited `{"compilerOptions":{"noEmit":true},
+ * "files":[]}` as the verified demonstration. That specific config does NOT reproduce
+ * it — tsc rejects an empty `files` list outright with `TS18002`, exit 2. A narrowed
+ * `include` is the shape that really slips through. The claim was corrected rather
+ * than deleted, because a header citing a check that does not reproduce is exactly the
+ * kind of false assurance this file exists to remove.)
  *
  * NOT chained into `npm run check`, after being chained and then un-chained again —
  * the reasoning changed twice, so here is the settled version. It was excluded first

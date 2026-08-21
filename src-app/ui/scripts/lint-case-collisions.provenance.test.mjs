@@ -19,11 +19,20 @@
  *      clone, a squash) turned that into a script that can never pass again on main —
  *      a named, documented runner that is red forever.
  *
- * `git log --follow` fixes both, because a rename is recorded in history permanently.
- * Asking "does this file's history cross a rename from the pre-`stores/` path?" is
- * true on the branch, still true on main a year later, and false exactly when the
- * files were copied-and-deleted instead of moved. No base ref, no diff, no count of
- * one particular branch's work.
+ * `git log --follow` fixes both, because the relocation is visible in history
+ * permanently: "does this file's history cross a rename from the pre-`stores/` path?"
+ * is true on the branch and still true on main a year later. No base ref, no diff, no
+ * count of one particular branch's work.
+ *
+ * WHAT THIS CANNOT PROVE, stated because an earlier header claimed otherwise: it does
+ * NOT distinguish `git mv` from a same-commit `cp` + `rm`. Git stores snapshots, not
+ * renames — `--follow` DETECTS a rename from content similarity at query time, so both
+ * routes produce byte-identical history. Two auditors demonstrated this by relocating a
+ * tree with `cp -r` + `rm -rf` and never invoking `git mv`: `--follow` still reports
+ * `R100`. So the mechanism half of INV-4 is not machine-checkable at all. What IS
+ * checkable is the design's actual purpose clause — "so history follows the files" —
+ * and that is exactly what is asserted below. A test that cannot fail for the reason
+ * its message states is worse than one that admits its scope.
  *
  * Not chained into `npm run check`: it shells out to `git log --follow` once per
  * sampled store and depends on history being present, which a CI checkout may
@@ -64,62 +73,93 @@ function relocatedCandidates(root, acc = []) {
   return acc
 }
 
-/** Renames in a file's own history, oldest-path first. [] when history is unavailable. */
-function renameHistory(fileAbs) {
+/**
+ * Renames in a file's own history, plus whether the file has ANY history at all.
+ *
+ * The two are separate questions and conflating them mis-diagnoses a shallow clone: a
+ * `--depth 1` checkout exits **0 with empty output**, so a `status !== 0` check never
+ * fires and the caller blamed a copy that never happened. `commits` is what tells the
+ * two apart.
+ */
+function history(fileAbs) {
   const rel = path.relative(REPO, fileAbs)
-  const r = spawnSync(
-    'git',
-    ['-C', REPO, 'log', '--follow', '--diff-filter=R', '--name-status', '--format=', '--', rel],
-    { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 },
-  )
-  if (r.status !== 0) return null
-  return r.stdout
-    .split('\n')
-    .filter(l => l.startsWith('R'))
-    .map(l => {
-      const c = l.split('\t')
-      return { from: c[1], to: c[2] }
-    })
+  const run = args => spawnSync('git', ['-C', REPO, ...args], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 })
+
+  const log = run(['log', '--follow', '--diff-filter=R', '--name-status', '--format=', '--', rel])
+  if (log.status !== 0) return { available: false, renames: [], commits: 0 }
+
+  const commits = run(['log', '--follow', '--format=%H', '--', rel])
+  const depth = commits.status === 0 ? commits.stdout.split('\n').filter(Boolean).length : 0
+
+  return {
+    available: true,
+    commits: depth,
+    renames: log.stdout
+      .split('\n')
+      .filter(l => l.startsWith('R'))
+      .map(l => {
+        const c = l.split('\t')
+        return { from: c[1], to: c[2] }
+      }),
+  }
 }
 
 describe('case-collision fix — provenance', () => {
   // TEST-6 [acceptance] [invariant: INV-4]
   test('TEST-6: the relocated stores MOVED — their history crosses the rename', () => {
     const candidates = relocatedCandidates(UI_SRC)
-    assert.ok(candidates.length >= 20, `expected the relocated stores to be present, found ${candidates.length}`)
+    assert.ok(candidates.length > 0, `expected store directories under a stores/ parent, found ${candidates.length}`)
 
-    // Sample rather than shell out ~120 times; `--follow` is the expensive call here.
-    // Any store whose index.ts was COPIED instead of moved has no rename in its
-    // history, so a sample of this size cannot miss a wholesale copy-then-delete.
-    const sample = candidates.slice(0, 8)
-    let checked = 0
-    for (const { dir } of sample) {
+    // ALL of them, not a sample. `--follow` over 24 stores costs ~4 s in a suite that
+    // is manual and phase-8-only; an earlier `slice(0, 8)` saved 2.7 s and bought a
+    // readdir-ORDER dependency — which 8 got checked shifted whenever an unrelated
+    // directory was added.
+    let relocated = 0
+    let noHistory = 0
+    for (const { dir } of candidates) {
       const index = path.join(dir, 'index.ts')
-      const renames = renameHistory(index)
-      if (renames === null) {
-        // No git, or no history for this path (shallow clone). Say so and stop —
-        // reporting a green here would certify INV-4 against nothing.
-        assert.fail(
-          `TEST-6 cannot read history for ${path.relative(REPO, index)} — \`git log --follow\` failed. This test certifies that the stores MOVED; it refuses to report a pass it did not earn. Run it in a full (non-shallow) clone.`,
-        )
-      }
-      // The rename that matters: from the SAME path without the `/stores` segment.
       const rel = path.relative(REPO, index)
+      const h = history(index)
+
+      // No git at all, or a shallow clone that truncated this path's history. NOT a
+      // finding about the code — say which it is instead of blaming a copy that never
+      // happened, which is what a `status !== 0`-only check did (a `--depth 1` clone
+      // exits 0 with empty output, so that branch never fired).
+      if (!h.available || h.commits === 0) {
+        noHistory++
+        continue
+      }
+
       const preMove = rel.replace(/\/stores\/([^/]+)\/index\.ts$/, '/$1/index.ts')
-      const crossed = renames.some(r => r.from === preMove && r.to === rel)
-      assert.ok(
-        crossed,
-        `${rel} has no rename from ${preMove} in its history — it was copied, not moved (renames seen: ${JSON.stringify(renames)})`,
-      )
-      checked++
+      const crossed = h.renames.some(r => r.from === preMove && r.to === rel)
+      if (crossed) {
+        relocated++
+        continue
+      }
+      // A store with history but NO relocation rename is a legitimately NEW store,
+      // created in place under `stores/` — not evidence of anything wrong. Asserting
+      // on every candidate made this test fail the first time anyone ADDED a store,
+      // which is the same "permanent gate carrying a one-time claim" defect twice
+      // removed. What must hold is the shape of the renames that DO exist.
+      for (const r of h.renames)
+        if (r.to === rel && r.from.replace('/stores/', '/') === rel.replace('/stores/', '/'))
+          assert.equal(r.from, preMove, `${rel} moved from an unexpected path: ${r.from}`)
     }
-    assert.equal(checked, sample.length)
+
+    assert.ok(
+      noHistory < candidates.length,
+      `TEST-6 could read history for NONE of the ${candidates.length} stores — \`git log --follow\` is unavailable or this is a shallow clone. This test certifies that the stores' history follows them; it refuses to report a pass it did not earn. Run it in a full clone.`,
+    )
+    assert.ok(
+      relocated > 0,
+      `no store directory shows a rename from its pre-\`stores/\` path — the relocation is absent from history (checked ${candidates.length}, ${noHistory} without history)`,
+    )
   })
 
   // TEST-7 [acceptance] [invariant: INV-7]
   test('TEST-7: every relocated store sits under a `stores/` parent beside its component', () => {
     const candidates = relocatedCandidates(UI_SRC)
-    assert.ok(candidates.length >= 20, `expected relocated stores, found ${candidates.length}`)
+    assert.ok(candidates.length > 0, `expected store directories under a stores/ parent, found ${candidates.length}`)
 
     for (const { dir, component } of candidates) {
       // Under a parent literally named `stores` — the existing convention, not a

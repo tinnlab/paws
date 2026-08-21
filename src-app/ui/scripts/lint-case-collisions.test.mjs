@@ -172,10 +172,22 @@ describe('lint-case-collisions', () => {
     )
     assert.equal(scannedFrom(r.stdout), expectedTotal, 'reported total does not match the tree')
 
-    // Anti-vacuity, part 2: the contracted set includes the sdk packages both tsconfigs
-    // compile through `@ziee/*`. (No numeric floors on the app trees — the exact
-    // recount above already subsumes them, and a floor is the drifting-threshold shape
-    // this file complains about elsewhere.)
+    // Anti-vacuity, part 2: the trees are REAL, not merely agreed-upon.
+    //
+    // These floors were briefly deleted on the reasoning that the exact recount above
+    // subsumes them. It does not, and an auditor falsified that by construction: the
+    // recount proves the guard AGREES WITH an independent walk, which stays true on a
+    // degenerate tree where both sides walk almost nothing. A layout with the right
+    // root structure but 3 entries under `src-app/ui/src` passed the recount and would
+    // have passed this test — precisely the "scanned nothing, reported clean" class the
+    // file exists to prevent. Actual values are ~2830 and ~205, so the margin is large
+    // and these are not drifting thresholds.
+    assert.ok(
+      reported[path.relative(REPO, path.join(UI, 'src'))] > 2000,
+      'the web src tree is implausibly small — the recount agrees, but with almost nothing',
+    )
+    assert.ok(reported[path.relative(REPO, path.join(DESKTOP_UI, 'src'))] > 100)
+    // …and the contracted set includes the sdk packages both tsconfigs compile via `@ziee/*`.
     assert.ok(Object.keys(reported).some(k => k.startsWith('sdk/packages/')))
     // The owned trees must be BLOCKING, not advisory — otherwise a real collision in
     // them would print and exit 0.
@@ -444,6 +456,33 @@ describe('lint-case-collisions', () => {
     }
   })
 
+  // TEST-16 — the gate's own `tsc` step must compile a REAL program.
+  //
+  // Un-chaining the tsc oracle removed one thing worth keeping: nothing in either
+  // `check` chain would notice a `tsconfig` narrowed to compile almost nothing, after
+  // which the chain's leading `tsc` exits 0 having type-checked nearly no files. This
+  // restores exactly that leg, `ui`-only (so it does not re-introduce the cross-workspace
+  // coupling) and via `--listFilesOnly`, which does no type-checking and costs ~2 s
+  // rather than the ~47 s of a second full compile.
+  test('TEST-16: `ui`\'s tsconfig program is non-empty and includes the relocated stores', () => {
+    const tsc = path.resolve(REPO, 'node_modules/typescript/bin/tsc')
+    assert.ok(fs.existsSync(tsc), `hoisted typescript not found at ${tsc}`)
+    const r = spawnSync(process.execPath, [tsc, '-p', 'tsconfig.json', '--noEmit', '--listFilesOnly'], {
+      cwd: UI,
+      encoding: 'utf8',
+      maxBuffer: 128 * 1024 * 1024,
+    })
+    assert.equal(r.status, 0, `tsc --listFilesOnly failed:\n${r.stdout}${r.stderr}`)
+    const files = r.stdout.split('\n').map(s => s.trim()).filter(Boolean)
+    assert.ok(files.length > 1000, `ui compiles only ${files.length} files — its tsconfig no longer covers the app`)
+    // …and the program contains a relocated store beside its component, discovered
+    // from the tree rather than hardcoded to this branch's filenames.
+    const joined = files.join('\n')
+    const anyStore = files.find(f => /\/stores\/[^/]+\/index\.ts$/.test(f) && f.includes(path.join(UI, 'src')))
+    assert.ok(anyStore, 'no relocated store is in the compile surface')
+    assert.ok(joined.includes(path.dirname(path.dirname(path.dirname(anyStore)))))
+  })
+
   // TEST-12 — the durable half of the convention claim.
   //
   // Scope note, arrived at by being wrong twice. This started as a count (`>= 110`),
@@ -473,20 +512,34 @@ describe('lint-case-collisions', () => {
     }
     walk(path.join(UI, 'src'), false)
     walk(path.join(DESKTOP_UI, 'src'), false)
-    assert.ok(stores.length > 0, 'expected stores under a `stores/` ancestor')
+    // A population anchor, restored after being deleted. The per-store assertion below
+    // is the meaningful check, but on its own it is satisfied by a tree containing ONE
+    // store — an auditor demonstrated exactly that, deleting 23 of the 24 and watching
+    // this test stay green. Removing the ratio was right; removing the reality anchor
+    // with it was not. They are independent properties.
+    assert.ok(stores.length > 100, `expected the stores/ convention to be populated, found ${stores.length}`)
 
+    let defining = 0
     for (const dir of stores) {
+      // Open it. Without this the test never reads a single file, so every
+      // `stores/*/index.ts` in the tree could be empty and it would still pass.
+      const index = fs.readFileSync(path.join(dir, 'index.ts'), 'utf8')
+      if (/defineStore|defineLocalStore|registerLazyStore/.test(index)) defining++
+
       // Its directory name must not collide with any sibling — the property the whole
-      // branch exists to establish, asserted PER STORE rather than as a population
-      // statistic, so a regression names the store instead of moving a count. (No
-      // "how many" assertion here at all: every count this test has carried has been
-      // either satisfiable while the convention was violated, or a threshold that
-      // would go red for an unrelated consolidation.)
+      // branch exists to establish, asserted PER STORE, so a regression names the store
+      // instead of moving a count. (What is deliberately NOT here is a RATIO of
+      // inside-vs-outside `stores/`: that was satisfiable with all 24 stores moved back
+      // out, so it measured nothing about placement.)
       const name = path.basename(dir)
       for (const sib of fs.readdirSync(path.dirname(dir)))
         if (sib !== name && sib.toLowerCase() === name.toLowerCase())
           assert.fail(`${path.relative(REPO, dir)} collides with sibling ${sib}`)
     }
+    assert.ok(
+      defining > 100,
+      `most dirs under a stores/ ancestor should DEFINE a store; only ${defining} of ${stores.length} do`,
+    )
   })
 
   // TEST-3 [acceptance] [invariant: INV-5]
@@ -505,19 +558,14 @@ describe('lint-case-collisions', () => {
     // Registered but never chained is the failure this half catches.
     assert.match(uiPkg.scripts.check, /npm run check:case-collisions\b/)
     assert.match(dtPkg.scripts.check, /npm run check:case-collisions\b/)
-    assert.match(uiPkg.scripts.check, /npm run test:case-collisions\b/)
+    // `\b` would let `test:case-collisions:resolution` satisfy a check for the BASE
+    // suite (the boundary matches before the colon), so dropping the base suite from
+    // the chain would go unnoticed. Anchor on the following space or end-of-string.
+    assert.match(uiPkg.scripts.check, /npm run test:case-collisions(?=\s|$)/)
     assert.match(
       uiPkg.scripts.check,
-      /npm run test:case-collisions:resolution\b/,
+      /npm run test:case-collisions:resolution(?=\s|$)/,
       'the behavioural resolution oracle is the general check — it must run in the gate, not sit unreachable',
-    )
-    // The tsc oracle is deliberately NOT chained: it compiles BOTH workspaces, so
-    // running it from `ui`'s gate makes a desktop type error fail `ui`'s check with a
-    // case-collision message. It has a runner and is executed at phase 8.
-    assert.doesNotMatch(
-      uiPkg.scripts.check,
-      /npm run test:case-collisions:tsc\b/,
-      "`ui`'s gate must not type-check the desktop workspace and report it as a case-collision failure",
     )
 
     // One harness, not several.
@@ -538,9 +586,9 @@ describe('lint-case-collisions', () => {
       'the behavioural resolution oracle must have a named runner, or it is dead code',
     )
 
-    // The provenance suite asserts facts about THIS branch's diff, so it must have a
-    // runner but must NOT be chained: on any later branch that relocates a store, its
-    // "exactly 24" claim would fail `npm run check` for a change it knows nothing about.
+    // The provenance suite reads git history, which a CI checkout may legitimately
+    // shallow away, so it must have a runner but must NOT be chained — a gate that
+    // depends on history depth fails for reasons unrelated to the code.
     assert.equal(
       uiPkg.scripts['test:case-collisions:provenance'],
       'node --test scripts/lint-case-collisions.provenance.test.mjs',
@@ -564,7 +612,17 @@ describe('lint-case-collisions', () => {
       assert.doesNotMatch(
         chain,
         /test:case-collisions:provenance|lint-case-collisions\.provenance\.test\.mjs/,
-        `${label}: the provenance suite must NOT be reachable from \`check\` — it is a one-time claim about one diff, and would fail for any later branch that relocates a store`,
+        `${label}: the provenance suite must NOT be reachable from \`check\` — it depends on git history depth, so it would fail for reasons unrelated to the code`,
+      )
+      // Same treatment for the tsc oracle, which was previously a naive string check
+      // while the provenance exclusion five lines up got a transitive walk — the same
+      // bypass, two different standards. It compiles BOTH workspaces, so running it
+      // from `ui`'s gate makes a DESKTOP type error fail `ui`'s check with a
+      // case-collision message.
+      assert.doesNotMatch(
+        chain,
+        /test:case-collisions:tsc|lint-case-collisions\.tsc\.test\.mjs/,
+        `${label}: the tsc oracle must NOT be reachable from \`check\` — one workspace's gate must not type-check the other and mislabel the failure`,
       )
     }
 

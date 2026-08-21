@@ -239,10 +239,13 @@ test.describe('store case-collision fix', () => {
           .catch(() => false)
       }
       const deadline = Date.now() + retryMs
-      do {
+      for (;;) {
         if (((await dialog.textContent().catch(() => '')) ?? '').includes(marker.text as string)) return true
-      } while (Date.now() < deadline)
-      return false
+        if (Date.now() >= deadline) return false
+        // Sleep between polls: a bare loop is a busy-wait that fires thousands of CDP
+        // round-trips per second of retry.
+        await page.waitForTimeout(100)
+      }
     }
 
     const crossMatches: string[] = []

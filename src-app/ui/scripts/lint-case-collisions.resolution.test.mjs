@@ -26,11 +26,24 @@
  * That shape is rule 3 of `lint-case-collisions.mjs`, which does catch it. The two
  * checks are complements, not one subsuming the other.
  *
- * It IS chained into `npm run check`. An earlier header claimed it was excluded because
- * it "takes ~10-20 s" — measured, it takes **0.26 s**, so that reason was simply false,
- * and it left the most general oracle in the set reachable by no runner at all (dead
- * code, CODING_GUIDELINES §15). It replaced a 47 s duplicate `tsc` pass in the same
- * chain, so the gate got both cheaper and more general.
+ * It IS chained into `npm run check`. An earlier header justified excluding it on a
+ * cost of "~10-20 s"; measured, it is **0.29 s**, so the stated reason was simply
+ * wrong. (That header also called it "dead code, §15" — it was not: it already had a
+ * named runner. The §15 argument was overreach; the real argument is just that the
+ * general oracle belongs in the gate.) It replaced a 47 s duplicate `tsc` pass in the
+ * same chain, so the gate got both cheaper and more general.
+ *
+ * KNOWN LIMITS, so no other file's header leans on a promise this one does not keep:
+ *   - only the FINAL path segment is case-folded, so a mis-cased intermediate
+ *     directory (`./Stores/foo`) is invisible here. `tsc` catches that one — it is
+ *     unresolvable on Linux — and `tsc` is `check`'s first step.
+ *   - the three desktop tiers are applied to specifiers in DESKTOP-tree files. In the
+ *     desktop build the plugin is not importer-scoped, so a core-tree file's `@/x` is
+ *     also tiered; modelling that adds no findings today (verified: 0 divergences
+ *     either way) and is left out to keep the model small.
+ *   - tier 2 is modelled through the full probe chain, where the real
+ *     `probeDesktopInfix` only tries `<rel>.desktop.<ext>`. Strictly broader, so it can
+ *     only over-report, and there are zero `*.desktop` paths in either tree.
  *
  * Run:  npm run test:case-collisions:resolution   (~0.3 s)
  */
@@ -113,10 +126,11 @@ const isDirAs = p => {
 const JS_TO_TS = { '.js': ['.ts', '.tsx', '.d.ts'], '.jsx': ['.tsx'], '.mjs': ['.mts'], '.cjs': ['.cts'] }
 
 function resolve(base, insensitive) {
-  for (const ext of ['', ...PROBE_EXTS]) {
-    const hit = statAs(base + ext, insensitive)
-    if (hit && !isDirAs(hit)) return hit
-  }
+  // The substitution runs BEFORE the literal probe, because that is tsc's order —
+  // `--traceResolution` shows `has a '.js' extension - stripping it` and then resolving
+  // `foo.ts`, WITHOUT ever stat-ing `foo.js`. Running it after produced a divergence no
+  // real resolver can (`./foo.js` with `Foo.js` + `foo.ts` present: tsc picks `foo.ts`
+  // under both regimes; the after-order model reported `foo.ts` vs `Foo.js`).
   for (const [js, tsExts] of Object.entries(JS_TO_TS)) {
     if (!base.toLowerCase().endsWith(js)) continue
     const stem = base.slice(0, -js.length)
@@ -124,6 +138,10 @@ function resolve(base, insensitive) {
       const hit = statAs(stem + ts, insensitive)
       if (hit && !isDirAs(hit)) return hit
     }
+  }
+  for (const ext of ['', ...PROBE_EXTS]) {
+    const hit = statAs(base + ext, insensitive)
+    if (hit && !isDirAs(hit)) return hit
   }
   for (const idx of INDEX_EXTS) {
     const hit = statAs(path.join(base, idx), insensitive)
@@ -264,7 +282,42 @@ describe('case-collision fix — resolution behaviour', () => {
     )
   })
 
-  test('TEST-14 (control): the simulator reproduces both real bug shapes', () => {
+  test('TEST-14 (control): the specifier model covers what it claims to cover', () => {
+    // Without this, every coverage widening in this file is unpinned. An auditor
+    // reverted each of them in turn — the desktop tiers, the `@ziee/*` aliases, the
+    // side-effect-import pattern, the `.js`→`.ts` substitution — and the main test
+    // stayed GREEN each time, because the anti-vacuity floors have enough headroom to
+    // absorb thousands of dropped specifiers. These assertions make each one load-bearing.
+    const webFile = path.join(UI_SRC, 'modules/x/A.tsx')
+    const desktopFile = path.join(DESKTOP_SRC, 'modules/x/A.tsx')
+
+    // A web file sees ONE base; a desktop file sees the three resolver tiers in order.
+    assert.deepEqual(specifierBases(webFile, '@/modules/y'), [path.join(UI_SRC, 'modules/y')])
+    assert.deepEqual(specifierBases(desktopFile, '@/modules/y'), [
+      path.join(DESKTOP_SRC, 'modules/y'),
+      `${path.join(UI_SRC, 'modules/y')}.desktop`,
+      path.join(UI_SRC, 'modules/y'),
+    ])
+    // Desktop's exact tsconfig keys beat the `@/*` wildcard.
+    assert.deepEqual(specifierBases(desktopFile, '@/api-client/types'), [
+      path.join(DESKTOP_SRC, 'api-client/types'),
+    ])
+    // `@ziee/*` subpaths resolve into real source trees, not node packages.
+    assert.deepEqual(specifierBases(webFile, '@ziee/kit/kit/list'), [
+      path.join(REPO, 'sdk/packages/kit/src/kit/list'),
+    ])
+    assert.deepEqual(specifierBases(webFile, '@ziee/desktop/modules/updater/stores/updater'), [
+      path.join(DESKTOP_SRC, 'modules/updater/stores/updater'),
+    ])
+    // A bare package specifier is still skipped (false-negative only, by design).
+    assert.deepEqual(specifierBases(webFile, 'react'), [])
+
+    // Side-effect imports are matched by the specifier pattern.
+    const found = [...`import './types'\nimport x from './y'\nimport('./z')`.matchAll(SPEC_RE)].map(m => m[1])
+    assert.deepEqual(found, ['./types', './y', './z'])
+  })
+
+  test('TEST-14 (control): the simulator reproduces the real bug shapes', () => {
     // Without this the "0 divergent" result above is unfalsifiable — a simulator whose
     // insensitive branch silently equalled its sensitive one would report 0 forever.
     // These are the two shapes this branch actually fixed, rebuilt in a temp tree.
@@ -307,6 +360,18 @@ describe('case-collision fix — resolution behaviour', () => {
       fs.mkdirSync(path.join(dTier3, 'foo'), { recursive: true })
       fs.writeFileSync(path.join(dTier1, 'Foo.tsx'), 'x\n')
       fs.writeFileSync(path.join(dTier3, 'foo', 'index.ts'), 'y\n')
+      // (d) TS's `.js` → `.ts` substitution. Without it, `./Widget.js` beside
+      //     `Widget.ts` resolves to null under both regimes and any divergence in that
+      //     shape is invisible — a mutation that deleted JS_TO_TS changed nothing
+      //     observable in the main test.
+      fs.mkdirSync(path.join(root, 'e'), { recursive: true })
+      fs.writeFileSync(path.join(root, 'e', 'Widget.ts'), 'x\n')
+      assert.equal(
+        path.basename(resolve(path.join(root, 'e', 'Widget.js'), false)),
+        'Widget.ts',
+        'a `.js` specifier must resolve to its `.ts` source — TS strips the extension before probing',
+      )
+
       const tiers = [path.join(dTier1, 'foo'), path.join(dTier3, 'foo')]
       assert.equal(
         path.basename(resolveTiered(tiers, false)),
