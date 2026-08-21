@@ -218,13 +218,31 @@ test.describe('store case-collision fix', () => {
     // So: open every drawer and cross-check every marker against it. This is the
     // adversarial pairing the loose regexes failed — 8 of 10 cross-pairings passed
     // then; every off-diagonal cell must fail now.
-    const satisfied = async (marker: { testid?: string; text?: string }) => {
+    // The DIAGONAL (a drawer satisfying its own marker) is allowed a short retry: a
+    // marker that renders one tick after the dialog becomes visible would otherwise
+    // fail with a message blaming the marker. The OFF-diagonal deliberately does not
+    // retry — waiting for a marker that should never appear would just cost 12 × 11
+    // timeouts.
+    const satisfied = async (marker: { testid?: string; text?: string }, retryMs = 0) => {
       const dialog = page
         .locator('[role="dialog"]:not([data-testid="gallery-root"] *)')
         .filter({ visible: true })
         .first()
-      if (marker.testid) return await dialog.getByTestId(marker.testid).first().isVisible().catch(() => false)
-      return ((await dialog.textContent().catch(() => '')) ?? '').includes(marker.text as string)
+      if (marker.testid) {
+        if (retryMs === 0)
+          return await dialog.getByTestId(marker.testid).first().isVisible().catch(() => false)
+        return await dialog
+          .getByTestId(marker.testid)
+          .first()
+          .waitFor({ state: 'visible', timeout: retryMs })
+          .then(() => true)
+          .catch(() => false)
+      }
+      const deadline = Date.now() + retryMs
+      do {
+        if (((await dialog.textContent().catch(() => '')) ?? '').includes(marker.text as string)) return true
+      } while (Date.now() < deadline)
+      return false
     }
 
     const crossMatches: string[] = []
@@ -238,8 +256,9 @@ test.describe('store case-collision fix', () => {
         .waitFor({ state: 'visible', timeout: 15_000 })
 
       for (const candidate of OVERLAYS) {
-        const hit = await satisfied(candidate)
-        if (candidate.slug === open.slug) {
+        const isSelf = candidate.slug === open.slug
+        const hit = await satisfied(candidate, isSelf ? 5_000 : 0)
+        if (isSelf) {
           expect(hit, `${open.slug} does not satisfy its OWN marker — the marker is wrong`).toBe(true)
         } else if (hit) {
           crossMatches.push(`${open.slug} also satisfies ${candidate.slug}'s marker`)

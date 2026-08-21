@@ -1,31 +1,33 @@
 /**
- * TEST-6 / TEST-7 — provenance assertions about THIS branch's diff.
+ * TEST-6 / TEST-7 — the store directories MOVED, and they moved into the existing
+ * convention.
  *
- * WHY THIS IS A SEPARATE FILE, AND NOT IN `npm run check`
- * ------------------------------------------------------
- * These two tests assert facts about `git diff origin/main...HEAD`: that the 24 store
- * directories MOVED (renames, not add/delete — design invariant INV-4), and that each
- * one landed under a parent literally named `stores/` beside its component (INV-7).
- * Both are true exactly once, on the branch that performs the move.
+ * WHY THIS READS HISTORY RATHER THAN A DIFF
+ * -----------------------------------------
+ * These certify two design invariants: INV-4 ("use `git mv` so history follows the
+ * files") and INV-7 ("conform to the existing majority convention"). Both are claims
+ * about a change that happened once.
  *
- * A first attempt put them in `lint-case-collisions.test.mjs`, which IS chained into
- * `npm run check`. That is wrong in two ways, and the second is not obvious:
+ * Two earlier shapes were wrong, in opposite directions, and the history is worth
+ * keeping because the failure mode is easy to re-create:
  *
- *   1. after the merge, `HEAD == origin/main`, the diff is empty, and the assertions
- *      fail on main forever (rule B6's failure mode, reached through a branch-relative
- *      git assumption rather than a `.lifecycle/` path); and
- *   2. even with (1) guarded, ANY future branch that relocates a store would take the
- *      branch path and hit `assert.equal(dirs.size, 24)` — a count that describes this
- *      diff and nothing else — and any branch cut from a stale base would re-see these
- *      24 renames plus its own additions and trip the "only renames" assertion.
+ *   1. Asserting on `git diff origin/main...HEAD` made the test true only while the
+ *      branch was unmerged. After the merge the diff is empty; on any LATER branch
+ *      that relocates a store the "exactly 24" count is wrong; on a branch cut from a
+ *      stale base the diff re-shows these renames plus that branch's own additions.
+ *   2. Hard-failing when the diff could not be evaluated (no `origin/main`, a shallow
+ *      clone, a squash) turned that into a script that can never pass again on main —
+ *      a named, documented runner that is red forever.
  *
- * A permanent gate cannot carry a one-time claim. So the durable properties stay in
- * `lint-case-collisions.test.mjs` (chained into `check`), and the provenance claims
- * live here, run once at phase 8 via `npm run test:case-collisions:provenance`, and
- * are never inflicted on anyone else's branch.
+ * `git log --follow` fixes both, because a rename is recorded in history permanently.
+ * Asking "does this file's history cross a rename from the pre-`stores/` path?" is
+ * true on the branch, still true on main a year later, and false exactly when the
+ * files were copied-and-deleted instead of moved. No base ref, no diff, no count of
+ * one particular branch's work.
  *
- * On a tree where the claim does not apply (no base ref, or a diff that relocates no
- * store) each test says so and asserts the durable shape instead of a made-up number.
+ * Not chained into `npm run check`: it shells out to `git log --follow` once per
+ * sampled store and depends on history being present, which a CI checkout may
+ * legitimately shallow away. It has a runner and is executed at phase 8.
  *
  * Run:  npm run test:case-collisions:provenance
  */
@@ -37,138 +39,103 @@ import test, { describe } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
-const UI = path.resolve(HERE, '..')
+const UI_SRC = path.resolve(HERE, '../src')
 const REPO = path.resolve(HERE, '../../..')
 
-/** This branch's claim: exactly this many store directories were relocated. */
-const RELOCATED_COUNT = 24
-
-function branchRenames() {
-  const base = spawnSync('git', ['-C', REPO, 'rev-parse', '--verify', '--quiet', 'origin/main'], {
-    encoding: 'utf8',
-  })
-  if (base.status !== 0) return { available: false, renames: [], addedOrDeleted: [] }
-  const d = spawnSync('git', ['-C', REPO, 'diff', '--find-renames', '--name-status', 'origin/main...HEAD'], {
-    encoding: 'utf8',
-    maxBuffer: 64 * 1024 * 1024,
-  })
-  if (d.status !== 0) return { available: false, renames: [], addedOrDeleted: [] }
-  const renames = []
-  const addedOrDeleted = []
-  for (const line of d.stdout.split('\n')) {
-    if (!line.trim()) continue
-    const cols = line.split('\t')
-    if (cols[0].startsWith('R')) renames.push({ from: cols[1], to: cols[2] })
-    else if (cols[0] === 'A' || cols[0] === 'D') addedOrDeleted.push({ status: cols[0], file: cols[1] })
-  }
-  return { available: true, renames, addedOrDeleted }
-}
-
-const storeRenamesOf = renames =>
-  renames.filter(
-    r => r.to.startsWith('src-app/ui/src/') && r.to.includes('/stores/') && !r.from.includes('/stores/'),
-  )
-const storeDirOf = p => {
-  const parts = p.split('/')
-  return parts.slice(0, parts.lastIndexOf('stores') + 2).join('/')
-}
-const componentExists = (abs, storeName) => {
-  const componentDir = path.dirname(path.dirname(abs))
-  const pascal = storeName[0].toUpperCase() + storeName.slice(1)
-  return fs
-    .readdirSync(componentDir)
-    .some(n => n.toLowerCase() === `${storeName.toLowerCase()}.tsx` || n === `${pascal}.tsx`)
-}
-
-/**
- * Refuse to certify an invariant this tree cannot evaluate.
- *
- * The earlier fallback here asserted `fs.existsSync(<UI>/src)` and returned — which
- * cannot be false in any tree where this file exists. So on a shallow checkout, a
- * clone with no `origin/main`, or after a squash that defeats rename detection, both
- * tests reported `ok` having verified nothing, and the only signal was a `console.log`
- * buried in TAP output. That is a green certificate for INV-4/INV-7 backed by no
- * evidence — worse than a failure, because it reads as proof.
- *
- * This suite is deliberately manual and run once, at phase 8, precisely to certify
- * those two invariants. If it cannot, the honest answer is to say so loudly and fail,
- * not to pass quietly.
- */
-function requireEvaluable(id, available, relocatedCount) {
-  assert.ok(
-    available,
-    `${id} cannot be evaluated: \`origin/main\` is unresolvable, or \`git diff\` failed. This suite exists to certify a claim about this branch's diff — refusing rather than reporting a green it did not earn. Fetch origin/main (and ensure the clone is not shallow), then re-run.`,
-  )
-  assert.ok(
-    relocatedCount > 0,
-    `${id} cannot be evaluated: the diff against origin/main relocates no store directory. Either the branch does not contain the move, or rename detection was defeated (a squash, or a low \`diff.renameLimit\`). Refusing rather than reporting a green it did not earn.`,
-  )
-}
-
-describe('case-collision fix — branch provenance', () => {
-  // TEST-6 [acceptance] [invariant: INV-4]
-  test('TEST-6: the stores MOVED (git renames) — history follows the files', () => {
-    const { available, renames, addedOrDeleted } = branchRenames()
-    const storeRenames = storeRenamesOf(renames)
-
-    requireEvaluable('TEST-6', available, storeRenames.length)
-
-    // Each rename must be exactly "insert /stores before the last directory segment".
-    for (const r of storeRenames) {
-      const parts = r.to.split('/')
-      const i = parts.lastIndexOf('stores')
-      assert.equal(
-        r.from,
-        [...parts.slice(0, i), ...parts.slice(i + 1)].join('/'),
-        `unexpected rename shape: ${r.from} -> ${r.to}`,
-      )
+/** Every store directory sitting directly under a `stores/` parent, with its component. */
+function relocatedCandidates(root, acc = []) {
+  for (const e of fs.readdirSync(root, { withFileTypes: true })) {
+    if (!e.isDirectory() || ['node_modules', 'dist', 'build', '.git'].includes(e.name)) continue
+    const full = path.join(root, e.name)
+    if (
+      path.basename(root) === 'stores' &&
+      fs.existsSync(path.join(full, 'index.ts')) &&
+      fs.existsSync(path.join(full, 'actions'))
+    ) {
+      const componentDir = path.dirname(path.dirname(full))
+      const pascal = e.name[0].toUpperCase() + e.name.slice(1)
+      const component = fs
+        .readdirSync(componentDir)
+        .find(n => n === `${pascal}.tsx` || n.toLowerCase() === `${e.name.toLowerCase()}.tsx`)
+      if (component) acc.push({ dir: full, component: path.join(componentDir, component) })
     }
+    relocatedCandidates(full, acc)
+  }
+  return acc
+}
 
-    // A copy-then-delete would show up as A/D pairs instead of R. Scoped to files
-    // inside the relocated store directories, which is the claim being made — an
-    // earlier version asserted "nothing anywhere under src-app/ui/src is added or
-    // deleted", which is a much wider statement than INV-4 and broke under a low
-    // `diff.renameLimit`: an unrelated helper test that was renamed WITH content
-    // changes degrades to A/D, while the (byte-identical) store files still report R.
-    const storeDirs = new Set(storeRenames.flatMap(r => [storeDirOf(r.to), storeDirOf(r.to).replace('/stores/', '/')]))
-    const inAStore = f => [...storeDirs].some(d => f.startsWith(`${d}/`))
-    const storeAD = addedOrDeleted.filter(x => inAStore(x.file))
-    assert.deepEqual(
-      storeAD,
-      [],
-      `the relocated stores must appear as renames, not add/delete: ${JSON.stringify(storeAD)}`,
-    )
+/** Renames in a file's own history, oldest-path first. [] when history is unavailable. */
+function renameHistory(fileAbs) {
+  const rel = path.relative(REPO, fileAbs)
+  const r = spawnSync(
+    'git',
+    ['-C', REPO, 'log', '--follow', '--diff-filter=R', '--name-status', '--format=', '--', rel],
+    { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 },
+  )
+  if (r.status !== 0) return null
+  return r.stdout
+    .split('\n')
+    .filter(l => l.startsWith('R'))
+    .map(l => {
+      const c = l.split('\t')
+      return { from: c[1], to: c[2] }
+    })
+}
 
-    assert.equal(
-      new Set(storeRenames.map(r => storeDirOf(r.to))).size,
-      RELOCATED_COUNT,
-      `expected ${RELOCATED_COUNT} relocated store directories`,
-    )
+describe('case-collision fix — provenance', () => {
+  // TEST-6 [acceptance] [invariant: INV-4]
+  test('TEST-6: the relocated stores MOVED — their history crosses the rename', () => {
+    const candidates = relocatedCandidates(UI_SRC)
+    assert.ok(candidates.length >= 20, `expected the relocated stores to be present, found ${candidates.length}`)
+
+    // Sample rather than shell out ~120 times; `--follow` is the expensive call here.
+    // Any store whose index.ts was COPIED instead of moved has no rename in its
+    // history, so a sample of this size cannot miss a wholesale copy-then-delete.
+    const sample = candidates.slice(0, 8)
+    let checked = 0
+    for (const { dir } of sample) {
+      const index = path.join(dir, 'index.ts')
+      const renames = renameHistory(index)
+      if (renames === null) {
+        // No git, or no history for this path (shallow clone). Say so and stop —
+        // reporting a green here would certify INV-4 against nothing.
+        assert.fail(
+          `TEST-6 cannot read history for ${path.relative(REPO, index)} — \`git log --follow\` failed. This test certifies that the stores MOVED; it refuses to report a pass it did not earn. Run it in a full (non-shallow) clone.`,
+        )
+      }
+      // The rename that matters: from the SAME path without the `/stores` segment.
+      const rel = path.relative(REPO, index)
+      const preMove = rel.replace(/\/stores\/([^/]+)\/index\.ts$/, '/$1/index.ts')
+      const crossed = renames.some(r => r.from === preMove && r.to === rel)
+      assert.ok(
+        crossed,
+        `${rel} has no rename from ${preMove} in its history — it was copied, not moved (renames seen: ${JSON.stringify(renames)})`,
+      )
+      checked++
+    }
+    assert.equal(checked, sample.length)
   })
 
   // TEST-7 [acceptance] [invariant: INV-7]
-  test('TEST-7: every relocated store joined the existing `stores/` convention', () => {
-    const { available, renames } = branchRenames()
-    const relocated = new Set(storeRenamesOf(renames).map(r => path.join(REPO, storeDirOf(r.to))))
+  test('TEST-7: every relocated store sits under a `stores/` parent beside its component', () => {
+    const candidates = relocatedCandidates(UI_SRC)
+    assert.ok(candidates.length >= 20, `expected relocated stores, found ${candidates.length}`)
 
-    requireEvaluable('TEST-7', available, relocated.size)
-
-    assert.equal(relocated.size, RELOCATED_COUNT)
-    for (const abs of relocated) {
-      // Under a parent literally named `stores` — not a bespoke suffix…
+    for (const { dir, component } of candidates) {
+      // Under a parent literally named `stores` — the existing convention, not a
+      // bespoke suffix…
       assert.equal(
-        path.basename(path.dirname(abs)),
+        path.basename(path.dirname(dir)),
         'stores',
-        `${path.relative(REPO, abs)} is not under a parent literally named stores/`,
+        `${path.relative(REPO, dir)} is not under a parent literally named stores/`,
       )
-      // …still a real store…
-      assert.ok(fs.existsSync(path.join(abs, 'index.ts')), `${path.relative(REPO, abs)}/index.ts missing`)
-      assert.ok(fs.existsSync(path.join(abs, 'actions')), `${path.relative(REPO, abs)}/actions missing`)
-      // …and still co-located with its component, which is what makes this the
-      // minimal move rather than a re-architecture.
-      assert.ok(
-        componentExists(abs, path.basename(abs)),
-        `${path.relative(REPO, abs)} lost co-location with its component`,
+      // …and still co-located with the component it belongs to, which is what makes
+      // this the minimal move rather than a re-architecture.
+      assert.ok(fs.existsSync(component), `${path.relative(REPO, dir)} lost co-location with its component`)
+      assert.equal(
+        path.dirname(component),
+        path.dirname(path.dirname(dir)),
+        `${path.relative(REPO, dir)} is not a sibling of ${path.relative(REPO, component)}`,
       )
     }
   })

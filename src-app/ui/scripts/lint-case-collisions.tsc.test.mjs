@@ -16,13 +16,19 @@
  * files, and that file list contains named relocated stores plus their sibling
  * components.
  *
- * IS chained into `npm run check`. An earlier revision was not, on the reasoning that
- * `tsc` is already that script's first step — true of the exit-code assertion, false
- * of the two above it, which are the whole point of the file. Outside the chain they
- * ran nowhere, so the guard against a silently-empty compile did not exist on main.
- * The duplicated compile (~45 s on a multi-minute gate) is the right price.
+ * NOT chained into `npm run check`, after being chained and then un-chained again —
+ * the reasoning changed twice, so here is the settled version. It was excluded first
+ * on cost (wrong: the exit-code leg duplicates the gate's own `tsc`, but the coverage
+ * legs do not, and outside the chain nothing ran them). It was then chained. An
+ * auditor pointed out the decisive problem with that: this file compiles BOTH
+ * workspaces, so running it from `src-app/ui`'s gate makes a type error in
+ * `src-app/desktop/ui` fail `ui`'s check with the message *"at least one import site
+ * still points at a pre-move path"*. Coupling one workspace's gate to the other's
+ * type-cleanliness, and mislabelling the failure, is worse than the hole it closed —
+ * and `lint-case-collisions.resolution.test.mjs` now covers the general case in 0.3 s.
  *
- * Run:  npm run test:case-collisions:tsc      (~45 s)
+ * Run:  npm run test:case-collisions:tsc      (~45 s; run at phase 8 and when
+ *                                              changing resolution-adjacent config)
  */
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
@@ -56,8 +62,8 @@ const TSC = path.resolve(REPO, 'node_modules/typescript/bin/tsc')
 function mustCompile(uiSrc) {
   const found = []
   const walk = (dir, underStores) => {
-    if (found.length >= 3) return
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (found.length >= 2) return // enough — checked in the loop, not just per frame
       if (!e.isDirectory() || ['node_modules', 'dist', 'build', '.git'].includes(e.name)) continue
       const full = path.join(dir, e.name)
       if (underStores && fs.existsSync(path.join(full, 'index.ts'))) {
@@ -68,8 +74,15 @@ function mustCompile(uiSrc) {
         const sibling = fs
           .readdirSync(componentDir)
           .find(n => n === `${pascal}.tsx` || n.toLowerCase() === `${e.name.toLowerCase()}.tsx`)
+        // RELATIVE to the repo, not absolute: `tsc --listFilesOnly` prints realpaths,
+        // so an absolute needle built with `path.resolve` goes red in a worktree
+        // reached through a symlinked path — a spelling difference reported as "the
+        // moved module is outside the compile surface".
         if (sibling)
-          found.push(path.join(full, 'index.ts'), path.join(componentDir, sibling))
+          found.push(
+            path.relative(REPO, path.join(full, 'index.ts')),
+            path.relative(REPO, path.join(componentDir, sibling)),
+          )
       }
       walk(full, underStores || e.name === 'stores')
     }

@@ -90,12 +90,30 @@ function expectedRoots() {
  */
 function countEntries(dir) {
   let n = 0
-  const entries = fs.readdirSync(dir, { withFileTypes: true })
-  for (const e of entries) {
-    if (e.isDirectory()) {
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    // Classify symlinks by their TARGET, exactly as the guard does. Using the Dirent
+    // predicates alone would skip them (both `isDirectory()` and `isFile()` are false
+    // for a symlink) while the guard counts them, so the two counts would disagree the
+    // day anyone added a symlink under any root — turning `npm run check` red inside
+    // this test for an entirely unrelated change.
+    let isDir = e.isDirectory()
+    let isFile = e.isFile()
+    if (e.isSymbolicLink()) {
+      try {
+        const st = fs.statSync(path.join(dir, e.name))
+        isDir = st.isDirectory()
+        isFile = st.isFile()
+      } catch {
+        continue // broken link: the guard skips it too
+      }
+    }
+    if (isDir) {
       if (SKIP_DIRS.has(e.name)) continue
-      n += 1 + countEntries(path.join(dir, e.name))
-    } else if (e.isFile()) n += 1
+      n += 1
+      // A symlinked directory is NAMED by the guard but not WALKED, so it contributes
+      // itself and nothing beneath it.
+      if (!e.isSymbolicLink()) n += countEntries(path.join(dir, e.name))
+    } else if (isFile) n += 1
   }
   return n
 }
@@ -154,11 +172,10 @@ describe('lint-case-collisions', () => {
     )
     assert.equal(scannedFrom(r.stdout), expectedTotal, 'reported total does not match the tree')
 
-    // Anti-vacuity, part 2: the contracted set includes the trees a collision would
-    // actually break the build in — both app srcs, both test dirs, and the sdk
-    // packages both tsconfigs compile through `@ziee/*`.
-    assert.ok(reported[path.relative(REPO, path.join(UI, "src"))] > 2000)
-    assert.ok(reported[path.relative(REPO, path.join(DESKTOP_UI, "src"))] > 100)
+    // Anti-vacuity, part 2: the contracted set includes the sdk packages both tsconfigs
+    // compile through `@ziee/*`. (No numeric floors on the app trees — the exact
+    // recount above already subsumes them, and a floor is the drifting-threshold shape
+    // this file complains about elsewhere.)
     assert.ok(Object.keys(reported).some(k => k.startsWith('sdk/packages/')))
     // The owned trees must be BLOCKING, not advisory — otherwise a real collision in
     // them would print and exit 0.
@@ -456,28 +473,20 @@ describe('lint-case-collisions', () => {
     }
     walk(path.join(UI, 'src'), false)
     walk(path.join(DESKTOP_UI, 'src'), false)
-    assert.ok(stores.length > 100, `expected the stores/ convention to be populated, found ${stores.length}`)
+    assert.ok(stores.length > 0, 'expected stores under a `stores/` ancestor')
 
-    let defining = 0
     for (const dir of stores) {
-      // Not every `index.ts` under a `stores/` ancestor DEFINES a store — a few are
-      // grouping barrels that re-export a family (`stores/llmModelDrawers/index.ts`).
-      // Count the defining ones, and collision-check them all either way.
-      const index = fs.readFileSync(path.join(dir, 'index.ts'), 'utf8')
-      if (/defineStore|defineLocalStore|registerLazyStore/.test(index)) defining++
-
       // Its directory name must not collide with any sibling — the property the whole
-      // branch exists to establish, asserted per store rather than as a population
-      // statistic, so a regression names the store instead of moving a count.
+      // branch exists to establish, asserted PER STORE rather than as a population
+      // statistic, so a regression names the store instead of moving a count. (No
+      // "how many" assertion here at all: every count this test has carried has been
+      // either satisfiable while the convention was violated, or a threshold that
+      // would go red for an unrelated consolidation.)
       const name = path.basename(dir)
       for (const sib of fs.readdirSync(path.dirname(dir)))
         if (sib !== name && sib.toLowerCase() === name.toLowerCase())
           assert.fail(`${path.relative(REPO, dir)} collides with sibling ${sib}`)
     }
-    assert.ok(
-      defining > 100,
-      `expected most dirs under a stores/ ancestor to define a store, only ${defining} of ${stores.length} do`,
-    )
   })
 
   // TEST-3 [acceptance] [invariant: INV-5]
@@ -499,8 +508,16 @@ describe('lint-case-collisions', () => {
     assert.match(uiPkg.scripts.check, /npm run test:case-collisions\b/)
     assert.match(
       uiPkg.scripts.check,
+      /npm run test:case-collisions:resolution\b/,
+      'the behavioural resolution oracle is the general check — it must run in the gate, not sit unreachable',
+    )
+    // The tsc oracle is deliberately NOT chained: it compiles BOTH workspaces, so
+    // running it from `ui`'s gate makes a desktop type error fail `ui`'s check with a
+    // case-collision message. It has a runner and is executed at phase 8.
+    assert.doesNotMatch(
+      uiPkg.scripts.check,
       /npm run test:case-collisions:tsc\b/,
-      "the tsc oracle's unique value is its non-empty-program assertions; outside `check` nothing ever runs them",
+      "`ui`'s gate must not type-check the desktop workspace and report it as a case-collision failure",
     )
 
     // One harness, not several.

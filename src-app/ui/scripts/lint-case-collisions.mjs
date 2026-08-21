@@ -92,7 +92,7 @@
  *
  * Run:
  *   node scripts/lint-case-collisions.mjs              # every compiled tree; exit 1 on any owned-tree finding
- *   node scripts/lint-case-collisions.mjs --root=<dir> # scan ONLY <dir>, as mandatory (repeatable; used by the tests)
+ *   node scripts/lint-case-collisions.mjs --root=<dir> # scan ONLY <dir>, as mandatory (exactly one; used by the tests)
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -290,11 +290,6 @@ function scan(dir, root) {
     }
   }
 
-  // Every entry below this line is one the rules actually LOOK at. Counted here, at
-  // the point of analysis, so a subtree that is traversed but not analysed changes the
-  // number — see analysedPerRoot.
-  analysedPerRoot.set(root.real, (analysedPerRoot.get(root.real) ?? 0) + files.length + dirs.length)
-
   // Rule 3 FIRST — a full-name case duplicate is strictly the worst diagnosis (the two
   // entries cannot both exist on a case-insensitive checkout, so one is LOST, not
   // merely mis-resolved) and its fix advice differs. Findings are deduped by
@@ -365,6 +360,14 @@ function scan(dir, root) {
         )
     }
   }
+
+  // Counted HERE — after all three rules have actually run over this directory's
+  // entries, not before them. Placing it earlier looked equivalent and was not: any
+  // early return between the counter and the rules leaves the number byte-identical,
+  // so a mutation that traverses a subtree while analysing nothing still matched the
+  // external recount exactly. Incrementing only once the analysis has completed is
+  // what makes "walked past it" and "checked it" different numbers.
+  analysedPerRoot.set(root.real, (analysedPerRoot.get(root.real) ?? 0) + files.length + dirs.length)
 
   for (const d of dirs) {
     const full = path.join(dir, d)
