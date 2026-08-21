@@ -80,11 +80,13 @@ const OVERLAY_SLUGS = [
   'overlay-hub-mcp-details-drawer',
 ] as const
 
-/** `modules/a/b/stores/editUserDrawer` -> `EditUserDrawer` */
-const pascalOf = (storePath: string): string => {
-  const name = storePath.split('/').pop() as string
-  return name[0].toUpperCase() + name.slice(1)
-}
+/**
+ * The control target for clause 1: a real component module. Passed in as a VARIABLE
+ * rather than written as a literal `import('…')`, so TypeScript treats it as a
+ * runtime path (the gallery's Vite dev server resolves it) instead of trying to
+ * resolve `/src/…` against the tsconfig at compile time.
+ */
+const CONTROL_COMPONENT = '/src/modules/user/components/user/EditUserDrawer.tsx'
 
 test.describe('store case-collision fix', () => {
   test('every relocated store path resolves to the STORE module, not its component', async ({
@@ -146,12 +148,10 @@ test.describe('store case-collision fix', () => {
     // Positive control: the SAME assertion, aimed at a real component module, must
     // see 'function'. Without this, "not a function" would pass for any path that
     // simply failed to expose the symbol, and the check above would be vacuous.
-    const control = await page.evaluate(async () => {
-      const mod: Record<string, unknown> = await import(
-        /* @vite-ignore */ '/src/modules/user/components/user/EditUserDrawer.tsx'
-      )
+    const control = await page.evaluate(async (specifier: string) => {
+      const mod: Record<string, unknown> = await import(/* @vite-ignore */ specifier)
       return typeof mod.EditUserDrawer
-    })
+    }, CONTROL_COMPONENT)
     expect(
       control,
       'the control component module must expose EditUserDrawer as a function, or this test proves nothing',

@@ -95,7 +95,9 @@ Two facts the design did NOT state, found here and load-bearing:
 | 23 | `src-app/ui/src/modules/workflow/widgets/groupSystemWorkflowsAssignmentDrawer/` | `…/widgets/stores/groupSystemWorkflowsAssignmentDrawer/` |
 | 24 | `src-app/ui/src/modules/workflow/widgets/groupSystemWorkflowsWidget/` | `…/widgets/stores/groupSystemWorkflowsWidget/` |
 
-**Edited (import specifiers only — 99 sites across 44 files in `src-app/ui/src`),** the
+**Edited (import specifiers only — 99 sites across 62 files in `src-app/ui/src`;
+amended from an eyeballed "44" per DRIFT-1.1, the 62 is the codemod's measured
+count),** the
 heaviest being `modules/layouts/app-layout/` (22 sites in 8 modules),
 `modules/user/{types/index.ts,gallery.tsx,components/**}`,
 `modules/llm-provider/{types.ts,gallery.tsx,components/**,widgets/**}`,
