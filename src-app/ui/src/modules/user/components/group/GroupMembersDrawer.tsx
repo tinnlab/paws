@@ -2,7 +2,7 @@ import { User } from 'lucide-react'
 import { useEffect } from 'react'
 import { Drawer } from '@/modules/layouts/app-layout/components/Drawer'
 import { List, Tag } from '@ziee/kit'
-import { GroupMembersDrawer as GroupMembersDrawerStore } from '@/modules/user/components/group/groupMembersDrawer'
+import { GroupMembersDrawer as GroupMembersDrawerStore } from '@/modules/user/components/group/stores/groupMembersDrawer'
 import { UserGroups } from '@/modules/user/stores/userGroups'
 
 export function GroupMembersDrawer() {

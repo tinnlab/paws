@@ -5,8 +5,8 @@ import type { Skill } from '@/api-client/types'
 import { Permissions } from '@/api-client/permissions'
 import { usePermission } from '@/core/permissions'
 import { GroupEntityAssignmentWidget } from '@/components/common/group-entity-assignment/GroupEntityAssignmentWidget'
-import { GroupSystemSkillsAssignment } from '@/modules/skill/widgets/groupSystemSkillsAssignmentDrawer'
-import { GroupSystemSkillsWidget as GroupSystemSkillsWidgetStore } from '@/modules/skill/widgets/groupSystemSkillsWidget'
+import { GroupSystemSkillsAssignment } from '@/modules/skill/widgets/stores/groupSystemSkillsAssignmentDrawer'
+import { GroupSystemSkillsWidget as GroupSystemSkillsWidgetStore } from '@/modules/skill/widgets/stores/groupSystemSkillsWidget'
 
 const skillLabel = (s: Skill) => s.display_name ?? s.name
 

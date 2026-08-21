@@ -1,7 +1,7 @@
 import { Tooltip, Button } from '@ziee/kit'
 import { PanelLeft, PanelRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { AppLayout } from '@/modules/layouts/app-layout/appLayout'
+import { AppLayout } from '@/modules/layouts/app-layout/stores/appLayout'
 
 export function SidebarToggleButton() {
   const { isSidebarCollapsed, nativeScroll, headerHidden } = AppLayout

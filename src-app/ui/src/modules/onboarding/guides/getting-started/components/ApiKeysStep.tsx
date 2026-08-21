@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useApiKeysStepStore } from './apiKeysStep'
+import { useApiKeysStepStore } from './stores/apiKeysStep'
 import {
   Spin,
   ErrorState,
@@ -15,7 +15,7 @@ import { Plug, CircleCheck } from 'lucide-react'
 import type { OnboardingStepProps } from '@/modules/onboarding/types/onboarding'
 import { PROVIDER_ICONS } from '@/modules/llm-provider/constants'
 import { Onboarding } from '@/modules/onboarding/stores/onboarding'
-import { ApiKeysStep as ApiKeysStepStore } from '@/modules/onboarding/guides/getting-started/components/apiKeysStep'
+import { ApiKeysStep as ApiKeysStepStore } from '@/modules/onboarding/guides/getting-started/components/stores/apiKeysStep'
 
 export default function ApiKeysStep({ registerBeforeNext }: OnboardingStepProps) {
   const enteredApiKeys = ApiKeysStepStore.enteredApiKeys

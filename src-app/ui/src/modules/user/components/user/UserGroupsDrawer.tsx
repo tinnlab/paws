@@ -12,8 +12,8 @@ import {
   Empty,
   List,
 } from '@ziee/kit'
-import { AssignGroupDrawer } from '@/modules/user/components/user/assignGroupDrawer'
-import { UserGroupsDrawer as UserGroupsDrawerStore } from '@/modules/user/components/user/userGroupsDrawer'
+import { AssignGroupDrawer } from '@/modules/user/components/user/stores/assignGroupDrawer'
+import { UserGroupsDrawer as UserGroupsDrawerStore } from '@/modules/user/components/user/stores/userGroupsDrawer'
 import { UserGroups } from '@/modules/user/stores/userGroups'
 
 export function UserGroupsDrawer() {

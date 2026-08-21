@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { Drawer } from '@/modules/layouts/app-layout/components/Drawer'
 import { usePermission } from '@/core/permissions'
 import { Permissions } from '@/api-client/permissions'
-import { AssignGroupDrawer as AssignGroupDrawerStore } from '@/modules/user/components/user/assignGroupDrawer'
+import { AssignGroupDrawer as AssignGroupDrawerStore } from '@/modules/user/components/user/stores/assignGroupDrawer'
 import { UserGroups } from '@/modules/user/stores/userGroups'
 
 const assignGroupSchema = z.object({

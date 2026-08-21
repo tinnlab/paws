@@ -8,7 +8,7 @@ import { HeaderBarContainer } from '@/modules/layouts/app-layout/components/Head
 import { useElementMinSize } from '@/modules/layouts/app-layout/hooks/useWindowMinSize'
 import { useNativeScroll } from '@/modules/layouts/app-layout/hooks/useNativeScroll'
 import { cn } from '@/lib/utils'
-import { AppLayout } from '@/modules/layouts/app-layout/appLayout'
+import { AppLayout } from '@/modules/layouts/app-layout/stores/appLayout'
 import { ChatHistory } from '@/modules/chat/stores/chatHistory'
 
 /**

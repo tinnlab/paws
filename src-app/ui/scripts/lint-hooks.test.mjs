@@ -526,13 +526,18 @@ describe('TEST-6: the non-firing shapes stay silent (zero-false-positive budget)
   }
 
   test('factor 1 is module RESOLUTION — a proxy outside a `stores/` path is still recognised', () => {
-    // `Hardware` is exported from `@/modules/hardware/hardware`, a specifier the
-    // legacy path-shape heuristic rejects. Making `resolveSpecifier` return []
-    // (falling back to path shape) turns this red — and silently drops ~95 proxy
-    // bindings tree-wide, incl. AppLayout and most drawer stores.
+    // `Hardware` is exported from `@/modules/hardware/hardware`, and
+    // `AssistantDrawer` from `@/modules/assistant/components/assistantDrawer` —
+    // specifiers the legacy path-shape heuristic rejects because neither carries a
+    // `stores/` segment. Making `resolveSpecifier` return [] (falling back to path
+    // shape) turns this red — and silently drops ~95 proxy bindings tree-wide.
+    // `AppLayout` is kept as the third case: it now DOES live under a `stores/`
+    // parent (the component/store case-collision fix moved it), so it guards the
+    // resolution path rather than the outside-`stores/` property.
     for (const [spec, name, field] of [
       ['@/modules/hardware/hardware', 'Hardware', 'devices'],
-      ['@/modules/layouts/app-layout/appLayout', 'AppLayout', 'isSidebarCollapsed'],
+      ['@/modules/assistant/components/assistantDrawer', 'AssistantDrawer', 'editingAssistant'],
+      ['@/modules/layouts/app-layout/stores/appLayout', 'AppLayout', 'isSidebarCollapsed'],
     ]) {
       const findings = lintSnippet(
         `import { ${name} } from '${spec}'\nexport function C({ a }: { a: boolean }) {\n` +

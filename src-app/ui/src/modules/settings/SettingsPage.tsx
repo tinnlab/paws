@@ -11,7 +11,7 @@ import {
   ChevronDown,
   Settings,
 } from 'lucide-react'
-import { AppLayout as AppLayoutStore } from '@/modules/layouts/app-layout/appLayout'
+import { AppLayout as AppLayoutStore } from '@/modules/layouts/app-layout/stores/appLayout'
 import { Auth } from '@/modules/auth/Auth.store'
 import { ModuleSystem } from '@ziee/framework/stores'
 

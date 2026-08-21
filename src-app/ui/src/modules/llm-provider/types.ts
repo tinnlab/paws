@@ -9,9 +9,9 @@ import type {
   useViewDownloadDrawerStore,
   useUploadStore,
 } from '@/modules/llm-provider/stores'
-import type { useProviderGroupAssignmentCardStore } from '@/modules/llm-provider/components/providerGroupAssignmentCard'
-import type { useLlmProviderDrawerStore } from '@/modules/llm-provider/components/llmProviderDrawer'
-import type { useGroupLlmProvidersAssignmentStore } from '@/modules/llm-provider/components/groupLlmProvidersAssignmentDrawer'
+import type { useProviderGroupAssignmentCardStore } from '@/modules/llm-provider/components/stores/providerGroupAssignmentCard'
+import type { useLlmProviderDrawerStore } from '@/modules/llm-provider/components/stores/llmProviderDrawer'
+import type { useGroupLlmProvidersAssignmentStore } from '@/modules/llm-provider/components/stores/groupLlmProvidersAssignmentDrawer'
 
 declare module '@ziee/framework/stores' {
   interface RegisteredStores {

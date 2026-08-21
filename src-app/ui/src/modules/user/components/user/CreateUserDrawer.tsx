@@ -7,7 +7,7 @@ import type { CreateUserRequest } from '@/api-client/types'
 import { Permissions } from '@/api-client/permissions'
 import { PermissionsField } from '@/modules/user/components/PermissionsField.tsx'
 import { EMAIL_RE } from '@/lib/validation'
-import { CreateUserDrawer as CreateUserDrawerStore } from '@/modules/user/components/user/createUserDrawer'
+import { CreateUserDrawer as CreateUserDrawerStore } from '@/modules/user/components/user/stores/createUserDrawer'
 
 const createUserSchema = z.object({
   username: z.string().min(1, 'Please enter username'),

@@ -1,5 +1,5 @@
 import type { StoreProxy } from '@ziee/framework/stores'
-import type { useAppLayoutStore } from '@/modules/layouts/app-layout/appLayout'
+import type { useAppLayoutStore } from '@/modules/layouts/app-layout/stores/appLayout'
 
 // Shim → @ziee/shell. The generic sidebar slot item types + the `Slots`
 // augmentation (sidebarNavigation/Tools/PrimaryActions/Content/Bottom/Footer +

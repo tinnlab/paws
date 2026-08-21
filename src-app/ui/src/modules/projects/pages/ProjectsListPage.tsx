@@ -11,7 +11,7 @@ import { useNativeScroll } from '@/modules/layouts/app-layout/hooks/useNativeScr
 import { cn } from '@/lib/utils'
 import { ProjectDrawer } from '@/modules/projects/stores/projectDrawer'
 import { Projects as ProjectsStore } from '@/modules/projects/stores/projects'
-import { AppLayout } from '@/modules/layouts/app-layout/appLayout'
+import { AppLayout } from '@/modules/layouts/app-layout/stores/appLayout'
 
 export function ProjectsListPage() {
   // Native document-scroll on mobile (iOS toolbar collapse + content under the

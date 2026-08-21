@@ -17,7 +17,7 @@ import { HeaderBarContainer } from '@/modules/layouts/app-layout/components/Head
 import { useNativeScroll } from '@/modules/layouts/app-layout/hooks/useNativeScroll'
 
 import { ScheduledTaskCard } from '../components/ScheduledTaskCard'
-import { AppLayout } from '@/modules/layouts/app-layout/appLayout'
+import { AppLayout } from '@/modules/layouts/app-layout/stores/appLayout'
 import { SchedulerDrawer } from '@/modules/scheduler/stores/schedulerDrawer'
 import { ScheduledTasks } from '@/modules/scheduler/stores/scheduledTasks'
 

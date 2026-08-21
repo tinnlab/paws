@@ -1083,7 +1083,7 @@ export const gallery: ModuleGallery = {
           '@/modules/chat/stores/chatHistory'
         )
         const { AppLayoutDef } = await import(
-          '@/modules/layouts/app-layout/appLayout'
+          '@/modules/layouts/app-layout/stores/appLayout'
         )
         // ChatHistoryPage refetches on mount (which flips loading/isInitialized as
         // it resolves), so a one-shot seed races into a blank window: `loading`

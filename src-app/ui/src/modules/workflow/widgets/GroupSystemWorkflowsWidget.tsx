@@ -5,8 +5,8 @@ import type { Workflow } from '@/api-client/types'
 import { Permissions } from '@/api-client/permissions'
 import { usePermission } from '@/core/permissions'
 import { GroupEntityAssignmentWidget } from '@/components/common/group-entity-assignment/GroupEntityAssignmentWidget'
-import { GroupSystemWorkflowsAssignment } from '@/modules/workflow/widgets/groupSystemWorkflowsAssignmentDrawer'
-import { GroupSystemWorkflowsWidget as GroupSystemWorkflowsWidgetStore } from '@/modules/workflow/widgets/groupSystemWorkflowsWidget'
+import { GroupSystemWorkflowsAssignment } from '@/modules/workflow/widgets/stores/groupSystemWorkflowsAssignmentDrawer'
+import { GroupSystemWorkflowsWidget as GroupSystemWorkflowsWidgetStore } from '@/modules/workflow/widgets/stores/groupSystemWorkflowsWidget'
 
 const workflowLabel = (w: Workflow) => w.display_name ?? w.name
 

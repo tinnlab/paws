@@ -19,8 +19,8 @@ import { CircleCheck, Book, ArrowLeft } from 'lucide-react'
 import type { OnboardingSlot } from './types/OnboardingSlot'
 import type { OnboardingStepProps } from './types/onboarding'
 import { Onboarding as OnboardingStore } from '@/modules/onboarding/stores/onboarding'
-import { ApiKeysStep } from '@/modules/onboarding/guides/getting-started/components/apiKeysStep'
-import { McpServersStep } from '@/modules/onboarding/guides/getting-started/components/mcpServersStep'
+import { ApiKeysStep } from '@/modules/onboarding/guides/getting-started/components/stores/apiKeysStep'
+import { McpServersStep } from '@/modules/onboarding/guides/getting-started/components/stores/mcpServersStep'
 import { ModuleSystem } from '@ziee/framework/stores'
 
 export default function OnboardingPage() {

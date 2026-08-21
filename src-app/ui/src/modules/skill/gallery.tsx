@@ -14,7 +14,7 @@ import {
   skillsList,
 } from '@/dev/gallery/fixtures/skills'
 import { SkillDrawer } from '@/modules/skill/stores/skillDrawer'
-import { GroupSystemSkillsAssignment } from '@/modules/skill/widgets/groupSystemSkillsAssignmentDrawer'
+import { GroupSystemSkillsAssignment } from '@/modules/skill/widgets/stores/groupSystemSkillsAssignmentDrawer'
 import { SkillConversationDrawer as SkillConversationDrawerStore } from '@/modules/skill/stores/skillConversationDrawer'
 
 const noop = () => {}

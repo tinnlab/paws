@@ -5,7 +5,7 @@ import { Permissions } from '@/api-client/permissions'
 import { UserGroupAssignment } from '@/components/common/UserGroupAssignment'
 import { emitMcpServerGroupsChanged } from '@/modules/mcp/events'
 import { SystemMcpServer as SystemMcpServerStore } from '@/modules/mcp/stores/systemMcpServer'
-import { SystemMcpServerGroupCard } from '@/modules/mcp/components/system/mcpServerGroupsAssignmentCard'
+import { SystemMcpServerGroupCard } from '@/modules/mcp/components/system/stores/mcpServerGroupsAssignmentCard'
 
 interface McpServerGroupsAssignmentCardProps {
   serverId: string

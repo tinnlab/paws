@@ -30,7 +30,7 @@ import { useRef, useLayoutEffect, useCallback } from 'react'
 import { isTauriView, isMacOS, isLinux } from '@ziee/desktop/core/platform'
 import { useHeaderLeftInset } from '@/modules/layouts/app-layout/hooks/useHeaderLeftInset'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { AppLayout as AppLayoutStore } from '@/modules/layouts/app-layout/appLayout'
+import { AppLayout as AppLayoutStore } from '@/modules/layouts/app-layout/stores/appLayout'
 
 // Selector matching anything we'd consider an "interactive" descendant.
 // A mousedown on any of these (or their inner content) should NOT

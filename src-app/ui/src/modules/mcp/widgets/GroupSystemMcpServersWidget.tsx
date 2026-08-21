@@ -4,8 +4,8 @@ import { Plug, Pencil } from 'lucide-react'
 import type { GroupWidgetProps } from '@/modules/user/types/GroupWidget'
 import { usePermission } from '@/core/permissions'
 import { Permissions } from '@/api-client/permissions'
-import { GroupSystemMcpServersWidget as GroupSystemMcpServersWidgetStore } from '@/modules/mcp/widgets/groupSystemMcpServersWidget'
-import { GroupSystemMcpServersAssignment } from '@/modules/mcp/components/system/groupSystemMcpServersAssignmentDrawer'
+import { GroupSystemMcpServersWidget as GroupSystemMcpServersWidgetStore } from '@/modules/mcp/widgets/stores/groupSystemMcpServersWidget'
+import { GroupSystemMcpServersAssignment } from '@/modules/mcp/components/system/stores/groupSystemMcpServersAssignmentDrawer'
 
 /**
  * Widget that displays System MCP Servers assigned to a group.

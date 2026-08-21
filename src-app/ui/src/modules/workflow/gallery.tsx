@@ -22,7 +22,7 @@ import { HUMANISED_CODES } from './components/builder/validationCopy'
 import type { BuilderDef } from './stores/WorkflowBuilder.store'
 import { workflowCassette } from '@/dev/gallery/fixtures/workflow'
 import { llmGroupsList } from '@/dev/gallery/fixtures/llm-providers'
-import { GroupSystemWorkflowsAssignment } from '@/modules/workflow/widgets/groupSystemWorkflowsAssignmentDrawer'
+import { GroupSystemWorkflowsAssignment } from '@/modules/workflow/widgets/stores/groupSystemWorkflowsAssignmentDrawer'
 import { WorkflowDrawer } from '@/modules/workflow/stores/workflowDrawer'
 
 const group = llmGroupsList.groups[0]

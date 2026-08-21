@@ -10,7 +10,7 @@ import { cn } from '@/lib/utils'
 import { KnowledgeBaseCard } from '@/modules/knowledge-base/components/KnowledgeBaseCard'
 import { KnowledgeBaseFormDrawer } from '@/modules/knowledge-base/components/KnowledgeBaseFormDrawer'
 import { KnowledgeBases } from '@/modules/knowledge-base/stores/knowledgeBases'
-import { AppLayout } from '@/modules/layouts/app-layout/appLayout'
+import { AppLayout } from '@/modules/layouts/app-layout/stores/appLayout'
 
 export function KnowledgeBasesListPage() {
   useNativeScroll(true)
