@@ -209,7 +209,7 @@ describe('lint-case-collisions', () => {
       },
     )
 
-    // (b) file-vs-file across extensions — the shape a file-vs-dir-only guard called
+    // (b) [TEST-10] file-vs-file across extensions — the shape a file-vs-dir-only guard called
     //     clean while `AgentStepForm.tsx` + `agentStepForm.ts` were live in the tree.
     //     `.ts` is probed before `.tsx`, so `./AgentStepForm` picks the helper on macOS.
     withFixture(
@@ -223,7 +223,7 @@ describe('lint-case-collisions', () => {
       },
     )
 
-    // (c) the desktop resolver's `.desktop` infix — `probeDesktopInfix` matches
+    // (c) [TEST-11] the desktop resolver's `.desktop` infix — `probeDesktopInfix` matches
     //     `X.desktop.tsx` for the bare specifier `X`, so it collides with `x/` too.
     //     This exact pair (ProviderGroupAssignmentCard) was live on origin/main.
     withFixture(
@@ -287,7 +287,7 @@ describe('lint-case-collisions', () => {
       }
     })
 
-    // (f) FAIL CLOSED. A root that cannot be walked must be a hard error, never a
+    // (f) [TEST-11] FAIL CLOSED. A root that cannot be walked must be a hard error, never a
     //     green line — the fail-open shape where a renamed tree silently drops out.
     const missing = runGuard([`--root=${path.join(os.tmpdir(), 'definitely-not-here-9d3f')}`])
     assert.equal(missing.status, 1, 'a missing root must exit 1')

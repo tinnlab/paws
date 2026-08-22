@@ -207,7 +207,7 @@ test.describe('store case-collision fix', () => {
     }
   })
 
-  test('each identity marker appears in ITS drawer and in no other', async ({ page }) => {
+  test('TEST-13: each identity marker appears in ITS drawer and in no other', async ({ page }) => {
     // The property the per-overlay assertions need is "marker M appears in drawer D
     // and nowhere else". An earlier version checked the marker STRINGS against each
     // other — uniqueness and substrings — which is not the same thing and would not
