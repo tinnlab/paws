@@ -245,8 +245,17 @@ fn build_pgvector_extension(
     if !output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
-        eprintln!("pgvector build STDOUT:\n{stdout}");
-        eprintln!("pgvector build STDERR:\n{stderr}");
+        // `cargo:warning=` per line, NOT eprintln! — cargo swallows build-script
+        // stderr unless the script itself fails, and this helper is fail-soft, so
+        // make's actual compiler error was never visible in CI. One warning per
+        // line because cargo truncates each at the first newline. Tail-capped:
+        // the failure is at the end of make's output.
+        for line in stdout.lines().rev().take(20).collect::<Vec<_>>().into_iter().rev() {
+            println!("cargo:warning=pgvector make stdout: {line}");
+        }
+        for line in stderr.lines().rev().take(60).collect::<Vec<_>>().into_iter().rev() {
+            println!("cargo:warning=pgvector make stderr: {line}");
+        }
         return Err(format!(
             "pgvector make failed with exit code: {:?}",
             output.status.code()
