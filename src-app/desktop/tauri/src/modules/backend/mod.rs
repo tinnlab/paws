@@ -17,6 +17,11 @@ pub use state::BackendState;
 
 use crate::module_api::DesktopModule;
 use anyhow::Result;
+// Used only by `proxy_to_vite` below, which is `#[cfg(debug_assertions)]`.
+// Without the same gate these go unused in a release build, and the
+// workspace lint policy sets `unused_imports = "deny"` — so a release
+// build (which is what `tauri build` runs) fails to compile.
+#[cfg(debug_assertions)]
 use axum::{body::Body, http::Request, response::Response};
 use sqlx::PgPool;
 use std::sync::{Arc, OnceLock};
@@ -281,6 +286,11 @@ pub fn start_backend_server(desktop_routes: ApiRouter, app_handle: tauri::AppHan
         min_inner_size: (400.0, 600.0),
         effect_radius: 8.0,
         traffic_light_position: (20.0, 22.0),
+        // Ziee's desktop pop-out does NOT go through the frontend's `window.open`:
+        // `openConversationWindow.desktop.ts` overrides the web path and opens a
+        // real OS window via Tauri's `WebviewWindow` API. So the harness's
+        // window.open opt-in stays off (its stock behavior).
+        enable_popout_windows: false,
     };
 
     spawn_boot_then_window(boot, app_handle, window, move |handle| async move {
