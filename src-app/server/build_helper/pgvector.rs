@@ -223,6 +223,24 @@ fn build_pgvector_extension(
                 }
             }
         }
+
+        // Same class of staleness as PG_SYSROOT above, different variable.
+        // theseus-rs builds its PostgreSQL binaries with
+        // MACOSX_DEPLOYMENT_TARGET=10.13, and bakes that into
+        // `lib/pgxs/src/Makefile.global`. But PostgreSQL 18's OWN
+        // `port/pg_iovec.h` calls preadv/pwritev, which are macOS 11.0+.
+        // Since the same Makefile.global also carries
+        // `-Werror=unguarded-availability-new`, PG 18's headers cannot
+        // compile against PG 18's own baked deployment target:
+        //
+        //   error: 'preadv' is only available on macOS 11.0 or newer
+        //   ... but the deployment target is macOS 10.13.0
+        //
+        // Every pgvector .c that reaches storage/fd.h fails, make exits 2,
+        // and the fail-soft path then ships a binary that cannot boot.
+        // Raise it to the minimum that satisfies those symbols. A make
+        // command-line assignment outranks the Makefile's own.
+        cmd.arg("MACOSX_DEPLOYMENT_TARGET=11.0");
     } else if target.contains("windows") {
         cmd.args(["/f", "Makefile.win"]);
         let pgroot = postgres_dir.display().to_string();
