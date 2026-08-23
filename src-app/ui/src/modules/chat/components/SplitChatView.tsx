@@ -5,7 +5,7 @@ import { useWindowMinSize } from '@/modules/layouts/app-layout/hooks/useWindowMi
 import { ChatPaneProvider } from '@/modules/chat/core/pane/ChatPaneContext'
 import { ConversationPane } from '@/modules/chat/pages/ConversationPage'
 import { SPLIT_LIMITS } from '@/modules/chat/core/split/limits'
-import { AppLayout } from '@/modules/layouts/app-layout/appLayout'
+import { AppLayout } from '@/modules/layouts/app-layout/stores/appLayout'
 import { SplitView as SplitViewStore } from '@/modules/chat/core/stores/splitView'
 
 /**

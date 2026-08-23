@@ -3,7 +3,7 @@ import { LogOut, User } from 'lucide-react'
 import { usePermission } from '@/core/permissions'
 import { Permissions } from '@/api-client/permissions'
 import { useNavigate } from 'react-router-dom'
-import { AppLayout } from '@/modules/layouts/app-layout/appLayout'
+import { AppLayout } from '@/modules/layouts/app-layout/stores/appLayout'
 import { Auth } from '@/modules/auth/Auth.store'
 
 function SidebarItem({

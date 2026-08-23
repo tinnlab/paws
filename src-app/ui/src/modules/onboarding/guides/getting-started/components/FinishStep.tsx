@@ -3,8 +3,8 @@ import { CircleCheck, Rocket } from 'lucide-react'
 import type { OnboardingStepProps } from '@/modules/onboarding/types/onboarding'
 import { Title, Paragraph, Text } from '@ziee/kit'
 import { Onboarding } from '@/modules/onboarding/stores/onboarding'
-import { ApiKeysStep } from '@/modules/onboarding/guides/getting-started/components/apiKeysStep'
-import { McpServersStep as McpServersStepStore } from '@/modules/onboarding/guides/getting-started/components/mcpServersStep'
+import { ApiKeysStep } from '@/modules/onboarding/guides/getting-started/components/stores/apiKeysStep'
+import { McpServersStep as McpServersStepStore } from '@/modules/onboarding/guides/getting-started/components/stores/mcpServersStep'
 
 export default function FinishStep({ registerBeforeNext }: OnboardingStepProps) {
   // Read the REACTIVE field (not `.$`) in render so the count re-renders

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Button, Card, Flex, Spin, Switch, Tag, Text, Title, message } from '@ziee/kit'
 import { Drawer } from '@/modules/layouts/app-layout/components/Drawer'
-import { GroupLlmProvidersAssignment } from '@/modules/llm-provider/components/groupLlmProvidersAssignmentDrawer'
+import { GroupLlmProvidersAssignment } from '@/modules/llm-provider/components/stores/groupLlmProvidersAssignmentDrawer'
 import { LlmProvider } from '@/modules/llm-provider/stores/llmProvider'
 
 /**

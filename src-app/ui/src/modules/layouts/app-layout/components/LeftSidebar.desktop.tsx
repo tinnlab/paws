@@ -30,7 +30,7 @@
 import { LeftSidebar as CoreLeftSidebar } from '@ziee/ui-core/modules/layouts/app-layout/components/LeftSidebar'
 import { useWindowMinSize } from '@ziee/ui-core/modules/layouts/app-layout/hooks/useWindowMinSize'
 import { isMacOS, isTauriView } from '@ziee/desktop/core/platform'
-import { AppLayout as AppLayoutStore } from '@/modules/layouts/app-layout/appLayout'
+import { AppLayout as AppLayoutStore } from '@/modules/layouts/app-layout/stores/appLayout'
 
 /**
  * Module-load constant. The platform checks are static for the

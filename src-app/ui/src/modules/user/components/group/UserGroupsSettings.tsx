@@ -25,8 +25,8 @@ import { EditUserGroupDrawer } from '@/modules/user/components/group/EditUserGro
 import { GroupMembersDrawer } from '@/modules/user/components/group/GroupMembersDrawer.tsx'
 import { GroupListItem } from '@/modules/user/components/group/GroupListItem.tsx'
 import { PermissionsField } from '@/modules/user/components/PermissionsField.tsx'
-import { GroupMembersDrawer as GroupMembersDrawerStore } from '@/modules/user/components/group/groupMembersDrawer'
-import { EditUserGroupDrawer as EditUserGroupDrawerStore } from '@/modules/user/components/group/editUserGroupDrawer'
+import { GroupMembersDrawer as GroupMembersDrawerStore } from '@/modules/user/components/group/stores/groupMembersDrawer'
+import { EditUserGroupDrawer as EditUserGroupDrawerStore } from '@/modules/user/components/group/stores/editUserGroupDrawer'
 import { UserGroups } from '@/modules/user/stores/userGroups'
 
 interface CreateGroupFormValues {

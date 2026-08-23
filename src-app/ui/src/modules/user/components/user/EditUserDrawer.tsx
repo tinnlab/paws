@@ -6,7 +6,7 @@ import { usePermission } from '@/core/permissions'
 import { type UpdateUserRequest } from '@/api-client/types'
 import { Permissions } from '@/api-client/permissions'
 import { useEffect } from 'react'
-import { EditUserDrawer as EditUserDrawerStore } from '@/modules/user/components/user/editUserDrawer'
+import { EditUserDrawer as EditUserDrawerStore } from '@/modules/user/components/user/stores/editUserDrawer'
 
 const editUserSchema = z.object({
   username: z.string().min(1, 'Please enter username'),

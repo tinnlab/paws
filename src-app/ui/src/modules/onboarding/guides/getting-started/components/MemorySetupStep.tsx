@@ -17,7 +17,7 @@ import type { OnboardingStepProps } from '@/modules/onboarding/types/onboarding'
 import { usePermission } from '@/core/permissions'
 import { Permissions } from '@/api-client/permissions'
 import { Onboarding } from '@/modules/onboarding/stores/onboarding'
-import { MemorySetupStep as MemorySetupStepStore } from '@/modules/onboarding/guides/getting-started/components/memorySetupStep'
+import { MemorySetupStep as MemorySetupStepStore } from '@/modules/onboarding/guides/getting-started/components/stores/memorySetupStep'
 
 /**
  * MemorySetupStep — Plan §8 two-screen flow.

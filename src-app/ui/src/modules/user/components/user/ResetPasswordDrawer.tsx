@@ -4,7 +4,7 @@ import { Drawer } from '@/modules/layouts/app-layout/components/Drawer'
 import { Users } from '@/modules/user/stores/users'
 import { usePermission } from '@/core/permissions'
 import { Permissions } from '@/api-client/permissions'
-import { ResetPasswordDrawer as ResetPasswordDrawerStore } from '@/modules/user/components/user/resetPasswordDrawer'
+import { ResetPasswordDrawer as ResetPasswordDrawerStore } from '@/modules/user/components/user/stores/resetPasswordDrawer'
 
 const resetPasswordSchema = z
   .object({

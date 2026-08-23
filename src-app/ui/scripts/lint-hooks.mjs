@@ -368,8 +368,12 @@ const MODULE_EXTS = ['.ts', '.tsx', '/index.ts', '/index.tsx', '']
  * could denote, so a proxy is recognised by WHERE IT IS DEFINED rather than by
  * whether its path happens to contain a `stores/` segment. That path-shape
  * heuristic (kept below as the unresolvable-specifier fallback) silently excluded
- * ~44 real proxies — `AppLayout` from `@/modules/layouts/app-layout/appLayout`,
- * `Hardware`, and most drawer stores — which is exactly BUG-B's own class.
+ * ~44 real proxies — `AssistantDrawer` from
+ * `@/modules/assistant/components/assistantDrawer`, `Hardware` from
+ * `@/modules/hardware/hardware`, and most drawer stores — which is exactly BUG-B's
+ * own class. (The example used to be `AppLayout`; it moved under a `stores/`
+ * parent when the component/store case collisions were fixed, so it no longer
+ * illustrates the exclusion. A dozen stores still live outside `stores/`.)
  * Handles the `@/` alias (against every root, since desktop's `@/` falls back to
  * the web tree) and relative specifiers. Returns [] when it cannot resolve.
  */

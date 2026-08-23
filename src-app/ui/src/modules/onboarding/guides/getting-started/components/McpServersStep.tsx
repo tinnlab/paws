@@ -15,7 +15,7 @@ import type { OnboardingStepProps } from '@/modules/onboarding/types/onboarding'
 import { usePermission } from '@/core/permissions'
 import { Permissions } from '@/api-client/permissions'
 import { Onboarding } from '@/modules/onboarding/stores/onboarding'
-import { McpServersStep as McpServersStepStore } from '@/modules/onboarding/guides/getting-started/components/mcpServersStep'
+import { McpServersStep as McpServersStepStore } from '@/modules/onboarding/guides/getting-started/components/stores/mcpServersStep'
 
 export default function McpServersStep({ registerBeforeNext }: OnboardingStepProps) {
   const selectedMcpServerIds = McpServersStepStore.selectedMcpServerIds

@@ -12,7 +12,7 @@ import { holdPatch, lazyNamed, lazyProps, setMockMode } from '@/dev/gallery/supp
 import { llmGroupsList } from '@/dev/gallery/fixtures/llm-providers'
 import { McpComposer } from '@/modules/mcp/stores/mcpComposer'
 import { McpServerDrawer as McpServerDrawerStore } from '@/modules/mcp/stores/mcpServerDrawer'
-import { GroupSystemMcpServersAssignment } from '@/modules/mcp/components/system/groupSystemMcpServersAssignmentDrawer'
+import { GroupSystemMcpServersAssignment } from '@/modules/mcp/components/system/stores/groupSystemMcpServersAssignmentDrawer'
 
 const group = llmGroupsList.groups[0]
 
@@ -290,7 +290,7 @@ export const gallery: ModuleGallery = {
       ),
       setup: async () => {
         const { GroupSystemMcpServersWidgetDef } = await import(
-          '@/modules/mcp/widgets/groupSystemMcpServersWidget'
+          '@/modules/mcp/widgets/stores/groupSystemMcpServersWidget'
         )
         await holdPatch(() =>
           GroupSystemMcpServersWidgetDef.store.setState({

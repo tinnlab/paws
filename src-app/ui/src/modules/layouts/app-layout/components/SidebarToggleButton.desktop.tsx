@@ -19,7 +19,7 @@ import { Button, Tooltip } from '@ziee/kit'
 import { PanelLeft, PanelRight } from 'lucide-react'
 import { isTauriView, isMacOS } from '@ziee/desktop/core/platform'
 import { TauriDragRegion } from '@ziee/desktop/components/TauriDragRegion.tsx'
-import { AppLayout } from '@/modules/layouts/app-layout/appLayout'
+import { AppLayout } from '@/modules/layouts/app-layout/stores/appLayout'
 
 export function SidebarToggleButton() {
   const { isSidebarCollapsed, isFullscreen } = AppLayout

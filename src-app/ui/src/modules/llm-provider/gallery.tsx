@@ -19,8 +19,8 @@ import {
   llmProvidersCassette,
   llmProvidersList,
 } from '@/dev/gallery/fixtures/llm-providers'
-import { GroupLlmProvidersAssignment } from '@/modules/llm-provider/components/groupLlmProvidersAssignmentDrawer'
-import { LlmProviderDrawer as LlmProviderDrawerStore } from '@/modules/llm-provider/components/llmProviderDrawer'
+import { GroupLlmProvidersAssignment } from '@/modules/llm-provider/components/stores/groupLlmProvidersAssignmentDrawer'
+import { LlmProviderDrawer as LlmProviderDrawerStore } from '@/modules/llm-provider/components/stores/llmProviderDrawer'
 import { AddLocalLlmModelUploadDrawer as AddLocalLlmModelUploadDrawerStore } from '@/modules/llm-provider/stores/llmModelDrawers/addLocalLlmModelUploadDrawer'
 import { AddRemoteLlmModelDrawer as AddRemoteLlmModelDrawerStore } from '@/modules/llm-provider/stores/llmModelDrawers/addRemoteLlmModelDrawer'
 import { EditLlmModelDrawer as EditLlmModelDrawerStore } from '@/modules/llm-provider/stores/llmModelDrawers/editLlmModelDrawer'

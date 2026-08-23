@@ -13,7 +13,7 @@ import {
   agentReadback,
   effortToMaxSteps,
   maxStepsToEffort,
-} from './agentStepForm'
+} from './agentStepForm.helpers'
 
 type AgentStep = Extract<BuilderStep, { kind: 'agent' }>
 

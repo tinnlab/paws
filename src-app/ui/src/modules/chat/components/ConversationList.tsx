@@ -10,7 +10,7 @@ import { VirtualizedConversationList } from '@/modules/chat/components/Virtualiz
 import type { ConversationResponse } from '@/api-client/types'
 import { DivScrollY } from '@/components/common/DivScrollY'
 import { cn } from '@/lib/utils'
-import { AppLayout } from '@/modules/layouts/app-layout/appLayout'
+import { AppLayout } from '@/modules/layouts/app-layout/stores/appLayout'
 import { ChatHistory } from '@/modules/chat/stores/chatHistory'
 
 

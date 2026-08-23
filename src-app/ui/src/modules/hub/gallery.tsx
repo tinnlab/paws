@@ -7,8 +7,8 @@
  */
 import type { ModuleGallery } from '@/dev/gallery/support'
 import { lazyBound, lazyNamed } from '@/dev/gallery/support'
-import { ModelDetailsDrawer as ModelDetailsDrawerStore } from '@/modules/hub/modules/llm-models/components/modelDetailsDrawer'
-import { McpServerDetailsDrawer as McpServerDetailsDrawerStore } from '@/modules/hub/modules/mcp/components/mcpServerDetailsDrawer'
+import { ModelDetailsDrawer as ModelDetailsDrawerStore } from '@/modules/hub/modules/llm-models/components/stores/modelDetailsDrawer'
+import { McpServerDetailsDrawer as McpServerDetailsDrawerStore } from '@/modules/hub/modules/mcp/components/stores/mcpServerDetailsDrawer'
 
 const noop = () => {}
 

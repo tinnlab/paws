@@ -5,7 +5,7 @@ import { Drawer } from '@/modules/layouts/app-layout/components/Drawer'
 import { usePermission } from '@/core/permissions'
 import { type CreateLlmProviderRequest, type UpdateLlmProviderRequest } from '@/api-client/types'
 import { Permissions } from '@/api-client/permissions'
-import { LlmProviderDrawer as LlmProviderDrawerStore } from '@/modules/llm-provider/components/llmProviderDrawer'
+import { LlmProviderDrawer as LlmProviderDrawerStore } from '@/modules/llm-provider/components/stores/llmProviderDrawer'
 import { LlmProvider } from '@/modules/llm-provider/stores/llmProvider'
 
 const PROVIDER_TYPES = [

@@ -6,9 +6,9 @@ import type {
   useMcpComposerStore,
   useMcpToolCallsStore,
 } from '@/modules/mcp/stores'
-import type { useSystemMcpServerGroupCardStore } from '@/modules/mcp/components/system/mcpServerGroupsAssignmentCard'
-import type { useGroupSystemMcpServersWidgetStore } from '@/modules/mcp/widgets/groupSystemMcpServersWidget'
-import type { useGroupSystemMcpServersAssignmentStore } from '@/modules/mcp/components/system/groupSystemMcpServersAssignmentDrawer'
+import type { useSystemMcpServerGroupCardStore } from '@/modules/mcp/components/system/stores/mcpServerGroupsAssignmentCard'
+import type { useGroupSystemMcpServersWidgetStore } from '@/modules/mcp/widgets/stores/groupSystemMcpServersWidget'
+import type { useGroupSystemMcpServersAssignmentStore } from '@/modules/mcp/components/system/stores/groupSystemMcpServersAssignmentDrawer'
 import type { useProjectMcpSettingsStore } from '@/modules/mcp/project-extension/stores/projectMcpSettings'
 
 declare module '@ziee/framework/stores' {

@@ -160,8 +160,8 @@ describe('SettingsPageContainer — hook count must not depend on seam registrat
     })
     expect(host.querySelector('[data-testid="settings-container-test-body"]'), 'container rendered').not.toBeNull()
 
-    // 2. The lazy `modules/layouts/app-layout/appLayout` chunk is imported and
-    //    its module side effect injects the seam.
+    // 2. The lazy `modules/layouts/app-layout/stores/appLayout` chunk is imported
+    //    and its module side effect injects the seam.
     const AppLayoutDef = defineStore<{ nativeScroll: boolean; isSidebarCollapsed: boolean }, Record<string, never>>(
       'TestAppLayout',
       { state: { nativeScroll: false, isSidebarCollapsed: false }, actions: () => ({}) },

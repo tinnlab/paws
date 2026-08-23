@@ -6,7 +6,7 @@ import { usePermission } from '@/core/permissions'
 import { type UpdateGroupRequest } from '@/api-client/types'
 import { Permissions } from '@/api-client/permissions'
 import { PermissionsField } from '@/modules/user/components/PermissionsField.tsx'
-import { EditUserGroupDrawer as EditUserGroupDrawerStore } from '@/modules/user/components/group/editUserGroupDrawer'
+import { EditUserGroupDrawer as EditUserGroupDrawerStore } from '@/modules/user/components/group/stores/editUserGroupDrawer'
 import { UserGroups } from '@/modules/user/stores/userGroups'
 
 const editUserGroupSchema = z.object({

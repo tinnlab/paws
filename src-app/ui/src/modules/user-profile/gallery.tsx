@@ -42,7 +42,7 @@ const seedUser =
   async () => {
     const { useAuthStore } = await import('@/modules/auth/Auth.store')
     const { useAppLayoutStore } = await import(
-      '@/modules/layouts/app-layout/appLayout'
+      '@/modules/layouts/app-layout/stores/appLayout'
     )
     await holdPatch(() => {
       useAppLayoutStore.setState({ isSidebarCollapsed: collapsed } as any)

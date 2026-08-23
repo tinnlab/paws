@@ -20,7 +20,7 @@ import { LlmProviderDrawer } from '@/modules/llm-provider/components/LlmProvider
 import { LocalProviderSettings } from '@/modules/llm-provider/components/LocalProviderSettings'
 import { RemoteProviderSettings } from '@/modules/llm-provider/components/RemoteProviderSettings'
 import { useWindowMinSize } from '@/modules/layouts/app-layout/hooks/useWindowMinSize'
-import { LlmProviderDrawer as LlmProviderDrawerStore } from '@/modules/llm-provider/components/llmProviderDrawer'
+import { LlmProviderDrawer as LlmProviderDrawerStore } from '@/modules/llm-provider/components/stores/llmProviderDrawer'
 import { LlmProvider } from '@/modules/llm-provider/stores/llmProvider'
 
 export function LlmProviderSettings() {

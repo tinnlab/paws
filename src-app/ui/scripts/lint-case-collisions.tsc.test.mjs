@@ -1,0 +1,165 @@
+/**
+ * TEST-8 [acceptance] [invariant: INV-3] — "update every import site in BOTH
+ * `src-app/ui/src` and `src-app/desktop/ui/src`".
+ *
+ * `tsc` is the authoritative oracle for that claim: relocating the store directories
+ * changed 100 import specifiers, and a single one missed in either workspace is an
+ * unresolvable module, which `tsc --noEmit` reports as an error. Nothing weaker can
+ * prove the claim — a grep only finds the specifiers it was told to look for.
+ *
+ * Exit code alone is NOT sufficient evidence, and this file does not rely on it. A
+ * `tsconfig` whose `include` was NARROWED type-checks almost nothing and exits 0 just
+ * as happily as a clean full compile. So each workspace is asserted three ways: it
+ * exits 0, `--listFilesOnly` shows it really pulled in thousands of files, and that
+ * file list contains relocated stores plus their sibling components.
+ *
+ * (An earlier version of this paragraph cited `{"compilerOptions":{"noEmit":true},
+ * "files":[]}` as the verified demonstration. That specific config does NOT reproduce
+ * it — tsc rejects an empty `files` list outright with `TS18002`, exit 2. A narrowed
+ * `include` is the shape that really slips through. The claim was corrected rather
+ * than deleted, because a header citing a check that does not reproduce is exactly the
+ * kind of false assurance this file exists to remove.)
+ *
+ * NOT chained into `npm run check`, after being chained and then un-chained again —
+ * the reasoning changed twice, so here is the settled version. It was excluded first
+ * on cost (wrong: the exit-code leg duplicates the gate's own `tsc`, but the coverage
+ * legs do not, and outside the chain nothing ran them). It was then chained. An
+ * auditor pointed out the decisive problem with that: this file compiles BOTH
+ * workspaces, so running it from `src-app/ui`'s gate makes a type error in
+ * `src-app/desktop/ui` fail `ui`'s check with the message *"at least one import site
+ * still points at a pre-move path"*. Coupling one workspace's gate to the other's
+ * type-cleanliness, and mislabelling the failure, is worse than the hole it closed —
+ * and `lint-case-collisions.resolution.test.mjs` now covers the general case in 0.3 s.
+ *
+ * Run:  npm run test:case-collisions:tsc      (~45 s; run at phase 8 and when
+ *                                              changing resolution-adjacent config)
+ */
+import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import test, { describe } from 'node:test'
+import { fileURLToPath } from 'node:url'
+
+const HERE = path.dirname(fileURLToPath(import.meta.url))
+const REPO = path.resolve(HERE, '../../..')
+const WORKSPACES = [
+  { label: 'ui', dir: path.resolve(HERE, '..') },
+  { label: 'desktop/ui', dir: path.resolve(HERE, '../../desktop/ui') },
+]
+
+const TSC = path.resolve(REPO, 'node_modules/typescript/bin/tsc')
+
+/**
+ * Paths that MUST appear in the compiled program, DERIVED from the tree rather than
+ * hardcoded.
+ *
+ * An earlier revision listed specific branch paths (`.../stores/editUserDrawer/index.ts`,
+ * `agentStepForm.helpers.ts`). That is the same defect as putting a one-time claim in
+ * a permanent gate: this file is chained into `npm run check`, so a future branch that
+ * legitimately renamed or consolidated `editUserDrawer` would get a red build with a
+ * case-collision message about a change it knew nothing about. Discovering the sample
+ * at runtime keeps the anti-vacuity property (the program really contains relocated
+ * stores and their components) without pinning it to this diff's filenames.
+ */
+function mustCompile(uiSrc) {
+  const found = []
+  const walk = (dir, underStores) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (found.length >= 2) return // enough — checked in the loop, not just per frame
+      if (!e.isDirectory() || ['node_modules', 'dist', 'build', '.git'].includes(e.name)) continue
+      const full = path.join(dir, e.name)
+      if (underStores && fs.existsSync(path.join(full, 'index.ts'))) {
+        // A store under `stores/`, plus the component it sits beside — the exact pair
+        // the move created, whatever it happens to be called.
+        const componentDir = path.dirname(path.dirname(full))
+        const pascal = e.name[0].toUpperCase() + e.name.slice(1)
+        const sibling = fs
+          .readdirSync(componentDir)
+          .find(n => n === `${pascal}.tsx` || n.toLowerCase() === `${e.name.toLowerCase()}.tsx`)
+        // RELATIVE to the repo, not absolute: `tsc --listFilesOnly` prints realpaths,
+        // so an absolute needle built with `path.resolve` goes red in a worktree
+        // reached through a symlinked path — a spelling difference reported as "the
+        // moved module is outside the compile surface".
+        if (sibling)
+          found.push(
+            path.relative(REPO, path.join(full, 'index.ts')),
+            path.relative(REPO, path.join(componentDir, sibling)),
+          )
+      }
+      walk(full, underStores || e.name === 'stores')
+    }
+  }
+  walk(uiSrc, false)
+  assert.ok(found.length >= 2, 'expected to find at least one relocated store beside its component')
+  return found
+}
+
+const runTsc = (dir, extraArgs = []) =>
+  spawnSync(process.execPath, [TSC, '-p', 'tsconfig.json', ...extraArgs], {
+    cwd: dir,
+    encoding: 'utf8',
+    maxBuffer: 128 * 1024 * 1024,
+  })
+
+describe('case-collision fix — import sites', () => {
+  test('TEST-8: `tsc --noEmit` is clean in BOTH UI workspaces, and really compiled the moved files', { timeout: 1_800_000 }, () => {
+    assert.ok(fs.existsSync(TSC), `hoisted typescript not found at ${TSC} — run npm install at the repo root`)
+
+    for (const ws of WORKSPACES) {
+      assert.ok(fs.existsSync(path.join(ws.dir, 'tsconfig.json')), `${ws.label} must have a tsconfig.json`)
+
+      // 1. It type-checks cleanly.
+      const check = runTsc(ws.dir, ['--noEmit'])
+      assert.equal(
+        check.status,
+        0,
+        `tsc --noEmit failed in ${ws.label} — at least one import site still points at a pre-move path:\n${check.stdout}\n${check.stderr}`,
+      )
+
+      // 2. …over a real program, not an empty one. This is what makes (1) evidence.
+      const listed = runTsc(ws.dir, ['--noEmit', '--listFilesOnly'])
+      assert.equal(listed.status, 0, `tsc --listFilesOnly failed in ${ws.label}:\n${listed.stderr}`)
+      const files = listed.stdout.split('\n').map(s => s.trim()).filter(Boolean)
+      assert.ok(
+        files.length > 1000,
+        `${ws.label} compiled only ${files.length} files — its tsconfig include/files no longer covers the app, so a green exit proves nothing`,
+      )
+
+      // 3. …and that program includes relocated stores and their sibling components.
+      const joined = files.join('\n')
+      for (const needle of mustCompile(path.resolve(HERE, '../src'))) {
+        assert.ok(
+          joined.includes(needle),
+          `${ws.label}'s program does not include ${needle} — the moved module is outside the compile surface, so tsc cannot be vouching for its import sites`,
+        )
+      }
+    }
+  })
+
+  test('TEST-8 (control): tsc really does fail on a broken specifier', { timeout: 900_000 }, () => {
+    // Proves the runner reports failure at all. Complements the coverage assertions
+    // above: those show the workspace compile is non-empty, this shows a bad import
+    // in a compiled file is fatal rather than swallowed.
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tsc-control-'))
+    try {
+      fs.writeFileSync(
+        path.join(tmp, 'tsconfig.json'),
+        JSON.stringify({
+          compilerOptions: { noEmit: true, moduleResolution: 'bundler', module: 'esnext', target: 'esnext' },
+          include: ['broken.ts'],
+        }),
+      )
+      fs.writeFileSync(
+        path.join(tmp, 'broken.ts'),
+        "import { X } from './components/user/editUserDrawer'\nexport const y = X\n",
+      )
+      const r = runTsc(tmp, ['--noEmit'])
+      assert.notEqual(r.status, 0, `the control project must FAIL tsc, got exit 0:\n${r.stdout}`)
+      assert.match(r.stdout, /editUserDrawer/, `expected the unresolved specifier to be named:\n${r.stdout}`)
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true })
+    }
+  })
+})

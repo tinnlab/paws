@@ -5,7 +5,7 @@ import { usePermission } from '@/core/permissions'
 import { type McpServer } from '@/api-client/types'
 import { Permissions } from '@/api-client/permissions'
 import { SystemMcpServer } from '@/modules/mcp/stores/systemMcpServer'
-import { GroupSystemMcpServersAssignment } from '@/modules/mcp/components/system/groupSystemMcpServersAssignmentDrawer'
+import { GroupSystemMcpServersAssignment } from '@/modules/mcp/components/system/stores/groupSystemMcpServersAssignmentDrawer'
 
 /**
  * Drawer for assigning/removing system MCP servers to/from a group.

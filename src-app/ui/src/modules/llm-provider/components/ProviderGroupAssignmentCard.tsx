@@ -6,7 +6,7 @@ import { Permissions } from '@/api-client/permissions'
 import { usePermission } from '@/core/permissions'
 import { UserGroupAssignment } from '@/components/common/UserGroupAssignment'
 import { emitLlmProviderGroupsChanged } from '@/modules/llm-provider/events'
-import { ProviderGroupAssignmentCard as ProviderGroupAssignmentCardStore } from '@/modules/llm-provider/components/providerGroupAssignmentCard'
+import { ProviderGroupAssignmentCard as ProviderGroupAssignmentCardStore } from '@/modules/llm-provider/components/stores/providerGroupAssignmentCard'
 import { LlmProvider } from '@/modules/llm-provider/stores/llmProvider'
 
 /**

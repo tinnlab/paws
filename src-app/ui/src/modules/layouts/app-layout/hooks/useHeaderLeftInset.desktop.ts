@@ -1,5 +1,5 @@
 import { isTauriView, isMacOS } from '@ziee/desktop/core/platform'
-import { AppLayout } from '@/modules/layouts/app-layout/appLayout'
+import { AppLayout } from '@/modules/layouts/app-layout/stores/appLayout'
 
 /**
  * DESKTOP override of {@link useHeaderLeftInset} — adds the macOS traffic-light
