@@ -24,6 +24,8 @@ named test executed green (rule A11).
 | 11 | `npx playwright test tests/e2e/onboarding --workers=1` | 0 — 37 passed |
 | 12 | `npx playwright test tests/e2e/onboarding/default-model-step.spec.ts --workers=1` (re-run after the label fix) | 0 — 4 passed |
 | 13 | `npx playwright test tests/e2e/memory/onboarding-{skip,enable}.spec.ts --workers=1` | 0 — 2 passed |
+| 14 | `npx vitest run src/modules/loader.test.ts` (desktop/ui) | 0 — 3 passed |
+| 15 | `npm run gate:ui` (desktop/ui, `set -o pipefail`) | **0** — 51/51 surfaces PASS, 318/318 cells, transport artifacts 0 (0%) |
 
 All Playwright and docker-touching commands were wrapped in `sg docker -c "…"`.
 
@@ -83,7 +85,8 @@ Cmd 3's filter also matched 3 pre-existing tests (`project::conversations_test::
 
 - `npm run check (ui)`: **PASS**
 - `npm run check (desktop/ui)`: **PASS**
-- `gate:ui (ui)`: **PASS**
+- `gate:ui (ui)`: **PASS** — 220/220 surfaces, 688/688 cells, transport artifacts 0 (0%)
+- `gate:ui (desktop/ui)`: **PASS** — 51/51 surfaces, 318/318 cells, transport artifacts 0 (0%)
 
 ## Tree changes after the first full run
 
