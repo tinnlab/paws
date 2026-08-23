@@ -26,6 +26,14 @@ export default (set: DefaultModelStepSet, get: DefaultModelStepGet) => {
   const ensureRuntime = ensureRuntimeFactory(set, get)
 
   return async (): Promise<void> => {
+    // Re-entrancy guard. The install button is hidden while an orchestration
+    // runs, but a double-click can land two calls before the first render, and
+    // two concurrent runs would each enable the provider and race the runtime
+    // leg's `setDefaultVersion`. Only the weights leg is de-duplicated, and only
+    // server-side (`find_existing_in_progress`), so this is the guard for the
+    // other two legs.
+    if (get().installing) return
+
     set(draft => {
       draft.installing = true
       draft.error = null
@@ -34,10 +42,11 @@ export default (set: DefaultModelStepSet, get: DefaultModelStepGet) => {
     })
 
     try {
-      const providerId = await ensureLocalProvider()
+      const { providerId, problem } = await ensureLocalProvider()
       if (!providerId) {
         throw new Error(
-          'No local provider is available to install into. An administrator can add or enable one in Settings → LLM Providers.',
+          problem ??
+            'No local provider is available to install into. An administrator can add or enable one in Settings → LLM Providers.',
         )
       }
 

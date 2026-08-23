@@ -51,9 +51,12 @@ function snapshot(over: Partial<DownloadSnapshot> = {}): DownloadSnapshot {
   } as DownloadSnapshot
 }
 
-const localProvider = (models: { name: string; enabled: boolean }[]): ProviderLike => ({
+const localProvider = (
+  models: { name: string; enabled: boolean }[],
+  enabled = true,
+): ProviderLike => ({
   provider_type: 'local',
-  enabled: true,
+  enabled,
   llm_models: models,
 })
 
@@ -121,9 +124,32 @@ test('a failed download shows failed, with its reason', () => {
   assert.equal(failureReason(input({ downloads: [failed] })), 'clone rejected')
 })
 
-test('a cancelled download returns to the offer path, not an error', () => {
+test('a cancelled download returns to the plain offer, not an error', () => {
+  // There is deliberately no `cancelled` view: a cancelled DownloadInstance
+  // never survives in the store to be derived from (the cancel action removes
+  // the row; the SSE and load-existing paths keep only pending/downloading/
+  // failed). Cancelling therefore restores the offer, which is what the user
+  // asked for.
   const cancelled = download({ status: 'cancelled' })
-  assert.equal(deriveViewState(input({ downloads: [cancelled] })), 'cancelled')
+  assert.equal(deriveViewState(input({ downloads: [cancelled] })), 'offer')
+})
+
+test('a RUNNING orchestration outranks a stale failed record (the retry bug)', () => {
+  // A failed DownloadInstance survives in the store. If the terminal record were
+  // checked first, clicking "Try again" would keep showing the error and a live
+  // Retry button for the whole provider + runtime-discovery leg — the retry
+  // would look like a no-op and each further click would start another install.
+  const stale = download({ status: 'failed', error_message: 'previous attempt' })
+  assert.equal(
+    deriveViewState(input({ downloads: [stale], installing: true, stage: 'provider' })),
+    'preparing',
+  )
+  assert.equal(
+    deriveViewState(input({ downloads: [stale], installing: true, stage: 'runtime' })),
+    'preparing',
+  )
+  // …and once it settles, the failure is visible again.
+  assert.equal(deriveViewState(input({ downloads: [stale] })), 'failed')
 })
 
 test('an unavailable runtime is its own state, distinct from failure', () => {
@@ -147,6 +173,25 @@ test('installed detection matches the descriptor name under a local provider onl
     'a remote provider hosting a same-named model is not our local install',
   )
   assert.equal(isDefaultModelInstalled([localProvider([])]), false)
+})
+
+test('installed means USABLE — both enabled flags are required', () => {
+  // The already-installed copy tells the user they can start chatting. The model
+  // picker resolves the first ENABLED model under a provider it can see, and a
+  // disabled provider is filtered out of that list entirely — so reporting
+  // "installed" with either flag off would be a claim the user cannot act on.
+  assert.equal(
+    isDefaultModelInstalled([localProvider([{ name: DEFAULT_MODEL.name, enabled: false }])]),
+    false,
+    'a disabled MODEL is not a usable default',
+  )
+  assert.equal(
+    isDefaultModelInstalled([
+      localProvider([{ name: DEFAULT_MODEL.name, enabled: true }], false),
+    ]),
+    false,
+    'a model under a disabled PROVIDER is not reachable',
+  )
 })
 
 test('percent is null until a total is known, and is clamped', () => {

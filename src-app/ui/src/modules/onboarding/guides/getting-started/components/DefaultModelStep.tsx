@@ -71,7 +71,24 @@ async function advanceUnconditionally(): Promise<void> {
  *     `MemorySetupStep` handles `MemoryAdminManage`.
  */
 export default function DefaultModelStep({ registerBeforeNext }: OnboardingStepProps) {
-  const canInstall = usePermission(Permissions.LlmModelsCreate)
+  // Gate on what the WHOLE flow needs, not just its last step. Installing walks
+  // three subsystems — enable + group-assign a provider, download and default a
+  // runtime, then download the model — and each is separately permissioned. A
+  // control gated only on `llm_models::create` renders enabled for a user who
+  // will hit a 403 partway through, after having already changed provider state.
+  // `RuntimeVersionRead` matters twice over: its store action early-returns
+  // SILENTLY without it, so the runtime leg would conclude "nothing installed"
+  // even when a runtime is present.
+  const canInstall = usePermission({
+    allOf: [
+      Permissions.LlmModelsCreate,
+      Permissions.LlmProvidersEdit,
+      Permissions.LlmProvidersAssignGroups,
+      Permissions.RuntimeVersionRead,
+      Permissions.RuntimeVersionCreate,
+      Permissions.RuntimeVersionUpdate,
+    ],
+  })
 
   // Reactive reads — these drive the derivation below and must be read at the
   // top level of render, never inside a `.map()` or a conditional.
@@ -189,13 +206,6 @@ export default function DefaultModelStep({ registerBeforeNext }: OnboardingStepP
         {view === 'preparing' && (
           <Text type="secondary" className="text-sm">
             Preparing&hellip;
-          </Text>
-        )}
-
-        {view === 'cancelled' && (
-          <Text type="secondary" className="text-sm" data-testid="onboarding-default-model-cancelled-note">
-            Download cancelled &mdash; nothing was installed. You can install it
-            now or later from Settings.
           </Text>
         )}
       </div>

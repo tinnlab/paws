@@ -35,10 +35,18 @@ const MODEL_NAME: &str = "ziee-default-qwen3-5-9b-q4-k-m";
 #[tokio::test]
 async fn test_6_install_sequence_yields_a_servable_default_model() {
     let mock = mock_release::setup().await;
+    // The sequence spans three subsystems, so it needs all three permission
+    // families — including the two the group-assignment leg turns on.
+    let mut perms: Vec<&str> = LOCAL_RUNTIME_ADMIN_PERMS.to_vec();
+    perms.extend_from_slice(&[
+        "groups::read",
+        "llm_providers::assign_groups",
+        "user_llm_providers::read",
+    ]);
     let admin = crate::common::test_helpers::create_user_with_permissions(
         &mock.server,
         "installer",
-        LOCAL_RUNTIME_ADMIN_PERMS,
+        &perms,
     )
     .await;
     let client = reqwest::Client::new();
@@ -95,6 +103,38 @@ async fn test_6_install_sequence_yields_a_servable_default_model() {
         .await
         .expect("enable the local provider");
     assert_eq!(enabled.status(), 200, "the local provider should enable");
+
+    // …and share it with the default group, which is the second half of the leg
+    // and the one that is easy to miss: enabling alone leaves the provider out
+    // of every user's list. Nothing seeds a `user_group_llm_providers` row.
+    let groups: serde_json::Value = client
+        .get(mock.server.api_url("/groups?page=1&per_page=100"))
+        .header("Authorization", &auth)
+        .send()
+        .await
+        .expect("list groups")
+        .json()
+        .await
+        .expect("groups json");
+    let default_group = groups["groups"]
+        .as_array()
+        .expect("groups array")
+        .iter()
+        .find(|g| g["is_default"] == true && g["is_active"] == true)
+        .expect("a default group exists")
+        .clone();
+    let assigned = client
+        .post(mock.server.api_url(&format!("/llm-providers/{local_id}/groups")))
+        .header("Authorization", &auth)
+        .json(&json!({ "group_id": default_group["id"] }))
+        .send()
+        .await
+        .expect("assign the provider to the default group");
+    assert!(
+        assigned.status().is_success(),
+        "sharing the provider with a group should succeed; got {}",
+        assigned.status()
+    );
 
     // ── Leg 2: provision llama.cpp and make it the system default ───────────
     let version_id = lrt::download_engine_from_mock(&mock, &admin.token, "llamacpp").await;
@@ -159,9 +199,44 @@ async fn test_6_install_sequence_yields_a_servable_default_model() {
         .json()
         .await
         .expect("provider json");
-    assert_eq!(
-        provider_now["enabled"], true,
-        "the provider stays enabled, so the model is reachable from the picker"
+    assert_eq!(provider_now["enabled"], true, "the provider stays enabled");
+
+    // ── …and it is REACHABLE, which enabling alone does not achieve ─────────
+    //
+    // This is the assertion that would have caught the gap: an enabled provider
+    // holding an enabled model is still INVISIBLE until it is assigned to a
+    // group the user belongs to. `get_for_user` — which backs
+    // `GET /api/user-llm-providers`, the endpoint the model picker reads —
+    // INNER JOINs `user_group_llm_providers`, and every chat send re-checks
+    // `user_has_access_to_provider`. Neither has an admin bypass, and nothing
+    // seeds such a row. Asserting only `enabled` above passed happily while the
+    // model was unusable.
+    let picker: serde_json::Value = client
+        .get(mock.server.api_url("/user-llm-providers"))
+        .header("Authorization", &auth)
+        .send()
+        .await
+        .expect("read the user-facing provider list")
+        .json()
+        .await
+        .expect("user providers json");
+    let visible = picker["providers"]
+        .as_array()
+        .expect("providers array")
+        .iter()
+        .find(|p| p["id"].as_str() == Some(local_id.as_str()))
+        .expect(
+            "INV-2: the local provider must be visible in the user-facing list — an \
+             enabled provider that is not shared with any group never reaches the \
+             model picker, and chat answers 403 ACCESS_DENIED for it",
+        );
+    assert!(
+        visible["llm_models"]
+            .as_array()
+            .expect("llm_models array")
+            .iter()
+            .any(|m| m["name"].as_str() == Some(MODEL_NAME)),
+        "INV-2: the installed model must be among the models the user can pick"
     );
 
     // An engine is resolvable for it. `BinaryManager::select_runtime_version`

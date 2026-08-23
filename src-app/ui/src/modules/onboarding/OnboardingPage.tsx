@@ -20,6 +20,7 @@ import type { OnboardingSlot } from './types/OnboardingSlot'
 import type { OnboardingStepProps } from './types/onboarding'
 import { Onboarding as OnboardingStore } from '@/modules/onboarding/stores/onboarding'
 import { ApiKeysStep } from '@/modules/onboarding/guides/getting-started/components/stores/apiKeysStep'
+import { DefaultModelStep } from '@/modules/onboarding/guides/getting-started/components/stores/defaultModelStep'
 import { McpServersStep } from '@/modules/onboarding/guides/getting-started/components/stores/mcpServersStep'
 import { ModuleSystem } from '@ziee/framework/stores'
 
@@ -42,6 +43,7 @@ export default function OnboardingPage() {
     return () => {
       OnboardingStore.reset()
       ApiKeysStep.reset()
+      DefaultModelStep.reset()
       McpServersStep.reset()
     }
   }, [])
@@ -88,6 +90,7 @@ export default function OnboardingPage() {
         await OnboardingStore.completeGuide(guide.id)
         OnboardingStore.reset()
         ApiKeysStep.reset()
+        DefaultModelStep.reset()
         McpServersStep.reset()
         navigate('/chat', { replace: true })
       } else {

@@ -108,6 +108,19 @@ artifact) · already-installed · offline.
 A 5.68 GB download inside a wizard is the main UX risk. It must not block
 completion (INV-3).
 
+> **Known limitation, found during implementation — a connection-speed floor.**
+> The LFS client is built with `.timeout(Duration::from_secs(60 * 30))`
+> (`utils/git/lfs/service.rs`), and reqwest applies that to the WHOLE request
+> including the streamed body. A 5.68 GB blob therefore needs a sustained
+> **~3.2 MB/s (~25 Mbps)**; below that the install fails, every time, with no
+> resume. The bound is pre-existing — it replaced reqwest's unbounded default as
+> a security fix — and this feature is simply the first to depend on a multi-GB
+> transfer by default. Left unchanged here on purpose: raising it weakens a
+> shared bound for every caller, `Q3_K_M` (4.67 GB) only moves the floor to
+> ~2.6 MB/s, and choosing the minimum connection a first-run default supports is
+> a product decision. Options are (a) accept the floor, (b) raise the timeout as
+> its own reviewed change, (c) add resume/chunking.
+
 **3. No default-model work is needed.** A fresh install seeds **no models at
 all** (no `INSERT INTO llm_models` in any migration), and the model picker
 already resolves:

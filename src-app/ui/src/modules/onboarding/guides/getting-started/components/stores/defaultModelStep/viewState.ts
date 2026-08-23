@@ -22,14 +22,19 @@ export type DefaultModelView =
   | 'installing-runtime'
   /** The weights are downloading. */
   | 'downloading'
-  /** The model exists under an enabled local provider. */
+  /** The model exists, enabled, under an enabled local provider. */
   | 'already-installed'
   /** The last attempt failed; a reason and a Retry are shown. */
   | 'failed'
-  /** The last attempt was cancelled by the user; the offer returns. */
-  | 'cancelled'
   /** No installable runtime for this host (offline / nothing published). */
   | 'runtime-unavailable'
+
+// NOTE: there is deliberately no `cancelled` state. A cancelled
+// `DownloadInstance` never reaches this derivation — `cancelLlmModelDownload`
+// removes the row on success, and both the SSE handler and the
+// load-existing-downloads path keep only pending/downloading/failed. A state the
+// product cannot reach is a state nobody maintains, so cancelling simply
+// restores the offer, which is what the user asked for anyway.
 
 /** The subset of a provider this derivation needs. */
 export interface ProviderLike {
@@ -72,17 +77,25 @@ export function activeDefaultModelDownload(
 }
 
 /**
- * Is the default model installed?
+ * Is the default model installed AND usable?
  *
  * Matched on the descriptor's STABLE name under a local provider — the same key
  * `llm_models`' `UNIQUE (provider_id, name)` enforces, so this agrees with the
  * database rather than approximating it.
+ *
+ * Both `enabled` flags are required, and that is not pedantry: the step's
+ * already-installed copy tells the user the model "is already your default model,
+ * so you can start chatting". The model picker resolves the first ENABLED model
+ * under a provider the user can reach, and a disabled provider is filtered out of
+ * that list entirely — so claiming readiness while either flag is off would be a
+ * plain untruth the user cannot act on.
  */
 export function isDefaultModelInstalled(providers: ProviderLike[]): boolean {
   return providers.some(
     p =>
       p.provider_type === 'local' &&
-      (p.llm_models ?? []).some(m => m.name === DEFAULT_MODEL.name),
+      p.enabled &&
+      (p.llm_models ?? []).some(m => m.name === DEFAULT_MODEL.name && m.enabled),
   )
 }
 
@@ -115,20 +128,27 @@ export function deriveViewState(input: DeriveViewStateInput): DefaultModelView {
   // `failed`/`cancelled` over an installed model would be a lie.
   if (isDefaultModelInstalled(providers)) return 'already-installed'
 
+  // A RUNNING orchestration outranks any past outcome.
+  //
+  // This ordering is load-bearing. A `failed` DownloadInstance survives in the
+  // store (the download store's filters drop only `cancelled`/`completed`), so
+  // checking the terminal record first would keep rendering the error and a live
+  // Retry button for the whole provider + runtime-discovery leg after the user
+  // clicked "Try again" — the retry would look like a no-op, and each further
+  // click would start another orchestration.
+  if (installing || stage !== 'idle') return 'preparing'
+
   if (error) return 'failed'
   if (runtime?.status === 'failed') return 'failed'
   if (runtimeUnavailable) return 'runtime-unavailable'
 
-  // Terminal transfer outcomes, most recent first. `failed` keeps its reason and
-  // a Retry; `cancelled` returns to the plain offer because the user asked for
-  // that and re-offering is the whole affordance.
+  // The most recent terminal outcome. `failed` keeps its reason and a Retry;
+  // `cancelled` returns to the plain offer, because the user asked for that and
+  // re-offering is the whole affordance.
   const terminal = [...downloads]
     .filter(isDefaultModelDownload)
     .sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1))[0]
   if (terminal?.status === 'failed') return 'failed'
-  if (terminal?.status === 'cancelled') return 'cancelled'
-
-  if (installing || stage !== 'idle') return 'preparing'
 
   return 'offer'
 }

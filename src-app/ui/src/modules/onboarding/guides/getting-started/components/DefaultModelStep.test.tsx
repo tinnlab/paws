@@ -64,6 +64,7 @@ const cancelInstall = vi.hoisted(() => vi.fn(async () => undefined))
 const install = vi.hoisted(() => vi.fn(async () => undefined))
 const dismissError = vi.hoisted(() => vi.fn(() => undefined))
 const loadContext = vi.hoisted(() => vi.fn(async () => undefined))
+const reset = vi.hoisted(() => vi.fn(() => undefined))
 const setReady = vi.hoisted(() => vi.fn(() => undefined))
 
 vi.mock('@/core/permissions', () => ({
@@ -127,6 +128,7 @@ vi.mock(
       install,
       dismissError,
       loadContext,
+      reset,
     },
   }),
 )
@@ -304,7 +306,28 @@ describe('TEST-14 — the transfer states, and what the step does NOT own (INV-6
     expect(q('onboarding-default-model-retry-button')).toBeNull()
   })
 
-  test('a user without the permission sees an explanation and no controls', async () => {
+  test('a DISABLED model or provider is not reported as ready to chat with', async () => {
+    // The installed copy promises the user they can start chatting. A disabled
+    // model is not resolved by the picker, and a disabled provider is filtered
+    // out of the user's provider list entirely.
+    stores.providers = [
+      {
+        provider_type: 'local',
+        enabled: true,
+        llm_models: [{ name: DEFAULT_MODEL.name, enabled: false }],
+      },
+    ]
+    await mount()
+    expect(q('onboarding-default-model-installed-tag')).toBeNull()
+    expect(q('onboarding-default-model-install-button')).not.toBeNull()
+  })
+
+  test('a user missing ANY of the flow\'s permissions sees an explanation, not controls', async () => {
+    // `canInstall` here stands for the whole `allOf` set the component gates on
+    // — model-create, provider-edit, provider-assign-groups and the runtime
+    // read/create/update perms. Gating on only the last step would render an
+    // enabled button for a user who 403s partway through, AFTER the provider
+    // state has already been changed.
     stores.canInstall = false
     await mount()
 

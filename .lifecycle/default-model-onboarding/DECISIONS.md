@@ -246,3 +246,47 @@ produces no credential (TEST-4), that the URL composition is right (TEST-3), and
 that the download lifecycle behaves around failure (TEST-5/TEST-7). A human
 smoke-test against real Hugging Face is the honest way to close the remainder,
 and it is flagged for the reviewer rather than papered over.
+
+### DEC-15: A 5.68 GB download against a 30-minute absolute LFS timeout requires ~3.2 MB/s. Raise the timeout, shrink the model, or accept it?
+
+**Resolution:** ACCEPT IT for now, and escalate. Nothing in this branch changes
+the timeout or the model. The arithmetic is recorded in the design doc and
+surfaced to the owner in `HUMAN_FEEDBACK.md`.
+**Basis:** the two fixes available to me are both worse than the report.
+`utils/git/lfs/service.rs` builds its client with
+`.timeout(Duration::from_secs(60 * 30))`, which reqwest applies to the WHOLE
+request including the streamed body — so 5.68 GB needs a sustained
+5.68 GiB / 1800 s ≈ **3.2 MB/s (~25 Mbps)** or the install always fails. Raising
+it would weaken a bound in shared code that exists as a security fix (it closed
+07-llm-model F-07, replacing reqwest's unbounded default), for every caller, to
+serve one feature. Shrinking to `Q3_K_M` (4.67 GB) only moves the floor to
+~2.6 MB/s — it does not solve the class. And "what connection speed does the
+first-run default require?" is a product question about who the product is for,
+which is the owner's call, not mine (B8/B5).
+
+What this is NOT: a defect introduced by this branch. It is a pre-existing bound
+that this feature is the first to depend on, which is exactly why it surfaced
+here. The honest options for the owner are (a) accept a ~25 Mbps floor, (b) raise
+the LFS timeout deliberately, as its own reviewed change, or (c) add resume /
+chunking so the bound stops mattering.
+
+### DEC-16: The design lists seven step states as "needing gallery coverage". The change proves them by mounting instead. Is that a deviation?
+
+**Resolution:** YES, deliberately, and it is recorded rather than glossed. The
+new required-state keys are mapped `skip: true` in `stateCoverage.ts` with the
+sibling's reason, and the states are proven by mounting the real component in
+`DefaultModelStep.test.tsx`.
+**Basis:** codebase — the onboarding module declares `gallery.tsx` as
+`{ crawlOnly: true }`, the documented marker for a module whose surfaces are
+proven by the crawl rather than a seeded cassette, and every sibling step
+(`ApiKeysStep`, `MemorySetupStep`) maps its states exactly this way. Building a
+bespoke cassette for one step would diverge from every other Onboarding surface
+for one feature's benefit.
+
+The honest cost, stated: the `downloading` / `failed` / `already-installed` /
+unpermitted renders are therefore NOT seen by `gate:ui`'s runtime-health,
+AA-contrast or visual-regression pass — only the states the crawl reaches are.
+The mount proves behaviour, not pixels. Flagged to the owner as the one place
+the shipped approach differs from the design's wording; converting the module to
+a seeded cassette is a coherent follow-up, but it is an Onboarding-wide change,
+not this feature's to make unilaterally.

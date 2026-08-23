@@ -226,10 +226,15 @@ async fn test_5_failed_download_leaves_no_half_installed_model() {
 /// The client half (the step re-deriving from the live store on a fresh mount)
 /// is proven by the store unit test. This is the SERVER half, and the one that
 /// would make the promise impossible if it were false: the transfer must not be
-/// bound to the client that started it. Every client handle is dropped
-/// immediately after the request returns; the work must still run to terminal on
-/// its own, and must still be listed afterwards — which is what lets a returning
-/// client pick it back up.
+/// bound to the client that started it.
+///
+/// What this actually exercises, stated precisely: after the POST returns,
+/// NOTHING further is done on the caller's behalf — no stream is read, no
+/// progress is subscribed to, no connection is held open — and the work still
+/// reaches its own conclusion and is still listed afterwards, which is what lets
+/// a returning client pick it back up. It does not simulate a TCP reset; each
+/// request here uses its own short-lived client and the response body is already
+/// consumed by the time the assertions begin.
 #[tokio::test]
 async fn test_7_download_survives_the_client_that_started_it() {
     let h = setup("navigate_away_downloader").await;
@@ -237,7 +242,9 @@ async fn test_7_download_survives_the_client_that_started_it() {
     let instance = h.start_download().await;
     let id = instance["id"].as_str().expect("download id").to_string();
 
-    // "The user navigated away": nothing of the originating request is held.
+    // "The user navigated away": from here on nothing is done on the caller's
+    // behalf until the assertions — no progress subscription, no polling of the
+    // instance, nothing holding the work open.
     drop(instance);
     tokio::time::sleep(Duration::from_millis(300)).await;
 

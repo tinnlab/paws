@@ -1,4 +1,5 @@
 import { ApiClient } from '@/api-client'
+import type { DownloadVersionRequest } from '@/api-client/types'
 import { DEFAULT_MODEL } from '@/modules/onboarding/guides/getting-started/defaultModel'
 import { RuntimeDownloadProgress } from '@/modules/llm-local-runtime/stores/runtimeDownloadProgress'
 import { RuntimeVersion as RuntimeVersionStore } from '@/modules/llm-local-runtime/stores/runtimeVersion'
@@ -9,6 +10,8 @@ import type { DefaultModelStepGet, DefaultModelStepSet } from '../state'
 const POLL_MS = 500
 /** Backstop so a wedged task can never hang the install forever. */
 const WAIT_TIMEOUT_MS = 15 * 60 * 1000
+/** Floor between server-side version-list re-checks while a snapshot is absent. */
+const LIST_FALLBACK_MS = 5000
 
 export type EnsureRuntimeResult = 'ready' | 'unavailable' | 'failed'
 
@@ -51,7 +54,7 @@ export default (set: DefaultModelStepSet, _get: DefaultModelStepGet) =>
       draft.runtimeUnavailable = false
     })
 
-    const versionId = await waitForRuntimeDownload(key)
+    const versionId = await waitForRuntimeDownload(key, request)
     if (!versionId) return 'failed'
 
     // Make it the default so `select_runtime_version` resolves it for a model
@@ -69,20 +72,29 @@ export default (set: DefaultModelStepSet, _get: DefaultModelStepGet) =>
  * failure — treated as such, with the version id recovered from the freshly
  * reloaded version list.
  */
-async function waitForRuntimeDownload(key: string): Promise<string | null> {
+async function waitForRuntimeDownload(
+  key: string,
+  request: DownloadVersionRequest,
+): Promise<string | null> {
   const deadline = Date.now() + WAIT_TIMEOUT_MS
+  // A missing snapshot is checked against the server only occasionally. It
+  // happens on the ordinary path (the entry is auto-dismissed ~2s after
+  // completing), but re-listing versions on every 500 ms tick would fire ~1800
+  // requests across the timeout window whenever a subscription is lost.
+  let nextListAt = 0
   for (;;) {
     const snapshot = RuntimeDownloadProgress.$.activeByKey.get(key)
 
     if (snapshot?.status === 'completed') {
-      return snapshot.result_version_id ?? (await findInstalledVersionId())
+      return snapshot.result_version_id ?? (await findInstalledVersionId(request))
     }
     if (snapshot?.status === 'failed') return null
-    if (!snapshot) {
+    if (!snapshot && Date.now() >= nextListAt) {
       // Either dismissed after completing, or never registered. The version
-      // list is the authority either way — re-fetch it rather than reading a
-      // list that may predate the download.
-      const id = await findInstalledVersionId()
+      // list is the authority either way — re-fetch rather than reading a list
+      // that may predate the download.
+      nextListAt = Date.now() + LIST_FALLBACK_MS
+      const id = await findInstalledVersionId(request)
       if (id) return id
     }
     if (Date.now() > deadline) return null
@@ -90,10 +102,27 @@ async function waitForRuntimeDownload(key: string): Promise<string | null> {
   }
 }
 
-async function findInstalledVersionId(): Promise<string | null> {
+/**
+ * The id of the version this step asked for — matched on the full
+ * `{engine, version, platform, arch, backend}` tuple, not just the engine.
+ *
+ * Matching on engine alone would return whichever llamacpp row happens to sort
+ * first, which on a machine that already had one (or where another admin
+ * installed one concurrently) is a DIFFERENT build — and that id is then handed
+ * to `setDefaultVersion`, silently promoting someone else's runtime.
+ */
+async function findInstalledVersionId(
+  request: DownloadVersionRequest,
+): Promise<string | null> {
   await RuntimeVersionStore.loadVersions(DEFAULT_MODEL.engine)
   return (
-    RuntimeVersionStore.$.versions.find(v => v.engine === DEFAULT_MODEL.engine)?.id ??
-    null
+    RuntimeVersionStore.$.versions.find(
+      v =>
+        v.engine === request.engine &&
+        v.version === request.version &&
+        v.platform === request.platform &&
+        v.arch === request.arch &&
+        v.backend === request.backend,
+    )?.id ?? null
   )
 }

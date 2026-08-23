@@ -8,7 +8,7 @@
 ## Summary
 
 - **354** surfaces carry at least one renderable-state signal.
-- **2191** signals total: 1722 branch, 141 empty, 127 error, 94 loading, 102 overlay, 5 panel.
+- **2190** signals total: 1721 branch, 141 empty, 127 error, 94 loading, 102 overlay, 5 panel.
 - **5** right-panel renderers registered (each a right-panel-open state).
 - **35** slot registrations (sidebar / settings / chat mount points).
 
@@ -3444,11 +3444,11 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!guide` | 81 |
-| branch | `!guide` | 118 |
-| branch | `isCompleted` | 196 |
-| branch | `nextError` | 230 |
-| branch | `StepComponent` | 240 |
+| branch | `!guide` | 83 |
+| branch | `!guide` | 121 |
+| branch | `isCompleted` | 199 |
+| branch | `nextError` | 233 |
+| branch | `StepComponent` | 243 |
 
 ### `modules/onboarding/guides/getting-started/components/ApiKeysStep`
 
@@ -3468,20 +3468,19 @@ Required states: `delayed`, `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!canInstall` | 97 |
-| loading | `loading` | 109 |
-| branch | `view === 'already-installed'` | 138 |
-| branch | `view === 'installing-runtime'` | 174 |
-| branch | `view === 'downloading'` | 181 |
-| branch | `view === 'preparing'` | 189 |
-| branch | `view === 'cancelled'` | 195 |
-| error | `view === 'failed'` | 203 |
-| branch | `view === 'runtime-unavailable'` | 218 |
-| branch | `view === 'offer' && shouldWarnLowMemory(hardwareInfo?.memory?.total_ram)` | 228 |
-| branch | `view === 'already-installed'` | 257 |
-| branch | `view === 'downloading'` | 259 |
-| branch | `view === 'installing-runtime' \|\| view === 'preparing'` | 274 |
-| branch | `isRetry` | 295 |
+| branch | `!canInstall` | 114 |
+| loading | `loading` | 126 |
+| branch | `view === 'already-installed'` | 155 |
+| branch | `view === 'installing-runtime'` | 191 |
+| branch | `view === 'downloading'` | 198 |
+| branch | `view === 'preparing'` | 206 |
+| error | `view === 'failed'` | 213 |
+| branch | `view === 'runtime-unavailable'` | 228 |
+| branch | `view === 'offer' && shouldWarnLowMemory(hardwareInfo?.memory?.total_ram)` | 238 |
+| branch | `view === 'already-installed'` | 267 |
+| branch | `view === 'downloading'` | 269 |
+| branch | `view === 'installing-runtime' \|\| view === 'preparing'` | 284 |
+| branch | `isRetry` | 305 |
 
 ### `modules/onboarding/guides/getting-started/components/McpServersStep`
 

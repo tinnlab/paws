@@ -88,6 +88,63 @@ async fn test_1_default_model_repository_is_seeded_built_in_enabled_and_anonymou
     );
 }
 
+/// TEST-21 (acceptance, INV-5) — the boot health scan must never auto-disable
+/// the seeded anonymous row.
+///
+/// The startup scan is spawned fire-and-forget at boot and DISABLES any probed
+/// repository whose probe fails. It skips rows with no credential — but
+/// `has_credential_for("none")` is always TRUE, so an anonymous row is NOT
+/// covered by that skip and would be disabled by a first boot that is offline,
+/// firewalled, or behind a captive portal. Re-enabling then requires a passing
+/// probe, so a single transient outage would permanently defeat "a fresh install
+/// has it with no admin action".
+///
+/// This waits past the scan rather than reading the row once, so it observes the
+/// state the scan leaves behind rather than racing it.
+#[tokio::test]
+async fn test_21_boot_health_scan_never_disables_the_anonymous_default_row() {
+    let server = TestServer::start().await;
+    let pool = connect(&server).await;
+    let id = Uuid::parse_str(DEFAULT_MODEL_REPOSITORY_ID).expect("valid fixture uuid");
+
+    // Give the spawned scan room to run and finish. The two credentialed
+    // built-ins are its other candidates and are skipped immediately, so this is
+    // generous rather than tight.
+    for _ in 0..40 {
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        let row = sqlx::query!(
+            "SELECT enabled, last_health_check_status FROM llm_repositories WHERE id = $1",
+            id
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("read the seeded row");
+
+        assert!(
+            row.enabled,
+            "INV-5: the boot health scan disabled the seeded anonymous repository \
+             (status={}) — a fresh install must have it enabled with no admin action, \
+             and a transient network failure at boot must not defeat that",
+            row.last_health_check_status
+        );
+
+        // Asserting `enabled` ALONE would be vacuous on a networked machine,
+        // where the probe simply succeeds and the row survives for the wrong
+        // reason. The property that actually holds is that the row is never
+        // PROBED: `untested` is the seeded default and only a probe overwrites
+        // it. This assertion fails on a networked box too, the moment the skip
+        // is removed.
+        assert_eq!(
+            row.last_health_check_status, "untested",
+            "INV-5: the boot scan probed the seeded anonymous repository. It must \
+             skip it — on an offline / firewalled first boot a probe maps to \
+             Unhealthy and DISABLES the row, and re-enabling then needs a passing \
+             probe, so one transient outage would permanently turn off a row the \
+             product ships enabled"
+        );
+    }
+}
+
 /// TEST-2 — the migration is purely ADDITIVE.
 ///
 /// `llm_repositories` carries `UNIQUE (name)` and `UNIQUE (url)`, and the

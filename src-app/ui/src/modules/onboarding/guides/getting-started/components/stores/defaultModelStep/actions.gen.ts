@@ -9,4 +9,5 @@ export type Actions = {
   ensureRuntime: typeof import('./actions/ensureRuntime')['default']
   install: typeof import('./actions/install')['default']
   loadContext: typeof import('./actions/loadContext')['default']
+  reset: typeof import('./actions/reset')['default']
 }

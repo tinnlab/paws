@@ -22,6 +22,21 @@
  * third-party build, and GGUF routes to llama.cpp — the verified engine path.
  * The safetensors base repo would route to mistral.rs, whose flags CLAUDE.md
  * records as unverified against a real binary.
+ *
+ * ## These strings are load-bearing and NOT covered by any test
+ *
+ * A wrong org, repo or quant name would ship green and 404 at clone time for
+ * every user — no test can catch it, because the design forbids contacting the
+ * real Hugging Face from tests, and a fixture necessarily uses its own names.
+ * They were therefore verified by hand against the live upstream on
+ * **2026-08-23**:
+ *
+ * - `GIT_TERMINAL_PROMPT=0 git ls-remote https://huggingface.co/unsloth/Qwen3.5-9B-GGUF`
+ *   → exit 0, no credential prompt (which is also the INV-1 premise).
+ * - `https://huggingface.co/api/models/unsloth/Qwen3.5-9B-GGUF` lists
+ *   `Qwen3.5-9B-Q4_K_M.gguf` among its 28 files.
+ *
+ * **Re-run both if you change any of them.**
  */
 
 import type { EngineType, FileFormat } from '@/api-client/types'
