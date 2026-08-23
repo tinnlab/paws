@@ -22,6 +22,9 @@ Goal: **finish Onboarding, have a model, talk to it.** No key, no settings page.
   half-installed model** the app will try to load.
 - **INV-5**: The default-model repository row is **built-in and enabled by
   default**, so a fresh install has it with no admin action.
+- **INV-6**: A download started from Onboarding **continues if the user navigates
+  away**, and its progress stays visible elsewhere in the app. The user must be
+  able to browse settings while a multi-GB download runs.
 
 ## The model
 
@@ -61,6 +64,11 @@ Researched before designing; this is most of the work already done.
 - The REST surface already exists: `POST /llm-models/download`,
   `GET /llm-models/downloads/subscribe` (**SSE progress**),
   `POST /llm-models/downloads/{id}/cancel`.
+- **INV-6 is satisfied by construction**: the download runs **server-side**, so it
+  is not bound to the step's lifetime. The `llmModelDownload` store
+  (`subscribeToDownloadProgress`, with reconnect accounting) already tracks it and
+  `ModelHubCard` already renders progress — so leaving Onboarding neither cancels
+  the download nor hides it. Binding it to the step would have been *extra* work.
 
 **Consequence: no new download, progress, LFS, or hosting code.** The work is a
 seed row, an Onboarding step, and the default-model semantics below.
@@ -125,9 +133,8 @@ Mock only the external boundary; do not hit the real HF in tests.
 
 ## Open questions
 
-1. Does a download **survive** navigating away from the Onboarding step?
-2. Re-install / second machine — re-download, or detect an existing copy?
-3. **Hardware.** A 9B at Q4_K_M needs ~8 GB free RAM. Should the step detect
+1. Re-install / second machine — re-download, or detect an existing copy?
+2. **Hardware.** A 9B at Q4_K_M needs ~8 GB free RAM. Should the step detect
    available memory and warn, or offer a smaller quant (`Q3_K_M`, 4.67 GB)?
 
 None of these block implementation.
