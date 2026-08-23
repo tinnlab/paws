@@ -90,19 +90,18 @@ artifact) · already-installed · offline.
 A 5.68 GB download inside a wizard is the main UX risk. It must not block
 completion (INV-3).
 
-**3. Default-model semantics — the genuinely new part.** There is **no global or
-per-user default model today**; `default_model_id` exists only on `projects`
-(`project/types.rs:31`). Options:
+**3. No default-model work is needed.** A fresh install seeds **no models at
+all** (no `INSERT INTO llm_models` in any migration), and the model picker
+already resolves:
 
-- **(a)** Onboarding-only — install it, set no default. Cheapest; arguably misses
-  the goal.
-- **(b)** A user-level `default_model_id`, consulted when creating a conversation
-  with no explicit model. Mirrors the project precedent and its
-  `DEFAULT_MODEL_NOT_FOUND` validation. **Recommended.**
-- **(c)** A deployment-level admin singleton, mirroring `session_settings`.
+```
+defaultModelId()      = explicit new-chat choice ?? firstEnabledModelId()
+firstEnabledModelId() = first enabled model across providers, else null
+```
 
-Per the lifecycle's configurable-settings rule, a new tunable should follow the
-established settings pattern rather than becoming a hardcoded constant.
+So with zero models it is `null`; install exactly one and that one **is** the
+default, with no new field, migration, or setting. An earlier draft proposed a
+user-level `default_model_id` — unnecessary, and removed.
 
 ## Security
 
@@ -126,11 +125,12 @@ Mock only the external boundary; do not hit the real HF in tests.
 
 ## Open questions
 
-1. **Default-model semantics** — (a), (b) or (c) above? **Blocks implementation.**
-2. Does a download **survive** navigating away from the Onboarding step?
-3. Re-install / second machine — re-download, or detect an existing copy?
-4. **Hardware.** A 9B at Q4_K_M needs ~8 GB free RAM. Should the step detect
+1. Does a download **survive** navigating away from the Onboarding step?
+2. Re-install / second machine — re-download, or detect an existing copy?
+3. **Hardware.** A 9B at Q4_K_M needs ~8 GB free RAM. Should the step detect
    available memory and warn, or offer a smaller quant (`Q3_K_M`, 4.67 GB)?
+
+None of these block implementation.
 
 ## Out of scope
 
