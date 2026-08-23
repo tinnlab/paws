@@ -1,0 +1,90 @@
+name: CI
+
+# The gap this closes: before this file, the repo had exactly two workflows,
+# both tag-triggered. Nothing built the app on a PR or a merge. Four bugs that
+# each made the desktop app unbuildable or unbootable therefore survived —
+# a wrong beforeBuildCommand cwd, 25 filesystem case collisions, a
+# ziee-desktop release-only compile break, and a silently stubbed pgvector.
+# Every one of them was invisible on a Linux debug check.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# NOTE: nothing here BUILDS the desktop app. Building is deliberately
+# on-demand — `desktop-release.yml`'s workflow_dispatch job — because a full
+# macOS build is ~25 minutes and is not wanted on every PR. These jobs are the
+# cheap contract only: types, lint, registries, and the case-sensitivity check
+# that a Linux runner structurally cannot provide.
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Every PR: the cheap contract. Types, lint, registries, Rust typecheck. ──
+  checks-linux:
+    name: checks (linux)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # The server's SQLx macros verify queries at COMPILE time against a live
+      # pgvector Postgres at the URL in .cargo/config.toml (127.0.0.1:54321).
+      - name: Build database (pgvector)
+        run: |
+          docker run -d --name ziee-build-db \
+            -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=password \
+            -e POSTGRES_DB=postgres -p 54321:5432 \
+            pgvector/pgvector:pg18
+          for _ in $(seq 1 30); do
+            docker exec ziee-build-db pg_isready -U postgres >/dev/null 2>&1 && break
+            sleep 2
+          done
+
+      - name: Linux build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev patchelf build-essential
+
+      - run: npm ci
+
+      - name: npm run check (ui)
+        run: npm run check --workspace=@ziee/ui-core
+
+      - name: npm run check (desktop/ui)
+        run: npm run check --workspace=@ziee/desktop-ui
+
+      - name: cargo check --workspace
+        working-directory: src-app
+        run: cargo check --workspace --all-targets
+
+  # ── Every PR: the case-sensitivity guard that Linux structurally cannot give.
+  # macOS runners use a case-INSENSITIVE filesystem. This is where a `Foo.tsx`
+  # sitting beside a `foo/` directory breaks TypeScript module resolution —
+  # invisible on Linux, fatal on macOS and Windows. TypeScript only: no Rust,
+  # no bundling, so it costs ~5 minutes rather than ~25.
+  tsc-macos:
+    name: typescript (macos, case-insensitive fs)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - name: tsc + vite build (ui)
+        run: npm run build --workspace=@ziee/ui-core
+      - name: tsc + vite build (desktop/ui)
+        run: npm run build --workspace=@ziee/desktop-ui
