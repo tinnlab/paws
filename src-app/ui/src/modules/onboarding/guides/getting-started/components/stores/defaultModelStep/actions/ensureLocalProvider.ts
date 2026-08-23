@@ -149,7 +149,16 @@ async function ensureGroupAssignment(
     return 'The local provider is not shared with any user group, and your account cannot change that. An administrator can assign it in Settings → LLM Providers → Groups.'
   }
 
-  const groups = await ApiClient.UserGroup.list({ page: 1, per_page: 100 })
+  // Wrapped for the same reason the read above is: the provider has ALREADY
+  // been enabled by this point, so an unhandled throw here leaves a
+  // half-applied administrative change and surfaces a raw transport string
+  // instead of something the user can act on.
+  let groups: { groups: { id: string; name: string; is_active: boolean; is_default: boolean }[] }
+  try {
+    groups = await ApiClient.UserGroup.list({ page: 1, per_page: 100 })
+  } catch {
+    return 'Could not look up the user groups to share the local provider with. The provider is enabled but not shared yet — an administrator can share it in Settings → LLM Providers → Groups.'
+  }
   const active = groups.groups.filter(g => g.is_active)
   // `is_default` is the schema's own answer to "the group ordinary users land
   // in"; the name is the fallback for a deployment that unset it. There is NO
@@ -161,6 +170,10 @@ async function ensureGroupAssignment(
     return `No default user group was found to share the local provider with. An administrator can share it with the right group in Settings → LLM Providers → Groups.`
   }
 
-  await LlmProviderStore.assignGroupToProvider(providerId, target.id)
+  try {
+    await LlmProviderStore.assignGroupToProvider(providerId, target.id)
+  } catch {
+    return `The local provider could not be shared with the “${target.name}” group, so an installed model would not appear in the model picker. An administrator can share it in Settings → LLM Providers → Groups.`
+  }
   return null
 }

@@ -56,6 +56,7 @@ if (!globalThis.matchMedia) {
  */
 const REQUIRED_PERMISSIONS = [
   'llm_providers::read',
+  'llm_models::read',
   'groups::read',
   'llm_local_runtime::versions_read',
   'user_llm_providers::read',
@@ -80,6 +81,8 @@ const stores = vi.hoisted(() => ({
     runtimeUnavailable: false,
     runtimeKey: null as string | null,
     loading: false,
+    contextUnavailable: false,
+    cancelError: null as string | null,
   },
   hardwareInfo: null as unknown,
 }))
@@ -120,11 +123,15 @@ vi.mock('@/modules/llm-provider/stores/llmModelDownload', () => ({
     },
   },
 }))
-// The USER-FACING provider list — what the step derives "installed" from. The
-// server has already filtered it to enabled + group-reachable providers, so an
-// empty list is exactly what a user sees when the provider is shared with nobody.
-vi.mock('@/modules/user-llm-providers/userLlmProviders', () => ({
-  UserLlmProviders: {
+// The MODEL PICKER's provider list — what the step derives "installed" from,
+// and the same list `defaultModelId()` reasons over. The server has already
+// filtered it to enabled + group-reachable providers, so an empty list is
+// exactly what a user sees when the provider is shared with nobody.
+//
+// NOT `UserLlmProviders`: that store backs the personal-API-key page and
+// filters `provider_type !== 'local'`, so the local provider is never in it.
+vi.mock('@/modules/user-llm-providers/modelPicker', () => ({
+  ModelPicker: {
     get providers() {
       return stores.providers
     },
@@ -165,6 +172,12 @@ vi.mock(
       },
       get loading() {
         return stores.step.loading
+      },
+      get contextUnavailable() {
+        return stores.step.contextUnavailable
+      },
+      get cancelError() {
+        return stores.step.cancelError
       },
       cancelInstall,
       install,
@@ -237,6 +250,8 @@ beforeEach(() => {
     runtimeUnavailable: false,
     runtimeKey: null,
     loading: false,
+    contextUnavailable: false,
+    cancelError: null,
   }
   stores.hardwareInfo = null
   registered = null
@@ -379,6 +394,73 @@ describe('TEST-14 — the transfer states, and what the step does NOT own (INV-6
     expect(q('onboarding-default-model-install-button')).not.toBeNull()
   })
 
+  test('a FAILED cancel is surfaced while the download is still running', async () => {
+    // The download is still active, so the view is `downloading` — where the
+    // install-failure alert is not rendered at all. Without a dedicated
+    // surface the user clicks Cancel, sees the bar keep moving, and cannot tell
+    // whether the request was even sent.
+    stores.downloads = [activeDownload()]
+    stores.step.cancelError = "The download couldn't be cancelled: 503"
+    await mount()
+
+    const alert = q('onboarding-default-model-cancel-error-alert')
+    expect(alert).not.toBeNull()
+    expect(alert!.textContent).toContain("couldn't be cancelled")
+    // …and the transfer's own controls are still there, because it is still running.
+    expect(q('onboarding-default-model-cancel-button')).not.toBeNull()
+  })
+
+  test('a failed CONTEXT load says so instead of silently offering the install', async () => {
+    // Rendering the plain offer would invite a user who already has the model to
+    // re-download 5.68 GB.
+    stores.step.contextUnavailable = true
+    await mount()
+
+    const alert = q('onboarding-default-model-context-alert')
+    expect(alert).not.toBeNull()
+    expect(alert!.textContent).toMatch(/already installed/i)
+  })
+
+  test('every non-idle state is announced to assistive technology', async () => {
+    // Each state change here is the RESULT of a control that then disappears or
+    // is disabled — which browsers blur — so without a live region a
+    // screen-reader user gets no signal that anything happened.
+    stores.downloads = [activeDownload()]
+    await mount()
+    const live = q('onboarding-default-model-live-status')
+    expect(live).not.toBeNull()
+    expect(live!.getAttribute('aria-live')).toBe('polite')
+    expect(live!.textContent).toMatch(/downloading/i)
+  })
+
+  test('completion is announced, not just shown', async () => {
+    stores.providers = [
+      {
+        provider_type: 'local',
+        enabled: true,
+        llm_models: [{ name: DEFAULT_MODEL.name, enabled: true }],
+      },
+    ]
+    await mount()
+    expect(q('onboarding-default-model-live-status')!.textContent).toMatch(
+      /installed and ready/i,
+    )
+  })
+
+  test('the memory advisory renders BEFORE the install control', async () => {
+    // A warning that exists to inform a decision has to be visible before the
+    // button that makes it — at ~390px it is not, if it sits below the card.
+    stores.hardwareInfo = { memory: { total_ram: 4 * 1024 ** 3 } }
+    await mount()
+
+    const advisory = q('onboarding-default-model-memory-alert')!
+    const install = q('onboarding-default-model-install-button')!
+    expect(advisory).not.toBeNull()
+    expect(install).not.toBeNull()
+    // DOCUMENT_POSITION_FOLLOWING === 4: install comes after the advisory.
+    expect(advisory.compareDocumentPosition(install) & 4).toBeTruthy()
+  })
+
   test('a model the user cannot REACH is not reported as installed', async () => {
     // The step derives from the user-facing provider list, which the server has
     // already filtered to enabled + group-reachable. An empty list is what a
@@ -430,8 +512,31 @@ describe('TEST-14 — the transfer states, and what the step does NOT own (INV-6
     expect(q('onboarding-default-model-cancel-button')).toBeNull()
     expect(q('onboarding-default-model-retry-button')).toBeNull()
 
-    // It must not fire admin-only loads for a user who cannot use them.
-    expect(loadContext).not.toHaveBeenCalled()
+    // The context IS loaded for them — its own read self-gates on the
+    // permission they hold — because they still need to know whether the model
+    // is already there.
+    expect(loadContext).toHaveBeenCalled()
+  })
+
+  test('an unpermitted user on a CONFIGURED deployment is told it is ready, not to wait', async () => {
+    // Otherwise they finish onboarding waiting on an admin for a model they
+    // already have — the two situations are indistinguishable from the static
+    // "your administrator installs it" copy.
+    stores.canInstall = false
+    stores.providers = [
+      {
+        provider_type: 'local',
+        enabled: true,
+        llm_models: [{ name: DEFAULT_MODEL.name, enabled: true }],
+      },
+    ]
+    await mount()
+
+    expect(q('onboarding-default-model-installed-tag')).not.toBeNull()
+    expect(host!.textContent).toMatch(/ready for you/i)
+    expect(host!.textContent).not.toMatch(/administrator installs it/i)
+    // …and still no controls they cannot use.
+    expect(q('onboarding-default-model-install-button')).toBeNull()
   })
 
   test('the offer names the file and size, and warns only on a small machine', async () => {

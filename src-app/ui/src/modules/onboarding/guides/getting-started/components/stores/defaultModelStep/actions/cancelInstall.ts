@@ -17,11 +17,22 @@ export default (set: DefaultModelStepSet, _get: DefaultModelStepGet) =>
   async (): Promise<void> => {
     const active = activeDefaultModelDownload(LlmModelDownload.$.downloads)
     if (!active) return
+    set(draft => {
+      draft.cancelError = null
+    })
     try {
       await LlmModelDownload.cancelLlmModelDownload(active.id)
     } catch (e: unknown) {
+      // NOT `error`: the download is still running, so the view is still
+      // `downloading` — where the install-failure alert is not rendered. Writing
+      // it to `error` would show the user nothing at the moment they need it,
+      // and then resurface this text later under "The model couldn't be
+      // installed", attached to a Retry that restarts the whole transfer.
       set(draft => {
-        draft.error = e instanceof Error ? e.message : 'The download could not be cancelled.'
+        draft.cancelError =
+          e instanceof Error
+            ? `The download couldn't be cancelled: ${e.message}`
+            : "The download couldn't be cancelled."
       })
     }
   }

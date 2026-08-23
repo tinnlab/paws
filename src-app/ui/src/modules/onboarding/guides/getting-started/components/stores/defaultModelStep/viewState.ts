@@ -112,12 +112,6 @@ export function isDefaultModelInstalled(providers: ProviderLike[]): boolean {
   )
 }
 
-/** Has a download of the default model COMPLETED in this session? */
-export function hasCompletedDefaultModelDownload(
-  downloads: DownloadInstance[],
-): boolean {
-  return downloads.some(d => isDefaultModelDownload(d) && d.status === 'completed')
-}
 
 export function deriveViewState(input: DeriveViewStateInput): DefaultModelView {
   const {
@@ -143,20 +137,16 @@ export function deriveViewState(input: DeriveViewStateInput): DefaultModelView {
     return 'installing-runtime'
   }
 
-  // Installed beats a stale terminal download record: after a successful
-  // install the completed instance is still in the array, and reporting
-  // `failed` over an installed model would be a lie.
+  // Installed beats a stale terminal record: reporting `failed` from an earlier
+  // attempt over a model that is now installed would be a lie.
   //
-  // A download that COMPLETED in this session also counts, because the server
-  // creates the model row as the final step of that same download — so the
-  // install is genuinely done, even in the window before the user-facing
-  // provider list has been re-fetched.
-  if (
-    isDefaultModelInstalled(providers) ||
-    hasCompletedDefaultModelDownload(downloads)
-  ) {
-    return 'already-installed'
-  }
+  // There is deliberately no "a download completed" clause here, for the same
+  // reason there is no `cancelled` state: a `completed` DownloadInstance never
+  // survives in the store either (both writers drop it). Nor is one needed — the
+  // server publishes `UserLlmProvider` when it creates the model row at the end
+  // of the download, and the picker store reloads on that sync event, so
+  // `providers` gains the model and this branch fires on its own.
+  if (isDefaultModelInstalled(providers)) return 'already-installed'
 
   // A RUNNING orchestration outranks any past outcome.
   //

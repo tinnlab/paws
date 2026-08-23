@@ -4,7 +4,7 @@
 // renders + overlay triggers + panel/slot registrations) that the reconciliation
 // gate (scripts/reconcile-state-matrix.mjs) checks the gallery entries against.
 //
-// 354 surfaces carry renderable-state signals; 2190 signals total.
+// 354 surfaces carry renderable-state signals; 2193 signals total.
 
 /** A signal is one mechanically-detected render fork (a state the surface can be in). */
 export interface StateSignal {
@@ -3166,19 +3166,22 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/onboarding/guides/getting-started/components/DefaultModelStep",
     requiredStates: ["delayed","error"],
     signals: [
-      { kind: "branch", condition: "!canInstall", line: 125 },
-      { kind: "loading", condition: "loading", line: 137 },
-      { kind: "branch", condition: "view === 'already-installed'", line: 166 },
-      { kind: "branch", condition: "view === 'installing-runtime'", line: 202 },
-      { kind: "branch", condition: "view === 'downloading'", line: 209 },
-      { kind: "branch", condition: "view === 'preparing'", line: 217 },
-      { kind: "error", condition: "view === 'failed'", line: 224 },
-      { kind: "branch", condition: "view === 'runtime-unavailable'", line: 239 },
-      { kind: "branch", condition: "view === 'offer' && shouldWarnLowMemory(hardwareInfo?.memory?.total_ram)", line: 249 },
-      { kind: "branch", condition: "view === 'already-installed'", line: 278 },
-      { kind: "branch", condition: "view === 'downloading'", line: 280 },
-      { kind: "branch", condition: "view === 'installing-runtime' || view === 'preparing'", line: 295 },
-      { kind: "branch", condition: "isRetry", line: 316 },
+      { kind: "branch", condition: "!canInstall", line: 174 },
+      { kind: "branch", condition: "installed", line: 183 },
+      { kind: "loading", condition: "loading", line: 208 },
+      { kind: "branch", condition: "view === 'already-installed'", line: 255 },
+      { kind: "branch", condition: "view === 'offer' && shouldWarnLowMemory(hardwareInfo?.memory?.total_ram)", line: 282 },
+      { kind: "branch", condition: "contextUnavailable", line: 291 },
+      { kind: "branch", condition: "view === 'installing-runtime'", line: 314 },
+      { kind: "branch", condition: "view === 'downloading'", line: 321 },
+      { kind: "branch", condition: "view === 'preparing'", line: 329 },
+      { kind: "branch", condition: "cancelError && view === 'downloading'", line: 338 },
+      { kind: "error", condition: "view === 'failed'", line: 349 },
+      { kind: "branch", condition: "view === 'runtime-unavailable'", line: 364 },
+      { kind: "branch", condition: "view === 'already-installed'", line: 395 },
+      { kind: "branch", condition: "view === 'downloading'", line: 397 },
+      { kind: "branch", condition: "view === 'installing-runtime' || view === 'preparing'", line: 416 },
+      { kind: "branch", condition: "isRetry", line: 437 },
     ],
   },
   "modules/onboarding/guides/getting-started/components/McpServersStep": {

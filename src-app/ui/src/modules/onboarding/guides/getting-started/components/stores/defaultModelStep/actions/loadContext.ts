@@ -1,7 +1,7 @@
 import { Permissions } from '@/api-client/permissions'
 import { hasPermissionNow } from '@/core/permissions'
 import { LlmModelDownload } from '@/modules/llm-provider/stores/llmModelDownload'
-import { UserLlmProviders } from '@/modules/user-llm-providers/userLlmProviders'
+import { ModelPicker } from '@/modules/user-llm-providers/modelPicker'
 import { RuntimeDownloadProgress } from '@/modules/llm-local-runtime/stores/runtimeDownloadProgress'
 import type { DefaultModelStepGet, DefaultModelStepSet } from '../state'
 
@@ -15,22 +15,24 @@ import type { DefaultModelStepGet, DefaultModelStepSet } from '../state'
  * re-attaches to a runtime download already in flight; `LlmModelDownload`'s own
  * store `init` does the same for weights transfers.
  *
- * Each load is permission-gated so a user without the admin reads does not
- * generate 403s just by walking through Onboarding.
+ * A FAILURE here is recorded, not swallowed. Without the context the step
+ * cannot tell "not installed" from "could not find out", and defaulting to the
+ * former invites the user to re-download 5.68 GB they may already have.
  */
 export default (set: DefaultModelStepSet, _get: DefaultModelStepGet) =>
   async (): Promise<void> => {
     set(draft => {
       draft.loading = true
+      draft.contextUnavailable = false
     })
     try {
       await Promise.all([
-        // The user-facing list is what "already installed" is derived from, and
-        // its permission is one ordinary users hold — so this is not gated on
-        // the admin reads.
-        hasPermissionNow(Permissions.UserLlmProvidersRead)
-          ? UserLlmProviders.load()
-          : Promise.resolve(),
+        // The picker's own provider list is what "already installed" is derived
+        // from. No permission guard here — `loadProviders` self-gates on
+        // `user_llm_providers::read`, which is the repo's convention for these
+        // shell-eager loads (the gate lives in the action, not the call site),
+        // and duplicating it would mean maintaining the permission twice.
+        ModelPicker.loadProviders(),
         hasPermissionNow(Permissions.RuntimeVersionRead)
           ? RuntimeDownloadProgress.loadActive()
           : Promise.resolve(),
@@ -39,6 +41,10 @@ export default (set: DefaultModelStepSet, _get: DefaultModelStepGet) =>
         // step renders.
         Promise.resolve(LlmModelDownload.$.downloads),
       ])
+    } catch {
+      set(draft => {
+        draft.contextUnavailable = true
+      })
     } finally {
       set(draft => {
         draft.loading = false

@@ -23,7 +23,7 @@ import { usePermission } from '@/core/permissions'
 import { formatSpeed, formatTime } from '@/utils/downloadUtils'
 import { Hardware as HardwareStore } from '@/modules/hardware/hardware'
 import { LlmModelDownload as LlmModelDownloadStore } from '@/modules/llm-provider/stores/llmModelDownload'
-import { UserLlmProviders as UserLlmProvidersStore } from '@/modules/user-llm-providers/userLlmProviders'
+import { ModelPicker as ModelPickerStore } from '@/modules/user-llm-providers/modelPicker'
 import { RuntimeDownloadProgress as RuntimeDownloadProgressStore } from '@/modules/llm-local-runtime/stores/runtimeDownloadProgress'
 import type { OnboardingStepProps } from '@/modules/onboarding/types/onboarding'
 import { Onboarding } from '@/modules/onboarding/stores/onboarding'
@@ -38,6 +38,8 @@ import {
   deriveViewState,
   downloadPercent,
   failureReason,
+  isDefaultModelInstalled,
+  type DefaultModelView,
 } from '@/modules/onboarding/guides/getting-started/components/stores/defaultModelStep/viewState'
 
 /**
@@ -50,6 +52,32 @@ import {
  */
 async function advanceUnconditionally(): Promise<void> {
   return
+}
+
+/**
+ * What the step's live region announces for each state.
+ *
+ * Deliberately a sentence rather than a status word: it is read out of context,
+ * with no surrounding layout, to someone who may have activated a control that
+ * has since vanished.
+ */
+function liveStatus(view: DefaultModelView, modelName: string): string {
+  switch (view) {
+    case 'preparing':
+      return `Preparing to install ${modelName}.`
+    case 'installing-runtime':
+      return 'Step 1 of 2: installing the local runtime.'
+    case 'downloading':
+      return `Step 2 of 2: downloading ${modelName}. This continues if you move on.`
+    case 'already-installed':
+      return `${modelName} is installed and ready to use.`
+    case 'failed':
+      return `${modelName} could not be installed. You can try again, or continue without it.`
+    case 'runtime-unavailable':
+      return 'No local runtime is available for this machine right now. You can continue without it.'
+    default:
+      return ''
+  }
 }
 
 /**
@@ -86,6 +114,11 @@ export default function DefaultModelStep({ registerBeforeNext }: OnboardingStepP
       // try/catch, so without it the install throws AFTER the provider has
       // already been enabled — a half-applied administrative change.
       Permissions.LlmProvidersRead,
+      // `loadLlmProviders` gates on BOTH provider-read and model-read and
+      // early-returns silently without either — so omitting this one produces an
+      // enabled button whose install ends in "No local provider exists", which
+      // is not even true. It is not covered by the Users-group grant.
+      Permissions.LlmModelsRead,
       Permissions.GroupsRead,
       Permissions.RuntimeVersionRead,
       Permissions.UserLlmProvidersRead,
@@ -101,13 +134,28 @@ export default function DefaultModelStep({ registerBeforeNext }: OnboardingStepP
   // Reactive reads — these drive the derivation below and must be read at the
   // top level of render, never inside a `.map()` or a conditional.
   const { downloads } = LlmModelDownloadStore
-  // The USER-FACING provider list, not the admin one — see the note on
-  // `DeriveViewStateInput.providers`. Deriving "installed" from the admin list
-  // would promise "you can start chatting" about a model the user cannot see.
-  const { providers } = UserLlmProvidersStore
+  // The MODEL PICKER's own provider list — see the note on
+  // `DeriveViewStateInput.providers`.
+  //
+  // Specifically NOT `UserLlmProviders`, which looks right and is not: it backs
+  // the personal-API-key page and filters `provider_type !== 'local'`, so the
+  // local provider is never in it and "already installed" could never render.
+  // And not the ADMIN list either, which includes providers shared with nobody.
+  // `ModelPicker.providers` is the unfiltered user-reachable set that
+  // `defaultModelId()` itself reasons over — the same list that decides whether
+  // this model really is the user's default.
+  const { providers } = ModelPickerStore
   const { activeByKey } = RuntimeDownloadProgressStore
-  const { installing, stage, error, runtimeUnavailable, runtimeKey, loading } =
-    DefaultModelStepStore
+  const {
+    installing,
+    stage,
+    error,
+    runtimeUnavailable,
+    runtimeKey,
+    loading,
+    contextUnavailable,
+    cancelError,
+  } = DefaultModelStepStore
   const { hardwareInfo } = HardwareStore
 
   useEffect(() => {
@@ -117,19 +165,42 @@ export default function DefaultModelStep({ registerBeforeNext }: OnboardingStepP
     Onboarding.setReady(true)
     registerBeforeNext(advanceUnconditionally)
 
-    if (canInstall) {
-      void DefaultModelStepStore.loadContext()
-    }
-  }, [canInstall])
+    // Loaded for EVERY user, not just those who can install. A user without the
+    // admin permissions still needs to know whether the model is already there —
+    // its own load self-gates on the read permission they do hold.
+    void DefaultModelStepStore.loadContext()
+  }, [])
 
   if (!canInstall) {
+    // Two different situations, and telling them apart is the whole point: a
+    // deployment where an admin has yet to install the model, and one where it
+    // is installed and waiting in their picker. Saying "your administrator
+    // installs it" in the second case leaves the user waiting for something they
+    // already have.
+    const installed = isDefaultModelInstalled(providers)
     return (
       <StepShell>
-        <Paragraph type="secondary">
-          Ziee can run a model locally on this machine, with no API key and no
-          account. Your administrator installs it once for the whole deployment;
-          after that it appears in your model picker like any other model.
-        </Paragraph>
+        {installed ? (
+          <Paragraph type="secondary">
+            <Tag
+              tone="success"
+              icon={<CircleCheck />}
+              data-testid="onboarding-default-model-installed-tag"
+            >
+              Installed
+            </Tag>{' '}
+            <strong>{DEFAULT_MODEL.displayName}</strong> is installed on this
+            deployment and ready for you &mdash; you&rsquo;ll find it in your
+            model picker.
+          </Paragraph>
+        ) : (
+          <Paragraph type="secondary">
+            Ziee can run a model locally on this machine, with no API key and no
+            account. Your administrator installs it once for the whole
+            deployment; after that it appears in your model picker like any
+            other model.
+          </Paragraph>
+        )}
       </StepShell>
     )
   }
@@ -163,6 +234,24 @@ export default function DefaultModelStep({ registerBeforeNext }: OnboardingStepP
 
   return (
     <StepShell>
+      {/* One polite live region for the whole step.
+       *
+       * Every state change here is the RESULT of a control that then disappears
+       * or becomes disabled — pressing Install replaces it with a disabled
+       * button, which browsers blur, so a screen-reader user is left with focus
+       * at the top of the document and no idea anything happened. The visible
+       * progress and success copy are plain text with no role, so nothing else
+       * announces. This is the one element that tells them where they are.
+       */}
+      <div
+        className="sr-only"
+        role="status"
+        aria-live="polite"
+        data-testid="onboarding-default-model-live-status"
+      >
+        {liveStatus(view, DEFAULT_MODEL.displayName)}
+      </div>
+
       {view === 'already-installed' ? (
         <Paragraph type="secondary">
           <Tag
@@ -179,10 +268,33 @@ export default function DefaultModelStep({ registerBeforeNext }: OnboardingStepP
       ) : (
         <Paragraph type="secondary">
           Install <strong>{DEFAULT_MODEL.displayName}</strong> to run entirely on
-          this machine &mdash; no API key, no account, nothing sent to a
-          provider. It becomes your default model, and you can swap it later
-          from Settings.
+          this machine &mdash; no API key, no account, and nothing sent to a
+          provider when you chat. It becomes your default model, and you can
+          swap it later from Settings. Installing itself downloads{' '}
+          {DEFAULT_MODEL.sizeGb} GB from Hugging Face, so it needs an internet
+          connection once.
         </Paragraph>
+      )}
+
+      {/* Placed ABOVE the install control on purpose: a warning that exists to
+          inform a decision has to be visible before the button that makes it,
+          which at ~390px it is not if it sits below the card. */}
+      {view === 'offer' && shouldWarnLowMemory(hardwareInfo?.memory?.total_ram) && (
+        <Alert
+          data-testid="onboarding-default-model-memory-alert"
+          tone="warning"
+          title={`This machine has less than ${DEFAULT_MODEL_MIN_MEMORY_GB} GB of memory`}
+          description="The model will still install, but it may run slowly. You can install it anyway, or skip and choose a smaller model later."
+        />
+      )}
+
+      {contextUnavailable && (
+        <Alert
+          data-testid="onboarding-default-model-context-alert"
+          tone="warning"
+          title="Couldn't check whether the model is already installed"
+          description="What follows may be out of date — if you already have this model, installing again is unnecessary. Reload to try again, or continue and check later from Settings."
+        />
       )}
 
       <div className="border rounded-lg p-4 flex flex-col gap-3">
@@ -219,6 +331,19 @@ export default function DefaultModelStep({ registerBeforeNext }: OnboardingStepP
             Preparing&hellip;
           </Text>
         )}
+
+        {/* A cancel that FAILED, surfaced while the transfer is still running.
+            Without this the user clicks Cancel, sees the bar keep moving, and
+            has no way to tell whether the request was even sent. */}
+        {cancelError && view === 'downloading' && (
+          <Alert
+            data-testid="onboarding-default-model-cancel-error-alert"
+            tone="error"
+            icon={<CircleAlert />}
+            title={cancelError}
+            description="The download is still running. You can try Cancel again, or continue — leaving this step does not stop it."
+          />
+        )}
       </div>
 
       {view === 'failed' && (
@@ -246,14 +371,6 @@ export default function DefaultModelStep({ registerBeforeNext }: OnboardingStepP
         />
       )}
 
-      {view === 'offer' && shouldWarnLowMemory(hardwareInfo?.memory?.total_ram) && (
-        <Alert
-          data-testid="onboarding-default-model-memory-alert"
-          tone="warning"
-          title={`This machine has less than ${DEFAULT_MODEL_MIN_MEMORY_GB} GB of memory`}
-          description="The model will still install, but it may run slowly. You can install it anyway, or skip and choose a smaller model later."
-        />
-      )}
     </StepShell>
   )
 }
@@ -283,11 +400,15 @@ function StepAction({ view }: { view: ReturnType<typeof deriveViewState> }) {
         data-testid="onboarding-default-model-cancel-button"
         variant="outline"
         icon={<X />}
+        // Named, not just "Cancel": this sits inside wizard chrome that has its
+        // own navigation, so a screen-reader user hearing "Cancel, button" could
+        // not tell whether it stops the download or leaves Onboarding.
+        aria-label="Cancel the model download"
         onClick={() => {
           void DefaultModelStepStore.cancelInstall()
         }}
       >
-        Cancel
+        Cancel download
       </Button>
     )
   }
