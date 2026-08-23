@@ -67,7 +67,7 @@ Cmd 3's filter also matched 3 pre-existing tests (`project::conversations_test::
 - **TEST-19**: PASS — `check:state-matrix` green inside cmd 8. Earned: this branch
   adds the step's state keys to `stateCoverage.ts` and regenerates
   `stateMatrix.generated.ts`, and the check fails on an unmapped key.
-- **TEST-20**: **NOT VERIFIED** as a TEST-ID. Phase 3 declared its `file:` as
+- **TEST-20**: NOT VERIFIED — as a TEST-ID. Phase 3 declared its `file:` as
   `src-app/desktop/ui/package.json`, which this branch does not touch — so there is
   no line this branch added that a PASS could be keyed to, and claiming one would
   be inheriting another feature's use of the `TEST-N` namespace. What TEST-20
