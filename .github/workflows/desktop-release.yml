@@ -232,6 +232,26 @@ jobs:
       - name: Install npm deps (workspace hoist at repo root)
         run: npm ci
 
+      # THE PGVECTOR GATE. The pgvector build helper is fail-soft: on failure it
+      # writes zero-byte stubs and lets the build SUCCEED. But migration
+      # 202607140001_app_bootstrap.sql runs an unconditional
+      # `CREATE EXTENSION vector` as the FIRST framework migration, so a stubbed
+      # build produces an app that cannot boot at all — not, as the code once
+      # claimed, merely "memory features disabled". A green build is therefore
+      # NOT sufficient evidence; the warning must be ABSENT.
+      # This shipped a macOS app that opened a window and failed every request
+      # with "Load failed". It must never ship silently again.
+      - name: Assert pgvector is not stubbed
+        working-directory: src-app
+        run: |
+          set -o pipefail
+          cargo build -p ziee 2>&1 | tee "$RUNNER_TEMP/ziee-build.log"
+          if grep -q 'pgvector build FAILED' "$RUNNER_TEMP/ziee-build.log"; then
+            echo "::error::pgvector was stubbed into this build. The app will NOT boot (migration 202607140001 requires the vector extension). See the cargo:warning lines above for make's actual error."
+            exit 1
+          fi
+          echo "pgvector compiled into the binary — no stub."
+
       # No tagName → tauri-action builds and reports artifactPaths without
       # creating or uploading to a Release.
       - name: Build
