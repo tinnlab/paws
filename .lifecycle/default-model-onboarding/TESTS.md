@@ -87,3 +87,19 @@ the response is to simplify it, not harden it (GUARD-SUB).
 | INV-6 | TEST-7 |
 
 No ITEM is `[DESCOPED]`.
+
+---
+
+## Added during the phase-6/7 fix rounds
+
+These were not in the phase-3 enumeration; each was written to close a confirmed
+audit finding, and is listed here so phase 8 records every ID it runs.
+
+- **TEST-21** (tier: integration) [acceptance] [invariant: INV-5] [covers: ITEM-1] file: `src-app/server/tests/llm_repository/default_model_seed_test.rs` — asserts: the boot connection-health scan never auto-disables the seeded anonymous row. The pre-existing skip is `if !repository.has_credential()`, which does NOT cover an anonymous row (`has_credential_for("none") => true`), so without the second skip the row would be health-checked against Hugging Face at every boot and disabled on a network failure — silently breaking INV-5 on exactly the offline first-run this feature targets. Asserts `enabled` stays true and `last_health_check_status` stays `untested` over a 30s window.
+- **TEST-23** (tier: unit) [covers: ITEM-6] file: `.../defaultModelStep/install.store.test.ts` — asserts: the three install legs run in order, a re-entrant call while `installing` is a no-op (no second 5.68 GB transfer), the readiness leg's `problem` is propagated verbatim rather than replaced with a generic message, and `installing` is always cleared in `finally`.
+- **TEST-24** (tier: unit) [covers: ITEM-7] file: `.../defaultModelStep/ensureRuntime.store.test.ts` — asserts: the runtime leg installs a version when none is present, matches an already-installed one on the FULL `{engine, version, platform, arch, backend}` tuple rather than version alone, and does not short-circuit on a list populated only after the download.
+- **TEST-25** (tier: unit) [covers: ITEM-8] file: `.../defaultModelStep/reset.store.test.ts` — asserts: `reset()` restores every field to its initial value, so a user who leaves and re-enters Onboarding does not inherit a stale `error` / `stage` / `installing` from a previous visit.
+
+| INV | additionally pinned by |
+|---|---|
+| INV-5 | TEST-21 (the row also stays enabled after boot, not merely at seed time) |

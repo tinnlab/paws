@@ -10,8 +10,9 @@ import {
 /**
  * Onboarding "Local Model" step — the browser-side proofs.
  *
- * Covers TEST-15 (acceptance, INV-2), TEST-17 (restricted user) and TEST-18
- * (390px) of the `default-model-onboarding` feature.
+ * Covers TEST-15 (acceptance, INV-2), TEST-17 (restricted user), TEST-22
+ * (one permission missing) and TEST-18 (390px) of the
+ * `default-model-onboarding` feature.
  *
  * These specs deliberately do NOT click Install. Completing the real install
  * would need either a live Hugging Face fetch (forbidden by the design's test
@@ -167,7 +168,7 @@ test.describe('Onboarding — Local Model step', () => {
   })
 
   /**
-   * TEST-17b — a user holding MOST of the set, missing one.
+   * TEST-22 — a user holding MOST of the set, missing one.
    *
    * The plain no-permissions case above cannot distinguish "gated on the whole
    * flow" from "gated on any one thing". This one can: the user has
