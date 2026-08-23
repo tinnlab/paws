@@ -117,6 +117,7 @@ test.describe('Memory — onboarding enable', () => {
 
     await byTestId(page, 'onboarding-page-next-button').click() // Welcome
     await byTestId(page, 'onboarding-page-next-button').click() // API Keys
+    await byTestId(page, 'onboarding-page-next-button').click() // Local Model
     await byTestId(page, 'onboarding-page-next-button').click() // MCP
 
     // Memory step: the enable switch only renders here, so it confirms the

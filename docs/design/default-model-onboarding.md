@@ -86,6 +86,16 @@ deterministic UUID. Prefix must sort above the current **server** max
 (`202607200600`) — not above the desktop `1e13` block; the sequences are
 independent.
 
+> **Amended during implementation.** The row's URL is **org-scoped** —
+> `https://huggingface.co/unsloth`, not the bare origin. `llm_repositories`
+> carries `UNIQUE (url)` and the credentialed `Hugging Face Hub` row already
+> holds `https://huggingface.co`, so a second row there is impossible. An
+> org-scoped Hugging Face base is an explicitly supported shape
+> (`llm_repository/utils.rs::is_usable_repository_base`) and
+> `GitService::build_repository_url` composes it with the model's
+> `repository_path` — which is therefore `Qwen3.5-9B-GGUF`, **not**
+> `unsloth/Qwen3.5-9B-GGUF`.
+
 **2. Onboarding step** — a new entry in `guides/getting-started/module.tsx`'s
 `steps` array, after `api-keys` (a user who added a key can skip) and before
 `finish`. Uses the existing `OnboardingStepProps` / `registerBeforeNext` contract
@@ -111,6 +121,34 @@ So with zero models it is `null`; install exactly one and that one **is** the
 default, with no new field, migration, or setting. An earlier draft proposed a
 user-level `default_model_id` — unnecessary, and removed.
 
+**4. Two prerequisites the earlier draft missed — both added during
+implementation.** Neither was visible from the download surface alone; both were
+found by re-verifying "no new infrastructure is required" against the codebase,
+and without them INV-2's *working* model is false while every gate stays green.
+
+- **The built-in `Local` provider ships DISABLED.** `list_local_providers`
+  filters `WHERE provider_type = 'local' AND enabled = true`
+  (`llm_provider/repositories/admin.rs`), so a fresh install has nothing to
+  download *into*. The step enables that provider as part of installing —
+  user-initiated and reversible, deliberately **not** a migration flip, so
+  existing deployments are untouched until someone uses the step.
+- **A fresh install has no local runtime engine.** No migration inserts into
+  `llm_runtime_versions`, and `BinaryManager::select_runtime_version` walks
+  model → provider → system-default → latest and returns `None` with **no
+  auto-fetch** — so the downloaded GGUF could not be served, and "talk to it"
+  would be false. The step therefore provisions a **llama.cpp runtime** first
+  (discover installable versions → download the host-matching variant → mark it
+  system default), then the model. It is a visibly separate stage, not merged
+  into the model's progress bar, and it is skipped when a llamacpp version is
+  already installed.
+
+  Consequence for the step's states: **installing-runtime** joins the list
+  below, and an **offline** runtime-discovery result must be surfaced as such —
+  `GET /local-runtime/versions/available` answers **200 with an empty list**
+  when upstream is unreachable, carrying the truth in `source` /
+  `unavailable_reason`, so an empty list must never be read as "no versions
+  exist".
+
 ## Security
 
 Anonymous means **no secret is stored** — this removes a risk class rather than
@@ -131,13 +169,24 @@ is operator-seeded, not user-supplied; `validate_url` still governs admin edits.
 
 Mock only the external boundary; do not hit the real HF in tests.
 
-## Open questions
+## Open questions — both RESOLVED during implementation
 
-1. Re-install / second machine — re-download, or detect an existing copy?
-2. **Hardware.** A 9B at Q4_K_M needs ~8 GB free RAM. Should the step detect
-   available memory and warn, or offer a smaller quant (`Q3_K_M`, 4.67 GB)?
+1. ~~Re-install / second machine — re-download, or detect an existing copy?~~
+   **Detect.** The step pins a stable model `name`, so an existing copy under the
+   local provider renders *already-installed* and offers no download. That name
+   also makes `UNIQUE (provider_id, name)` on `llm_models` a DB-level guard
+   against a double install, not just a UI one. Each machine keeps its own copy;
+   no cross-machine sharing is introduced.
+2. ~~**Hardware.** A 9B at Q4_K_M needs ~8 GB free RAM. Should the step detect
+   available memory and warn, or offer a smaller quant (`Q3_K_M`, 4.67 GB)?~~
+   **Warn, never gate; and no second quant.** INV-3 forbids gating, and by the
+   same logic the step must not decide the machine is unsuitable on the user's
+   behalf. A second quant would multiply the state matrix inside a first-run
+   wizard whose job is one confident default — anyone wanting `Q3_K_M` has the
+   full LLM Providers download drawer.
 
-None of these block implementation.
+Full rationale, with the code references each rests on, is in this feature's
+`DECISIONS.md` (DEC-3 and DEC-4).
 
 ## Out of scope
 

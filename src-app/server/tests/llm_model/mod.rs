@@ -2,7 +2,12 @@
 
 mod capabilities_infer_test;
 mod create_deprecated_test;
+mod default_model_download_test;
+mod default_model_install_test;
 mod deprecation_sweep_test;
+/// Loopback git server used by the default-model tests (feature-local, not a
+/// shared harness — rule B3).
+pub mod git_fixture;
 mod download_management_test;
 mod download_progress_test;
 pub mod download_test;

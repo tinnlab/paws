@@ -4,7 +4,7 @@
 // renders + overlay triggers + panel/slot registrations) that the reconciliation
 // gate (scripts/reconcile-state-matrix.mjs) checks the gallery entries against.
 //
-// 353 surfaces carry renderable-state signals; 2177 signals total.
+// 354 surfaces carry renderable-state signals; 2191 signals total.
 
 /** A signal is one mechanically-detected render fork (a state the surface can be in). */
 export interface StateSignal {
@@ -3162,6 +3162,26 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
       { kind: "branch", condition: "(currentProvider.api_key_configured || hasUserKey)", line: 171 },
     ],
   },
+  "modules/onboarding/guides/getting-started/components/DefaultModelStep": {
+    surface: "modules/onboarding/guides/getting-started/components/DefaultModelStep",
+    requiredStates: ["delayed","error"],
+    signals: [
+      { kind: "branch", condition: "!canInstall", line: 97 },
+      { kind: "loading", condition: "loading", line: 109 },
+      { kind: "branch", condition: "view === 'already-installed'", line: 138 },
+      { kind: "branch", condition: "view === 'installing-runtime'", line: 174 },
+      { kind: "branch", condition: "view === 'downloading'", line: 181 },
+      { kind: "branch", condition: "view === 'preparing'", line: 189 },
+      { kind: "branch", condition: "view === 'cancelled'", line: 195 },
+      { kind: "error", condition: "view === 'failed'", line: 203 },
+      { kind: "branch", condition: "view === 'runtime-unavailable'", line: 218 },
+      { kind: "branch", condition: "view === 'offer' && shouldWarnLowMemory(hardwareInfo?.memory?.total_ram)", line: 228 },
+      { kind: "branch", condition: "view === 'already-installed'", line: 257 },
+      { kind: "branch", condition: "view === 'downloading'", line: 259 },
+      { kind: "branch", condition: "view === 'installing-runtime' || view === 'preparing'", line: 274 },
+      { kind: "branch", condition: "isRetry", line: 295 },
+    ],
+  },
   "modules/onboarding/guides/getting-started/components/McpServersStep": {
     surface: "modules/onboarding/guides/getting-started/components/McpServersStep",
     requiredStates: [],
@@ -4389,7 +4409,7 @@ export type StateMatrixSurface = keyof typeof STATE_MATRIX
  * `STATE_COVERAGE satisfies Record<RequiredState, StateCoverageEntry>`, so a
  * newly-extracted state with no entry is a compile error (mirrors how
  * galleryCoverage.generated.ts's `GallerySurface` gates coverage.ts).
- * 384 keys.
+ * 386 keys.
  */
 export type RequiredState =
   | "modules/agent/components/AgentSettingsSection:delayed"
@@ -4654,6 +4674,8 @@ export type RequiredState =
   | "modules/onboarding/guides/getting-started/components/ApiKeysStep:delayed"
   | "modules/onboarding/guides/getting-started/components/ApiKeysStep:empty"
   | "modules/onboarding/guides/getting-started/components/ApiKeysStep:error"
+  | "modules/onboarding/guides/getting-started/components/DefaultModelStep:delayed"
+  | "modules/onboarding/guides/getting-started/components/DefaultModelStep:error"
   | "modules/onboarding/guides/getting-started/components/MemorySetupStep:delayed"
   | "modules/onboarding/guides/getting-started/components/MemorySetupStep:empty"
   | "modules/onboarding/guides/getting-started/components/MemorySetupStep:error"
@@ -5041,6 +5063,8 @@ export const REQUIRED_STATE_KEYS = [
   "modules/onboarding/guides/getting-started/components/ApiKeysStep:delayed",
   "modules/onboarding/guides/getting-started/components/ApiKeysStep:empty",
   "modules/onboarding/guides/getting-started/components/ApiKeysStep:error",
+  "modules/onboarding/guides/getting-started/components/DefaultModelStep:delayed",
+  "modules/onboarding/guides/getting-started/components/DefaultModelStep:error",
   "modules/onboarding/guides/getting-started/components/MemorySetupStep:delayed",
   "modules/onboarding/guides/getting-started/components/MemorySetupStep:empty",
   "modules/onboarding/guides/getting-started/components/MemorySetupStep:error",

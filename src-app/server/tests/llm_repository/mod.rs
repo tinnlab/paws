@@ -2,6 +2,7 @@ use serde_json::json;
 
 mod capability_probe_test;
 mod connection_health_test;
+mod default_model_seed_test;
 mod update_validation_test;
 mod sync_emit_test;
 mod test_connection_user_agent;

@@ -7,8 +7,8 @@
 
 ## Summary
 
-- **353** surfaces carry at least one renderable-state signal.
-- **2177** signals total: 1710 branch, 141 empty, 126 error, 93 loading, 102 overlay, 5 panel.
+- **354** surfaces carry at least one renderable-state signal.
+- **2191** signals total: 1722 branch, 141 empty, 127 error, 94 loading, 102 overlay, 5 panel.
 - **5** right-panel renderers registered (each a right-panel-open state).
 - **35** slot registrations (sidebar / settings / chat mount points).
 
@@ -16,9 +16,9 @@
 
 | state | surfaces |
 |---|---|
-| `delayed` | 83 |
+| `delayed` | 84 |
 | `empty` | 114 |
-| `error` | 97 |
+| `error` | 98 |
 | `open` | 85 |
 | `panel-open` | 5 |
 
@@ -3461,6 +3461,27 @@ Required states: `delayed`, `empty`, `error`
 | empty | `providers.length === 0` | 77 |
 | error | `error` | 127 |
 | branch | `(currentProvider.api_key_configured \|\| hasUserKey)` | 171 |
+
+### `modules/onboarding/guides/getting-started/components/DefaultModelStep`
+
+Required states: `delayed`, `error`
+
+| kind | condition | line |
+|---|---|---|
+| branch | `!canInstall` | 97 |
+| loading | `loading` | 109 |
+| branch | `view === 'already-installed'` | 138 |
+| branch | `view === 'installing-runtime'` | 174 |
+| branch | `view === 'downloading'` | 181 |
+| branch | `view === 'preparing'` | 189 |
+| branch | `view === 'cancelled'` | 195 |
+| error | `view === 'failed'` | 203 |
+| branch | `view === 'runtime-unavailable'` | 218 |
+| branch | `view === 'offer' && shouldWarnLowMemory(hardwareInfo?.memory?.total_ram)` | 228 |
+| branch | `view === 'already-installed'` | 257 |
+| branch | `view === 'downloading'` | 259 |
+| branch | `view === 'installing-runtime' \|\| view === 'preparing'` | 274 |
+| branch | `isRetry` | 295 |
 
 ### `modules/onboarding/guides/getting-started/components/McpServersStep`
 

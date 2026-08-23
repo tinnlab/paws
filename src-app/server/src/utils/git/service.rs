@@ -862,4 +862,45 @@ mod tests {
             "x-access-token"
         );
     }
+
+    /// TEST-3 (default-model-onboarding) — an ORG-SCOPED Hugging Face base
+    /// composes into a real model URL.
+    ///
+    /// `llm_repositories` carries `UNIQUE (url)` and the credentialed built-in
+    /// Hugging Face row already holds the bare origin, so the anonymous
+    /// default-model row is seeded one level down at
+    /// `https://huggingface.co/unsloth` with a `repository_path` of just the
+    /// model name. This pins the composition that makes that legal — if it ever
+    /// produced `…/unsloth/unsloth/Qwen…` or appended `.git`, the default
+    /// model's clone would 404 with no other test noticing.
+    #[test]
+    fn org_scoped_huggingface_base_composes_the_model_url() {
+        assert_eq!(
+            GitService::build_repository_url(
+                "https://huggingface.co/unsloth",
+                "Qwen3.5-9B-GGUF"
+            ),
+            "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF",
+            "org-scoped base + bare model name = the model URL, with no .git suffix"
+        );
+
+        // A trailing slash on the seeded URL must not double up.
+        assert_eq!(
+            GitService::build_repository_url(
+                "https://huggingface.co/unsloth/",
+                "Qwen3.5-9B-GGUF"
+            ),
+            "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF"
+        );
+
+        // The bare origin still composes an org-qualified path the old way, so
+        // the org-scoped row is an ADDITION to the convention, not a change to it.
+        assert_eq!(
+            GitService::build_repository_url(
+                "https://huggingface.co",
+                "unsloth/Qwen3.5-9B-GGUF"
+            ),
+            "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF"
+        );
+    }
 }

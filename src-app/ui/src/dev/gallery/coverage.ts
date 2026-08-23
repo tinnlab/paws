@@ -370,6 +370,7 @@ export const GALLERY_COVERAGE = {
   "modules/onboarding/OnboardingPage": { kind: 'via', reason: 'rendered within the onboarding module page' },
   "modules/onboarding/OnboardingRedirect": { kind: 'via', reason: 'rendered within the onboarding module page' },
   "modules/onboarding/guides/getting-started/components/ApiKeysStep": { kind: 'via', reason: 'rendered within the onboarding module page' },
+  "modules/onboarding/guides/getting-started/components/DefaultModelStep": { kind: 'via', reason: 'rendered within the onboarding module page' },
   "modules/onboarding/guides/getting-started/components/FinishStep": { kind: 'via', reason: 'rendered within the onboarding module page' },
   "modules/onboarding/guides/getting-started/components/McpServersStep": { kind: 'via', reason: 'rendered within the onboarding module page' },
   "modules/onboarding/guides/getting-started/components/MemorySetupStep": { kind: 'via', reason: 'rendered within the onboarding module page' },

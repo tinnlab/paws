@@ -158,16 +158,19 @@ its sibling for no gain.
 
 **Resolution:** ONE loopback git-over-HTTP fixture, serving a tiny bare repository whose
 single weight file carries the descriptor's filename, and which **401s any request bearing
-an `Authorization` header**. The Rust integration legs point a repository row at it; the
-Playwright leg points the seeded row at it through the existing admin API before reaching
-the step. The runtime leg uses the EXISTING debug-only engine mirror seams
-(`LLM_RUNTIME_RELEASE_MIRROR` / `LLM_RUNTIME_API_MIRROR`, `MockReleaseServer`).
+an `Authorization` header**. It is used by the RUST INTEGRATION legs only, which create
+their own repository row pointing at it — no production code and no debug seam are needed
+for that. The runtime leg reuses the EXISTING `MockReleaseServer`
+(`tests/llm_local_runtime/mock_release.rs`) with the existing debug-only
+`LLM_RUNTIME_RELEASE_MIRROR` / `LLM_RUNTIME_API_MIRROR` seams. The browser tier does not
+download at all — see DEC-13.
 **Basis:** the design doc's test strategy ("Mock only the external boundary; do not hit the
 real HF in tests") plus the task brief's stronger requirement that INV-1 be proven by a test
-that would FAIL if a credential were required. No new PRODUCTION seam is added — the e2e
-leg re-points the row through a real, permission-gated endpoint a real admin could use. The
-fixture lives in this feature's own test modules; `tests/common/*` and the Playwright config
-are NOT touched (rule B3).
+that would FAIL if a credential were required. Because the integration tier supplies its own
+repository row, **no new production seam is introduced** — a debug `cfg!(debug_assertions)`
+override of the clone base was considered and rejected as release-compiled surface area
+buying nothing. The fixture lives in this feature's own test module; `tests/common/*`, the
+gallery cassette and the Playwright config/harness are NOT touched (rule B3).
 
 ### DEC-12: The step's controls are permission-gated. What does a user without the permission see?
 
@@ -178,3 +181,35 @@ for them.
 a "Your administrator controls whether this is enabled" panel instead of the controls. No
 NEW permission is introduced; the existing `llm_models::create` / `llm_providers::edit` /
 runtime-version permissions are reused, so this is a rendering decision, not an authz change.
+
+### DEC-13: At which tier is each invariant proven — can the browser tier drive the real install?
+
+**Resolution:** NO — the browser tier does not drive the real install. Tiers are assigned by
+what each can honestly prove:
+- **integration (Rust)** proves the install legs for real — anonymous clone (INV-1), cancel
+  leaving nothing behind (INV-4), the working-model sequence (INV-2's substance), and
+  client-independent continuation (INV-6) — against a loopback fixture and the existing
+  `MockReleaseServer`.
+- **component (`*.test.tsx`, vitest + jsdom)** proves the step's hard-to-reach rendered
+  states by MOUNTING it: `downloading` / `failed` / `already-installed` / unpermitted, and
+  that unmount issues no cancel.
+- **e2e** proves what only a browser can: the step is genuinely inside the wizard right
+  after AI Providers (INV-2's location half), skipping completes Onboarding (INV-3), a
+  restricted user sees no controls with a positive control, and 390px is clean.
+
+**Basis:** convention + a hard constraint. Driving the real 5.68 GB install from Playwright
+needs one of two things, and BOTH are ruled out. (a) A live Hugging Face fetch — forbidden
+by the design's own test strategy ("Mock only the external boundary; do not hit the real HF
+in tests") and non-deterministic besides. (b) Pointing the seeded row at a loopback fixture
+— impossible from the UI, because `llm_repository/handlers.rs:225-251` makes a `built_in`
+row's `url` / `auth_type` / `name` IMMUTABLE by design (a deliberate security fix: "any
+holder of llm_repositories::edit could swap the Hugging Face URL to an attacker-controlled
+domain"), and impossible from the harness, because the per-test server spawn in
+`tests/fixtures/test-context.ts` takes no per-test env and editing it to add one is
+precisely the shared-harness workaround rule B3 forbids. A new production debug seam was
+considered and rejected: the integration tier can point its OWN repository row at the
+fixture with no production code at all, so a seam would add release-compiled surface area to
+buy nothing. The component harness is the established local answer for render states a
+browser run can't reach cheaply — `llm-local-runtime/components/AvailableVersionsCard.test.tsx`
+is the sibling precedent, and CLAUDE.md records that this harness replaced twenty rounds of
+source-scanning guards in the activity-rail work.
