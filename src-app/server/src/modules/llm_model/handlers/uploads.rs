@@ -1031,27 +1031,12 @@ pub async fn initiate_repository_download_internal(
         GitService::build_repository_url(&repository.url, &request.repository_path);
     let _repository_branch = request.repository_branch.clone();
 
-    // Extract the credential for the git layer. For basic_auth the username and
-    // password are kept SEPARATE — the password is the git secret and the
-    // username is threaded through so the credential callback can pair them
-    // correctly (libgit2 Basic auth = base64("username:password")). For
-    // api_key/bearer_token the secret is a token paired with a host-default
-    // username, so auth_username stays None and the token path is unchanged.
-    let (auth_username, auth_token): (Option<String>, Option<String>) =
-        match repository.auth_type.as_str() {
-            "api_key" => (None, repository.auth_config.api_key.clone()),
-            "bearer_token" => (None, repository.auth_config.token.clone()),
-            "basic_auth" => match (
-                &repository.auth_config.username,
-                &repository.auth_config.password,
-            ) {
-                (Some(username), Some(password)) => {
-                    (Some(username.clone()), Some(password.clone()))
-                }
-                _ => (None, None),
-            },
-            "none" | _ => (None, None),
-        };
+    // Extract the credential for the git layer. See
+    // `LlmRepository::git_credential` for the per-auth_type rules; it is a
+    // standalone function so the "anonymous repositories send NOTHING" property
+    // can be asserted directly over every input, rather than inferred from a
+    // clone that happened to succeed.
+    let (auth_username, auth_token) = repository.git_credential();
 
     // Create cancellation token for this download
     let cancellation_token =

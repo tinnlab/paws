@@ -213,3 +213,36 @@ buy nothing. The component harness is the established local answer for render st
 browser run can't reach cheaply — `llm-local-runtime/components/AvailableVersionsCard.test.tsx`
 is the sibling precedent, and CLAUDE.md records that this harness replaced twenty rounds of
 source-scanning guards in the activity-rail work.
+
+### DEC-14: The clone path refuses loopback unconditionally. Relax it for tests, or prove INV-1 somewhere else?
+
+**Resolution:** PROVE IT ELSEWHERE. `LlmRepository::git_credential` is extracted
+(ITEM-15) and asserted directly: an anonymous repository yields `(None, None)`
+over every input, including a row still carrying api_key / token / username /
+password. The loopback git fixture written for the original plan was deleted.
+`GitService::clone_repository` is left exactly as it was.
+**Basis:** convention — and a refusal to weaken a security check for testability.
+`clone_repository` validates against `PUBLIC_HTTP_OR_HTTPS` with **no**
+`cfg(debug_assertions)` relaxation, unlike the five sibling paths that do have one
+(`repo_files.rs`, `llm_provider/discover.rs`, `web_search/{fetch,brave}`,
+`citations/resolve.rs`). That asymmetry is deliberate and documented in the code:
+it is the defense-in-depth check at the git entry point, closing a Critical SSRF
+finding, explicitly so that "any future caller path bypassing the repository
+module is also covered". Adding a debug relaxation there would be defensible by
+precedent, but it would hand every debug build the ability to clone from
+loopback — a change to shared security posture, made to serve one feature's test.
+
+The replacement is not a concession; it is stronger. A fixture proves only that
+no credential went out on the paths one clone happened to take. Asserting at the
+decision point covers every auth_type and every `auth_config` shape, and it goes
+RED under mutation — verified by flipping the anonymous arm to leak `api_key` and
+observing the failure, then reverting.
+
+**Residual gap, stated plainly:** no automated test drives a real anonymous clone
+end to end. Nothing can, without either weakening the SSRF check or contacting
+Hugging Face for real, and the design forbids the latter ("do not hit the real HF
+in tests"). What IS proven: the seeded row's shape (TEST-1), that an anonymous row
+produces no credential (TEST-4), that the URL composition is right (TEST-3), and
+that the download lifecycle behaves around failure (TEST-5/TEST-7). A human
+smoke-test against real Hugging Face is the honest way to close the remainder,
+and it is flagged for the reviewer rather than papered over.

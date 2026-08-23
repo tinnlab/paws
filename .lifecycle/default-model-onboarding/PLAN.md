@@ -69,6 +69,7 @@ and `RuntimeDownloadProgress.loadActive()` re-attaches to in-flight engine downl
 - **ITEM-11**: Gallery coverage for every new conditional state introduced by ITEM-4, including a narrow-viewport (390px) cell, so `check:state-matrix` inside `npm run check` passes.
 - **ITEM-12**: Desktop parity (R2-3) — diff `src-app/desktop/ui/` against the changed web surfaces and confirm no override drops logic; run `npm run check` in that workspace. No `just openapi-regen` is expected (no backend type or route changes); if the diff proves otherwise, regen BOTH workspaces.
 - **ITEM-13**: Accessibility + responsive pass on the step per the UI-surface checklist — accessible names on every control, live-region progress, no horizontal scroll at 390px, tap targets, and no reactive store read inside a `.map()`/conditional (use the non-subscribing `.$`).
+- **ITEM-15**: *(added at phase 6 — see DRIFT-2.1)* Extract the git-credential decision out of the download handler into `LlmRepository::git_credential`, so "an anonymous repository sends nothing" is assertable **at the point the credential is decided**, over every input, rather than inferred from a clone that happened to succeed. Pure refactor of an inline `match`; no behaviour change.
 - **ITEM-14**: Amend `docs/design/default-model-onboarding.md` — record G1 and G2 under *What gets built*, and add the runtime-provisioning leg (DEC-6). The `## Invariants` section is NOT touched.
 
 ## Files to touch
@@ -187,6 +188,7 @@ generated and must never be hand-edited; if implementation proves a backend type
 - **ITEM-12** — verdict: PASS — `src-app/desktop/ui` reuses `src-app/ui` through the `@/…` alias with a three-tier override resolver; a new file under `ui/src` is picked up with no desktop edit unless an override shadows it. `just desktop-drift-check` is the mechanical check.
 - **ITEM-13** — verdict: PASS — enforced by `npm run check` (biome guardrails, `lint:colors`, kit manifest, testid registry) plus `gate:ui` (axe + AA contrast + runtime health).
 - **ITEM-14** — verdict: PASS — a docs edit; the `## Invariants` section is untouched, so the phase-1 verbatim lift stays valid.
+- **ITEM-15** — verdict: PASS — the extracted `match` is byte-equivalent to the inline one it replaces (the only change is `"none" | _` collapsing to `_`, which is the same arm); it lands next to `has_credential`, which already reasons about the same `auth_type` vocabulary; and the one caller is updated in the same commit.
 
 No `BLOCKED` verdicts. The four `CONCERN`s are open questions to resolve during
 implementation, not blockers; each is re-checked in the phase-5 drift loop.

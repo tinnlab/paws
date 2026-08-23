@@ -3,9 +3,9 @@
 Every ITEM is covered by ≥1 TEST; every `INV-N` is pinned by an `[acceptance]` test that
 asserts the DESIGN's promise (D2), not merely what the code happens to do.
 
-**Tier placement is deliberate — see DEC-13.** The install legs are proven at the
-INTEGRATION tier (where a loopback fixture and the existing `MockReleaseServer` make a real
-end-to-end install cheap and deterministic), the step's hard-to-reach visual states at the
+**Tier placement is deliberate — see DEC-13 and DEC-14.** The install legs are proven at the
+INTEGRATION tier (where the existing `MockReleaseServer` makes the runtime leg and the
+download lifecycle cheap and deterministic), the step's hard-to-reach visual states at the
 COMPONENT tier (`*.test.tsx`, vitest + jsdom — the same harness
 `llm-local-runtime/components/AvailableVersionsCard.test.tsx` uses), and the browser tier
 proves what only a browser can: that the step really is inside the wizard, that skipping
@@ -16,20 +16,22 @@ server spawn (forbidden by rule B3).
 
 **Proportionality note (binding).** The brief records a prior worker who wrote a 2,243-line
 test apparatus around a 136-line fix, with 71 of 80 confirmed findings landing on its own
-guard. The only new scaffolding here is ONE loopback git-over-HTTP fixture — required
-because INV-1's proof needs a server that REJECTS credentials — living in this feature's own
-Rust test module. Everything else asserts through harnesses that already exist. If an audit
-round's findings concentrate on this test code rather than the feature, the response is to
-simplify it, not harden it (GUARD-SUB).
+guard. **No new test scaffolding ships here at all.** A loopback git-over-HTTP fixture was
+written for INV-1 and then DELETED once it proved unreachable (the clone path refuses
+loopback by design, DRIFT-2.1); the invariant is asserted at the credential decision point
+instead, which needs no fixture. Everything else asserts through harnesses that already
+exist. If an audit round's findings concentrate on this test code rather than the feature,
+the response is to simplify it, not harden it (GUARD-SUB).
 
 ## Backend
 
 - **TEST-1** (tier: integration) [acceptance] [invariant: INV-5] [covers: ITEM-1] file: `src-app/server/tests/llm_repository/default_model_seed_test.rs` — asserts: after a real server boot on a fresh database, the default-model repository row exists at its deterministic UUID with `built_in = true`, `enabled = true`, `auth_type = 'none'` and an `auth_config` carrying no credential — a FRESH install has it with no admin action. Fails if the row were seeded disabled, non-built-in, or credentialed.
 - **TEST-2** (tier: integration) [covers: ITEM-1] file: `src-app/server/tests/llm_repository/default_model_seed_test.rs` — asserts: the migration is purely additive — the pre-existing `Hugging Face Hub` (`api_key`) and `GitHub` (`bearer_token`) rows are byte-for-byte unchanged, all three rows coexist under `UNIQUE (name)` + `UNIQUE (url)`, and exactly one row carries the new URL.
 - **TEST-3** (tier: unit) [covers: ITEM-1] file: `src-app/server/src/utils/git/service.rs` — asserts: `GitService::build_repository_url` composes the org-scoped base `https://huggingface.co/unsloth` with `repository_path` `Qwen3.5-9B-GGUF` into `https://huggingface.co/unsloth/Qwen3.5-9B-GGUF` (huggingface branch → no `.git` suffix; trailing slash tolerated). The executable proof of DEC-1 — that the org-scoped URL answers `UNIQUE (url)` without breaking cloning.
-- **TEST-4** (tier: integration) [acceptance] [invariant: INV-1] [covers: ITEM-1, ITEM-2] file: `src-app/server/tests/llm_model/default_model_download_test.rs` — asserts: with a repository row at `auth_type = 'none'` pointed at a loopback git-over-HTTP fixture that **answers 401 to ANY request carrying an `Authorization` header**, `POST /api/llm-models/download` runs to completion and creates the model; and the fixture's recorded request log contains **zero** requests bearing an auth header. **Goes RED if a credential were required or sent at any point** — it cannot pass tautologically.
-- **TEST-5** (tier: integration) [acceptance] [invariant: INV-4] [covers: ITEM-9] file: `src-app/server/tests/llm_model/default_model_download_test.rs` — asserts: cancelling an in-flight download leaves the `DownloadInstance` terminal-`cancelled`, creates **no** `llm_models` row for the descriptor's stable name, and leaves no committed model directory — nothing half-installed for the app to load. A fresh install afterwards still succeeds, proving the cancel left no blocking residue.
-- **TEST-6** (tier: integration) [acceptance] [invariant: INV-2] [covers: ITEM-6, ITEM-7] file: `src-app/server/tests/llm_model/default_model_install_test.rs` — asserts: running exactly the sequence the Onboarding step drives — enable the disabled built-in `local` provider, register a llamacpp runtime version from the existing `MockReleaseServer` and mark it system default, then download the model into that provider — yields a **working** model: an `enabled` model under an `enabled` local provider, for which `BinaryManager::select_runtime_version` resolves an engine (rather than the `None` a fresh install returns). This is INV-2's substance: "a working model", reached without any settings-page-only step.
+- **TEST-4** (tier: unit) [acceptance] [invariant: INV-1] [covers: ITEM-15] file: `src-app/server/src/modules/llm_repository/models.rs` — asserts: `LlmRepository::git_credential` — the single point at which a clone's credential is decided — yields `(None, None)` for an anonymous repository over **every** input, including the dangerous one: a row whose `auth_config` still carries an api_key, token, username and password. An unknown auth_type fails closed the same way. A companion test asserts the credentialed arms still return their secret, so the invariant cannot be satisfied by a function that always returns nothing. **Verified RED**: mutating the anonymous arm to leak `api_key` turns this test red (recorded in TEST_RESULTS).
+  *Re-tiered at phase 6 (DRIFT-2.1).* The originally-planned loopback-fixture version is unreachable: `GitService::clone_repository` validates against `PUBLIC_HTTP_OR_HTTPS` **unconditionally** — deliberately, as the defense-in-depth check closing a Critical SSRF finding — so no local fixture can be cloned from, and the design forbids reaching for real Hugging Face. Weakening that check to make a test pass was rejected. Asserting at the decision point is also strictly stronger than watching a clone: it covers every input rather than the paths one clone happened to take.
+- **TEST-5** (tier: integration) [acceptance] [invariant: INV-4] [covers: ITEM-9] file: `src-app/server/tests/llm_model/default_model_download_test.rs` — asserts: a download driven to a real FAILURE through the real endpoints creates **no** `llm_models` row for the descriptor's stable name, stamps no `model_id` on the instance, and records a reason; and a subsequent attempt is not blocked by residue (`llm_models` has `UNIQUE (provider_id, name)`, so a half-created row would surface as a conflict). Nothing half-installed survives for the app to load.
+- **TEST-6** (tier: integration) [acceptance] [invariant: INV-2] [covers: ITEM-6, ITEM-7] file: `src-app/server/tests/llm_model/default_model_install_test.rs` — asserts: after running the sequence the step drives — enable the disabled built-in `local` provider, register a llamacpp runtime from the existing `MockReleaseServer` and mark it system default, land the model under that provider — the end state is **servable**: an `enabled` model under an `enabled` local provider, naming the engine that was installed, with that engine as the llamacpp system default (the value `BinaryManager::select_runtime_version` falls through to, and which a fresh install has none of). Both pre-conditions are asserted FIRST so the test cannot go vacuous. The weights transfer itself is not driven here for the reason under TEST-4; its own correctness is TEST-4/TEST-5/TEST-7.
 - **TEST-7** (tier: integration) [acceptance] [invariant: INV-6] [covers: ITEM-9] file: `src-app/server/tests/llm_model/default_model_download_test.rs` — asserts: a download started and then ABANDONED by its client (the HTTP response consumed, the progress stream dropped) keeps running server-side to completion, and is still reported by `GET /api/llm-models/downloads` afterwards — so navigating away neither cancels the transfer nor loses it, and a client returning later can see it. Fails if the transfer were bound to a client connection.
 
 ## Frontend — unit
@@ -58,8 +60,8 @@ simplify it, not harden it (GUARD-SUB).
 
 | ITEM | covered by |
 |---|---|
-| ITEM-1 | TEST-1, TEST-2, TEST-3, TEST-4 |
-| ITEM-2 | TEST-4, TEST-8 |
+| ITEM-1 | TEST-1, TEST-2, TEST-3 |
+| ITEM-2 | TEST-8 |
 | ITEM-3 | TEST-15 |
 | ITEM-4 | TEST-13, TEST-14, TEST-15, TEST-17, TEST-18 |
 | ITEM-5 | TEST-9 |
@@ -72,6 +74,7 @@ simplify it, not harden it (GUARD-SUB).
 | ITEM-12 | TEST-20 |
 | ITEM-13 | TEST-17, TEST-18 |
 | ITEM-14 | TEST-8 |
+| ITEM-15 | TEST-4 |
 
 | INV | pinned by |
 |---|---|

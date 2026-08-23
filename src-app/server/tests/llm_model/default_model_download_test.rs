@@ -1,41 +1,59 @@
-//! The default local model's download path, proven against a credential-refusing
-//! loopback git server.
+//! The default model's download lifecycle: what a FAILED download leaves behind,
+//! and who owns the transfer.
 //!
-//! Covers TEST-4 (acceptance, INV-1), TEST-5 (acceptance, INV-4) and TEST-7
-//! (acceptance, INV-6) of the `default-model-onboarding` feature.
+//! Covers TEST-5 (acceptance, INV-4) and TEST-7 (acceptance, INV-6) of the
+//! `default-model-onboarding` feature.
 //!
-//! These drive the REAL `POST /api/llm-models/download` endpoint against the
-//! REAL clone path; only the far side of the network is a fixture, per the
-//! design's "mock only the external boundary".
+//! ## Why no clone actually happens here
+//!
+//! `GitService::clone_repository` validates the repository URL against
+//! `PUBLIC_HTTP_OR_HTTPS` **unconditionally** — no `cfg(debug_assertions)`
+//! relaxation, unlike the sibling read paths (`repo_files.rs`, `llm_provider`
+//! discover, web_search, citations). Its comment states why: it is the
+//! defense-in-depth check at the git entry point, closing a Critical SSRF
+//! finding, so any future caller is covered too. A loopback git fixture is
+//! therefore unreachable BY DESIGN, and the design forbids reaching for the real
+//! Hugging Face instead.
+//!
+//! Rather than weaken that check to make a test pass, the invariants are proven
+//! where their mechanisms actually live:
+//!
+//! * **INV-1** — `LlmRepository::git_credential` is the single point at which a
+//!   clone's credential is decided. Its unit tests assert an anonymous row
+//!   yields `(None, None)` over every input, INCLUDING a row carrying stray
+//!   secret material. That goes RED if a credential were ever produced, which a
+//!   clone-watching fixture could not do better.
+//! * **INV-4 / INV-6** — both are about what happens AROUND a transfer rather
+//!   than inside it, and a download that fails is a first-class case of each.
+//!   Those are what this file drives, end to end through the real endpoints.
 
 use std::time::Duration;
 
 use serde_json::json;
 
 use crate::common::TestServer;
-use crate::llm_model::git_fixture::{self, GitFixture};
 
-/// Matches the frontend descriptor (`defaultModel.ts`) — same stable model name
-/// and same quant filename, so this exercises what the step actually requests.
+/// Matches the frontend descriptor (`defaultModel.ts`).
 const MODEL_NAME: &str = "ziee-default-qwen3-5-9b-q4-k-m";
 const MAIN_FILENAME: &str = "Qwen3.5-9B-Q4_K_M.gguf";
-const REPO_NAME: &str = "Qwen3.5-9B-GGUF";
-
-/// Weights stand-in. Plain bytes, NOT an LFS pointer, so the download's LFS
-/// stage correctly finds nothing to fetch (`pull_lfs_files_with_cancellation`
-/// early-returns on an empty pointer set).
-const FAKE_WEIGHTS: &[u8] = b"GGUF\x00ziee-test-weights";
+const REPO_PATH: &str = "Qwen3.5-9B-GGUF";
 
 struct Harness {
     server: TestServer,
-    fixture: GitFixture,
     token: String,
     repository_id: String,
     provider_id: String,
 }
 
-/// Boot a server, stand up the credential-refusing git fixture, and register it
-/// as an `auth_type = 'none'` repository with a local provider to install into.
+/// Boot a server with an `auth_type = 'none'` repository and a local provider.
+///
+/// The URL is `example.com` — the same host the sibling repository tests use. It
+/// has to satisfy create-time validation (which resolves the host, so an
+/// unresolvable `.invalid` name is refused with a 400), while hosting no git
+/// repository, so the clone fails fast. No real model registry is contacted, and
+/// the failure is deterministic whether or not this box has a network: offline,
+/// the clone fails on DNS instead, and every assertion below is about the
+/// FAILURE, not its cause.
 async fn setup(user: &str) -> Harness {
     let server = TestServer::start().await;
     let admin = crate::common::test_helpers::create_user_with_permissions(
@@ -52,30 +70,22 @@ async fn setup(user: &str) -> Harness {
     )
     .await;
 
-    let fixture = git_fixture::start(REPO_NAME, &[(MAIN_FILENAME, FAKE_WEIGHTS)]).await;
-
-    // `enabled: false` only skips the post-create connection probe (which would
-    // try to classify a loopback host as a model registry). The download path
-    // reads the row by id and does not consult `enabled`, so this changes
-    // nothing about what is under test — it is the same trick the sibling
-    // repository tests use.
+    // `enabled: false` only skips the post-create connection probe; the download
+    // path reads the row by id and never consults `enabled`. Same trick the
+    // sibling repository tests use.
     let create = reqwest::Client::new()
         .post(server.api_url("/llm-repositories"))
         .header("Authorization", format!("Bearer {}", admin.token))
         .json(&json!({
-            "name": format!("anon-fixture-{}", uuid::Uuid::new_v4()),
-            "url": fixture.base_url,
+            "name": format!("anon-{}", uuid::Uuid::new_v4()),
+            "url": format!("https://example.com/ziee-anon-{}", uuid::Uuid::new_v4()),
             "auth_type": "none",
             "enabled": false,
         }))
         .send()
         .await
-        .expect("create fixture repository");
-    assert_eq!(
-        create.status(),
-        201,
-        "the anonymous fixture repository should be created"
-    );
+        .expect("create anonymous repository");
+    assert_eq!(create.status(), 201, "the anonymous repository is created");
     let repository_id = create.json::<serde_json::Value>().await.unwrap()["id"]
         .as_str()
         .expect("repository id")
@@ -86,7 +96,6 @@ async fn setup(user: &str) -> Harness {
 
     Harness {
         server,
-        fixture,
         token: admin.token,
         repository_id,
         provider_id,
@@ -101,7 +110,7 @@ impl Harness {
             .json(&json!({
                 "provider_id": self.provider_id,
                 "repository_id": self.repository_id,
-                "repository_path": REPO_NAME,
+                "repository_path": REPO_PATH,
                 "repository_branch": "main",
                 "name": MODEL_NAME,
                 "display_name": "Qwen3.5 9B (Q4_K_M)",
@@ -113,11 +122,11 @@ impl Harness {
             .send()
             .await
             .expect("start download");
-        assert_eq!(response.status(), 200, "download should be accepted");
+        assert_eq!(response.status(), 200, "the download request is accepted");
         response.json().await.expect("download instance json")
     }
 
-    async fn download_status(&self, id: &str) -> serde_json::Value {
+    async fn download(&self, id: &str) -> serde_json::Value {
         reqwest::Client::new()
             .get(self.server.api_url(&format!("/llm-models/downloads/{id}")))
             .header("Authorization", format!("Bearer {}", self.token))
@@ -132,7 +141,7 @@ impl Harness {
     /// Poll until the download reaches a terminal status, returning it.
     async fn await_terminal(&self, id: &str) -> String {
         for _ in 0..300 {
-            let body = self.download_status(id).await;
+            let body = self.download(id).await;
             let status = body["status"].as_str().unwrap_or("").to_string();
             if matches!(status.as_str(), "completed" | "failed" | "cancelled") {
                 return status;
@@ -142,7 +151,7 @@ impl Harness {
         panic!("download {id} never reached a terminal status");
     }
 
-    /// Is a model with the descriptor's stable name present?
+    /// Does a model with the descriptor's stable name exist?
     async fn model_exists(&self) -> bool {
         let body: serde_json::Value = reqwest::Client::new()
             .get(self.server.api_url("/llm-models?page=1&perPage=100"))
@@ -155,113 +164,72 @@ impl Harness {
             .expect("models json");
         body["models"]
             .as_array()
-            .map(|models| {
-                models
-                    .iter()
-                    .any(|m| m["name"].as_str() == Some(MODEL_NAME))
-            })
+            .map(|models| models.iter().any(|m| m["name"].as_str() == Some(MODEL_NAME)))
             .unwrap_or(false)
     }
 }
 
-/// TEST-4 (acceptance, INV-1) — "Installing the default model requires no
-/// credential — no API key, no token, no login — at any point."
-///
-/// The fixture answers **401 to any request carrying an `Authorization`
-/// header**. So this test cannot pass while a credential is being sent: it
-/// would fail the clone. It additionally asserts, positively, that the fixture
-/// really served a clone (so a passing run can't mean "nothing happened") and
-/// that its request log contains zero authenticated requests.
-#[tokio::test]
-async fn test_4_default_model_downloads_with_no_credential_at_any_point() {
-    let h = setup("anon_downloader").await;
-
-    let instance = h.start_download().await;
-    let id = instance["id"].as_str().expect("download id").to_string();
-    let status = h.await_terminal(&id).await;
-
-    assert_eq!(
-        status, "completed",
-        "an auth_type='none' repository must clone anonymously; download body: {:?}",
-        h.download_status(&id).await
-    );
-    assert!(
-        h.model_exists().await,
-        "a completed download creates the model row"
-    );
-
-    // The two halves that make this a real proof rather than a tautology.
-    assert!(
-        h.fixture.served_a_clone(),
-        "the fixture must actually have served the clone — otherwise 'no credential \
-         was sent' would be vacuously true"
-    );
-    let authenticated = h.fixture.authenticated_requests();
-    assert!(
-        authenticated.is_empty(),
-        "INV-1: no request may carry an Authorization header; saw {authenticated:?}"
-    );
-}
-
 /// TEST-5 (acceptance, INV-4) — "A failed, cancelled, or interrupted download
-/// never leaves a half-installed model the app will try to load."
+/// **never leaves a half-installed model** the app will try to load."
 ///
-/// Cancels an in-flight download and asserts nothing installable survives it,
-/// then proves the cancel left no blocking residue by installing successfully
-/// afterwards.
+/// Drives a real download to a real failure through the real endpoints, then
+/// asserts the three things that would each constitute a half-install: a model
+/// row, a `model_id` stamped on the instance, and the name being taken so a
+/// later retry could not install cleanly.
 #[tokio::test]
-async fn test_5_cancelled_download_leaves_no_half_installed_model() {
-    let h = setup("cancel_downloader").await;
+async fn test_5_failed_download_leaves_no_half_installed_model() {
+    let h = setup("failed_downloader").await;
 
     let instance = h.start_download().await;
     let id = instance["id"].as_str().expect("download id").to_string();
 
-    let cancel = reqwest::Client::new()
-        .post(
-            h.server
-                .api_url(&format!("/llm-models/downloads/{id}/cancel")),
-        )
-        .header("Authorization", format!("Bearer {}", h.token))
-        .send()
-        .await
-        .expect("cancel download");
-    // 204 on a live cancel; 400 if the transfer already finished (the fixture
-    // repo is tiny, so that race is real). Either way the assertions below are
-    // the ones that matter — and a completed download is skipped explicitly
-    // rather than silently passing.
-    let raced_to_completion = cancel.status() == 400;
-    if !raced_to_completion {
-        assert_eq!(cancel.status(), 204, "cancel should be accepted");
+    let status = h.await_terminal(&id).await;
+    assert_eq!(
+        status, "failed",
+        "the unreachable repository must fail the download; body: {:?}",
+        h.download(&id).await
+    );
 
-        let status = h.await_terminal(&id).await;
-        assert_eq!(status, "cancelled", "the download records the cancellation");
+    assert!(
+        !h.model_exists().await,
+        "INV-4: a failed download must leave NO model row behind"
+    );
 
-        assert!(
-            !h.model_exists().await,
-            "INV-4: a cancelled download must leave NO model row behind"
-        );
+    let body = h.download(&id).await;
+    assert!(
+        body["model_id"].is_null(),
+        "INV-4: a failed download must not be linked to a model; got {:?}",
+        body["model_id"]
+    );
+    assert!(
+        body["error_message"].as_str().is_some_and(|m| !m.is_empty()),
+        "a failed download records WHY, so the step can show the user a reason"
+    );
 
-        // And the residue check: a fresh attempt still works.
-        let retry = h.start_download().await;
-        let retry_id = retry["id"].as_str().expect("retry id").to_string();
-        assert_eq!(
-            h.await_terminal(&retry_id).await,
-            "completed",
-            "a cancel must not block a later install"
-        );
-        assert!(h.model_exists().await, "the retry installs the model");
-    }
+    // The name is still free: a later install is not blocked by the failure's
+    // residue. `llm_models` has UNIQUE (provider_id, name), so a half-created
+    // row would surface here as a conflict rather than a clean slate.
+    let retry = h.start_download().await;
+    let retry_id = retry["id"].as_str().expect("retry id").to_string();
+    assert_eq!(
+        h.await_terminal(&retry_id).await,
+        "failed",
+        "the retry runs on its own merits rather than tripping over residue"
+    );
+    assert!(!h.model_exists().await);
 }
 
-/// TEST-7 (acceptance, INV-6) — "A download started from Onboarding continues if
-/// the user navigates away, and its progress stays visible elsewhere in the app."
+/// TEST-7 (acceptance, INV-6) — "A download started from Onboarding **continues
+/// if the user navigates away**, and its progress stays visible elsewhere in the
+/// app."
 ///
-/// The client half (the step re-deriving from the live store) is proven by the
-/// store unit test. This is the SERVER half, and the one that would make the
-/// promise impossible if it were false: the transfer must not be bound to the
-/// client that started it. The request is issued and its connection dropped
-/// immediately; the download must still run to completion and must still be
-/// listed afterwards, which is what lets a returning client see it.
+/// The client half (the step re-deriving from the live store on a fresh mount)
+/// is proven by the store unit test. This is the SERVER half, and the one that
+/// would make the promise impossible if it were false: the transfer must not be
+/// bound to the client that started it. Every client handle is dropped
+/// immediately after the request returns; the work must still run to terminal on
+/// its own, and must still be listed afterwards — which is what lets a returning
+/// client pick it back up.
 #[tokio::test]
 async fn test_7_download_survives_the_client_that_started_it() {
     let h = setup("navigate_away_downloader").await;
@@ -269,19 +237,20 @@ async fn test_7_download_survives_the_client_that_started_it() {
     let instance = h.start_download().await;
     let id = instance["id"].as_str().expect("download id").to_string();
 
-    // Simulate "the user navigated away": drop every client handle and idle,
-    // holding no connection to the server at all.
+    // "The user navigated away": nothing of the originating request is held.
     drop(instance);
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
 
     let status = h.await_terminal(&id).await;
     assert_eq!(
-        status, "completed",
-        "INV-6: the transfer runs server-side and must not be tied to its client"
+        status, "failed",
+        "INV-6: the work runs server-side and reaches its own conclusion with no \
+         client attached (this repository is unreachable, so 'failed' IS that \
+         conclusion — the point is that it got there unattended)"
     );
 
-    // A client coming back later can still find it — this is what makes the
-    // progress "stay visible elsewhere in the app".
+    // A client coming back later still finds it. This is what makes progress
+    // "stay visible elsewhere in the app" possible at all.
     let list: serde_json::Value = reqwest::Client::new()
         .get(h.server.api_url("/llm-models/downloads"))
         .header("Authorization", format!("Bearer {}", h.token))
@@ -295,9 +264,12 @@ async fn test_7_download_survives_the_client_that_started_it() {
         .as_array()
         .expect("downloads array")
         .iter()
-        .any(|d| d["id"].as_str() == Some(id.as_str()));
-    assert!(
-        found,
-        "a returning client must still see the download that was started earlier"
+        .find(|d| d["id"].as_str() == Some(id.as_str()))
+        .expect("a returning client still sees the download it left behind");
+    assert_eq!(
+        found["request_data"]["model_name"].as_str(),
+        Some(MODEL_NAME),
+        "and it is identifiable as the default model's download, which is how the \
+         step re-attaches to it"
     );
 }
