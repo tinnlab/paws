@@ -23,7 +23,7 @@ import { usePermission } from '@/core/permissions'
 import { formatSpeed, formatTime } from '@/utils/downloadUtils'
 import { Hardware as HardwareStore } from '@/modules/hardware/hardware'
 import { LlmModelDownload as LlmModelDownloadStore } from '@/modules/llm-provider/stores/llmModelDownload'
-import { LlmProvider as LlmProviderStore } from '@/modules/llm-provider/stores/llmProvider'
+import { UserLlmProviders as UserLlmProvidersStore } from '@/modules/user-llm-providers/userLlmProviders'
 import { RuntimeDownloadProgress as RuntimeDownloadProgressStore } from '@/modules/llm-local-runtime/stores/runtimeDownloadProgress'
 import type { OnboardingStepProps } from '@/modules/onboarding/types/onboarding'
 import { Onboarding } from '@/modules/onboarding/stores/onboarding'
@@ -81,10 +81,18 @@ export default function DefaultModelStep({ registerBeforeNext }: OnboardingStepP
   // even when a runtime is present.
   const canInstall = usePermission({
     allOf: [
+      // Reads the flow performs before it writes anything. `GroupsRead` is easy
+      // to miss and expensive to miss: the group lookup is not wrapped in a
+      // try/catch, so without it the install throws AFTER the provider has
+      // already been enabled — a half-applied administrative change.
+      Permissions.LlmProvidersRead,
+      Permissions.GroupsRead,
+      Permissions.RuntimeVersionRead,
+      Permissions.UserLlmProvidersRead,
+      // Writes.
       Permissions.LlmModelsCreate,
       Permissions.LlmProvidersEdit,
       Permissions.LlmProvidersAssignGroups,
-      Permissions.RuntimeVersionRead,
       Permissions.RuntimeVersionCreate,
       Permissions.RuntimeVersionUpdate,
     ],
@@ -93,7 +101,10 @@ export default function DefaultModelStep({ registerBeforeNext }: OnboardingStepP
   // Reactive reads — these drive the derivation below and must be read at the
   // top level of render, never inside a `.map()` or a conditional.
   const { downloads } = LlmModelDownloadStore
-  const { providers } = LlmProviderStore
+  // The USER-FACING provider list, not the admin one — see the note on
+  // `DeriveViewStateInput.providers`. Deriving "installed" from the admin list
+  // would promise "you can start chatting" about a model the user cannot see.
+  const { providers } = UserLlmProvidersStore
   const { activeByKey } = RuntimeDownloadProgressStore
   const { installing, stage, error, runtimeUnavailable, runtimeKey, loading } =
     DefaultModelStepStore

@@ -203,14 +203,21 @@ async fn test_6_install_sequence_yields_a_servable_default_model() {
 
     // ── …and it is REACHABLE, which enabling alone does not achieve ─────────
     //
-    // This is the assertion that would have caught the gap: an enabled provider
-    // holding an enabled model is still INVISIBLE until it is assigned to a
-    // group the user belongs to. `get_for_user` — which backs
+    // An enabled provider holding an enabled model is still INVISIBLE until it
+    // is assigned to a group the user belongs to. `get_for_user` — which backs
     // `GET /api/user-llm-providers`, the endpoint the model picker reads —
     // INNER JOINs `user_group_llm_providers`, and every chat send re-checks
     // `user_has_access_to_provider`. Neither has an admin bypass, and nothing
     // seeds such a row. Asserting only `enabled` above passed happily while the
     // model was unusable.
+    //
+    // SCOPE, stated precisely so this is not read as more than it is: this
+    // proves the group assignment is REQUIRED for the end state to be reachable
+    // — deleting the POST above turns this assertion red, which was verified by
+    // doing exactly that. It does NOT police the FRONTEND leg, because this test
+    // performs the assignment itself. That `ensureGroupAssignment` makes the
+    // call, and refuses to in the cases where it must not, is covered by
+    // `ensureLocalProvider.store.test.ts`.
     let picker: serde_json::Value = client
         .get(mock.server.api_url("/user-llm-providers"))
         .header("Authorization", &auth)

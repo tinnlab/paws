@@ -20,7 +20,12 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-type Provider = { id: string; provider_type: string; enabled: boolean }
+type Provider = {
+  id: string
+  provider_type: string
+  enabled: boolean
+  built_in?: boolean
+}
 type Group = { id: string; name: string; is_active: boolean; is_default: boolean }
 
 const state = vi.hoisted(() => ({
@@ -69,6 +74,12 @@ vi.mock('@/core/permissions', () => ({
       : state.canEditProviders,
 }))
 
+// `getGroups` is reset per test so a `mockRejectedValueOnce` cannot leak.
+const resetGetGroups = () => {
+  getGroups.mockReset()
+  getGroups.mockImplementation(async () => state.assignedGroups)
+}
+
 // The action writes no state of its own; these stand in for the store's
 // `set`/`get` so the factory can be exercised without booting a store.
 const noopSet = (() => undefined) as never
@@ -95,8 +106,8 @@ beforeEach(() => {
   state.allGroups = [USERS_GROUP]
   loadLlmProviders.mockClear()
   assignGroupToProvider.mockClear()
-  getGroups.mockClear()
   listGroups.mockClear()
+  resetGetGroups()
   // `mockReset`, not `mockClear`: a per-test `mockImplementation` survives
   // `mockClear`, so an earlier case's "flip enabled on update" would leak into
   // the case that asserts what happens when the enable does NOT take effect.
@@ -125,21 +136,12 @@ describe('ensureLocalProvider', () => {
     expect(assignGroupToProvider).toHaveBeenCalledWith('local-1', 'group-users')
   })
 
-  it('assigns the group even when the provider was ALREADY enabled', async () => {
-    // The gap is independent of the enable: a provider someone turned on by
-    // hand is still unreachable until it is shared with a group.
-    state.providers = [{ id: 'local-1', provider_type: 'local', enabled: true }]
-
-    await expect(run()).resolves.toEqual({ providerId: 'local-1', problem: null })
-    expect(updateLlmProvider).not.toHaveBeenCalled()
-    expect(assignGroupToProvider).toHaveBeenCalledWith('local-1', 'group-users')
-  })
-
   it('leaves an EXISTING group arrangement alone', async () => {
-    state.providers = [{ id: 'local-1', provider_type: 'local', enabled: true }]
+    state.providers = [{ id: 'local-1', provider_type: 'local', enabled: false }]
     state.assignedGroups = [
       { id: 'group-custom', name: 'Researchers', is_active: true, is_default: false },
     ]
+    enableOnUpdate()
 
     await expect(run()).resolves.toEqual({ providerId: 'local-1', problem: null })
     expect(
@@ -148,26 +150,103 @@ describe('ensureLocalProvider', () => {
     ).not.toHaveBeenCalled()
   })
 
-  it('prefers the DEFAULT group, then one named Users, over an arbitrary one', async () => {
+  it('does NOT grant access to a provider it did not provision', async () => {
+    // An empty group set on an ALREADY-enabled provider is a supported admin
+    // arrangement — it is how you keep a provider out of users' pickers while
+    // leaving it on. Silently re-granting would reverse that decision and widen
+    // access to everyone in the default group.
     state.providers = [{ id: 'local-1', provider_type: 'local', enabled: true }]
+    state.assignedGroups = []
+
+    const result = await run()
+    expect(assignGroupToProvider).not.toHaveBeenCalled()
+    expect(result.providerId).toBeNull()
+    expect(result.problem).toMatch(/not shared with any user group/i)
+  })
+
+  it('fails CLOSED when the current assignment cannot be read', async () => {
+    // A read failure is not evidence of "no groups". Treating it as such would
+    // widen access on a transient 5xx.
+    state.providers = [{ id: 'local-1', provider_type: 'local', enabled: false }]
+    enableOnUpdate()
+    getGroups.mockRejectedValueOnce(new Error('503 Service Unavailable'))
+
+    const result = await run()
+    expect(
+      assignGroupToProvider,
+      'an unreadable arrangement must never be overwritten',
+    ).not.toHaveBeenCalled()
+    expect(result.providerId).toBeNull()
+    expect(result.problem).toMatch(/could not check/i)
+  })
+
+  it('prefers the DEFAULT group over any other', async () => {
+    state.providers = [{ id: 'local-1', provider_type: 'local', enabled: false }]
     state.allGroups = [
       { id: 'group-other', name: 'Admins', is_active: true, is_default: false },
       USERS_GROUP,
     ]
+    enableOnUpdate()
 
     await run()
     expect(assignGroupToProvider).toHaveBeenCalledWith('local-1', 'group-users')
   })
 
+  it('falls back to a group NAMED Users when none is marked default', async () => {
+    // The second preference, exercised on its own — with an `is_default` group
+    // present the first preference always wins and this branch is never reached.
+    state.providers = [{ id: 'local-1', provider_type: 'local', enabled: false }]
+    state.allGroups = [
+      { id: 'group-admins', name: 'Admins', is_active: true, is_default: false },
+      { id: 'group-named', name: 'Users', is_active: true, is_default: false },
+    ]
+    enableOnUpdate()
+
+    await run()
+    expect(assignGroupToProvider).toHaveBeenCalledWith('local-1', 'group-named')
+  })
+
+  it('never guesses a group when neither the default nor Users is available', async () => {
+    // Granting to whichever group happens to sort first is a silent
+    // access-control decision nobody asked for — on a deployment with many
+    // groups that could be 'Auditors' or 'Contractors'.
+    state.providers = [{ id: 'local-1', provider_type: 'local', enabled: false }]
+    state.allGroups = [
+      { id: 'group-aud', name: 'Auditors', is_active: true, is_default: false },
+      { id: 'group-con', name: 'Contractors', is_active: true, is_default: false },
+    ]
+    enableOnUpdate()
+
+    const result = await run()
+    expect(assignGroupToProvider).not.toHaveBeenCalled()
+    expect(result.providerId).toBeNull()
+    expect(result.problem).toMatch(/no default user group/i)
+  })
+
   it('ignores INACTIVE groups — assigning to one would not grant access', async () => {
-    state.providers = [{ id: 'local-1', provider_type: 'local', enabled: true }]
+    state.providers = [{ id: 'local-1', provider_type: 'local', enabled: false }]
     state.allGroups = [
       { id: 'group-dead', name: 'Users', is_active: false, is_default: true },
-      { id: 'group-live', name: 'Everyone', is_active: true, is_default: false },
+      { id: 'group-live', name: 'Users', is_active: true, is_default: false },
     ]
+    enableOnUpdate()
 
     await run()
     expect(assignGroupToProvider).toHaveBeenCalledWith('local-1', 'group-live')
+  })
+
+  it('provisions the BUILT-IN local provider, not whichever sorts first', async () => {
+    // Enabling and then sharing an operator's own custom provider would be a
+    // bigger action than the user asked for.
+    state.providers = [
+      { id: 'local-custom', provider_type: 'local', enabled: false, built_in: false },
+      { id: 'local-builtin', provider_type: 'local', enabled: false, built_in: true },
+    ]
+    enableOnUpdate()
+
+    await expect(run()).resolves.toEqual({ providerId: 'local-builtin', problem: null })
+    expect(updateLlmProvider).toHaveBeenCalledWith('local-builtin', { enabled: true })
+    expect(assignGroupToProvider).toHaveBeenCalledWith('local-builtin', 'group-users')
   })
 
   it("re-reads the list instead of trusting updateLlmProvider's return value", async () => {
@@ -213,8 +292,9 @@ describe('ensureLocalProvider', () => {
   })
 
   it('names what a human must do when it cannot assign a group', async () => {
-    state.providers = [{ id: 'local-1', provider_type: 'local', enabled: true }]
+    state.providers = [{ id: 'local-1', provider_type: 'local', enabled: false }]
     state.canAssignGroups = false
+    enableOnUpdate()
 
     const result = await run()
     expect(

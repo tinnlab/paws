@@ -49,6 +49,7 @@ the response is to simplify it, not harden it (GUARD-SUB).
 - **TEST-15** (tier: e2e) [acceptance] [invariant: INV-2] [covers: ITEM-3, ITEM-4] file: `src-app/ui/tests/e2e/onboarding/default-model-step.spec.ts` — asserts: an admin walking Onboarding reaches the new step immediately after "AI Providers" **without leaving the wizard and without visiting any settings route**, and the step presents the default model by name, file and size with an install control ready. This is INV-2's location half (its "working model" half is TEST-6); the spec fails if the step were placed elsewhere, gated behind a settings page, or unreachable.
 - **TEST-16** (tier: e2e) [acceptance] [invariant: INV-3] [covers: ITEM-8] file: `src-app/ui/tests/e2e/onboarding/default-model-skip.spec.ts` — asserts: the same admin reaches the step, installs NOTHING, presses Next, and completes Onboarding into a working app — and that no download was started and no model exists afterwards. Fails if the step ever gated Next.
 - **TEST-17** (tier: e2e) [negative-perm] [positive-control] [covers: ITEM-4, ITEM-13] file: `src-app/ui/tests/e2e/onboarding/default-model-step.spec.ts` — asserts: a user LACKING the model-create permission **still LOADS the Onboarding wizard and can reach the step and advance past it** (positive control — proving the page really rendered), and on that step sees only the informational fallback: no Install, no Cancel, no Retry. Without the positive control, "absent" would be indistinguishable from "never rendered".
+- **TEST-22** (tier: e2e) [negative-perm] [positive-control] [covers: ITEM-4, ITEM-13] file: `src-app/ui/tests/e2e/onboarding/default-model-step.spec.ts` — asserts: a user holding EVERY permission the flow needs EXCEPT `llm_providers::assign_groups` — including `llm_models::create`, the one the control was originally gated on — **still LOADS the step and can advance past it** (positive control), and is offered no Install control. Added in fix round 1: the plain no-permissions case cannot tell "gated on the whole flow" from "gated on any one thing", and under the original single-permission gate this user would have been shown an enabled button that 403s partway through, after the provider had already been changed.
 - **TEST-18** (tier: e2e) [covers: ITEM-13] file: `src-app/ui/tests/e2e/onboarding/default-model-step.spec.ts` — asserts: at a 390px viewport the step produces no horizontal page overflow and its primary controls stay visible and accessibly named — complementing the axe / AA-contrast pass `gate:ui` runs over the same surface.
 
 ## Gates (enumerated because phase 8 records them)
@@ -63,7 +64,7 @@ the response is to simplify it, not harden it (GUARD-SUB).
 | ITEM-1 | TEST-1, TEST-2, TEST-3 |
 | ITEM-2 | TEST-8 |
 | ITEM-3 | TEST-15 |
-| ITEM-4 | TEST-13, TEST-14, TEST-15, TEST-17, TEST-18 |
+| ITEM-4 | TEST-13, TEST-14, TEST-15, TEST-17, TEST-18, TEST-22 |
 | ITEM-5 | TEST-9 |
 | ITEM-6 | TEST-6, TEST-11 |
 | ITEM-7 | TEST-6, TEST-10 |
@@ -72,7 +73,7 @@ the response is to simplify it, not harden it (GUARD-SUB).
 | ITEM-10 | TEST-12 |
 | ITEM-11 | TEST-19 |
 | ITEM-12 | TEST-20 |
-| ITEM-13 | TEST-17, TEST-18 |
+| ITEM-13 | TEST-17, TEST-18, TEST-22 |
 | ITEM-14 | TEST-8 |
 | ITEM-15 | TEST-4 |
 

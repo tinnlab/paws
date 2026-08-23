@@ -48,7 +48,18 @@ export interface DeriveViewStateInput {
   downloads: DownloadInstance[]
   /** Live `RuntimeDownloadProgress.activeByKey` values. */
   runtimeDownloads: DownloadSnapshot[]
-  /** Live `LlmProvider.providers`. */
+  /**
+   * Live `UserLlmProviders.providers` — the USER-FACING list, deliberately, not
+   * the admin one.
+   *
+   * `GET /user-llm-providers` is backed by `get_for_user`, which filters
+   * `p.enabled = true` AND INNER JOINs `user_group_llm_providers`. So a provider
+   * appearing here is one this user can actually reach; the admin list
+   * (`GET /llm-providers`) includes providers that are enabled but shared with
+   * nobody, which is exactly the invisible-in-the-picker state this feature
+   * exists to prevent. Deriving "installed" from the admin list would let the
+   * step promise "you can start chatting" about a model the user cannot see.
+   */
   providers: ProviderLike[]
   stage: InstallStage
   installing: boolean
@@ -77,18 +88,20 @@ export function activeDefaultModelDownload(
 }
 
 /**
- * Is the default model installed AND usable?
+ * Is the default model installed AND actually usable by this user?
  *
  * Matched on the descriptor's STABLE name under a local provider — the same key
  * `llm_models`' `UNIQUE (provider_id, name)` enforces, so this agrees with the
  * database rather than approximating it.
  *
- * Both `enabled` flags are required, and that is not pedantry: the step's
- * already-installed copy tells the user the model "is already your default model,
- * so you can start chatting". The model picker resolves the first ENABLED model
- * under a provider the user can reach, and a disabled provider is filtered out of
- * that list entirely — so claiming readiness while either flag is off would be a
- * plain untruth the user cannot act on.
+ * `providers` MUST be the user-facing list (see `DeriveViewStateInput`), which
+ * the server has already filtered to enabled + group-reachable. Both `enabled`
+ * checks below are then belt-and-braces rather than the primary guard — the
+ * primary guard is which list you pass in. That matters because the step's
+ * already-installed copy tells the user the model "is already your default
+ * model, so you can start chatting"; the picker resolves the first ENABLED model
+ * under a provider the user can REACH, so any of the three conditions being
+ * false makes that sentence a plain untruth.
  */
 export function isDefaultModelInstalled(providers: ProviderLike[]): boolean {
   return providers.some(
@@ -97,6 +110,13 @@ export function isDefaultModelInstalled(providers: ProviderLike[]): boolean {
       p.enabled &&
       (p.llm_models ?? []).some(m => m.name === DEFAULT_MODEL.name && m.enabled),
   )
+}
+
+/** Has a download of the default model COMPLETED in this session? */
+export function hasCompletedDefaultModelDownload(
+  downloads: DownloadInstance[],
+): boolean {
+  return downloads.some(d => isDefaultModelDownload(d) && d.status === 'completed')
 }
 
 export function deriveViewState(input: DeriveViewStateInput): DefaultModelView {
@@ -125,8 +145,18 @@ export function deriveViewState(input: DeriveViewStateInput): DefaultModelView {
 
   // Installed beats a stale terminal download record: after a successful
   // install the completed instance is still in the array, and reporting
-  // `failed`/`cancelled` over an installed model would be a lie.
-  if (isDefaultModelInstalled(providers)) return 'already-installed'
+  // `failed` over an installed model would be a lie.
+  //
+  // A download that COMPLETED in this session also counts, because the server
+  // creates the model row as the final step of that same download — so the
+  // install is genuinely done, even in the window before the user-facing
+  // provider list has been re-fetched.
+  if (
+    isDefaultModelInstalled(providers) ||
+    hasCompletedDefaultModelDownload(downloads)
+  ) {
+    return 'already-installed'
+  }
 
   // A RUNNING orchestration outranks any past outcome.
   //

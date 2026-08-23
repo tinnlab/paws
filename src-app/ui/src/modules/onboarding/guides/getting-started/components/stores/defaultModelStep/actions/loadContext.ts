@@ -1,7 +1,7 @@
 import { Permissions } from '@/api-client/permissions'
 import { hasPermissionNow } from '@/core/permissions'
 import { LlmModelDownload } from '@/modules/llm-provider/stores/llmModelDownload'
-import { LlmProvider as LlmProviderStore } from '@/modules/llm-provider/stores/llmProvider'
+import { UserLlmProviders } from '@/modules/user-llm-providers/userLlmProviders'
 import { RuntimeDownloadProgress } from '@/modules/llm-local-runtime/stores/runtimeDownloadProgress'
 import type { DefaultModelStepGet, DefaultModelStepSet } from '../state'
 
@@ -24,11 +24,13 @@ export default (set: DefaultModelStepSet, _get: DefaultModelStepGet) =>
       draft.loading = true
     })
     try {
-      const canReadProviders = hasPermissionNow({
-        allOf: [Permissions.LlmProvidersRead, Permissions.LlmModelsRead],
-      })
       await Promise.all([
-        canReadProviders ? LlmProviderStore.loadLlmProviders() : Promise.resolve(),
+        // The user-facing list is what "already installed" is derived from, and
+        // its permission is one ordinary users hold — so this is not gated on
+        // the admin reads.
+        hasPermissionNow(Permissions.UserLlmProvidersRead)
+          ? UserLlmProviders.load()
+          : Promise.resolve(),
         hasPermissionNow(Permissions.RuntimeVersionRead)
           ? RuntimeDownloadProgress.loadActive()
           : Promise.resolve(),

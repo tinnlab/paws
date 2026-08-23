@@ -5,12 +5,12 @@ import { LlmProvider as LlmProviderStore } from '@/modules/llm-provider/stores/l
 import type { DefaultModelStepGet, DefaultModelStepSet } from '../state'
 
 /**
- * The group an installed default model is made available through.
+ * The group an installed default model is made available through, when the seed
+ * default is unavailable.
  *
  * Every user belongs to `Users` — it is the group the migrations grant baseline
  * permissions to, and the group the shipped seed hands the built-in `fetch` MCP
- * server to (`resources/seed/default.yaml`). "Available to everyone" means this
- * group.
+ * server to (`resources/seed/default.yaml`).
  */
 const DEFAULT_GROUP_NAME = 'Users'
 
@@ -29,20 +29,31 @@ export interface LocalProviderReadiness {
  *    `Local` provider DISABLED, and `list_local_providers` filters
  *    `WHERE provider_type = 'local' AND enabled = true`, so there is otherwise
  *    nothing to download into.
- * 2. **The provider must be assigned to a group the user is in.** This is the
- *    one that looks unnecessary and is not: the model picker reads
- *    `get_for_user`, which INNER JOINs `user_group_llm_providers`, and every
- *    chat send re-checks `user_has_access_to_provider` and answers 403
- *    ACCESS_DENIED without it — with no admin bypass. Nothing seeds such a row.
- *    So an enabled provider holding a downloaded model is still INVISIBLE in the
- *    picker and unusable in chat, and the user would have to go to
- *    Settings → LLM Providers → Groups to fix it. That is precisely what INV-2
- *    forbids ("without visiting a settings page"), which is why the step does it.
+ * 2. **The provider must be assigned to a group the user is in.** The model
+ *    picker reads `get_for_user`, which INNER JOINs `user_group_llm_providers`,
+ *    and every chat send re-checks `user_has_access_to_provider` and answers 403
+ *    ACCESS_DENIED without it — with no admin bypass. Nothing seeds such a row,
+ *    so an enabled provider holding a downloaded model is still INVISIBLE, and
+ *    the user would have to go to Settings → LLM Providers → Groups. INV-2
+ *    forbids exactly that, which is why the step does it.
  *
- * Enabling happens at install time rather than in the seed migration so an
- * upgrading deployment that never touches this step is unaffected (DEC-5); the
- * group assignment is scoped the same way, and both are reversible from the
- * existing providers page.
+ * ## Granting access is an ACCESS-CONTROL WRITE, and is bounded accordingly
+ *
+ * The second half widens who can reach a provider, so it is deliberately narrow:
+ *
+ * - **It only grants as part of provisioning THIS step performed.** If the
+ *   provider was already enabled, someone has been here before and its group
+ *   arrangement is theirs — including the arrangement of having none, which is
+ *   the supported way to hide a provider from users while leaving it enabled
+ *   (`remove_provider_from_group` / `update_group_providers` are first-class
+ *   admin actions). The step reports what a human should do instead of quietly
+ *   reversing that decision.
+ * - **It fails CLOSED.** If the current assignment cannot be read, the step does
+ *   NOT grant. Guessing "probably none" and writing would widen access on a
+ *   transient 5xx.
+ * - **It never guesses a group.** Only the seeded default group, or one named
+ *   `Users`. If neither is present it reports the problem rather than granting
+ *   to whichever group happens to sort first.
  *
  * Returns the provider id, or a `problem` naming what a human must do instead.
  */
@@ -54,8 +65,16 @@ export default (_set: DefaultModelStepSet, _get: DefaultModelStepGet) =>
     const locals = () =>
       LlmProviderStore.$.providers.filter(p => p.provider_type === 'local')
 
-    let provider = locals().find(p => p.enabled) ?? locals()[0]
-    if (!provider) {
+    // Prefer the BUILT-IN local provider explicitly rather than whatever sorts
+    // first: it is the row the product seeds and the one this step exists to
+    // provision. Enabling and then sharing an operator's own custom provider
+    // would be a bigger action than the user asked for.
+    const pick = (candidates: typeof LlmProviderStore.$.providers) =>
+      candidates.find(p => p.built_in) ?? candidates[0]
+
+    const enabledLocal = pick(locals().filter(p => p.enabled))
+    const anyLocal = enabledLocal ?? pick(locals())
+    if (!anyLocal) {
       return {
         providerId: null,
         problem:
@@ -63,8 +82,12 @@ export default (_set: DefaultModelStepSet, _get: DefaultModelStepGet) =>
       }
     }
 
-    // ── 1. Enabled ──────────────────────────────────────────────────────────
-    if (!provider.enabled) {
+    // Was it already usable before this step touched anything? That answer
+    // decides whether the group grant below is provisioning or interference.
+    const wasAlreadyEnabled = Boolean(enabledLocal)
+
+    let providerId = anyLocal.id
+    if (!wasAlreadyEnabled) {
       if (!hasPermissionNow(Permissions.LlmProvidersEdit)) {
         return {
           providerId: null,
@@ -72,47 +95,55 @@ export default (_set: DefaultModelStepSet, _get: DefaultModelStepGet) =>
             'The local provider is turned off, and your account cannot turn it on. An administrator can enable it in Settings → LLM Providers.',
         }
       }
-      await LlmProviderStore.updateLlmProvider(provider.id, { enabled: true })
+      await LlmProviderStore.updateLlmProvider(providerId, { enabled: true })
 
       // Deliberately NOT trusting `updateLlmProvider`'s return value: it
       // resolves to `null` when a concurrent update is already in flight (it
       // early-returns on its own `updating` flag). Re-read so the result
       // reflects what the server actually holds.
       await LlmProviderStore.loadLlmProviders(true)
-      const enabled = locals().find(p => p.enabled)
-      if (!enabled) {
+      const nowEnabled = pick(locals().filter(p => p.enabled))
+      if (!nowEnabled) {
         return {
           providerId: null,
           problem: 'The local provider could not be turned on.',
         }
       }
-      provider = enabled
+      providerId = nowEnabled.id
     }
 
-    // ── 2. Reachable by this user ───────────────────────────────────────────
-    const problem = await ensureGroupAssignment(provider.id)
+    const problem = await ensureGroupAssignment(providerId, wasAlreadyEnabled)
     if (problem) return { providerId: null, problem }
 
-    return { providerId: provider.id, problem: null }
+    return { providerId, problem: null }
   }
 
 /**
- * Ensure the provider is assigned to at least one group, so an installed model
- * is actually reachable. Returns a human-readable problem, or `null` on success.
+ * Ensure the provider is reachable, granting access ONLY when this step is the
+ * one that provisioned it. Returns a human-readable problem, or `null`.
  */
-async function ensureGroupAssignment(providerId: string): Promise<string | null> {
-  let assigned: { id: string; name: string }[] = []
+async function ensureGroupAssignment(
+  providerId: string,
+  wasAlreadyEnabled: boolean,
+): Promise<string | null> {
+  // FAIL CLOSED. A read failure is not evidence of "no groups"; treating it as
+  // such would grant access on a transient error.
+  let assigned: { id: string; name: string }[]
   try {
     assigned = await ApiClient.LlmProvider.getGroups({ provider_id: providerId })
   } catch {
-    // Reading the assignment needs `llm_providers::read`, which the install
-    // flow already requires; if it fails, fall through to attempting the
-    // assignment rather than blocking on a read.
-    assigned = []
+    return 'Could not check which user groups the local provider is shared with, so it was left unchanged. Try again, or assign it in Settings → LLM Providers → Groups.'
   }
-  // Already reachable through some group — leave an operator's existing
-  // arrangement exactly as it is.
+
+  // Already reachable — leave an operator's arrangement exactly as it is.
   if (assigned.length > 0) return null
+
+  // No groups, and the provider was ALREADY enabled: someone configured this
+  // provider before we got here, and an empty group set is a supported way to
+  // keep a provider out of users' pickers. Say so; do not reverse it.
+  if (wasAlreadyEnabled) {
+    return 'The local provider is enabled but not shared with any user group, so an installed model would not appear in the model picker. An administrator can share it in Settings → LLM Providers → Groups.'
+  }
 
   if (!hasPermissionNow(Permissions.LlmProvidersAssignGroups)) {
     return 'The local provider is not shared with any user group, and your account cannot change that. An administrator can assign it in Settings → LLM Providers → Groups.'
@@ -121,13 +152,13 @@ async function ensureGroupAssignment(providerId: string): Promise<string | null>
   const groups = await ApiClient.UserGroup.list({ page: 1, per_page: 100 })
   const active = groups.groups.filter(g => g.is_active)
   // `is_default` is the schema's own answer to "the group ordinary users land
-  // in"; the name is the fallback for a deployment that renamed or unset it.
+  // in"; the name is the fallback for a deployment that unset it. There is NO
+  // third fallback on purpose — granting to whichever group sorts first is a
+  // silent access-control decision nobody asked for.
   const target =
-    active.find(g => g.is_default) ??
-    active.find(g => g.name === DEFAULT_GROUP_NAME) ??
-    active[0]
+    active.find(g => g.is_default) ?? active.find(g => g.name === DEFAULT_GROUP_NAME)
   if (!target) {
-    return 'No active user group exists to share the local provider with.'
+    return `No default user group was found to share the local provider with. An administrator can share it with the right group in Settings → LLM Providers → Groups.`
   }
 
   await LlmProviderStore.assignGroupToProvider(providerId, target.id)

@@ -39,6 +39,8 @@ test.describe('Onboarding — Local Model step is skippable', () => {
       username,
       `${username}@ex.com`,
       'password123',
+      // The full set the install flow needs — so this spec proves the offer was
+      // genuinely available and DECLINED, not merely unavailable.
       [
         'profile::read',
         'profile::edit',
@@ -46,9 +48,12 @@ test.describe('Onboarding — Local Model step is skippable', () => {
         'llm_models::read',
         'llm_providers::read',
         'llm_providers::edit',
+        'llm_providers::assign_groups',
         'llm_repositories::read',
         'llm_local_runtime::versions_read',
         'llm_local_runtime::create',
+        'llm_local_runtime::update',
+        'groups::read',
       ],
     )
 

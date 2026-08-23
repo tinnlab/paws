@@ -44,8 +44,32 @@ if (!globalThis.matchMedia) {
 //
 // The component is the unit under test; these are the inputs it derives from.
 
+/**
+ * Every permission the install flow's own calls require, as a HELD set the mock
+ * evaluates the component's `allOf` against.
+ *
+ * This is why the mock below is not `() => canInstall`: a mock that ignores its
+ * argument proves nothing about WHICH permissions the component gates on, so
+ * dropping any member of the real `allOf` would leave every test green. Here,
+ * removing one from the component's list makes the "missing one" case pass
+ * wrongly and the drop-one loop below catch it.
+ */
+const REQUIRED_PERMISSIONS = [
+  'llm_providers::read',
+  'groups::read',
+  'llm_local_runtime::versions_read',
+  'user_llm_providers::read',
+  'llm_models::create',
+  'llm_providers::edit',
+  'llm_providers::assign_groups',
+  'llm_local_runtime::create',
+  'llm_local_runtime::update',
+] as const
+
 const stores = vi.hoisted(() => ({
   canInstall: true,
+  /** Permissions the simulated user holds; `null` means "all of them". */
+  held: null as string[] | null,
   downloads: [] as unknown[],
   providers: [] as unknown[],
   activeByKey: new Map<string, unknown>(),
@@ -67,9 +91,24 @@ const loadContext = vi.hoisted(() => vi.fn(async () => undefined))
 const reset = vi.hoisted(() => vi.fn(() => undefined))
 const setReady = vi.hoisted(() => vi.fn(() => undefined))
 
+/**
+ * A real-enough `usePermission`: it EVALUATES the expression it is handed
+ * against the held set, so the component's actual `allOf` list is under test.
+ */
+function evaluate(expr: unknown): boolean {
+  if (stores.held === null) return stores.canInstall
+  const held = stores.held
+  if (typeof expr === 'string') return held.includes(expr)
+  if (expr && typeof expr === 'object' && 'allOf' in expr) {
+    const all = (expr as { allOf: string[] }).allOf
+    return all.every(p => held.includes(p))
+  }
+  return false
+}
+
 vi.mock('@/core/permissions', () => ({
-  usePermission: () => stores.canInstall,
-  hasPermissionNow: () => stores.canInstall,
+  usePermission: (expr: unknown) => evaluate(expr),
+  hasPermissionNow: (expr: unknown) => evaluate(expr),
 }))
 vi.mock('@/modules/onboarding/stores/onboarding', () => ({
   Onboarding: { setReady },
@@ -81,8 +120,11 @@ vi.mock('@/modules/llm-provider/stores/llmModelDownload', () => ({
     },
   },
 }))
-vi.mock('@/modules/llm-provider/stores/llmProvider', () => ({
-  LlmProvider: {
+// The USER-FACING provider list — what the step derives "installed" from. The
+// server has already filtered it to enabled + group-reachable providers, so an
+// empty list is exactly what a user sees when the provider is shared with nobody.
+vi.mock('@/modules/user-llm-providers/userLlmProviders', () => ({
+  UserLlmProviders: {
     get providers() {
       return stores.providers
     },
@@ -184,6 +226,7 @@ const q = (id: string) => host!.querySelector(`[data-testid="${id}"]`)
 
 beforeEach(() => {
   stores.canInstall = true
+  stores.held = null
   stores.downloads = []
   stores.providers = []
   stores.activeByKey = new Map()
@@ -306,10 +349,9 @@ describe('TEST-14 — the transfer states, and what the step does NOT own (INV-6
     expect(q('onboarding-default-model-retry-button')).toBeNull()
   })
 
-  test('a DISABLED model or provider is not reported as ready to chat with', async () => {
-    // The installed copy promises the user they can start chatting. A disabled
-    // model is not resolved by the picker, and a disabled provider is filtered
-    // out of the user's provider list entirely.
+  test('a DISABLED model is not reported as ready to chat with', async () => {
+    // The installed copy promises the user they can start chatting; the picker
+    // resolves the first ENABLED model, so a disabled one is not a default.
     stores.providers = [
       {
         provider_type: 'local',
@@ -322,12 +364,60 @@ describe('TEST-14 — the transfer states, and what the step does NOT own (INV-6
     expect(q('onboarding-default-model-install-button')).not.toBeNull()
   })
 
-  test('a user missing ANY of the flow\'s permissions sees an explanation, not controls', async () => {
-    // `canInstall` here stands for the whole `allOf` set the component gates on
-    // — model-create, provider-edit, provider-assign-groups and the runtime
-    // read/create/update perms. Gating on only the last step would render an
-    // enabled button for a user who 403s partway through, AFTER the provider
-    // state has already been changed.
+  test('a model under a DISABLED provider is not reported as ready either', async () => {
+    // Mounted separately rather than folded into the case above: the two guards
+    // are different clauses, and a single seeded fixture can only exercise one.
+    stores.providers = [
+      {
+        provider_type: 'local',
+        enabled: false,
+        llm_models: [{ name: DEFAULT_MODEL.name, enabled: true }],
+      },
+    ]
+    await mount()
+    expect(q('onboarding-default-model-installed-tag')).toBeNull()
+    expect(q('onboarding-default-model-install-button')).not.toBeNull()
+  })
+
+  test('a model the user cannot REACH is not reported as installed', async () => {
+    // The step derives from the user-facing provider list, which the server has
+    // already filtered to enabled + group-reachable. An empty list is what a
+    // user sees when the provider is shared with nobody — the exact state this
+    // feature exists to prevent, and one the admin list would have hidden.
+    stores.providers = []
+    await mount()
+    expect(q('onboarding-default-model-installed-tag')).toBeNull()
+    expect(q('onboarding-default-model-install-button')).not.toBeNull()
+  })
+
+  test('holding EVERY required permission renders the install control', async () => {
+    // The positive control for the drop-one loop below: without it, a component
+    // gated on something impossible would pass every "absent" assertion.
+    stores.held = [...REQUIRED_PERMISSIONS]
+    await mount()
+    expect(q('onboarding-default-model-install-button')).not.toBeNull()
+  })
+
+  for (const missing of REQUIRED_PERMISSIONS) {
+    test(`dropping ${missing} alone removes the install control`, async () => {
+      // Each of these is required by a call the flow actually makes. Gating on a
+      // subset would render an enabled button for a user who 403s partway
+      // through — after the provider state has already been changed. Because the
+      // mock evaluates the component's real `allOf`, deleting a permission from
+      // the component turns exactly this case red.
+      stores.held = REQUIRED_PERMISSIONS.filter(p => p !== missing)
+      await mount()
+
+      expect(host!.textContent, 'the step still renders for them').toContain(
+        'Local Model',
+      )
+      expect(q('onboarding-default-model-install-button')).toBeNull()
+      expect(q('onboarding-default-model-cancel-button')).toBeNull()
+      expect(q('onboarding-default-model-retry-button')).toBeNull()
+    })
+  }
+
+  test('a user with no permissions at all sees an explanation, not controls', async () => {
     stores.canInstall = false
     await mount()
 

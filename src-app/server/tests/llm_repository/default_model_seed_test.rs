@@ -107,10 +107,15 @@ async fn test_21_boot_health_scan_never_disables_the_anonymous_default_row() {
     let pool = connect(&server).await;
     let id = Uuid::parse_str(DEFAULT_MODEL_REPOSITORY_ID).expect("valid fixture uuid");
 
-    // Give the spawned scan room to run and finish. The two credentialed
-    // built-ins are its other candidates and are skipped immediately, so this is
-    // generous rather than tight.
-    for _ in 0..40 {
+    // Give the spawned scan room to run AND to write.
+    //
+    // The window has to exceed the probe's own budget, not just "feel generous":
+    // `test_repository_connectivity` builds its client with a 10s timeout, and
+    // the status is written only after `probe()` returns. A 10s window would
+    // therefore be a coin-flip on exactly the machine this fix is for — one that
+    // drops packets to huggingface.co, where connect hangs the full timeout. 30s
+    // clears it with room.
+    for _ in 0..120 {
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
         let row = sqlx::query!(
             "SELECT enabled, last_health_check_status FROM llm_repositories WHERE id = $1",

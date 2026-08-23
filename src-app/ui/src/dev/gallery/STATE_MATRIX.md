@@ -3468,19 +3468,19 @@ Required states: `delayed`, `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!canInstall` | 114 |
-| loading | `loading` | 126 |
-| branch | `view === 'already-installed'` | 155 |
-| branch | `view === 'installing-runtime'` | 191 |
-| branch | `view === 'downloading'` | 198 |
-| branch | `view === 'preparing'` | 206 |
-| error | `view === 'failed'` | 213 |
-| branch | `view === 'runtime-unavailable'` | 228 |
-| branch | `view === 'offer' && shouldWarnLowMemory(hardwareInfo?.memory?.total_ram)` | 238 |
-| branch | `view === 'already-installed'` | 267 |
-| branch | `view === 'downloading'` | 269 |
-| branch | `view === 'installing-runtime' \|\| view === 'preparing'` | 284 |
-| branch | `isRetry` | 305 |
+| branch | `!canInstall` | 125 |
+| loading | `loading` | 137 |
+| branch | `view === 'already-installed'` | 166 |
+| branch | `view === 'installing-runtime'` | 202 |
+| branch | `view === 'downloading'` | 209 |
+| branch | `view === 'preparing'` | 217 |
+| error | `view === 'failed'` | 224 |
+| branch | `view === 'runtime-unavailable'` | 239 |
+| branch | `view === 'offer' && shouldWarnLowMemory(hardwareInfo?.memory?.total_ram)` | 249 |
+| branch | `view === 'already-installed'` | 278 |
+| branch | `view === 'downloading'` | 280 |
+| branch | `view === 'installing-runtime' \|\| view === 'preparing'` | 295 |
+| branch | `isRetry` | 316 |
 
 ### `modules/onboarding/guides/getting-started/components/McpServersStep`
 

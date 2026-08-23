@@ -25,6 +25,13 @@ import {
  * place, offering the right thing, to the right people, at the right size.
  */
 
+/**
+ * Everything the install flow touches. The step gates its control on ALL of
+ * these, because the flow spans three subsystems: enable + share a provider,
+ * download and default a runtime, then download the model. Granting a subset
+ * would render a button that 403s partway through — which is the case TEST-17
+ * covers deliberately.
+ */
 const ONBOARDING_USER_PERMS = [
   'profile::read',
   'profile::edit',
@@ -32,9 +39,15 @@ const ONBOARDING_USER_PERMS = [
   'llm_models::read',
   'llm_providers::read',
   'llm_providers::edit',
+  'llm_providers::assign_groups',
   'llm_repositories::read',
   'llm_local_runtime::versions_read',
   'llm_local_runtime::create',
+  'llm_local_runtime::update',
+  // The flow looks up the group to share the provider with, and that read is
+  // not wrapped — without it the install would throw AFTER enabling the
+  // provider, leaving a half-applied change.
+  'groups::read',
 ]
 
 test.describe('Onboarding — Local Model step', () => {
@@ -149,6 +162,52 @@ test.describe('Onboarding — Local Model step', () => {
     // POSITIVE CONTROL (2) — the wizard is still navigable for them, so the
     // absent controls are a gate rather than a broken page.
     await expect(byTestId(page, 'onboarding-page-next-button')).toBeEnabled()
+    await byTestId(page, 'onboarding-page-next-button').click()
+    await expect(byTestId(page, 'onboarding-step-mcp-servers')).toBeVisible()
+  })
+
+  /**
+   * TEST-17b — a user holding MOST of the set, missing one.
+   *
+   * The plain no-permissions case above cannot distinguish "gated on the whole
+   * flow" from "gated on any one thing". This one can: the user has
+   * `llm_models::create` — the permission the control was ORIGINALLY gated on —
+   * and everything else except the group-assign. Under the original gate the
+   * button would render enabled and then fail partway through, AFTER having
+   * already enabled the provider. It must not render.
+   */
+  test('a user missing only the group-assign permission still gets no install control', async ({
+    page,
+    testInfra,
+  }) => {
+    const { baseURL, apiURL } = testInfra
+    const adminToken = await getAdminToken(apiURL)
+    const username = `dm_partial_${Date.now().toString(36)}`
+    await createTestUser(
+      apiURL,
+      adminToken,
+      username,
+      `${username}@ex.com`,
+      'password123',
+      ONBOARDING_USER_PERMS.filter(p => p !== 'llm_providers::assign_groups'),
+    )
+
+    await loginExpectingOnboarding(page, baseURL, username, 'password123')
+
+    await expect(byTestId(page, 'onboarding-step-welcome')).toBeVisible()
+    await byTestId(page, 'onboarding-page-next-button').click()
+    await expect(byTestId(page, 'onboarding-step-api-keys')).toBeVisible()
+    await byTestId(page, 'onboarding-page-next-button').click()
+
+    // POSITIVE CONTROL — the step renders for them.
+    const step = byTestId(page, 'onboarding-step-default-model')
+    await expect(step).toBeVisible()
+    await expect(step).toContainText('Local Model')
+
+    // …and offers nothing it cannot finish.
+    await expect(byTestId(page, 'onboarding-default-model-install-button')).toHaveCount(0)
+
+    // …and the wizard still advances.
     await byTestId(page, 'onboarding-page-next-button').click()
     await expect(byTestId(page, 'onboarding-step-mcp-servers')).toBeVisible()
   })

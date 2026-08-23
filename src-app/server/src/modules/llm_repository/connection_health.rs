@@ -592,6 +592,14 @@ pub async fn run_startup_health_check(pool: PgPool) {
         // the network at that instant, not of the configuration. The download
         // path surfaces a real failure with its reason if the host is genuinely
         // gone.
+        //
+        // Scope: `built_in` is set only by a migration — the create path binds
+        // it `false` literally and no request type carries the field — and a
+        // built-in row's url/auth_type are immutable through the API, so no
+        // operator- or attacker-supplied row can reach this branch or re-point
+        // one that does. The consequence worth knowing: any built-in anonymous
+        // row now stays `untested` forever and is never auto-disabled, and a
+        // future seeded anonymous repository inherits that silently.
         if repository.built_in && repository.auth_type == "none" {
             tracing::debug!(
                 repo_id = %repo_id,
