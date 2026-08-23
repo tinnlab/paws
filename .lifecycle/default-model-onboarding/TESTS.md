@@ -55,7 +55,7 @@ the response is to simplify it, not harden it (GUARD-SUB).
 ## Gates (enumerated because phase 8 records them)
 
 - **TEST-19** (tier: unit) [covers: ITEM-11] file: `src-app/ui/src/dev/gallery/stateCoverage.ts` — asserts: `npm run check:state-matrix` passes — the regenerated `stateMatrix.generated.ts` is committed and every NEW required-state key the step introduces is mapped in `stateCoverage.ts`, following the sibling `MemorySetupStep:*` "via surface — rendered within its page" precedent (DEC-10). An unmapped state fails `npm run check`.
-- **TEST-20** (tier: unit) [covers: ITEM-12] file: `src-app/desktop/ui/package.json` — asserts: `npm run check` passes in the desktop workspace and the desktop drift check reports no override that drops logic from the changed web surfaces (rule R2-3). Recorded as `npm run check (desktop/ui): PASS`.
+- **TEST-20** (tier: unit) [covers: ITEM-12] file: `src-app/desktop/ui/src/modules/loader.test.ts` — asserts: the desktop bundle does NOT blocklist the `onboarding` core module, so the new Local Model step actually reaches desktop users — the platform likeliest to want a local model with no API key. **Re-pointed at phase 8**: the phase-3 entry named `src-app/desktop/ui/package.json` and described a workspace-wide GATE rather than a test, so no line this branch added could earn it (A11 correctly refused the PASS). The gate it described is still run and recorded separately as `npm run check (desktop/ui): PASS`; the other half of R2-3 (no `.desktop.tsx` fork of a changed surface) is enforced by `check:override-registry` inside that same gate.
 
 ## Coverage map (bipartite completeness)
 

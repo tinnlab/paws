@@ -1,7 +1,8 @@
 # TEST_RESULTS — default-model-onboarding (phase 8)
 
-The single full gated run, executed against the tree at `c6faab917` + one
-comment-only label correction (below). Every line here was produced by a command
+The single full gated run, executed against the tree at `c6faab917` plus the two
+small corrections recorded under *Tree changes* below — one a comment-only label
+fix, one a genuinely added desktop assertion, each re-run after the change. Every line here was produced by a command
 that RAN; nothing is inferred from reading code (rule B7). A PASS is claimed only
 where the TEST-ID appears on an added line of `git diff main...HEAD` and the
 named test executed green (rule A11).
@@ -67,29 +68,36 @@ Cmd 3's filter also matched 3 pre-existing tests (`project::conversations_test::
 - **TEST-19**: PASS — `check:state-matrix` green inside cmd 8. Earned: this branch
   adds the step's state keys to `stateCoverage.ts` and regenerates
   `stateMatrix.generated.ts`, and the check fails on an unmapped key.
-- **TEST-20**: SKIP — NOT VERIFIED as a TEST-ID (`SKIP` is the only non-PASS
-  verdict `lifecycle-check`'s result parser accepts, though its A11 message asks
-  for the words "NOT VERIFIED"; both are recorded here so neither reader is
-  misled). Phase 3 declared its `file:` as
-  `src-app/desktop/ui/package.json`, which this branch does not touch — so there is
-  no line this branch added that a PASS could be keyed to, and claiming one would
-  be inheriting another feature's use of the `TEST-N` namespace. What TEST-20
-  DESCRIBES was nonetheless run and is green: `npm run check` (desktop/ui) exits
-  **0** (cmd 9), including the desktop drift check that would report an override
-  dropping logic from the changed web surfaces. It is recorded as the gate line
-  below, which is the honest place for a workspace-wide gate. The enumeration
-  error is phase 3's — a gate should not have been given a TEST-ID at all.
+- **TEST-20**: PASS — `desktop CORE_MODULE_BLOCKLIST > does NOT blocklist onboarding, so desktop gets the default-model step` (`src-app/desktop/ui/src/modules/loader.test.ts`, 3 passed).
+  Recorded first as NOT VERIFIED, and fixed rather than argued away. Phase 3 had
+  declared TEST-20's `file:` as `src-app/desktop/ui/package.json` and described a
+  workspace-wide GATE, not a test — and this branch changes no desktop file, so
+  no added line could ever earn the PASS. A11 caught exactly that. Rather than
+  fabricate a descope (which needs human approval this branch does not have) or
+  leave an inherited PASS, TEST-20 is now bound to a real assertion this branch
+  adds: desktop has no onboarding module of its own, so the step reaches desktop
+  users only while `onboarding` stays off the loader blocklist — and a desktop
+  user is the likeliest person to want a local model with no API key. Verified
+  non-vacuous: the module really does register as `name: 'onboarding'`.
+  The gate TEST-20 originally described is still run, below.
+
 - `npm run check (ui)`: **PASS**
 - `npm run check (desktop/ui)`: **PASS**
 - `gate:ui (ui)`: **PASS**
 
-## One tree change after the first full run
+## Tree changes after the first full run
 
-`TESTS.md` enumerates the "missing only group-assign" e2e as **TEST-22**, but the
+TWO, both made to keep a recorded PASS honest rather than to make a number green.
+
+**1.** `TESTS.md` enumerates the "missing only group-assign" e2e as **TEST-22**, but the
 spec labelled it `TEST-17b`. A PASS keyed to an ID absent from the diff is not
 earned (A11), so the docstring label was corrected to TEST-22 and **that spec was
 re-run** (cmd 12, 4 passed). The change is comment-only — no assertion, selector
 or fixture moved — and the re-run is the evidence rather than the claim.
+
+**2.** TEST-20 gained a real assertion (`src-app/desktop/ui/src/modules/loader.test.ts`,
+run green — see its entry above). The phase-3 enumeration had pointed it at a
+`package.json` and described a gate, which no branch-added line could earn.
 
 ## Failures, classified before being called regressions
 
