@@ -1,6 +1,6 @@
 # HUMAN_FEEDBACK — default-model-onboarding
 
-**No human feedback was received during this build.** One question was escalated
+**no human feedback received** — none arrived during this build. One question was escalated
 and answered before implementation (recorded as DEC-6): whether "talk to it"
 required provisioning the llama.cpp ENGINE as well as the weights. The answer was
 **model + engine**, and that is what shipped. Nothing else was asked, and no
