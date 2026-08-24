@@ -86,6 +86,19 @@ Lifted VERBATIM from `docs/design/paws-feature-surface.md` §Invariants.
   existing assertions that encode the old default (`config.rs` `mod
   voice_config_tests`, `src/modules/js_tool/mod.rs`). `bio_mcp` is deliberately
   NOT touched — it is not one of the 13 items.
+  **AMENDED during phase 5 (DRIFT-1.2): flipping those functions alone disables
+  NOTHING in the common case.** Every read site spelled the fallback out as
+  `.unwrap_or(true)`, so an ABSENT config key stayed enabled and only a
+  present-but-empty block would have changed behaviour. The item therefore also
+  adds four accessors on `Config` (`web_search_enabled()`, `lit_search_enabled()`,
+  `voice_enabled()`, `js_tool_enabled()`) that resolve the absent-key default from
+  the same `Default` impl as the empty-block case, and moves every read site onto
+  them so the two can never disagree again.
+  **Also amended (DRIFT-1.3):** the four suites for these features (~148
+  start-server call sites) would silently lose their subject, so
+  `tests/common/harness_inner.rs` gains `web_search_enabled` /
+  `lit_search_enabled` / `js_tool_enabled` options and writes all four sections
+  explicitly, defaulting ON in tests.
 - **ITEM-8**: Close the INV-3 hole in `web_search`: its chat-extension factory
   discards the config (`web_search/chat_extension/extension.rs:22-24`) and
   `should_attach` consults only DB rows, so with the switch off a surviving
@@ -107,8 +120,19 @@ Lifted VERBATIM from `docs/design/paws-feature-surface.md` §Invariants.
   its page and its store. The `assistant` module itself is NOT hidden, and
   `is_template` / the seeded template row / clone-on-signup all STAY — removing
   them would leave every new user with zero assistants.
+  **AMENDED (DRIFT-1.5):** deleting the store breaks `AssistantFormDrawer`, which
+  imports it, so the drawer's now-unreachable `isTemplate` branches go too
+  (permission selection, both save paths, the title, a field description), along
+  with the drawer state flag, the `openAssistantDrawer` parameter, the two
+  `assistant_template.*` subscriptions and the `TemplateAssistants` type
+  registration. The surviving user-assistants path through the same drawer is
+  unchanged.
 - **ITEM-12**: Delete the e2e suites that cover the now-hidden features, so the
   suite stays runnable and honest. Every deleted path is listed in the PR body.
+  **AMENDED (DRIFT-1.4):** four further specs import into those suites and would
+  fail collection — `14-split-chat/voice-per-pane`,
+  `14-split-chat/kb-highlight-per-pane`, `llm/repository-to-hub-admin-workflow`,
+  `sync/workflow-run-sync`. Each covers a hidden feature, so each goes.
 - **ITEM-13**: Prove and repair the survivors. Two files outside the hidden set
   statically import into it —
   `chat/extensions/schedule/components/ScheduleLoopDialog.tsx:26-29`
@@ -136,10 +160,19 @@ Lifted VERBATIM from `docs/design/paws-feature-surface.md` §Invariants.
 - `src-app/ui/src/modules/assistant/module.tsx` (+ remove its templates page/store)
 
 **Edited — server**
-- `src-app/server/src/core/config.rs`
+- `src-app/server/src/core/config.rs` (+ the four `Config` accessors, DRIFT-1.2)
 - `src-app/server/src/modules/js_tool/mod.rs` (default-encoding test)
 - `src-app/server/src/modules/web_search/chat_extension/{extension.rs,web_search.rs}`
+- `src-app/server/src/modules/{voice,web_search,lit_search}/mod.rs` and
+  `lit_search/chat_extension/extension.rs` — read sites moved onto the accessors
+- `src-app/server/tests/common/harness_inner.rs` (DRIFT-1.3) +
+  `tests/code_sandbox/{harness,mirror_fixture}.rs` (exhaustive struct literals)
 - `src-app/desktop/tauri/src/modules/backend/mod.rs`
+
+**Edited — UI, beyond the predicates (DRIFT-1.5)**
+- `assistant/components/AssistantFormDrawer.tsx`,
+  `assistant/components/assistantDrawer/{index.ts,state.ts,actions/*}`,
+  `assistant/stores/index.ts`, `assistant/types.ts`
 
 **Deleted**
 - `src-app/ui/tests/e2e/{citations,hub,workflows,14-scheduler,14-knowledge-base,file-rag,14-voice}/` and the assistant-template specs (exact list in TESTS.md / the PR body)
