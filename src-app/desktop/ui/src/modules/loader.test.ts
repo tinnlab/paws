@@ -9,6 +9,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { CORE_MODULE_BLOCKLIST, isBlocklisted, applyBlocklist } from '@/modules/loader.desktop'
+import { PAWS_HIDDEN_MODULE_NAMES } from '@/modules/pawsHiddenModules'
 
 describe('desktop CORE_MODULE_BLOCKLIST', () => {
   it('blocklists the web server-update + user-profile modules', () => {
@@ -27,5 +28,48 @@ describe('desktop CORE_MODULE_BLOCKLIST', () => {
     const kept = applyBlocklist(mods).map((m) => m.metadata.name)
     expect(kept).toEqual(['chat', 'settings'])
     expect(kept).not.toContain('server-update')
+  })
+
+  // TEST-7 (paws-feature-surface).
+  //
+  // This is the lever that actually hides features on DESKTOP. `loadModules()`
+  // in loader.desktop.ts eager-globs every core module.tsx and never evaluates
+  // `shouldLoad`, so a module's `shouldLoad: () => false` does nothing here —
+  // if the blocklist misses a name, that feature ships visible in the desktop
+  // app while the web build hides it.
+  it('blocklists every paws-hidden module', () => {
+    for (const name of PAWS_HIDDEN_MODULE_NAMES) {
+      expect(isBlocklisted(name), `${name} must be blocked on desktop`).toBe(true)
+    }
+    // Non-empty, so the loop above can't pass vacuously.
+    expect(PAWS_HIDDEN_MODULE_NAMES.size).toBeGreaterThan(0)
+  })
+
+  it('keeps the modules the reduction must NOT touch', () => {
+    // The design hides features; it must not take out the app around them.
+    // `assistants` is explicitly called out as core (design item 12 removes the
+    // template surface only), and web-search/literature are disable-only rows in
+    // the item table — their UI modules stay.
+    const survivors = [
+      'chat',
+      'projects',
+      'assistants',
+      'settings',
+      'onboarding',
+      'mcp',
+      'file',
+      'notification',
+      'web-search',
+      'literature',
+    ]
+    for (const name of survivors) {
+      expect(isBlocklisted(name), `${name} must survive the reduction`).toBe(false)
+    }
+
+    const mods = [
+      ...survivors.map((name) => ({ metadata: { name } })),
+      ...[...PAWS_HIDDEN_MODULE_NAMES].map((name) => ({ metadata: { name } })),
+    ]
+    expect(applyBlocklist(mods).map((m) => m.metadata.name)).toEqual(survivors)
   })
 })
