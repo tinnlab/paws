@@ -466,3 +466,25 @@ not this feature's to make unilaterally.
   **Not built, and stated as such:** a real upgrade test (apply the shipped set,
   then the current set, against a live DB). It needs the shared harness's DB
   bootstrap (rule B3), so it is proposed to the owner in FB-11 instead.
+
+## Fix round 8 (FB-12, FB-13)
+
+- **DEC-26 — progress is rebuilt into `progress_data` at the SSE consumer.**
+  The server's `DownloadProgressUpdate` is flat by design (it is the "simplified
+  progress data for SSE streaming"); the UI renders `progress_data.*`. The
+  handler now reconstructs that object from the delivered fields, per-field
+  falling back to the previous value so a null does not blank a figure the user
+  could already see. I did NOT change the wire format: it is shared with any
+  other consumer, and the mismatch is the client's to absorb.
+  The lesson recorded with it: my FB-5 test asserted the WRITE and the write was
+  never broken. An acceptance test for a user-visible value must assert what the
+  CONSUMER renders.
+
+- **DEC-27 — the text extension's conversation-keyed accumulator is REPORTED,
+  not re-keyed.** `chat/extensions/text/text.rs` keys accumulated deltas by
+  `conversation_id` and reads them destructively, so a second read in one
+  conversation yields nothing. It is a real trap, but it did NOT cause FB-13 (the
+  content persisted; the log shows the message with 1 text block and the turn
+  complete). Re-keying touches shared chat-core for every provider, and I have no
+  evidence linking it to a live failure — so it is escalated per the brief rather
+  than widened into this branch.

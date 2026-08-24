@@ -553,6 +553,110 @@ whole repo, and worth a real upgrade test that applies a previously-shipped
 migration set to a live database and then the current one on top. Both are
 owner-level decisions.
 
+### FB-4 CONFIRMED IN PRODUCTION — first end-to-end proof of the stall timeout
+
+A live 5.68 GB transfer was inspected mid-flight on the running Linux instance:
+**5,147,144,752 / 5,680,522,464 bytes (90.6%), still advancing at ~504 KB/s
+(~4 Mbps)** at sample time. It later reached 5,637,699,037 bytes (99.2%).
+
+**That rate is far below the ~25.2 Mbps floor the old 30-minute absolute cap
+imposed.** Under the pre-FB-4 code this transfer would have been killed at
+roughly 900 MB, with nothing kept and a "retry" that could never succeed. DEC-19
+is therefore not a theoretical improvement — it is the reason this download
+completed at all. Recorded as the first end-to-end confirmation.
+
+FB-3 is confirmed in the same observation: the blob staged at
+`…/cache/git/<repo>/.git/lfs/objects/03/b7/<oid>.lfstmp` — in the cache dir, not
+the process CWD.
+
+### FB-12 — the bar still read 0%, because the UI never received the numbers
+
+- **FB-12** [status: resolved] — the record was RIGHT and the consumer was
+  wrong. The SSE payload is flat; the UI renders `progress_data.*`; the handler
+  spread the flat update and never rebuilt `progress_data`. See DEC-26.
+
+**Established from the running instance, not inferred.** I queried the live
+embedded Postgres (port 38759) mid-download:
+
+```
+current: 5637699037, total: 5680522464, speed_bps: 1606723, eta_seconds: 26
+message: "Downloading model weights — 5.64 GB of 5.68 GB"
+```
+
+So **FB-5's write is correct and working**. I also confirmed the running binary
+contained that fix rather than trusting the build timeline —
+`strings … | grep "Downloading model weights"` matches in the shipped binary.
+
+**The defect is one line, in the consumer.**
+`subscribeToDownloadProgress.ts` did `{ ...download, ...update }`.
+`DownloadProgressUpdate` is FLAT — `current` / `total` / `speed_bps` /
+`eta_seconds` / `message` / `phase` at the top level — while every view renders
+`progress_data.*`. The spread grafted stray top-level keys on and left
+`progress_data` untouched, so it stayed at its initial zeros. The
+`as DownloadInstance` cast is what stopped TypeScript from catching it.
+
+That single store explains **both** reported surfaces: the onboarding step and
+the LLM-providers view ("0 bytes / 0 bytes") read the same downloads array.
+
+**Why my FB-5 round missed it:** my test asserted the WRITE. The write was never
+the broken half. The new tests assert what a CONSUMER sees — advancing bytes on
+`progress_data`, speed/ETA carried through, and a null field not blanking a
+figure already known. **Verified RED**: restoring the flat spread fails all
+three.
+
+**On the lead's lead:** the "Removed disconnected download monitoring client"
+lines are real but are NOT the cause. The SSE loop polls the DB record every
+second and broadcasts to whoever is connected; the record was correct throughout.
+Those lines are `broadcast_event` pruning senders whose receiver went away
+(a navigated-away tab), which is ordinary. The delivery channel was fine — the
+payload SHAPE was not.
+
+### FB-13 — the premise is wrong: the answer was NOT dropped
+
+- **FB-13** [status: wontfix] — investigated on the evidence; the reported
+  mechanism does not hold, and the latent defect I did find is shared chat-core,
+  so it is escalated rather than changed unilaterally.
+
+**What the log actually shows, two lines past the excerpt in the brief:**
+
+```
+18:25:00.134  mcp: Message ca5bc26a-… has 1 content blocks
+18:25:00.138  mcp:   Content block: type='text', sequence=0
+18:25:00.138  mcp: No tool uses found and stop_when_no_tool_calling=true, conversation complete
+```
+
+**The message HAS a persisted text content block and the turn completed cleanly
+server-side.** So the answer was not lost between accumulation and finalize. The
+`get_accumulated_content returned 0 items` line is benign: the text persisted via
+the streaming save path rather than through the extension accumulator, which is
+why finalize found nothing left to add. Reading that line as "the response was
+dropped" is the wrong conclusion, and building a fix on it would have been
+building on sand.
+
+Corroborating: `chat turn completed with no user-visible content (empty
+completion)` — the warn that fires when a turn genuinely produces nothing —
+appears **zero** times in the log. The server did not consider this turn empty.
+
+**So why did the UI spin?** I could not establish that, and I will not guess. It
+is a client-side question (the server finished and persisted at 18:25:00; the app
+was restarted at 18:29:02), and the instance has since shut down, so I can no
+longer query it. Given FB-12 turned out to be a payload-shape mismatch between
+server and UI in the *download* stream, the same class of defect in the *chat*
+stream is where I would look first — but that is a lead, not a finding.
+
+**A REAL latent defect I did find while looking, worth fixing separately.** The
+text extension keys its accumulator by **`conversation_id`**, not `message_id`
+(`chat/extensions/text/text.rs`), and `get_accumulated_content` does a
+destructive `remove`. Two consequences: any second read for the same conversation
+(a retry, a second finalize, a concurrent call) gets zero items; and two messages
+in one conversation share a slot. It did not cause the reported symptom — the
+content persisted — but it is a genuine trap.
+
+**Not fixed here, deliberately.** Re-keying that accumulator changes shared
+chat-core for every provider and every chat path, on a branch that is already
+carrying seven rounds of fixes, and I have no evidence tying it to a live
+failure. Per the brief's own instruction, escalated with the diagnosis instead.
+
 ## Follow-up NOT done this round (recorded so it is not lost)
 
 **Enforce the pinned `DEFAULT_MODEL_FILE_SHA256`.** The descriptor now declares
