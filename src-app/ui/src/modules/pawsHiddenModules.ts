@@ -6,12 +6,25 @@
  * `docs/design/paws-feature-surface.md`; every entry below is one row of that
  * document's item table.
  *
- * **To restore a feature: delete its entry from the two sets below.** Nothing
- * else is required and no deleted code has to be recovered — that is the
- * design's INV-5 ("reversible by configuration or a single predicate, not by
- * deleting code"). Server-side capabilities (web search, literature, voice,
- * programmatic tools) are a separate lever entirely: config keys in
- * `server/src/core/config.rs`, not this list.
+ * **To restore a HIDDEN feature's UI: delete its entry from the two sets below,
+ * and restore the module's original `shouldLoad` predicate** (each hidden
+ * `module.tsx` carries its previous predicate in a comment). No feature code was
+ * deleted, which is the design's INV-5 ("reversible by configuration or a single
+ * predicate, not by deleting code").
+ *
+ * Two honest caveats, so this header does not overstate the claim:
+ *
+ *  - **Server-side capabilities are a separate lever**: web search, literature,
+ *    voice and programmatic tools are config keys in `server/src/core/config.rs`,
+ *    not entries here. Re-enable with e.g. `web_search: { enabled: true }`.
+ *  - **Semantic search (design item 3) is a DB default**, not a predicate.
+ *    Restoring it is an admin settings write (`PUT /api/file-rag/admin-settings`
+ *    with `semantic_enabled: true`) — and since the file-rag admin UI is itself
+ *    hidden here, that is an API/DB action rather than a click.
+ *
+ * The hidden features' e2e suites were deleted (an explicit owner decision), so
+ * restoring a feature restores it without its end-to-end coverage; recover those
+ * specs from git history if you bring one back.
  *
  * ## Why a module is hidden in FOUR places and not one
  *

@@ -399,6 +399,28 @@ bio_mcp:
   # tool-capable chat). A dedicated bio spec enables it explicitly via
   # test.use({ bioMcpEnabled: true }).
   enabled: ${bioMcpEnabled}
+
+# web_search / lit_search / voice / js_tool ship OFF on paws (the feature-surface
+# reduction, docs/design/paws-feature-surface.md items 1/2/4/5). They are opt-IN
+# features, not deleted ones, and suites that cover them — literature/**,
+# sync/lit-search-sync, sync/web-search-*-sync, settings/** — still exercise real
+# supported behaviour, so the E2E deployment turns them ON.
+#
+# This mirrors what the Rust integration harness does
+# (server/tests/common/harness_inner.rs). The two harnesses MUST agree: when only
+# the Rust one was updated, every e2e run silently booted with all four off and
+# those suites lost their subject.
+#
+# The paws SHIPPING default is asserted where it belongs — the config unit tests
+# in core/config.rs, against the real packaged config — not here.
+web_search:
+  enabled: true
+lit_search:
+  enabled: true
+voice:
+  enabled: true
+js_tool:
+  enabled: true
 ${
   // Code sandbox is OFF by default in E2E (enabling it spawns squashfuse and
   // requires a mounted rootfs). The real-sandbox-via-chat E2E

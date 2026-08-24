@@ -146,9 +146,8 @@ mod tests {
     #[tokio::test]
     async fn kill_switch_blocks_attach_without_touching_the_db() {
         let ext = WebSearchExtension::new(PgPool::connect_lazy("postgres://invalid").unwrap(), false);
-        assert_eq!(
-            ext.should_attach().await.unwrap(),
-            false,
+        assert!(
+            !ext.should_attach().await.unwrap(),
             "web_search.enabled=false must block attach regardless of DB state"
         );
     }

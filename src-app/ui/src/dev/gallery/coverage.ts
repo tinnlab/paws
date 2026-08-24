@@ -84,7 +84,8 @@ export const GALLERY_COVERAGE = {
   "modules/assistant/chat-extension/components/AssistantStatusChip": { kind: 'via', reason: 'rendered within the assistant module page' },
   "modules/assistant/chat-extension/extension": { kind: 'via', reason: 'rendered within the assistant module page' },
   "modules/assistant/components/AssistantFormDrawer": { kind: 'overlay', states: ['open', 'filled', 'invalid'] },
-  "modules/assistant/pages/AssistantsSettings": { kind: 'data-page', states: ['loaded', 'empty', 'error'] },
+  // paws: `AssistantsSettings` (the Assistant Templates admin page) was removed
+  // with design item 12; its coverage entry goes with it.
   "modules/assistant/pages/UserAssistantsSettings": { kind: 'data-page', states: ['loaded', 'empty', 'error'] },
   "modules/auth-providers/AuthProvidersSettingsPage": { kind: 'data-page', states: ['loaded', 'empty', 'error'] },
   "modules/auth-providers/components/AddProviderMenu": { kind: 'static', reason: 'dialog/modal — prop/context-driven open; verified via the e2e interaction suite' },

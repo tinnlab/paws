@@ -56,11 +56,20 @@ pub struct WebSearchModule {
     // Module handle retained for parity with other modules; not read yet.
     #[allow(dead_code)]
     pool: Option<Arc<PgPool>>,
+    /// Resolved `web_search.enabled`, cached at `init()` so `register_routes()`
+    /// can consult it (it gets no `ModuleContext`). Mirrors `VoiceModule`.
+    ///
+    /// Defaults to the DISABLED value so route registration fails CLOSED if
+    /// `init()` never ran or returned early.
+    enabled: bool,
 }
 
 impl WebSearchModule {
     pub fn new() -> Self {
-        Self { pool: None }
+        Self {
+            pool: None,
+            enabled: false,
+        }
     }
 }
 
@@ -88,6 +97,7 @@ impl AppModule for WebSearchModule {
         // (distinct from the runtime `web_search_settings.enabled` toggle).
         // Mirrors lit_search.
         let enabled = crate::module_api::app_config(ctx).web_search_enabled();
+        self.enabled = enabled;
         if !enabled {
             tracing::info!("web_search: disabled in config; skipping registration");
             return Ok(());
@@ -118,6 +128,13 @@ impl AppModule for WebSearchModule {
     }
 
     fn register_routes(&self, router: ApiRouter) -> ApiRouter {
-        router.merge(routes::web_search_router())
+        // Settings/admin REST always mounts (the admin UI module is NOT hidden —
+        // web_search is a disable-only row). The MCP JSON-RPC endpoint, which is
+        // what actually egresses queries, mounts only when enabled.
+        let router = router.merge(routes::web_search_router());
+        if !self.enabled {
+            return router;
+        }
+        router.merge(routes::web_search_mcp_router())
     }
 }

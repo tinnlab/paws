@@ -159,11 +159,13 @@ test.describe('live-ui-audit UI conformance — regression guards', () => {
         ['chat', `/chat/${conversationId}`],
         ['conversations', '/chats'],
         ['projects', '/projects'],
-        ['hub-models', '/hub/models'],
+        // paws: `/hub/models` and `/settings/voice` dropped — the hub and voice
+        // modules are hidden (design items 11 and 4), so those routes render
+        // nothing to measure. `/settings/mcp-admin` remains as the widest
+        // surviving admin table, which is what the hub grid stood in for here.
         ['settings-users', '/settings/users'],
         ['settings-user-groups', '/settings/user-groups'],
         ['settings-mcp-admin', '/settings/mcp-admin'],
-        ['settings-voice', '/settings/voice'],
       ]
 
       const failures: string[] = []

@@ -499,6 +499,15 @@ impl Config {
             .map_or_else(|| JsToolConfig::default().enabled, |c| c.enabled)
     }
 
+    /// BioMCP (`bio_mcp`). Default: ON — deliberately NOT part of the paws
+    /// feature-surface reduction. It gets an accessor anyway so no kill switch
+    /// is left hand-rolled at its call sites.
+    pub fn bio_mcp_enabled(&self) -> bool {
+        self.bio_mcp
+            .as_ref()
+            .map_or_else(|| BioMcpConfig::default().enabled, |c| c.enabled)
+    }
+
     pub fn load_from(
         config_path: Option<String>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
@@ -734,9 +743,12 @@ js_tool:
         // an example of an existing kill switch. Its absent-key default must stay
         // ENABLED, or this branch has silently disabled a feature nobody asked to
         // disable.
+        // Through the ACCESSOR, not a re-implementation of the resolution
+        // expression — an inline copy could only ever confirm its own arithmetic
+        // and would stay green if the accessor disagreed with it.
         let cfg = parse("");
         assert!(
-            cfg.bio_mcp.as_ref().map(|c| c.enabled).unwrap_or(true),
+            cfg.bio_mcp_enabled(),
             "bio_mcp must remain enabled by default"
         );
     }

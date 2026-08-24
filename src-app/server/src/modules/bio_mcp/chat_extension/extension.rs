@@ -25,7 +25,7 @@ pub fn create(pool: PgPool, config: Arc<crate::core::config::Config>) -> Arc<dyn
     // section means enabled), mirroring `bio_mcp::mod::init`. When off, the
     // extension must never attach even if a stale enabled row survives from a
     // prior boot.
-    let config_enabled = config.bio_mcp.as_ref().map(|c| c.enabled).unwrap_or(true);
+    let config_enabled = config.bio_mcp_enabled();
     Arc::new(super::bio::BioMcpExtension::new(pool, config_enabled))
 }
 

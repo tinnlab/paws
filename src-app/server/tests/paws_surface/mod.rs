@@ -25,15 +25,28 @@ const RUN_JS_ROW: &str = "run_js";
 /// so the REST list is empty of them whether the capability is on or off. The
 /// first draft of this test asserted against that endpoint and its positive
 /// control caught it — the "absent" assertions were passing vacuously.
-async fn registered_builtin_names(server: &TestServer) -> Vec<String> {
+/// `expect_any` polls until at least one built-in row exists. The upsert is a
+/// fire-and-forget `tokio::spawn` inside each module's `init()`, so querying
+/// immediately after the server reports healthy can lose the race — which would
+/// make the ENABLED positive control flaky rather than wrong. The DISABLED side
+/// passes `false`: there is nothing to wait for, and waiting would only slow it.
+async fn registered_builtin_names(server: &TestServer, expect_any: bool) -> Vec<String> {
     let pool = sqlx::PgPool::connect(&server.database_url)
         .await
         .expect("connect to the test database");
-    let names: Vec<String> =
-        sqlx::query_scalar("SELECT name FROM mcp_servers WHERE is_built_in = true")
+
+    let mut names: Vec<String> = Vec::new();
+    for _ in 0..50 {
+        names = sqlx::query_scalar("SELECT name FROM mcp_servers WHERE is_built_in = true")
             .fetch_all(&pool)
             .await
             .expect("query built-in mcp_servers");
+        if !expect_any || !names.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
     pool.close().await;
     names
 }
@@ -60,7 +73,10 @@ async fn test_disabled_capabilities_register_no_mcp_server() {
     })
     .await;
     let off_admin = create_user_with_permissions(&off, "paws_off_admin", &["*"]).await;
-    let off_names = registered_builtin_names(&off).await;
+    // Other built-ins (memory, files, …) still register, so wait for the table
+    // to populate before concluding these four are absent — otherwise a fast
+    // query could "prove" absence simply by arriving first.
+    let off_names = registered_builtin_names(&off, true).await;
 
     for name in [WEB_SEARCH_ROW, LIT_SEARCH_ROW, RUN_JS_ROW] {
         assert!(
@@ -77,9 +93,37 @@ async fn test_disabled_capabilities_register_no_mcp_server() {
          make the assertions above meaningless"
     );
 
+    // The MCP JSON-RPC endpoints must be UNMOUNTED, not merely unadvertised.
+    //
+    // Skipping the `mcp_servers` upsert only stops the model being OFFERED the
+    // tools. Each endpoint is gated on a `*::use` permission the Users group
+    // HOLDS, and the runtime settings rows default enabled — so while the routes
+    // stayed mounted, an ordinary user could still drive live web searches,
+    // scholarly queries and arbitrary JS with the deploy switch off. That made
+    // "disabled" mean "unadvertised", and falsified the design's own definition
+    // ("the server does not register the MCP server / does not serve the route").
+    let client = reqwest::Client::new();
+    for path in ["/web-search/mcp", "/lit-search/mcp", "/run-js/mcp"] {
+        let resp = client
+            .post(off.api_url(path))
+            .header("Authorization", format!("Bearer {}", off_admin.token))
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}
+            }))
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{path} probe: {e}"));
+        assert_eq!(
+            resp.status(),
+            404,
+            "{path} must be UNMOUNTED when the capability is disabled (404), not \
+             merely gated — a 401/403 would mean the route is still there"
+        );
+    }
+
     // voice guards `register_routes` too, so its surface is unmounted entirely
     // rather than merely unregistered.
-    let resp = reqwest::Client::new()
+    let resp = client
         .get(off.api_url("/voice/capability"))
         .header("Authorization", format!("Bearer {}", off_admin.token))
         .send()
@@ -90,6 +134,23 @@ async fn test_disabled_capabilities_register_no_mcp_server() {
         404,
         "voice disabled must unmount its routes (404), not merely gate them"
     );
+
+    // The settings/admin REST for web_search + lit_search STAYS mounted: both
+    // are disable-only rows whose admin UI the design keeps visible, so 404ing
+    // these would break a page the reduction deliberately leaves in place.
+    for path in ["/web-search/settings", "/lit-search/settings"] {
+        let resp = client
+            .get(off.api_url(path))
+            .header("Authorization", format!("Bearer {}", off_admin.token))
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{path} probe: {e}"));
+        assert_ne!(
+            resp.status(),
+            404,
+            "{path} must remain mounted — its admin page is not hidden"
+        );
+    }
 
     drop(off);
 
@@ -103,7 +164,7 @@ async fn test_disabled_capabilities_register_no_mcp_server() {
     })
     .await;
     let on_admin = create_user_with_permissions(&on, "paws_on_admin", &["*"]).await;
-    let on_names = registered_builtin_names(&on).await;
+    let on_names = registered_builtin_names(&on, true).await;
 
     for name in [WEB_SEARCH_ROW, LIT_SEARCH_ROW, RUN_JS_ROW] {
         assert!(
@@ -114,7 +175,30 @@ async fn test_disabled_capabilities_register_no_mcp_server() {
         );
     }
 
-    let resp = reqwest::Client::new()
+    // POSITIVE CONTROL for the route half: every endpoint the disabled server
+    // 404s must be REACHABLE here. Without this, the 404s above would be
+    // satisfied by a typo in the path.
+    let client = reqwest::Client::new();
+    for path in ["/web-search/mcp", "/lit-search/mcp", "/run-js/mcp"] {
+        let resp = client
+            .post(on.api_url(path))
+            .header("Authorization", format!("Bearer {}", on_admin.token))
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}
+            }))
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{path} probe (enabled): {e}"));
+        assert_ne!(
+            resp.status(),
+            404,
+            "{path} must be MOUNTED when the capability is enabled — otherwise \
+             the 404 assertions on the disabled server prove only that the path \
+             is wrong"
+        );
+    }
+
+    let resp = client
         .get(on.api_url("/voice/capability"))
         .header("Authorization", format!("Bearer {}", on_admin.token))
         .send()
@@ -198,9 +282,20 @@ async fn test_semantic_search_disabled_after_migration() {
     );
 }
 
-/// The DEC-4 revokes landed — and took nothing extra with them.
+/// Hidden features keep their Users-group grants — deliberately (DEC-4).
+///
+/// The design records that hiding is UI-only and "the API remains reachable";
+/// revoking those grants was explored and REJECTED because it breaks a surviving
+/// surface. The citations built-in attaches its tools to EVERY tool-capable chat
+/// with no permission check (`citations/chat_extension/citations.rs`), so
+/// removing `citations::use` would leave every ordinary user with a chat that
+/// advertises citation tools in a system nudge and 403s on use — an INV-2 break
+/// introduced by a "cleanup". Fixing that properly means a server-side kill
+/// switch for a UI-only item, which the design puts out of scope.
+///
+/// This test pins the decision so a future round does not silently re-attempt it.
 #[tokio::test]
-async fn test_hidden_features_grants_revoked_but_notifications_kept() {
+async fn test_hidden_features_keep_their_grants() {
     let server = TestServer::start_with_options(TestServerOptions::default()).await;
     let admin = create_user_with_permissions(&server, "paws_grants_admin", &["*"]).await;
 
@@ -213,34 +308,15 @@ async fn test_hidden_features_grants_revoked_but_notifications_kept() {
     assert!(resp.status().is_success(), "admin must be able to list groups");
     let blob = resp.text().await.expect("groups body");
 
-    for revoked in [
-        "citations::use",
-        "citations::manage",
-        "knowledge_base::use",
-        "knowledge_base::manage",
-        "scheduler::use",
-        "workflows::read",
-        "workflows::execute",
-        "hub::assistants::read",
-        "hub::mcp_servers::read",
-    ] {
+    // `citations::use` is the load-bearing one — its backend chat extension
+    // attaches unconditionally, so revoking it degrades chat for every non-admin.
+    for kept in ["citations::use", "notifications::read"] {
         assert!(
-            !blob.contains(revoked),
-            "{revoked} must be revoked from the default groups (DEC-4)"
+            blob.contains(kept),
+            "{kept} must remain granted — hiding a module's UI must not strip a \
+             grant its still-running backend depends on"
         );
     }
-
-    // THE TRAP. `notifications::read` is granted by the SCHEDULER's grant
-    // migration, in the same ARRAY[...] as `scheduler::use`. Reversing that
-    // migration wholesale — the obvious reading of "undo the scheduler grant" —
-    // would take the notification list away from every non-admin user: an INV-2
-    // break disguised as a permission cleanup. `notifications` is a SURVIVING
-    // module.
-    assert!(
-        blob.contains("notifications::read"),
-        "notifications::read must SURVIVE — it rides in the scheduler grant \
-         migration but belongs to a module that is not hidden"
-    );
 }
 
 // ── TEST-13: the templates mechanism outlives its admin UI ──────────────────

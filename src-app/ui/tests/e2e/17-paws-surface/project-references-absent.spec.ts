@@ -62,14 +62,34 @@ test.describe('paws feature surface — project references removed', () => {
     const { baseURL, apiURL } = testInfra
     await signInFreshUser(page, baseURL, apiURL, 'pawsrefs')
 
-    // POSITIVE CONTROL, part 1 — the projects surface loads for this user.
-    await page.goto(`${baseURL}/projects`)
-    await page.waitForTimeout(2000)
+    // Knowledge kinds render on the project DETAIL page, so the spec has to
+    // create a project and open it. An earlier draft asserted on /projects (the
+    // LIST page), where those labels could never appear regardless — vacuous.
+    const adminToken = await getAdminToken(apiURL)
+    const projectName = `paws-refs-${Date.now()}`
+    const created = await fetch(`${apiURL}/api/projects`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${adminToken}`,
+      },
+      body: JSON.stringify({ name: projectName, description: 'paws surface test' }),
+    })
+    expect(created.ok, `create project: ${created.status}`).toBe(true)
+    const project = await created.json()
+
+    await page.goto(`${baseURL}/projects/${project.id}`)
+    await page.waitForTimeout(2500)
+
+    // POSITIVE CONTROL — the project DETAIL page loads AND its surviving
+    // knowledge kind is present. This is what makes the absences below mean
+    // "removed" rather than "the section never rendered": if the registry filter
+    // were too broad and dropped `file` too, this fails.
     await expect(
-      page.locator('[data-testid="app-root"]'),
-      'the projects page must LOAD for the restricted user — otherwise the ' +
-        'absence assertions below prove nothing',
-    ).toBeVisible()
+      page.getByText('Knowledge files', { exact: true }).first(),
+      'the surviving "Knowledge files" knowledge kind must still render — ' +
+        'otherwise the absence assertions prove nothing',
+    ).toBeVisible({ timeout: 15000 })
 
     // The removed knowledge kinds must not appear anywhere on the surface.
     for (const label of ['References', 'Knowledge bases']) {

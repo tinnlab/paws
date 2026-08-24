@@ -113,15 +113,38 @@ test.describe('paws feature surface — surviving modules still work (INV-2)', (
     const { errors } = failOnPageError(page)
     await signInFreshUser(page, baseURL, apiURL, 'pawsprojects')
 
-    await page.goto(`${baseURL}/projects`)
-    await page.waitForTimeout(2000)
-    await expect(page.locator('[data-testid="app-root"]')).toBeVisible()
+    // Open a real project — knowledge kinds live on the DETAIL page, not the
+    // list. An earlier draft stopped at /projects and asserted only that the
+    // shell was visible, which could not distinguish "filtered correctly" from
+    // "registry emptied entirely".
+    const adminToken = await getAdminToken(apiURL)
+    const created = await fetch(`${apiURL}/api/projects`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${adminToken}`,
+      },
+      body: JSON.stringify({
+        name: `paws-survivor-${Date.now()}`,
+        description: 'paws surface test',
+      }),
+    })
+    expect(created.ok, `create project: ${created.status}`).toBe(true)
+    const project = await created.json()
+
+    await page.goto(`${baseURL}/projects/${project.id}`)
+    await page.waitForTimeout(2500)
 
     // The project-extension registry now drops two of its three knowledge-kind
     // contributors (citations + knowledge-base). The surviving one — "Knowledge
-    // files", owned by the `file` module — must still be there. A registry
-    // filter that was too broad would leave the section empty, and THAT is what
-    // this assertion is for.
+    // files", owned by the `file` module — must still be there. A filter that
+    // was too broad would leave the section empty, and THAT is what this
+    // assertion is for.
+    await expect(
+      page.getByText('Knowledge files', { exact: true }).first(),
+      'the surviving knowledge kind must still render',
+    ).toBeVisible({ timeout: 15000 })
+
     expect(errors, `projects threw: ${errors.join(' | ')}`).toEqual([])
   })
 

@@ -50,28 +50,63 @@ const HIDDEN_MODULE_DIRS = [
   'js-tool',
 ]
 
-/** Every route a hidden module owns, plus the removed templates page. */
-const HIDDEN_ROUTES = [
-  '/knowledge',
-  '/scheduled-tasks',
-  '/hub',
-  '/settings/citations',
-  '/settings/file-rag-admin',
-  '/settings/js-tool',
-  '/settings/voice',
-  '/settings/workflows',
-  '/settings/scheduler',
-  '/settings/assistant-templates',
+/**
+ * Every route a hidden module owns, plus the removed templates page, paired with
+ * a text fragment that ONLY that feature's own page renders. Both halves are
+ * asserted: no router 403, and no feature page either.
+ */
+const HIDDEN_ROUTES: [string, string][] = [
+  ['/knowledge', 'Knowledge'],
+  ['/scheduled-tasks', 'Scheduled Tasks'],
+  ['/hub', 'Hub'],
+  ['/settings/citations', 'Citations'],
+  ['/settings/file-rag-admin', 'Document RAG'],
+  ['/settings/js-tool', 'Programmatic Tools'],
+  ['/settings/voice', 'Voice Dictation'],
+  ['/settings/workflows', 'Workflows'],
+  ['/settings/assistant-templates', 'Assistant Templates'],
 ]
 
-/** Nav / settings labels that must not appear anywhere in the shell. */
+/**
+ * Nav / settings labels that must not appear anywhere in the shell.
+ *
+ * These are the modules' REAL slot labels, read from each `module.tsx`. An
+ * earlier draft guessed `'Knowledge Bases'` — the knowledge-base module's label
+ * is `'Knowledge'` — so that entry could never have failed.
+ *
+ * Most of these are admin-page slots gated on `FileRagAdminRead` /
+ * `VoiceAdminRead` / `JsToolSettingsRead` / `AssistantsTemplateRead`, which is
+ * why the label sweep below runs as an ADMIN. As a permission-less user they
+ * would be absent on `main` too, and the assertion would prove nothing.
+ */
 const HIDDEN_LABELS = [
-  'Knowledge Bases',
+  'Knowledge',
   'Scheduled Tasks',
   'Assistant Templates',
   'Document RAG',
   'Voice Dictation',
   'Programmatic Tools',
+  'Workflows',
+  'Citations',
+  'Hub',
+]
+
+/**
+ * Chunk-name fragments for the hub SUB-modules.
+ *
+ * `chunkFileNames` turns a module's directory path into an underscore-joined
+ * chunk name, so `hub/modules/installed/module.tsx` ships as
+ * `module.hub_modules_installed.<hash>.js`. The plain `hub` entry in
+ * HIDDEN_MODULE_DIRS does not match those, so the six separately-hidden
+ * sub-modules would otherwise sit outside the assertion's key space entirely.
+ */
+const HIDDEN_SUBMODULE_CHUNKS = [
+  'hub_modules_installed',
+  'hub_modules_assistants',
+  'hub_modules_llm-models',
+  'hub_modules_mcp',
+  'hub_modules_skill',
+  'hub_modules_workflow',
 ]
 
 const PASSWORD = 'PawsSurfaceUser12345'
@@ -112,7 +147,7 @@ test.describe('paws feature surface — hidden features are absent (INV-1)', () 
     // chunk would be requested during this initial wave if the gate were broken.
     await page.waitForTimeout(2500)
 
-    for (const name of HIDDEN_MODULE_DIRS) {
+    for (const name of [...HIDDEN_MODULE_DIRS, ...HIDDEN_SUBMODULE_CHUNKS]) {
       expect(
         requested.has(name),
         `the "${name}" module chunk must never be downloaded — INV-1 requires ` +
@@ -128,46 +163,99 @@ test.describe('paws feature surface — hidden features are absent (INV-1)', () 
     ).toBe(true)
   })
 
-  test('no hidden feature has a nav or settings entry', async ({
+  test('no hidden feature has a nav or settings entry — AS AN ADMIN', async ({
     page,
     testInfra,
   }) => {
-    const { baseURL, apiURL } = testInfra
-    await signInFreshUser(page, baseURL, apiURL, 'pawsnav')
+    const { baseURL } = testInfra
+    // Deliberately an ADMIN, not the permission-less user the other specs use.
+    // Most hidden entries are admin-page slots; a `[]`-permission user would not
+    // see them on `main` either, so asserting their absence as that user proves
+    // nothing. The admin holds `*` — if any hidden surface survives, it shows up
+    // here. (This is the gap that let a surviving hub surface through review.)
+    await loginAsAdmin(page, baseURL)
+    await expect(page.locator('[data-testid="app-root"]')).toBeVisible({
+      timeout: 15000,
+    })
 
     await page.goto(`${baseURL}/settings`)
     await page.waitForTimeout(2500)
 
+    // POSITIVE CONTROL FIRST: the settings surface really rendered for this
+    // admin, and shows an entry that SHOULD be there.
+    await expect(
+      page.getByText('Assistants', { exact: true }).first(),
+      'the settings page must render for the admin — otherwise every absence ' +
+        'assertion below is vacuous',
+    ).toBeVisible({ timeout: 15000 })
+
     for (const label of HIDDEN_LABELS) {
       await expect(
         page.getByText(label, { exact: true }),
-        `"${label}" must not appear in the shell`,
+        `"${label}" must not appear in the shell, even for an admin`,
       ).toHaveCount(0)
     }
-
-    // POSITIVE CONTROL: the settings surface really rendered.
-    await expect(
-      page.getByText('Assistants', { exact: true }).first(),
-    ).toBeVisible({ timeout: 15000 })
   })
 
-  test('a hidden route is not-found, NOT the router 403', async ({
+  test('onboarding offers no Install-from-Hub section to an admin', async ({
     page,
     testInfra,
   }) => {
-    const { baseURL, apiURL } = testInfra
-    await signInFreshUser(page, baseURL, apiURL, 'pawsroutes')
+    const { baseURL } = testInfra
+    // The hub is hidden (design item 11), but this section lives inside the
+    // SURVIVING onboarding guide module — no module predicate, chat glob or
+    // project registry reaches it, and its only gate was a hub permission that
+    // administrators hold via the `*` wildcard.
+    await loginAsAdmin(page, baseURL)
+    await page.goto(`${baseURL}/onboarding`)
+    await page.waitForTimeout(3000)
 
-    for (const route of HIDDEN_ROUTES) {
+    // POSITIVE CONTROL: onboarding actually rendered.
+    await expect(page.locator('[data-testid="app-root"]')).toBeVisible()
+
+    await expect(
+      page.getByText('Install from Hub', { exact: true }),
+      'onboarding must not offer a hub install list when the hub is hidden',
+    ).toHaveCount(0)
+  })
+
+  test('a hidden route renders neither the feature nor the router 403', async ({
+    page,
+    testInfra,
+  }) => {
+    const { baseURL } = testInfra
+    // As an ADMIN: a permission-less user would be refused these routes anyway,
+    // so only an admin can distinguish "absent" from "gated".
+    await loginAsAdmin(page, baseURL)
+
+    // POSITIVE CONTROL FIRST — routing works and a SURVIVING settings route
+    // renders its own content. Without this, every assertion below is satisfied
+    // by an app whose router is simply broken.
+    await page.goto(`${baseURL}/settings/assistants`)
+    await expect(
+      page.getByText('Assistants', { exact: true }).first(),
+      'a surviving route must render its page — otherwise "hidden route shows ' +
+        'nothing" is indistinguishable from "nothing renders at all"',
+    ).toBeVisible({ timeout: 15000 })
+
+    for (const [route, featureText] of HIDDEN_ROUTES) {
       await page.goto(`${baseURL}${route}`)
       await page.waitForTimeout(1500)
 
-      // The specific regression: the in-place 403 claims the user lacks
-      // permission for a feature that does not exist on this instance.
+      // (a) the in-place 403 claims the user lacks permission for a feature
+      // this instance does not have.
       await expect(
         page.getByTestId('router-route-forbidden-result'),
         `${route} must not render the router 403 — the feature is absent on ` +
           `paws, not permission-gated`,
+      ).toHaveCount(0)
+
+      // (b) and the feature's OWN page must not have rendered either. Asserting
+      // only (a) was hollow: it is equally satisfied by the hidden page
+      // rendering in full.
+      await expect(
+        page.getByText(featureText, { exact: true }),
+        `${route} must not render the ${featureText} surface`,
       ).toHaveCount(0)
     }
   })

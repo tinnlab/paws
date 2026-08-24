@@ -62,11 +62,16 @@ pub struct VoiceModule {
 
 impl VoiceModule {
     pub fn new() -> Self {
-        // Default enabled (an absent `voice:` config section means on); `init`
-        // overwrites this from the resolved config before `register_routes`.
+        // Fail CLOSED. `init()` overwrites this from the resolved config before
+        // `register_routes()`, so the value here only matters on a path where
+        // init never ran or returned early — and on such a path the safe answer
+        // is "not mounted". It used to be `true` with a comment claiming an
+        // absent `voice:` section meant on; that is no longer the default
+        // (paws design item 4), and a stale initializer defaulting a kill switch
+        // to ON is precisely how a switch gets bypassed.
         Self {
             pool: None,
-            enabled: true,
+            enabled: false,
         }
     }
 }
