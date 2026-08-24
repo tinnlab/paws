@@ -57,7 +57,7 @@ Authored during phase 5, item by item, as each landed.
 - **DRIFT-1.7** — verdict: resolved — ITEM-10 shipped SIX migrations, not one.
   The plan folded the DEC-4 revokes into the file_rag migration; migrations are
   per-module in this repo, and a revoke belongs beside the grant it undoes. Same
-  work, correct placement. Prefixes `202607210200`–`202607210250`, all above the
+  work, correct placement. Prefixes `202607210200` (the five revoke migrations were withdrawn in round 1 — see DEC-4 REVERSED), above the
   in-flight PR #10 prefix.
 
 - **DRIFT-1.8** — verdict: resolved — TEST-2's composer leg was re-mechanised

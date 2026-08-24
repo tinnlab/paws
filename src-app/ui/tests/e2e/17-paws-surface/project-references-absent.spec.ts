@@ -60,7 +60,14 @@ test.describe('paws feature surface — project references removed', () => {
     testInfra,
   }) => {
     const { baseURL, apiURL } = testInfra
-    await signInFreshUser(page, baseURL, apiURL, 'pawsrefs')
+    // As the ADMIN, who holds `*`. If the removed knowledge kinds survived for
+    // anyone it would be this user, so it is the strongest subject for the
+    // absence claim — and projects are OWNER-SCOPED, so the same identity must
+    // create the project and view it.
+    await loginAsAdmin(page, baseURL)
+    await expect(page.locator('[data-testid="app-root"]')).toBeVisible({
+      timeout: 15000,
+    })
 
     // Knowledge kinds render on the project DETAIL page, so the spec has to
     // create a project and open it. An earlier draft asserted on /projects (the

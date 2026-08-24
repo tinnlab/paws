@@ -111,7 +111,14 @@ test.describe('paws feature surface — surviving modules still work (INV-2)', (
   }) => {
     const { baseURL, apiURL } = testInfra
     const { errors } = failOnPageError(page)
-    await signInFreshUser(page, baseURL, apiURL, 'pawsprojects')
+    // Browse as the ADMIN, and create the project with the ADMIN's token.
+    // Projects are OWNER-SCOPED: an earlier draft signed in a fresh user and
+    // created the project as the admin, so the detail page was another user's
+    // project and rendered nothing — the assertion failed for the wrong reason.
+    await loginAsAdmin(page, baseURL)
+    await expect(page.locator('[data-testid="app-root"]')).toBeVisible({
+      timeout: 15000,
+    })
 
     // Open a real project — knowledge kinds live on the DETAIL page, not the
     // list. An earlier draft stopped at /projects and asserted only that the

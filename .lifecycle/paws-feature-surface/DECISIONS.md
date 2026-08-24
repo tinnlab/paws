@@ -47,7 +47,37 @@ by deleting `citations/project-extension/extension.tsx`.
 extension" are the same thing here. Doing it in the registry keeps it reversible
 by the DEC-1 list (INV-5) instead of by restoring a deleted file.
 
-### DEC-4: Do hidden-but-not-disabled modules (items 6–11) also get their permissions revoked?
+## DEC-4 REVERSED (phase 7, round 1) — the revokes are NOT shipped
+
+**Resolution:** No permission revokes. The five revoke migrations were written,
+applied, verified against a real database — and then **removed**.
+
+**Basis:** codebase, found by the blind audit and confirmed against current code.
+Revoking `citations::use` breaks a SURVIVING surface. The citations backend chat
+extension (`citations/chat_extension/citations.rs`) attaches its tools and a
+~90-word system nudge to EVERY tool-capable chat with **no permission check**,
+and `mcp/chat_extension/mcp.rs` pushes the built-in server into the accessible
+set irrespective of grants. So an ordinary user would get a chat advertising
+citation tools that then return 403 on every call — an INV-2 break introduced by
+a permission "cleanup", affecting every non-admin on the instance.
+`knowledge_base::use` has the same shape on any upgraded deployment with existing
+KB bindings.
+
+Making the revokes safe would mean gating those backend chat extensions per
+feature — i.e. **server-side kill switches for UI-only items**, which the design
+lists as out of scope.
+
+DEC-4 asked whether to revoke and answered "recommended **if cheap**". Measured
+rather than assumed, it is not cheap. The design's own recorded limitation —
+hiding is not a security control; the API remains reachable — therefore stands
+unchanged, and is stated in the PR body. `test_hidden_features_keep_their_grants`
+pins the decision so a later round does not silently re-attempt it.
+
+The original decision is kept below in withdrawn form rather than deleted, so the
+reasoning that led to it (and the `notifications::read` trap it correctly caught)
+is not lost.
+
+### DEC-4 (WITHDRAWN): Do hidden-but-not-disabled modules (items 6–11) also get their permissions revoked?
 
 **Resolution:** Yes, for the Users-group grants of the six UI-only items, in the
 ITEM-10 migration. Revoked: `workflows::read`, `workflows::execute`,
