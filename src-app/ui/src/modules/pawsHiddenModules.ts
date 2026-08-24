@@ -8,9 +8,14 @@
  *
  * **To restore a HIDDEN feature's UI: delete its entry from the two sets below,
  * and restore the module's original `shouldLoad` predicate** (each hidden
- * `module.tsx` carries its previous predicate in a comment). No feature code was
- * deleted, which is the design's INV-5 ("reversible by configuration or a single
- * predicate, not by deleting code").
+ * `module.tsx` carries its previous predicate in a comment). No HIDDEN feature's
+ * code was deleted, which is the design's INV-5 ("reversible by configuration or
+ * a single predicate, not by deleting code").
+ *
+ * That claim is about the HIDDEN items only. The design's two `remove` rows
+ * (items 12 and 13) genuinely deleted code — `assistant/pages/AssistantsSettings.tsx`
+ * and `assistant/stores/templateAssistants/` are gone — so restoring the
+ * assistant-templates admin surface is a `git revert`, not a list edit.
  *
  * Two honest caveats, so this header does not overstate the claim:
  *

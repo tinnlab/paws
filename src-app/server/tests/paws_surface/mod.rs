@@ -215,8 +215,9 @@ async fn test_disabled_capabilities_register_no_mcp_server() {
 
 /// Nothing in this change weakens a permission or auth check.
 ///
-/// The reduction only ever REVOKES grants, so the checks themselves must behave
-/// exactly as before: a user holding a permission still succeeds, and an
+/// The reduction changes NO grant at all (the revokes it originally carried were
+/// withdrawn — see `test_hidden_features_keep_their_grants`), so the checks must
+/// behave exactly as before: a user holding a permission still succeeds, and an
 /// unauthenticated request is still refused.
 #[tokio::test]
 async fn test_permission_checks_still_behave() {
@@ -308,9 +309,26 @@ async fn test_hidden_features_keep_their_grants() {
     assert!(resp.status().is_success(), "admin must be able to list groups");
     let blob = resp.text().await.expect("groups body");
 
+    // EVERY grant the five withdrawn migrations would have removed, not just the
+    // two that motivated the withdrawal. A narrower pin would stay green if a
+    // later round re-revoked, say, only the hub grants.
+    //
     // `citations::use` is the load-bearing one — its backend chat extension
     // attaches unconditionally, so revoking it degrades chat for every non-admin.
-    for kept in ["citations::use", "notifications::read"] {
+    // `notifications::read` rides in the SCHEDULER's grant migration and belongs
+    // to a surviving module, so it must survive any future revoke attempt too.
+    for kept in [
+        "citations::use",
+        "citations::manage",
+        "knowledge_base::use",
+        "knowledge_base::manage",
+        "scheduler::use",
+        "workflows::read",
+        "workflows::execute",
+        "hub::assistants::read",
+        "hub::mcp_servers::read",
+        "notifications::read",
+    ] {
         assert!(
             blob.contains(kept),
             "{kept} must remain granted — hiding a module's UI must not strip a \

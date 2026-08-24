@@ -52,11 +52,27 @@ static BIO_MCP_MODULE_REGISTRATION: ModuleEntry = ModuleEntry {
 pub struct BioMcpModule {
     #[allow(dead_code)]
     pool: Option<Arc<PgPool>>,
+    /// Resolved `bio_mcp.enabled`, cached at `init()` so `register_routes()` can
+    /// consult it. Defaults to the DISABLED value so route registration fails
+    /// CLOSED if `init()` never ran or returned early.
+    ///
+    /// bio_mcp is NOT part of the paws feature-surface reduction (its config
+    /// default stays ON). This guard is here because it had the same hole the
+    /// reduction fixed for web_search / lit_search / js_tool: `init` early-returns
+    /// on `enabled: false` without clearing the `mcp_servers` row, so an operator
+    /// who boots once enabled and then disables leaves a stale enabled row — and
+    /// with the route still mounted and gated only on `bio::query` (held by the
+    /// Users group), the proxy would read that row, spawn the sidecar, and egress
+    /// query terms to public biomedical APIs with the switch off.
+    enabled: bool,
 }
 
 impl BioMcpModule {
     pub fn new() -> Self {
-        Self { pool: None }
+        Self {
+            pool: None,
+            enabled: false,
+        }
     }
 }
 
@@ -83,6 +99,7 @@ impl AppModule for BioMcpModule {
         // `bio_mcp: { enabled: false }`. The module still self-disables
         // below when the embedded binary is a build stub.
         let enabled = crate::module_api::app_config(ctx).bio_mcp_enabled();
+        self.enabled = enabled;
         if !enabled {
             tracing::info!("bio_mcp: disabled in config; skipping registration");
             return Ok(());
@@ -129,6 +146,9 @@ impl AppModule for BioMcpModule {
     }
 
     fn register_routes(&self, router: ApiRouter) -> ApiRouter {
+        if !self.enabled {
+            return router;
+        }
         router.merge(routes::bio_mcp_router())
     }
 }

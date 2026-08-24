@@ -64,6 +64,8 @@ const HIDDEN_ROUTES: [string, string][] = [
   ['/settings/js-tool', 'Programmatic Tools'],
   ['/settings/voice', 'Voice Dictation'],
   ['/settings/workflows', 'Workflows'],
+  ['/settings/workflows-admin', 'System Workflows'],
+  ['/settings/scheduler', 'Scheduler'],
   ['/settings/assistant-templates', 'Assistant Templates'],
 ]
 
@@ -87,6 +89,10 @@ const HIDDEN_LABELS = [
   'Voice Dictation',
   'Programmatic Tools',
   'Workflows',
+  // The admin-slot labels too — a partial restore that brought back only the
+  // admin pages would otherwise sail through this sweep.
+  'System Workflows',
+  'Scheduler',
   'Citations',
   'Hub',
 ]
@@ -134,17 +140,34 @@ async function signInFreshUser(
 }
 
 test.describe('paws feature surface — hidden features are absent (INV-1)', () => {
-  test('an ordinary user never downloads a hidden module', async ({
+  test('no hidden module chunk is ever downloaded — AS AN ADMIN', async ({
     page,
     testInfra,
   }) => {
-    const { baseURL, apiURL } = testInfra
+    const { baseURL } = testInfra
     const requested = trackModuleRequests(page)
-    await signInFreshUser(page, baseURL, apiURL, 'pawshidden')
 
-    // Bounded settle rather than networkidle: a fresh no-permission user churns
-    // on the sync SSE stream, so networkidle never arrives. A hidden module's
-    // chunk would be requested during this initial wave if the gate were broken.
+    // As an ADMIN, and this matters more here than anywhere else in the file.
+    // An earlier draft used a `[]`-permission user, and 10 of these 14 entries
+    // could not have failed for such a user: the original predicates (preserved
+    // in each module.tsx comment) required HubModelsRead / VoiceAdminRead /
+    // JsToolSettingsRead / FileRagAdminRead, so those chunks would never have
+    // been requested with or without the reduction. Only the four gated on a
+    // bare `ctx.isAuthenticated` were load-bearing. The admin holds `*`.
+    await loginAsAdmin(page, baseURL)
+    await expect(page.locator('[data-testid="app-root"]')).toBeVisible({
+      timeout: 15000,
+    })
+
+    // The six hub SUB-modules are additionally location-scoped (`/hub` or
+    // `/hub/*`), so visiting `/hub` is what would pull them if they were not
+    // hidden. Without this navigation their assertions are unfalsifiable too.
+    await page.goto(`${baseURL}/hub`)
+    await page.waitForTimeout(2000)
+    await page.goto(`${baseURL}/`)
+
+    // Bounded settle rather than networkidle: the sync SSE stream is always
+    // open, so networkidle never arrives.
     await page.waitForTimeout(2500)
 
     for (const name of [...HIDDEN_MODULE_DIRS, ...HIDDEN_SUBMODULE_CHUNKS]) {
@@ -208,14 +231,36 @@ test.describe('paws feature surface — hidden features are absent (INV-1)', () 
     // administrators hold via the `*` wildcard.
     await loginAsAdmin(page, baseURL)
     await page.goto(`${baseURL}/onboarding`)
-    await page.waitForTimeout(3000)
 
-    // POSITIVE CONTROL: onboarding actually rendered.
-    await expect(page.locator('[data-testid="app-root"]')).toBeVisible()
+    // Drive to the MCP Servers step. `loginAsAdmin` completes onboarding, so
+    // `/onboarding` opens on step 0 (Welcome) and the MCP step never mounts —
+    // an earlier draft asserted the absence right here and therefore passed on
+    // `main`, before the fix it was written to prove even existed. Click through
+    // until the step is actually on screen.
+    const mcpStep = page.getByTestId('onboarding-step-mcp-servers')
+    for (let i = 0; i < 6 && !(await mcpStep.isVisible().catch(() => false)); i++) {
+      await page.getByTestId('onboarding-page-next-button').click()
+      await page.waitForTimeout(800)
+    }
 
+    // POSITIVE CONTROL: the step under test is genuinely mounted. Without this
+    // the assertions below are satisfied by any page that isn't it.
+    await expect(
+      mcpStep,
+      'the MCP Servers onboarding step must be reached — otherwise this spec ' +
+        'asserts the absence of a section that was never going to render',
+    ).toBeVisible({ timeout: 15000 })
+
+    // Both the section AND the sentence that advertises it. Gating the list but
+    // leaving the prose two lines above it still tells the admin to go to a Hub
+    // this instance does not have.
     await expect(
       page.getByText('Install from Hub', { exact: true }),
       'onboarding must not offer a hub install list when the hub is hidden',
+    ).toHaveCount(0)
+    await expect(
+      mcpStep.getByText(/from the Hub/i),
+      'onboarding must not point the admin at the Hub in prose either',
     ).toHaveCount(0)
   })
 

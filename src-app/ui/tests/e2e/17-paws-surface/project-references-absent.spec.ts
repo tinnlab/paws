@@ -11,9 +11,11 @@ import {
  * TEST-14 [negative-perm] [positive-control] — design item 13: the project
  * "References" entry is gone, and so is "Knowledge bases".
  *
- * The user here LACKS `citations::use` and `knowledge_base::use` — DEC-4 revoked
- * both from the Users group in the same migration that disables semantic search,
- * so an ordinary paws user no longer holds them at all.
+ * The subject is an ADMIN holding `*`. The entries are gone because the MODULE
+ * is hidden, not because a permission is missing: the grant revokes this branch
+ * originally carried were withdrawn (they broke chat for non-admins), so every
+ * user still holds `citations::use` and `knowledge_base::use`. An admin is
+ * therefore the strongest possible subject for the absence claim.
  *
  * The POSITIVE CONTROL is the point of the spec. "No References entry" passes
  * vacuously when the project page never rendered — a failed route, a login

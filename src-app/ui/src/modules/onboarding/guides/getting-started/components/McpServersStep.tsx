@@ -70,7 +70,12 @@ export default function McpServersStep({ registerBeforeNext }: OnboardingStepPro
 
       <Paragraph tone="secondary">
         {canSeeAdminControls
-          ? 'MCP servers extend your AI assistant with tools and data access. Toggle the ones you want to use, or install new ones from the Hub.'
+          ? canInstallFromHub
+            ? 'MCP servers extend your AI assistant with tools and data access. Toggle the ones you want to use, or install new ones from the Hub.'
+            : // paws: the hub is hidden, so do not point the admin at it. Gating
+              // the section below while leaving this sentence would still
+              // advertise a feature that does not exist here.
+              'MCP servers extend your AI assistant with tools and data access. Toggle the ones you want to use.'
           : 'MCP servers extend your AI assistant with tools and data access. Your administrator has already configured the servers available to you.'}
       </Paragraph>
 

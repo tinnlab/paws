@@ -220,14 +220,17 @@ function PickModelScreen({
           title="No embedding-capable models found."
           description={
             <Flex vertical className="w-full gap-2">
+              {/* paws: the Hub is hidden (design item 11), so this no longer
+                  points the admin at a catalog they cannot reach. The remaining
+                  routes — upload a GGUF, register a remote API model — both
+                  still work, and the model names stay as useful examples. */}
               <Text>
-                Add one from the LLM Providers page. The Hub catalog
-                ships curated entries (<code>nomic-embed-text-v1.5</code>,
+                Add one from the LLM Providers page: upload a GGUF (e.g.{' '}
+                <code>nomic-embed-text-v1.5</code>,{' '}
                 <code>bge-small-en-v1.5</code>,{' '}
-                <code>mxbai-embed-large-v1</code>) one-click installable;
-                or upload a GGUF; or register a remote API model. Tick the
-                {' '}<strong>text_embedding</strong>{' '}capability before
-                saving.
+                <code>mxbai-embed-large-v1</code>), or register a remote API
+                model. Tick the{' '}<strong>text_embedding</strong>{' '}capability
+                before saving.
               </Text>
               <Space>
                 <Button
