@@ -47,7 +47,16 @@ would misdescribe the setting to make a string disappear.
 
 ## Termination
 
-**Loop terminates. Reason: CONVERGED — a quiet round on a decaying profile.**
+**CORRECTION — the loop does NOT terminate here.** I first wrote this section
+claiming convergence with a promoted fraction of ~0.09, counting one corroborated
+finding. The gate computes it properly from the ledger — n1=8, n2=7, **overlap=4**
+⇒ Chapman N̂=13.4 vs 11 observed ⇒ ~2.4 unfound, **~1.09 promotable** — which is
+*just above* the `< 1` threshold, so T1 does not fire. I undercounted the overlap
+(four rows carry `corroborated_by: 2`, not one) and that made my own arithmetic
+flatter than the truth. The gate was right; the claim below stands only as the
+qualitative picture.
+
+A fifth round follows, over round 4's diff.
 
 - Profile across rounds: **26 → 25 → 16 → 11**, and the last two rounds audited
   progressively smaller diffs. Monotonic decay, so the decreasing-detection model
