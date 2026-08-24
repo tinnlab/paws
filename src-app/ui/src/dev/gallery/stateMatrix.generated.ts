@@ -4,7 +4,7 @@
 // renders + overlay triggers + panel/slot registrations) that the reconciliation
 // gate (scripts/reconcile-state-matrix.mjs) checks the gallery entries against.
 //
-// 353 surfaces carry renderable-state signals; 2177 signals total.
+// 352 surfaces carry renderable-state signals; 2170 signals total.
 
 /** A signal is one mechanically-detected render fork (a state the surface can be in). */
 export interface StateSignal {
@@ -82,24 +82,10 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/assistant/components/AssistantFormDrawer",
     requiredStates: ["open"],
     signals: [
-      { kind: "branch", condition: "form.formState.isDirty", line: 135 },
-      { kind: "branch", condition: "!value || !value.trim()", line: 155 },
-      { kind: "overlay", condition: "<Drawer open>", line: 234 },
-      { kind: "branch", condition: "canSave", line: 245 },
-    ],
-  },
-  "modules/assistant/pages/AssistantsSettings": {
-    surface: "modules/assistant/pages/AssistantsSettings",
-    requiredStates: ["delayed","empty","error"],
-    signals: [
-      { kind: "loading", condition: "loading", line: 138 },
-      { kind: "error", condition: "error && assistants.length === 0", line: 140 },
-      { kind: "empty", condition: "assistants.length === 0", line: 148 },
-      { kind: "error", condition: "error", line: 149 },
-      { kind: "branch", condition: "assistant.is_default && assistants.length > 1", line: 201 },
-      { kind: "branch", condition: "!assistant.enabled", line: 204 },
-      { kind: "branch", condition: "index < assistants.length - 1", line: 227 },
-      { kind: "branch", condition: "assistants.length > 0", line: 235 },
+      { kind: "branch", condition: "form.formState.isDirty", line: 131 },
+      { kind: "branch", condition: "!value || !value.trim()", line: 151 },
+      { kind: "overlay", condition: "<Drawer open>", line: 216 },
+      { kind: "branch", condition: "canSave", line: 227 },
     ],
   },
   "modules/assistant/pages/UserAssistantsSettings": {
@@ -3299,8 +3285,9 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
     surface: "modules/projects/core/extensions/registry",
     requiredStates: [],
     signals: [
-      { kind: "branch", condition: "name === 'knowledge_kinds'", line: 102 },
-      { kind: "branch", condition: "name === 'advanced_settings'", line: 119 },
+      { kind: "branch", condition: "isPawsHiddenModuleName(registration.name)", line: 57 },
+      { kind: "branch", condition: "name === 'knowledge_kinds'", line: 119 },
+      { kind: "branch", condition: "name === 'advanced_settings'", line: 136 },
     ],
   },
   "modules/projects/core/extensions/slots": {
@@ -4346,29 +4333,28 @@ export const PANEL_RENDERERS: PanelRegistration[] = [
 export const SLOT_REGISTRATIONS: SlotRegistration[] = [
   { slot: "chatConversationHeaderTrailing", surface: "modules/chat/module", line: 124 },
   { slot: "settingsAdminPages", surface: "modules/agent/module", line: 46 },
-  { slot: "settingsAdminPages", surface: "modules/assistant/module", line: 59 },
   { slot: "settingsAdminPages", surface: "modules/auth-providers/module", line: 40 },
   { slot: "settingsAdminPages", surface: "modules/auth/module", line: 75 },
   { slot: "settingsAdminPages", surface: "modules/code-sandbox/module", line: 50 },
-  { slot: "settingsAdminPages", surface: "modules/file-rag/module", line: 32 },
+  { slot: "settingsAdminPages", surface: "modules/file-rag/module", line: 38 },
   { slot: "settingsAdminPages", surface: "modules/hardware/module", line: 42 },
-  { slot: "settingsAdminPages", surface: "modules/js-tool/module", line: 36 },
+  { slot: "settingsAdminPages", surface: "modules/js-tool/module", line: 41 },
   { slot: "settingsAdminPages", surface: "modules/literature/module", line: 57 },
   { slot: "settingsAdminPages", surface: "modules/llm-local-runtime/module", line: 54 },
   { slot: "settingsAdminPages", surface: "modules/llm-provider/module", line: 122 },
   { slot: "settingsAdminPages", surface: "modules/llm-repository/module", line: 55 },
   { slot: "settingsAdminPages", surface: "modules/mcp/module", line: 101 },
   { slot: "settingsAdminPages", surface: "modules/memory/module", line: 63 },
-  { slot: "settingsAdminPages", surface: "modules/scheduler/module", line: 79 },
+  { slot: "settingsAdminPages", surface: "modules/scheduler/module", line: 82 },
   { slot: "settingsAdminPages", surface: "modules/server-update/module", line: 32 },
   { slot: "settingsAdminPages", surface: "modules/skill/module", line: 83 },
   { slot: "settingsAdminPages", surface: "modules/summarization/module", line: 36 },
   { slot: "settingsAdminPages", surface: "modules/user/module", line: 51 },
-  { slot: "settingsAdminPages", surface: "modules/voice/module", line: 38 },
+  { slot: "settingsAdminPages", surface: "modules/voice/module", line: 45 },
   { slot: "settingsAdminPages", surface: "modules/web-search/module", line: 52 },
-  { slot: "settingsAdminPages", surface: "modules/workflow/module", line: 107 },
-  { slot: "settingsUserPages", surface: "modules/assistant/module", line: 49 },
-  { slot: "settingsUserPages", surface: "modules/citations/module", line: 38 },
+  { slot: "settingsAdminPages", surface: "modules/workflow/module", line: 113 },
+  { slot: "settingsUserPages", surface: "modules/assistant/module", line: 40 },
+  { slot: "settingsUserPages", surface: "modules/citations/module", line: 44 },
   { slot: "settingsUserPages", surface: "modules/literature/module", line: 69 },
   { slot: "settingsUserPages", surface: "modules/mcp/module", line: 91 },
   { slot: "settingsUserPages", surface: "modules/memory/module", line: 53 },
@@ -4377,7 +4363,7 @@ export const SLOT_REGISTRATIONS: SlotRegistration[] = [
   { slot: "settingsUserPages", surface: "modules/skill/module", line: 73 },
   { slot: "settingsUserPages", surface: "modules/user-llm-providers/module", line: 36 },
   { slot: "settingsUserPages", surface: "modules/web-search/module", line: 62 },
-  { slot: "settingsUserPages", surface: "modules/workflow/module", line: 97 },
+  { slot: "settingsUserPages", surface: "modules/workflow/module", line: 103 },
   { slot: "sidebarContent", surface: "modules/chat/module", line: 109 },
 ]
 
@@ -4389,15 +4375,12 @@ export type StateMatrixSurface = keyof typeof STATE_MATRIX
  * `STATE_COVERAGE satisfies Record<RequiredState, StateCoverageEntry>`, so a
  * newly-extracted state with no entry is a compile error (mirrors how
  * galleryCoverage.generated.ts's `GallerySurface` gates coverage.ts).
- * 384 keys.
+ * 381 keys.
  */
 export type RequiredState =
   | "modules/agent/components/AgentSettingsSection:delayed"
   | "modules/agent/components/AgentSettingsSection:error"
   | "modules/assistant/components/AssistantFormDrawer:open"
-  | "modules/assistant/pages/AssistantsSettings:delayed"
-  | "modules/assistant/pages/AssistantsSettings:empty"
-  | "modules/assistant/pages/AssistantsSettings:error"
   | "modules/assistant/pages/UserAssistantsSettings:delayed"
   | "modules/assistant/pages/UserAssistantsSettings:empty"
   | "modules/assistant/pages/UserAssistantsSettings:error"
@@ -4782,9 +4765,6 @@ export const REQUIRED_STATE_KEYS = [
   "modules/agent/components/AgentSettingsSection:delayed",
   "modules/agent/components/AgentSettingsSection:error",
   "modules/assistant/components/AssistantFormDrawer:open",
-  "modules/assistant/pages/AssistantsSettings:delayed",
-  "modules/assistant/pages/AssistantsSettings:empty",
-  "modules/assistant/pages/AssistantsSettings:error",
   "modules/assistant/pages/UserAssistantsSettings:delayed",
   "modules/assistant/pages/UserAssistantsSettings:empty",
   "modules/assistant/pages/UserAssistantsSettings:error",

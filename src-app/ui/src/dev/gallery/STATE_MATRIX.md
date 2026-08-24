@@ -7,18 +7,18 @@
 
 ## Summary
 
-- **353** surfaces carry at least one renderable-state signal.
-- **2177** signals total: 1710 branch, 141 empty, 126 error, 93 loading, 102 overlay, 5 panel.
+- **352** surfaces carry at least one renderable-state signal.
+- **2170** signals total: 1707 branch, 140 empty, 124 error, 92 loading, 102 overlay, 5 panel.
 - **5** right-panel renderers registered (each a right-panel-open state).
-- **35** slot registrations (sidebar / settings / chat mount points).
+- **34** slot registrations (sidebar / settings / chat mount points).
 
 ### Surfaces demanding each gallery state
 
 | state | surfaces |
 |---|---|
-| `delayed` | 83 |
-| `empty` | 114 |
-| `error` | 97 |
+| `delayed` | 82 |
+| `empty` | 113 |
+| `error` | 96 |
 | `open` | 85 |
 | `panel-open` | 5 |
 
@@ -42,29 +42,28 @@ conversation page.
 |---|---|
 | `chatConversationHeaderTrailing` | `modules/chat/module`:124 |
 | `settingsAdminPages` | `modules/agent/module`:46 |
-| `settingsAdminPages` | `modules/assistant/module`:59 |
 | `settingsAdminPages` | `modules/auth-providers/module`:40 |
 | `settingsAdminPages` | `modules/auth/module`:75 |
 | `settingsAdminPages` | `modules/code-sandbox/module`:50 |
-| `settingsAdminPages` | `modules/file-rag/module`:32 |
+| `settingsAdminPages` | `modules/file-rag/module`:38 |
 | `settingsAdminPages` | `modules/hardware/module`:42 |
-| `settingsAdminPages` | `modules/js-tool/module`:36 |
+| `settingsAdminPages` | `modules/js-tool/module`:41 |
 | `settingsAdminPages` | `modules/literature/module`:57 |
 | `settingsAdminPages` | `modules/llm-local-runtime/module`:54 |
 | `settingsAdminPages` | `modules/llm-provider/module`:122 |
 | `settingsAdminPages` | `modules/llm-repository/module`:55 |
 | `settingsAdminPages` | `modules/mcp/module`:101 |
 | `settingsAdminPages` | `modules/memory/module`:63 |
-| `settingsAdminPages` | `modules/scheduler/module`:79 |
+| `settingsAdminPages` | `modules/scheduler/module`:82 |
 | `settingsAdminPages` | `modules/server-update/module`:32 |
 | `settingsAdminPages` | `modules/skill/module`:83 |
 | `settingsAdminPages` | `modules/summarization/module`:36 |
 | `settingsAdminPages` | `modules/user/module`:51 |
-| `settingsAdminPages` | `modules/voice/module`:38 |
+| `settingsAdminPages` | `modules/voice/module`:45 |
 | `settingsAdminPages` | `modules/web-search/module`:52 |
-| `settingsAdminPages` | `modules/workflow/module`:107 |
-| `settingsUserPages` | `modules/assistant/module`:49 |
-| `settingsUserPages` | `modules/citations/module`:38 |
+| `settingsAdminPages` | `modules/workflow/module`:113 |
+| `settingsUserPages` | `modules/assistant/module`:40 |
+| `settingsUserPages` | `modules/citations/module`:44 |
 | `settingsUserPages` | `modules/literature/module`:69 |
 | `settingsUserPages` | `modules/mcp/module`:91 |
 | `settingsUserPages` | `modules/memory/module`:53 |
@@ -73,7 +72,7 @@ conversation page.
 | `settingsUserPages` | `modules/skill/module`:73 |
 | `settingsUserPages` | `modules/user-llm-providers/module`:36 |
 | `settingsUserPages` | `modules/web-search/module`:62 |
-| `settingsUserPages` | `modules/workflow/module`:97 |
+| `settingsUserPages` | `modules/workflow/module`:103 |
 | `sidebarContent` | `modules/chat/module`:109 |
 
 ## Per-surface required states
@@ -131,25 +130,10 @@ Required states: `open`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `form.formState.isDirty` | 135 |
-| branch | `!value \|\| !value.trim()` | 155 |
-| overlay | `<Drawer open>` | 234 |
-| branch | `canSave` | 245 |
-
-### `modules/assistant/pages/AssistantsSettings`
-
-Required states: `delayed`, `empty`, `error`
-
-| kind | condition | line |
-|---|---|---|
-| loading | `loading` | 138 |
-| error | `error && assistants.length === 0` | 140 |
-| empty | `assistants.length === 0` | 148 |
-| error | `error` | 149 |
-| branch | `assistant.is_default && assistants.length > 1` | 201 |
-| branch | `!assistant.enabled` | 204 |
-| branch | `index < assistants.length - 1` | 227 |
-| branch | `assistants.length > 0` | 235 |
+| branch | `form.formState.isDirty` | 131 |
+| branch | `!value \|\| !value.trim()` | 151 |
+| overlay | `<Drawer open>` | 216 |
+| branch | `canSave` | 227 |
 
 ### `modules/assistant/pages/UserAssistantsSettings`
 
@@ -3611,8 +3595,9 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `name === 'knowledge_kinds'` | 102 |
-| branch | `name === 'advanced_settings'` | 119 |
+| branch | `isPawsHiddenModuleName(registration.name)` | 57 |
+| branch | `name === 'knowledge_kinds'` | 119 |
+| branch | `name === 'advanced_settings'` | 136 |
 
 ### `modules/projects/core/extensions/slots`
 
