@@ -416,3 +416,35 @@ not this feature's to make unilaterally.
   but nothing compares it to a downloaded file yet. Wiring verification into the
   server download path is its own change with its own tests and must not ride on
   a URL swap; tracked as a follow-up in `HUMAN_FEEDBACK.md`.
+
+## Fix round 6 (FB-9, FB-10)
+
+- **DEC-23 — the desktop captures its listen address from the RESOLVED config,
+  and the `SERVER_ADDR` default is flagged rather than refactored.**
+  `set_server_addr` had one caller (the server binary); the desktop never called
+  it, so local providers resolved to the module default `127.0.0.1:3000` while
+  the app bound 8080-8180. The capture now runs in the desktop boot before the
+  server starts or any provider is read, reading `config.server.{host,port,
+  api_prefix}` — NOT the `find_available_port` result (the config may have been
+  loaded from a file instead) and NOT a hardcoded `/api`.
+
+  **On the underlying fragility, which the brief invited a proposal about:** the
+  real hazard is that `SERVER_ADDR` is a global WITH A PLAUSIBLE DEFAULT. A
+  binary that forgets to set it does not fail — it silently produces
+  `127.0.0.1:3000`, a URL that looks entirely reasonable in the admin UI and in
+  logs, which is why this survived to a user report. A non-defaulted
+  `OnceLock`-style value that panics or errors on read-before-init would have
+  made the omission impossible to ship. **I did not make that change**: it is
+  shared SDK core, every consumer would have to be audited for read-before-init
+  (tests included — the current default exists precisely so pre-boot reads work
+  in tests), and it is exactly the kind of unilateral refactor of shared code the
+  brief warned against. Recorded as a recommendation for the owner.
+
+- **DEC-24 — the swallowed-error fix is limited to LOGGING; a streaming deadline
+  is proposed, not applied.** The `chat_stream` error branch forwarded its error
+  to the stream but logged nothing, which is why the owner's log stopped dead.
+  That is now logged — contained, no behaviour change. What is NOT changed is the
+  absence of an end-to-end deadline on the chat streaming path: adding one
+  affects every provider and picking the bound is a product decision of the same
+  kind as DEC-19. See FB-10 for the two candidate explanations of the infinite
+  spin and why they need different owners.

@@ -391,6 +391,101 @@ concurrent download from the same repo could be reading it. That is exactly the
 I recommend (1), and did not implement it because it is still a behaviour change
 to shared download code in a round that already carries three fixes.
 
+### FB-9 — no local model has ever been usable in the desktop app
+
+- **FB-9** [status: resolved] — the desktop never captured its own listen
+  address, so every local provider resolved to port 3000 while the app bound
+  8080-8180. Chat sent requests to a port nothing listened on. See DEC-23.
+
+**This is the root cause of the hang, and it supersedes FIX-5's THEORY of why
+chat hung.** The ggml shim (FB-7) fixes a real, separate defect and stays — but
+it was not the cause of this symptom. The owner's decisive evidence: with
+`llama-server` manually started and the model loaded, chat STILL hung and `ps`
+showed the engine at **0.0% CPU**. It was idle. No request ever reached it.
+
+**Verified independently, every link:**
+
+1. `grep -rn set_server_addr --include=*.rs src-app/ sdk/` → exactly ONE
+   production caller: `src-app/server/src/main.rs:195`, the standalone server
+   binary. **Nothing under `src-app/desktop/`.**
+2. The fallback is `("127.0.0.1", 3000, "/api")`
+   (`sdk/crates/ziee-core/src/app_state.rs:76-78`).
+3. Local providers store `base_url` NULL and have it injected at READ time —
+   `llm_provider/repositories/admin.rs::inject_runtime_fields` calls
+   `get_server_addr()` → `derive_proxy_url()`, on *every* read site.
+4. The desktop binds a port from `find_available_port(8080, 8180)`.
+
+⇒ On desktop every local provider resolved to
+`http://127.0.0.1:3000/api/local-llm/v1`.
+
+**State plainly, as asked: no local model has ever been usable in the desktop
+app.** This is NOT a regression from this feature. The feature is simply the
+first thing that got a local model far enough along to expose it — before this,
+nothing in the desktop shipped a local model to try. It is desktop-only; the
+server binary sets the address correctly, which is why ziee web never saw it.
+
+**Fix:** the desktop boot captures the address from the RESOLVED config, before
+the server starts or any provider is read. Two details that matter and are easy
+to get wrong: the port is read from `config.server.port`, not from the
+`find_available_port` result — the config may equally have been LOADED from a
+file in the other branch, and only the config object is guaranteed to be what
+the server binds; and `api_prefix` comes from the config rather than a hardcoded
+`/api`, because routes nest under whatever it says.
+
+**Tests** (`ziee-desktop`, `desktop_boot_captures_the_bound_server_addr_not_the_default`):
+asserts the captured tuple matches the config AND that the DERIVED provider URL
+carries the bound port and is not `:3000`. Asserting the derived URL rather than
+just the tuple is deliberate — the tuple being right is not the property that
+matters; the URL a provider read hands to chat is. **Verified RED**: removing the
+capture fails it with `left: 3000, right: 8137`.
+
+**Stated limit:** no test here proves end-to-end chat works on macOS. The owner's
+retest is the proof.
+
+### FB-10 — a chat that goes nowhere produced no error, no timeout, no log
+
+- **FB-10** [status: resolved] — the contained half is fixed (the failure is now
+  logged); the remaining half is reported below rather than changed, because it
+  is shared streaming behaviour.
+
+**What I found, tracing the path the report named:**
+
+- `chat/core/ai_provider/mod.rs` propagates correctly with `?` — nothing is lost
+  there.
+- The real branch is `chat/core/services/streaming.rs`, where
+  `provider_for_task.chat_stream(...)` returns `Err`. The error **was** forwarded
+  to the stream channel (`tx.send(Err(...))`) — so it was not dropped — but there
+  was **no `tracing::error!` anywhere on that branch**. That is exactly why the
+  owner's log stopped dead after `"Adding N tools to ChatRequest"`: the failure
+  was recorded nowhere server-side, and diagnosing it required reading source.
+
+**Fixed here (contained):** that branch now logs at `error!` with the
+conversation id before forwarding. One line, no behaviour change to the stream.
+
+**NOT fixed, and why — this is the part I am escalating.** I could not establish
+from source alone *why the UI spun forever* rather than showing the error that
+was forwarded. Two candidates, and they need different owners:
+
+1. The error reaches the SSE stream and the **frontend** does not surface it —
+   a UI change.
+2. `chat_stream` never returned at all. A loopback connect to a dead port gives
+   ECONNREFUSED essentially instantly, so this should not happen — **unless
+   something else on the user's Mac was listening on port 3000**, which is a very
+   common dev port. In that case the request went to a foreign server that never
+   answered, and the absence of any client-side timeout on that path is the real
+   defect.
+
+Candidate (2) is worth the owner's attention precisely because it is plausible on
+a developer's machine, and it changes the fix: a wrong-port request that is
+REFUSED fails fast, but one that is ACCEPTED by an unrelated process hangs until
+something times it out. I did not add a timeout to the shared provider streaming
+path on my own judgement — that is a shared change affecting every provider, and
+picking a bound is a product decision of the same kind as DEC-19.
+
+**Recommendation:** an end-to-end request deadline on the chat streaming path, so
+no provider — local or remote, reachable or not — can leave the UI spinning
+indefinitely. Owner's call on the bound.
+
 ## Follow-up NOT done this round (recorded so it is not lost)
 
 **Enforce the pinned `DEFAULT_MODEL_FILE_SHA256`.** The descriptor now declares
