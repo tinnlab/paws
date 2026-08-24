@@ -202,6 +202,7 @@ yanked = false
         refresh_token_expiry_days: None,
         max_file_upload_mb: None,
         voice_enabled: None,
+        ..Default::default()
     };
     let server = TestServer::start_with_options(opts).await;
 
