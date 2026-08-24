@@ -5,12 +5,18 @@
 [submodule "sdk"]
 	path = sdk
 	url = https://github.com/ziee-ai/sdk.git
-	# ziee (the "chat" app) pins the SDK to its dedicated branch `chat`
-	# (CytoAnalyst pins `cyto`). The agent-core + frontend-perf integration has
-	# LANDED and its SDK line was reconciled back here: `chat` was fast-forwarded
-	# onto `sdk/agent-core-and-perf`, so the two are identical and this pin is
-	# back on the canonical branch.
-	branch = chat
+	# paws pins the SDK to its own dedicated branch `paws` (ziee/"chat" pins
+	# `chat`, CytoAnalyst pins `cyto`) — one branch per consuming app, so an
+	# app-driven regen of a generated kit artifact does not land on another
+	# app's line.
+	#
+	# `paws` was cut from `chat` at 584756d + this repo's testId-registry regens.
+	# It therefore starts 2 commits BEHIND `chat` (4ab7530): those two touch only
+	# `crates/ziee-sandbox` and were deliberately not absorbed, so the pointer
+	# stays exactly the tree the default-model-onboarding branch was verified
+	# against. Merge `chat` into `paws` when those sandbox changes are wanted —
+	# as a deliberate step, with the consuming build re-run.
+	branch = paws
 [submodule "agent-kit"]
 	path = agent-kit
 	url = https://github.com/ziee-ai/agent-kit.git

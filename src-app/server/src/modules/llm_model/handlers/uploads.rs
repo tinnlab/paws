@@ -1031,27 +1031,12 @@ pub async fn initiate_repository_download_internal(
         GitService::build_repository_url(&repository.url, &request.repository_path);
     let _repository_branch = request.repository_branch.clone();
 
-    // Extract the credential for the git layer. For basic_auth the username and
-    // password are kept SEPARATE — the password is the git secret and the
-    // username is threaded through so the credential callback can pair them
-    // correctly (libgit2 Basic auth = base64("username:password")). For
-    // api_key/bearer_token the secret is a token paired with a host-default
-    // username, so auth_username stays None and the token path is unchanged.
-    let (auth_username, auth_token): (Option<String>, Option<String>) =
-        match repository.auth_type.as_str() {
-            "api_key" => (None, repository.auth_config.api_key.clone()),
-            "bearer_token" => (None, repository.auth_config.token.clone()),
-            "basic_auth" => match (
-                &repository.auth_config.username,
-                &repository.auth_config.password,
-            ) {
-                (Some(username), Some(password)) => {
-                    (Some(username.clone()), Some(password.clone()))
-                }
-                _ => (None, None),
-            },
-            "none" | _ => (None, None),
-        };
+    // Extract the credential for the git layer. See
+    // `LlmRepository::git_credential` for the per-auth_type rules; it is a
+    // standalone function so the "anonymous repositories send NOTHING" property
+    // can be asserted directly over every input, rather than inferred from a
+    // clone that happened to succeed.
+    let (auth_username, auth_token) = repository.git_credential();
 
     // Create cancellation token for this download
     let cancellation_token =
@@ -1257,8 +1242,16 @@ pub async fn initiate_repository_download_internal(
                     )
                     .await;
 
-                // Create new progress channel for LFS
-                let (lfs_progress_tx, _lfs_progress_rx) = mpsc::unbounded_channel::<GitProgress>();
+                // LFS progress → the download record.
+                //
+                // This used to be `let (tx, _lfs_progress_rx) = channel()`, with
+                // nothing ever reading the receiver, so the record stayed frozen
+                // at the "Checking for LFS files..." write above for the whole
+                // multi-GB transfer — the 0% bar the owner reported. The helper
+                // owns both ends and hands back only the sender, so a receiver
+                // cannot be orphaned here again.
+                let (lfs_progress_tx, lfs_progress_forwarder) =
+                    super::lfs_progress::spawn_forwarder(download_id);
 
                 // Pull LFS files
                 let lfs_result = git_service
@@ -1270,6 +1263,12 @@ pub async fn initiate_repository_download_internal(
                         Some(cancellation_token.clone()),
                     )
                     .await;
+
+                // Drain the forwarder BEFORE any terminal write below. The pull
+                // drops its sender on return, so this ends promptly — but queued
+                // updates may still be in flight, and a progress write landing
+                // after the completion status would un-finish the record.
+                let _ = lfs_progress_forwarder.await;
 
                 // Check LFS result
                 if let Err(e) = lfs_result {

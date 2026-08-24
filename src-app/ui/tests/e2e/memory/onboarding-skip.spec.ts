@@ -52,6 +52,7 @@ test.describe('Memory — onboarding skip', () => {
     // OnboardingPage.tsx and may evolve.)
     await byTestId(page, 'onboarding-page-next-button').click() // Welcome
     await byTestId(page, 'onboarding-page-next-button').click() // API Keys
+    await byTestId(page, 'onboarding-page-next-button').click() // Local Model
     await byTestId(page, 'onboarding-page-next-button').click() // MCP
 
     // Memory step: the enable switch only renders on this step, so its

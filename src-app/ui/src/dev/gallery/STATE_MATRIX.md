@@ -7,8 +7,8 @@
 
 ## Summary
 
-- **352** surfaces carry at least one renderable-state signal.
-- **2171** signals total: 1708 branch, 140 empty, 124 error, 92 loading, 102 overlay, 5 panel.
+- **353** surfaces carry at least one renderable-state signal.
+- **2187** signals total: 1722 branch, 140 empty, 125 error, 93 loading, 102 overlay, 5 panel.
 - **5** right-panel renderers registered (each a right-panel-open state).
 - **34** slot registrations (sidebar / settings / chat mount points).
 
@@ -16,9 +16,9 @@
 
 | state | surfaces |
 |---|---|
-| `delayed` | 82 |
+| `delayed` | 83 |
 | `empty` | 113 |
-| `error` | 96 |
+| `error` | 97 |
 | `open` | 85 |
 | `panel-open` | 5 |
 
@@ -771,15 +771,15 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `isFootnoteLabel(props.id)` | 72 |
-| branch | `(rest as Record<string, unknown>)['data-footnotes'] === undefined` | 88 |
-| branch | `citeN !== null` | 111 |
-| branch | `className?.includes('data-footnote-backref') \|\| (rest as Record<string, unknown>)['data-footnote-backref'] !== undefined` | 115 |
-| branch | `scopedHref?.startsWith('#')` | 152 |
-| empty | `verdict === 'empty'` | 219 |
-| branch | `verdict === 'allowed'` | 220 |
-| branch | `typeof paperLabel === 'string'` | 234 |
-| branch | `typeof excerptLabel === 'string'` | 252 |
+| branch | `isFootnoteLabel(props.id)` | 71 |
+| branch | `(rest as Record<string, unknown>)['data-footnotes'] === undefined` | 87 |
+| branch | `citeN !== null` | 106 |
+| branch | `className?.includes('data-footnote-backref') \|\| (rest as Record<string, unknown>)['data-footnote-backref'] !== undefined` | 110 |
+| branch | `scopedHref?.startsWith('#')` | 147 |
+| empty | `verdict === 'empty'` | 214 |
+| branch | `verdict === 'allowed'` | 215 |
+| branch | `typeof paperLabel === 'string'` | 229 |
+| branch | `typeof excerptLabel === 'string'` | 247 |
 
 ### `modules/chat/extensions/compaction/components/CompactButton`
 
@@ -3428,11 +3428,11 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!guide` | 81 |
-| branch | `!guide` | 118 |
-| branch | `isCompleted` | 196 |
-| branch | `nextError` | 230 |
-| branch | `StepComponent` | 240 |
+| branch | `!guide` | 83 |
+| branch | `!guide` | 121 |
+| branch | `isCompleted` | 199 |
+| branch | `nextError` | 233 |
+| branch | `StepComponent` | 243 |
 
 ### `modules/onboarding/guides/getting-started/components/ApiKeysStep`
 
@@ -3445,6 +3445,29 @@ Required states: `delayed`, `empty`, `error`
 | empty | `providers.length === 0` | 77 |
 | error | `error` | 127 |
 | branch | `(currentProvider.api_key_configured \|\| hasUserKey)` | 171 |
+
+### `modules/onboarding/guides/getting-started/components/DefaultModelStep`
+
+Required states: `delayed`, `error`
+
+| kind | condition | line |
+|---|---|---|
+| branch | `!canInstall` | 174 |
+| branch | `installed` | 183 |
+| loading | `loading` | 208 |
+| branch | `view === 'already-installed'` | 255 |
+| branch | `view === 'offer' && shouldWarnLowMemory(hardwareInfo?.memory?.total_ram)` | 282 |
+| branch | `contextUnavailable` | 291 |
+| branch | `view === 'installing-runtime'` | 314 |
+| branch | `view === 'downloading'` | 321 |
+| branch | `view === 'preparing'` | 329 |
+| branch | `cancelError && view === 'downloading'` | 338 |
+| error | `view === 'failed'` | 349 |
+| branch | `view === 'runtime-unavailable'` | 364 |
+| branch | `view === 'already-installed'` | 395 |
+| branch | `view === 'downloading'` | 397 |
+| branch | `view === 'installing-runtime' \|\| view === 'preparing'` | 416 |
+| branch | `isRetry` | 437 |
 
 ### `modules/onboarding/guides/getting-started/components/McpServersStep`
 

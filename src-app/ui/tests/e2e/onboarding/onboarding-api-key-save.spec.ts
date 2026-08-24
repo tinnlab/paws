@@ -88,6 +88,12 @@ test.describe('Onboarding — API key save', () => {
     // intercepting pointer events. Activate Next via the keyboard from here on —
     // focus+Enter doesn't pointer-hit-test, so the toast can't block it.
     await byTestId(page, 'onboarding-page-next-button').click()
+    // Local Model step (inserted after AI Providers by
+    // default-model-onboarding). Skipped without installing — INV-3 keeps Next
+    // enabled, so this is a plain pass-through hop. Keyboard-activated for the
+    // reason stated just above: this hop falls inside the save-toast's lifetime.
+    await expect(byTestId(page, 'onboarding-step-default-model')).toBeVisible()
+    await byTestId(page, 'onboarding-page-next-button').press('Enter')
     await expect(byTestId(page, 'onboarding-step-mcp-servers')).toBeVisible()
     await byTestId(page, 'onboarding-page-next-button').press('Enter')
     await expect(byTestId(page, 'onboarding-step-memory-setup')).toBeVisible()

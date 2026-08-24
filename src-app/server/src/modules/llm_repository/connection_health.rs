@@ -574,6 +574,41 @@ pub async fn run_startup_health_check(pool: PgPool) {
             );
             continue;
         }
+        // Skip PRODUCT-SEEDED ANONYMOUS repositories too.
+        //
+        // The skip above protects the seeded credentialed rows only because
+        // their empty secrets make `has_credential()` false. An anonymous row is
+        // the opposite: `has_credential_for("none")` is always true, so it is
+        // probed — and a first boot that is offline, firewalled or behind a
+        // captive portal maps to `Unhealthy` and DISABLES it. Re-enabling then
+        // requires a passing probe (`enforce_on_update_transition`), so one
+        // transient outage at boot permanently turns off a row the product ships
+        // enabled on purpose.
+        //
+        // That is exactly the destructive outcome the `Unverified` arm below
+        // exists to avoid ("a host whose capability we could not confirm is
+        // recorded and LEFT ENABLED"), and for a built-in anonymous row there is
+        // nothing for an operator to fix anyway — reachability is a property of
+        // the network at that instant, not of the configuration. The download
+        // path surfaces a real failure with its reason if the host is genuinely
+        // gone.
+        //
+        // Scope: `built_in` is set only by a migration — the create path binds
+        // it `false` literally and no request type carries the field — and a
+        // built-in row's url/auth_type are immutable through the API, so no
+        // operator- or attacker-supplied row can reach this branch or re-point
+        // one that does. The consequence worth knowing: any built-in anonymous
+        // row now stays `untested` forever and is never auto-disabled, and a
+        // future seeded anonymous repository inherits that silently.
+        if repository.built_in && repository.auth_type == "none" {
+            tracing::debug!(
+                repo_id = %repo_id,
+                repo_name = %repo_name,
+                "llm_repo::health: skipping built-in anonymous repository at startup \
+                 (never auto-disable a product-seeded row on a transient outage)",
+            );
+            continue;
+        }
         match probe(&repository).await {
             ProbeVerdict::Healthy => {
                 tracing::debug!(
