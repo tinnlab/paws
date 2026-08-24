@@ -64,9 +64,16 @@
  *     a lazy-store init and fire live `/api/hub/*` requests from the sidebar.
  *     (Deliberately not enumerated file-by-file — that list went stale twice in
  *     consecutive rounds. `grep -rn isPawsHiddenModuleName src` is authoritative.)
- *  6. `chat/core/utils/citationTokenize.ts` — chat CORE turns every bare `[n]`
- *     in an assistant message into a knowledge-base citation chip; with the KB
- *     hidden that chip is dead but still focusable and announced.
+ *  6. **chat CORE's citation chips** — it turns every bare `[n]` in an assistant
+ *     message into a knowledge-base citation chip, and separately renders a chip
+ *     for any `#kb-cite-n` href. With the KB hidden those chips are dead but
+ *     still focusable and announced, so BOTH the producer and the consumer are
+ *     gated (`citationTokenize` / `citationChipNumber`).
+ *
+ * That list names CLASSES, not files, and deliberately so: a file-by-file
+ * enumeration here went stale in three consecutive audit rounds, twice in the
+ * very commit that told the reader to keep it current. `grep -rn
+ * isPawsHiddenModuleName src` is the authoritative set.
  *
  * Keys differ per consumer, which is why there are two sets: the loader and the
  * desktop blocklist match on `metadata.name`, while the two globs only ever see

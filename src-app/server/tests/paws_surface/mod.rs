@@ -83,6 +83,21 @@ async fn registered_builtin_names(server: &TestServer, await_names: &[&str]) -> 
 /// must SHOW the rows the off-server hides.
 #[tokio::test]
 async fn test_disabled_capabilities_register_no_mcp_server() {
+    // The ENABLED server runs FIRST, so the set of surviving built-ins is
+    // DERIVED from a real boot rather than hardcoded here (a hardcoded list
+    // would go stale the day someone adds a built-in, and would go stale
+    // silently — in the direction that weakens the test).
+    let on = TestServer::start_with_options(TestServerOptions {
+        web_search_enabled: Some(true),
+        lit_search_enabled: Some(true),
+        js_tool_enabled: Some(true),
+        voice_enabled: Some(true),
+        ..Default::default()
+    })
+    .await;
+    let on_admin = create_user_with_permissions(&on, "paws_on_admin", &["*"]).await;
+    let on_names = registered_builtin_names(&on, &[WEB_SEARCH_ROW, LIT_SEARCH_ROW, RUN_JS_ROW]).await;
+
     // ── disabled (the paws shipping posture) ──
     let off = TestServer::start_with_options(TestServerOptions {
         web_search_enabled: Some(false),
@@ -93,10 +108,29 @@ async fn test_disabled_capabilities_register_no_mcp_server() {
     })
     .await;
     let off_admin = create_user_with_permissions(&off, "paws_off_admin", &["*"]).await;
-    // Other built-ins (memory, files, …) still register, so wait for the table
-    // to populate before concluding these four are absent — otherwise a fast
-    // query could "prove" absence simply by arriving first.
-    let off_names = registered_builtin_names(&off, &[]).await;
+
+    // Wait for every SURVIVING built-in BY NAME — the complement of the three
+    // this test asserts absent, taken from the enabled boot above.
+    //
+    // Two weaker versions were tried and rejected. "Wait for any row" settles
+    // the moment `memory` lands, so an offender still in flight passes
+    // vacuously. "Wait until the row count stops changing" narrows that window
+    // to one poll interval but does not close it: a late upsert landing in a
+    // quiet 100 ms gap still slips through, and a same-size set swap is
+    // invisible to a length comparison. Waiting for specific NAMES has no
+    // window at all — every built-in that SHOULD be there must have arrived
+    // before the absence of the other three means anything.
+    let surviving: Vec<&str> = on_names
+        .iter()
+        .map(String::as_str)
+        .filter(|n| ![WEB_SEARCH_ROW, LIT_SEARCH_ROW, RUN_JS_ROW].contains(n))
+        .collect();
+    assert!(
+        !surviving.is_empty(),
+        "the enabled boot must register built-ins other than the three under \
+         test, or the disabled side has nothing to wait for"
+    );
+    let off_names = registered_builtin_names(&off, &surviving).await;
 
     for name in [WEB_SEARCH_ROW, LIT_SEARCH_ROW, RUN_JS_ROW] {
         assert!(
@@ -174,18 +208,7 @@ async fn test_disabled_capabilities_register_no_mcp_server() {
 
     drop(off);
 
-    // ── enabled (the positive control) ──
-    let on = TestServer::start_with_options(TestServerOptions {
-        web_search_enabled: Some(true),
-        lit_search_enabled: Some(true),
-        js_tool_enabled: Some(true),
-        voice_enabled: Some(true),
-        ..Default::default()
-    })
-    .await;
-    let on_admin = create_user_with_permissions(&on, "paws_on_admin", &["*"]).await;
-    let on_names = registered_builtin_names(&on, &[WEB_SEARCH_ROW, LIT_SEARCH_ROW, RUN_JS_ROW]).await;
-
+    // ── the positive control's assertions, against the enabled server above ──
     for name in [WEB_SEARCH_ROW, LIT_SEARCH_ROW, RUN_JS_ROW] {
         assert!(
             on_names.iter().any(|n| n == name),

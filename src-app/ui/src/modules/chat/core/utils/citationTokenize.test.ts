@@ -1,6 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { citationTokenize, isCitationHref } from './citationTokenize.ts'
+import {
+  citationTokenize,
+  citationChipNumber,
+  isCitationHref,
+} from './citationTokenize.ts'
 
 /**
  * An empty hidden-module set — i.e. "the knowledge base is present".
@@ -67,4 +71,17 @@ test('citationTokenize is disabled while the knowledge base is hidden', () => {
     'bare [n] must be left alone — a chip whose source card cannot exist is a ' +
       'dead but focusable, screen-reader-announced affordance',
   )
+})
+
+// The RENDERER-side gate. Gating only the tokenizer leaves a narrower door: a
+// model emitting the literal `[1](#kb-cite-1)` form itself would still get a
+// dead, focusable, aria-labelled chip. Both directions asserted, so the gate is
+// provably driven by the LIST rather than hard-coded.
+test('citationChipNumber suppresses the chip while the knowledge base is hidden', () => {
+  // Against the REAL shipping list — KB is hidden, so no chip.
+  assert.equal(citationChipNumber('#kb-cite-3'), null)
+  // With the KB present, the original behaviour is restored exactly.
+  assert.equal(citationChipNumber('#kb-cite-3', KB_PRESENT), 3)
+  assert.equal(citationChipNumber('#section', KB_PRESENT), null)
+  assert.equal(citationChipNumber(undefined, KB_PRESENT), null)
 })

@@ -55,6 +55,24 @@ export function citationTokenize(
     .join('')
 }
 
+/**
+ * Should the markdown `a` override render a knowledge-base citation chip for
+ * this href?
+ *
+ * Extracted as a pure function so the paws gate on the RENDERER is testable the
+ * same way the gate on the tokenizer is. Gating the producer is not sufficient:
+ * a model emitting the literal `[1](#kb-cite-1)` form itself would otherwise
+ * still get a dead, focusable, aria-labelled chip whose source card cannot
+ * exist.
+ */
+export function citationChipNumber(
+  href: string | undefined,
+  hidden?: ReadonlySet<string>,
+): number | null {
+  if (isPawsHiddenModuleName('knowledge-base', hidden)) return null
+  return isCitationHref(href)
+}
+
 /** The href a tokenized citation chip carries (used by the `a` override). */
 export function isCitationHref(href: string | undefined): number | null {
   if (!href) return null
