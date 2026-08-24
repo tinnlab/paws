@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { Permissions } from '@/api-client/permissions'
+import { isPawsHiddenModuleName } from '@/modules/pawsHiddenModules'
 import {
   Alert,
   Card,
@@ -484,7 +485,18 @@ export function AgentSettingsSection() {
             <FormField
               name="delegate_enabled"
               label="Enable on-demand delegation"
-              description="Lets the agent delegate work to parallel sub-agents via the built-in delegate tool. Applies to the agent-core chat path and workflow agent steps. The fan-out limits below bound each delegate call."
+              // paws: the workflow clause names a surface the user cannot reach
+              // (item 6 hides the workflow module, so no workflow can be
+              // authored here). The scheduler sentence further down is
+              // deliberately NOT gated — its horizon backstop is a server-side
+              // ceiling that still applies whether or not the scheduler has a
+              // UI, so trimming it would misdescribe the setting just to make a
+              // string disappear.
+              description={
+                isPawsHiddenModuleName('workflow')
+                  ? 'Lets the agent delegate work to parallel sub-agents via the built-in delegate tool. The fan-out limits below bound each delegate call.'
+                  : 'Lets the agent delegate work to parallel sub-agents via the built-in delegate tool. Applies to the agent-core chat path and workflow agent steps. The fan-out limits below bound each delegate call.'
+              }
               valuePropName="checked"
             >
               <Switch

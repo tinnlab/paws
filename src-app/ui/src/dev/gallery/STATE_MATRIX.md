@@ -8,7 +8,7 @@
 ## Summary
 
 - **352** surfaces carry at least one renderable-state signal.
-- **2170** signals total: 1707 branch, 140 empty, 124 error, 92 loading, 102 overlay, 5 panel.
+- **2171** signals total: 1708 branch, 140 empty, 124 error, 92 loading, 102 overlay, 5 panel.
 - **5** right-panel renderers registered (each a right-panel-open state).
 - **34** slot registrations (sidebar / settings / chat mount points).
 
@@ -83,11 +83,11 @@ Required states: `delayed`, `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!canRead` | 235 |
-| error | `error` | 280 |
-| loading | `loading && !settings` | 290 |
-| branch | `canManage` | 297 |
-| branch | `!canManage` | 317 |
+| branch | `!canRead` | 236 |
+| error | `error` | 281 |
+| loading | `loading && !settings` | 291 |
+| branch | `canManage` | 298 |
+| branch | `!canManage` | 318 |
 
 ### `modules/app/SetupPage`
 
@@ -2793,10 +2793,10 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `grayed` | 19 |
-| branch | `!grayed` | 40 |
-| branch | `help` | 156 |
-| branch | `help` | 203 |
+| branch | `grayed` | 20 |
+| branch | `!grayed` | 55 |
+| branch | `help` | 171 |
+| branch | `help` | 218 |
 
 ### `modules/llm-provider/components/llm-models/shared/LlmModelParametersSection`
 
@@ -2812,15 +2812,15 @@ Required states: `empty`, `open`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!d.provider_id \|\| !d.repository_id \|\| !r.model_name \|\| !r.repository_path \|\| !r.file_format \|\| !r.main_filename \|\| !r.display_name` | 34 |
-| branch | `!KNOWN_FILE_FORMATS.includes(r.file_format as FileFormat)` | 49 |
-| empty | `activeDownloads.length === 0 && failedDownloads.length === 0` | 88 |
-| branch | `hubModel` | 136 |
-| branch | `!gateResult.ok` | 138 |
-| branch | `!req` | 171 |
-| branch | `activeDownloads.length > 0` | 204 |
-| branch | `failedDownloads.length > 0` | 218 |
-| overlay | `<Popover open>` | 260 |
+| branch | `!d.provider_id \|\| !d.repository_id \|\| !r.model_name \|\| !r.repository_path \|\| !r.file_format \|\| !r.main_filename \|\| !r.display_name` | 35 |
+| branch | `!KNOWN_FILE_FORMATS.includes(r.file_format as FileFormat)` | 50 |
+| empty | `activeDownloads.length === 0 && failedDownloads.length === 0` | 89 |
+| branch | `hubModel` | 155 |
+| branch | `!gateResult.ok` | 157 |
+| branch | `!req` | 190 |
+| branch | `activeDownloads.length > 0` | 225 |
+| branch | `failedDownloads.length > 0` | 239 |
+| overlay | `<Popover open>` | 281 |
 
 ### `modules/llm-provider/widgets/LLMProviderGroupWidget`
 
@@ -3174,13 +3174,13 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `rawFlavors.length` | 45 |
-| branch | `!multiUserMode` | 79 |
-| branch | `saving` | 82 |
-| branch | `v.stdio && !v.flavor` | 83 |
-| branch | `canEdit` | 109 |
-| empty | `noTransports` | 151 |
-| branch | `stdio` | 160 |
+| branch | `rawFlavors.length` | 46 |
+| branch | `!multiUserMode` | 80 |
+| branch | `saving` | 83 |
+| branch | `v.stdio && !v.flavor` | 84 |
+| branch | `canEdit` | 110 |
+| empty | `noTransports` | 155 |
+| branch | `stdio` | 168 |
 
 ### `modules/mcp/components/system/SystemMcpServersPage`
 
@@ -3417,10 +3417,10 @@ Required states: `delayed`, `empty`, `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!n` | 82 |
-| loading | `loading && list.length === 0` | 114 |
-| error | `error && list.length === 0` | 118 |
-| empty | `list.length === 0` | 126 |
+| branch | `!n` | 83 |
+| loading | `loading && list.length === 0` | 122 |
+| error | `error && list.length === 0` | 126 |
+| empty | `list.length === 0` | 134 |
 
 ### `modules/onboarding/OnboardingPage`
 
@@ -3452,14 +3452,14 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `loadingServers` | 42 |
-| branch | `applyErrors.length > 0 && canSeeAdminControls` | 65 |
-| branch | `serversError && canSeeAdminControls` | 86 |
-| branch | `canManageSystemMcp && systemServers.length > 0` | 90 |
-| branch | `server.description` | 112 |
-| branch | `canInstallFromHub && hubServers.length > 0` | 125 |
-| branch | `alreadyInstalled` | 163 |
-| branch | `server.description` | 165 |
+| branch | `loadingServers` | 54 |
+| branch | `applyErrors.length > 0 && canSeeAdminControls` | 82 |
+| branch | `serversError && canSeeAdminControls` | 103 |
+| branch | `canManageSystemMcp && systemServers.length > 0` | 107 |
+| branch | `server.description` | 129 |
+| branch | `canInstallFromHub && hubServers.length > 0` | 142 |
+| branch | `alreadyInstalled` | 180 |
+| branch | `server.description` | 182 |
 
 ### `modules/onboarding/guides/getting-started/components/MemorySetupStep`
 
@@ -3467,16 +3467,17 @@ Required states: `delayed`, `empty`, `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!canManageMemory` | 56 |
-| branch | `!canManageMemory` | 72 |
-| loading | `loading` | 91 |
-| branch | `screen === 'pick' && enableMemory` | 100 |
-| error | `error` | 132 |
-| branch | `saving` | 156 |
-| error | `error` | 204 |
-| empty | `noModelsAvailable` | 210 |
-| empty | `noModelsAvailable` | 215 |
-| branch | `saving` | 280 |
+| branch | `!canManageMemory` | 57 |
+| branch | `!canManageMemory` | 73 |
+| loading | `loading` | 92 |
+| branch | `screen === 'pick' && enableMemory` | 101 |
+| error | `error` | 133 |
+| branch | `saving` | 157 |
+| error | `error` | 205 |
+| empty | `noModelsAvailable` | 211 |
+| empty | `noModelsAvailable` | 216 |
+| branch | `isPawsHiddenModuleName('hub')` | 229 |
+| branch | `saving` | 297 |
 
 ### `modules/profile/pages/ProfileSettingsPage`
 
@@ -3867,12 +3868,12 @@ Required states: `delayed`, `error`, `open`
 
 | kind | condition | line |
 |---|---|---|
-| error | `loading && !error` | 55 |
-| branch | `skill.description` | 84 |
-| branch | `skills.length > 0` | 95 |
-| error | `error && skills.length === 0` | 110 |
-| loading | `!loading && skills.length === 0` | 119 |
-| overlay | `<ImportSkillDialog open>` | 130 |
+| error | `loading && !error` | 56 |
+| branch | `skill.description` | 85 |
+| branch | `skills.length > 0` | 96 |
+| error | `error && skills.length === 0` | 111 |
+| loading | `!loading && skills.length === 0` | 120 |
+| overlay | `<ImportSkillDialog open>` | 139 |
 
 ### `modules/skill/components/admin/AdminSkillGroupAssignment`
 

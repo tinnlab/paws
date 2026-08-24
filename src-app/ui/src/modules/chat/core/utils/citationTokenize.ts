@@ -25,7 +25,15 @@ const CITE_RE = /(?<![\w\]])\[(\d{1,3})\](?![(:])/g
  *  verbatim — a rewrite there would corrupt the displayed code). */
 const CODE_SEGMENT_RE = /(```[\s\S]*?```|`[^`]*`)/g
 
-export function citationTokenize(text: string): string {
+/**
+ * @param hidden injectable hidden-module set. Defaults to the real one; a test
+ *   passes an empty set to exercise the TOKENIZATION rules independently of
+ *   whether this instance hides the knowledge base.
+ */
+export function citationTokenize(
+  text: string,
+  hidden?: ReadonlySet<string>,
+): string {
   // paws: knowledge base is hidden (design item 9), so do not manufacture
   // citation chips. This runs on EVERY assistant message and rewrites any bare
   // `[n]` into a `role="button"`, `tabIndex={0}`, aria-labelled chip whose
@@ -35,7 +43,7 @@ export function citationTokenize(text: string): string {
   //
   // Gated rather than deleted, so restoring `knowledge-base` restores this with
   // it (INV-5).
-  if (isPawsHiddenModuleName('knowledge-base')) return text
+  if (isPawsHiddenModuleName('knowledge-base', hidden)) return text
   return text
     .split(CODE_SEGMENT_RE)
     .map(seg =>

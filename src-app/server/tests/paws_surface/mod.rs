@@ -33,9 +33,9 @@ const RUN_JS_ROW: &str = "run_js";
 /// satisfies that while the rows the caller actually asserts on are still in
 /// flight. So the enabled side waits for the SPECIFIC names it is about to check.
 ///
-/// The disabled side passes an empty slice — there is nothing to wait for, and
-/// it separately asserts the table is non-empty so "absent" cannot mean "nothing
-/// registered yet".
+/// The disabled side passes an empty slice, which waits for ANY row — there are
+/// no specific names to wait for there, and it separately asserts the table is
+/// non-empty so "absent" cannot mean "nothing registered yet".
 async fn registered_builtin_names(server: &TestServer, await_names: &[&str]) -> Vec<String> {
     let pool = sqlx::PgPool::connect(&server.database_url)
         .await

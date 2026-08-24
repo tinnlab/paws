@@ -138,10 +138,10 @@ impl AppModule for BioMcpModule {
         // it. A guard was added here and then REVERTED: bio_mcp is not one of
         // the 13 items in `docs/design/paws-feature-surface.md`, and unmounting
         // the route changes its disabled contract from 401/403/503/405 to a bare
-        // 404, which five existing tests in `tests/bio_mcp/` assert
-        // deliberately (one of them relies on the disabled path to reach the
-        // graceful-503 branch). Redefining that contract belongs to whoever owns
-        // bio_mcp, not to this feature.
+        // 404, which the proxy tests in `tests/bio_mcp/` assert deliberately —
+        // one of them relies on the disabled path to reach the graceful-503
+        // branch. Redefining that contract belongs to whoever owns bio_mcp, not
+        // to this feature.
         //
         // Recorded as a follow-up in the PR body instead of silently reshaping
         // an unrelated module.

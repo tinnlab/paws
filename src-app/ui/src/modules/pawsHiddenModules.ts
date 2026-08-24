@@ -6,7 +6,7 @@
  * `docs/design/paws-feature-surface.md`; every entry below is one row of that
  * document's item table.
  *
- * **To restore a HIDDEN feature's UI: delete its entry from the two sets below,
+ * **To restore a HIDDEN feature's UI: delete its entry from the sets below,
  * and restore the module's original `shouldLoad` predicate** (each hidden
  * `module.tsx` carries its previous predicate in a comment). No HIDDEN feature's
  * code was deleted, which is the design's INV-5 ("reversible by configuration or
@@ -31,7 +31,7 @@
  * restoring a feature restores it without its end-to-end coverage; recover those
  * specs from git history if you bring one back.
  *
- * ## Why a module is hidden in FOUR places and not one
+ * ## Why a module is hidden in several places and not one
  *
  * Hiding is the `shouldLoad` manifest predicate (INV-4), but the predicate alone
  * is provably not sufficient — several surfaces reach a hidden feature without
@@ -58,11 +58,12 @@
  *     the project page.
  *  5. **Copy, empty states and fetches inside SURVIVING modules** that reference
  *     a hidden feature. These are unreachable by any of the levers above,
- *     because they live in modules that are not hidden: the onboarding MCP step
- *     and its hub fetch, the memory-setup step's copy, the skills empty state,
- *     the MCP user-policy admin copy, the model-capabilities tooltip, and the
- *     llm-provider download widget's hub lookup (which would otherwise trigger a
- *     lazy-store init and fire live `/api/hub/*` requests).
+ *     because they live in modules that are not hidden — onboarding, skills,
+ *     mcp, llm-provider, notification. The most consequential is not copy at
+ *     all: the llm-provider download widget's hub lookup would otherwise trigger
+ *     a lazy-store init and fire live `/api/hub/*` requests from the sidebar.
+ *     (Deliberately not enumerated file-by-file — that list went stale twice in
+ *     consecutive rounds. `grep -rn isPawsHiddenModuleName src` is authoritative.)
  *  6. `chat/core/utils/citationTokenize.ts` — chat CORE turns every bare `[n]`
  *     in an assistant message into a knowledge-base citation chip; with the KB
  *     hidden that chip is dead but still focusable and announced.

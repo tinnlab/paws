@@ -127,9 +127,17 @@ export function DownloadIndicatorWidget() {
     // proxy initialises on FIRST ACCESS, and its init fires `loadModels()` +
     // `loadLocalProviders()` — so merely READING `HubModels.$.models` here sends
     // GET /api/hub/models, /api/hub/models/version and /api/hub/local-providers
-    // from a SURVIVING sidebar widget, for a feature with no UI. With the hub
-    // hidden nothing can have been installed from it, so the lookup could only
-    // ever miss anyway and the fallback below is the correct path.
+    // from a SURVIVING sidebar widget, for a feature with no UI.
+    //
+    // The trade, stated rather than glossed: on a FRESH paws instance nothing
+    // can have been installed from the hub, so the lookup could only ever miss
+    // and the fallback below is the correct path. On a deployment that ran with
+    // the hub enabled and was LATER reduced, a failed download of a
+    // hub-installed model now takes the fallback instead of the gated hub retry
+    // — it still retries, but without the Repository Disabled / Auth Required /
+    // Cannot Connect modals, and it surfaces the metadata error toast if the row
+    // is missing fields. Losing those modals is worth stopping a hidden
+    // feature's API being polled from the sidebar.
     const hubModel =
       repoPath && !isPawsHiddenModuleName('hub')
         ? HubModels.$.models.find(m =>
