@@ -57,21 +57,43 @@ test('the descriptor is internally coherent', () => {
 })
 
 test('the descriptor matches the seed migration', () => {
-  const migration = read(
+  const seed = read(
     'src-app/server/src/modules/llm_repository/migrations/202607210100_llm_repository_default_model_seed.sql',
   )
   assert.ok(
-    migration.includes(DEFAULT_MODEL_REPOSITORY_ID),
+    seed.includes(DEFAULT_MODEL_REPOSITORY_ID),
     'the descriptor\'s repository UUID must be the one the migration seeds — otherwise ' +
       'every install resolves a repository that does not exist',
   )
   assert.ok(
-    migration.includes(`'${DEFAULT_MODEL_REPOSITORY_URL}'`),
-    `the migration must seed the org-scoped base ${DEFAULT_MODEL_REPOSITORY_URL}`,
+    seed.includes("'none'"),
+    "the seeded row must be auth_type 'none' (INV-1)",
+  )
+
+  // The LIVE url lives in the LATER migration, not the seed.
+  //
+  // The seed was shipped, so it is immutable: editing it in place broke every
+  // upgraded install with a checksum mismatch (FB-11). The mirror swap is
+  // therefore an additive UPDATE, and this assertion follows the value rather
+  // than the filename — asserting against the seed would either fail or, worse,
+  // silently pass again the day someone "fixes" it by editing the seed.
+  const mirror = read(
+    'src-app/server/src/modules/llm_repository/migrations/202607210200_llm_repository_default_model_mirror.sql',
   )
   assert.ok(
-    migration.includes("'none'"),
-    "the seeded row must be auth_type 'none' (INV-1)",
+    mirror.includes(`'${DEFAULT_MODEL_REPOSITORY_URL}'`),
+    `the mirror migration must set the org-scoped base ${DEFAULT_MODEL_REPOSITORY_URL}`,
+  )
+  assert.ok(
+    mirror.includes(DEFAULT_MODEL_REPOSITORY_ID),
+    'the update must be scoped to the seeded row by id',
+  )
+  // Non-vacuity: the two files must genuinely differ on the url, otherwise this
+  // test would keep passing if the split were undone.
+  assert.ok(
+    !seed.includes(`'${DEFAULT_MODEL_REPOSITORY_URL}'`),
+    'the SHIPPED seed migration must not be edited to carry the new url — that is ' +
+      'the change that bricks upgraded installs (FB-11)',
   )
 })
 

@@ -448,3 +448,21 @@ not this feature's to make unilaterally.
   affects every provider and picking the bound is a product decision of the same
   kind as DEC-19. See FB-10 for the two candidate explanations of the infinite
   spin and why they need different owners.
+
+## Fix round 7 (FB-11)
+
+- **DEC-25 — an applied migration is IMMUTABLE; the mirror swap is additive.**
+  Supersedes how DEC-22 was implemented (the destination is unchanged — the
+  default model still installs from the tinnlab mirror — but it is now reached by
+  a new migration rather than by editing the seed). `202607210100` is restored
+  byte-for-byte to what shipped; `202607210200` UPDATEs the row, guarded on the
+  old url so it is idempotent and leaves a manually-diverged row alone.
+  Pre-release is NOT an exception to immutability: a maintainer's test machine
+  counts as "anywhere", which is exactly how this reached a user.
+  The guard compares each migration to its FIRST COMMIT rather than to a branch
+  baseline — the branch form both missed already-pushed edits and flagged the
+  legitimate restore. Four pre-existing violations on `main` are grandfathered in
+  a list that may only shrink; rewriting their bytes would itself be the hazard.
+  **Not built, and stated as such:** a real upgrade test (apply the shipped set,
+  then the current set, against a live DB). It needs the shared harness's DB
+  bootstrap (rule B3), so it is proposed to the owner in FB-11 instead.

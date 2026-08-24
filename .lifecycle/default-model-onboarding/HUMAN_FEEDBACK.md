@@ -486,6 +486,73 @@ picking a bound is a product decision of the same kind as DEC-19.
 no provider — local or remote, reachable or not — can leave the UI spinning
 indefinitely. Owner's call on the bound.
 
+### FB-11 — editing a shipped migration bricks every upgraded install
+
+- **FB-11** [status: resolved] — my defect, and the worst one in this series: the
+  mirror swap EDITED an already-applied migration instead of adding a new one, so
+  any machine that had run an earlier build failed to boot. Restored and re-done
+  additively; a guard now makes the mistake unshippable. See DEC-25.
+
+> "Load failed" + the first-run admin login page
+
+**That is not an auth bug — the backend never starts.** Verified: the migrator
+(`core/database/mod.rs`) is `sqlx::migrate!` with `set_ignore_missing(true)` and
+nothing else. That flag ignores migrations present in the DB but absent from
+source; it does **not** disable checksum validation. So on boot sqlx checksums
+`202607210100`, finds it differs from `_sqlx_migrations`, and aborts. No
+migrations ⇒ no embedded server ⇒ every API call fails ⇒ with no session the UI
+falls back to first-run setup. Auto-login was never the problem.
+
+**A FRESH install of the same build works.** That is exactly why it shipped:
+every test in this repo runs against a fresh database, so the only broken path
+was the upgrade — the one real users take.
+
+**Fix:** `202607210100` is restored to its previously-shipped bytes (verified
+byte-identical to `281b4c009^`), and the mirror swap moved to a NEW migration
+`202607210200_llm_repository_default_model_mirror.sql` in the same module
+sequence. The UPDATE is guarded on the OLD url, which makes it idempotent, a
+no-op once applied, and — deliberately — **silent on a row somebody has since
+pointed elsewhere**: `built_in` rows are edit-denied in the UI, so a divergent
+value means a deliberate manual change, and a migration that overwrote it would
+be reversing a human decision.
+
+**Do NOT tell the owner to wipe `postgres-data`.** It would fix the boot, but the
+mirror swap changes the LFS cache key and they would re-download 5.68 GB. The
+rebuild migrates their existing database in place.
+
+**Guard — and what it does NOT cover.** New test
+`server/tests/migration_immutability.rs` asserts every tracked migration is
+byte-identical to **its first commit**. I chose first-commit rather than a branch
+baseline after the branch version proved wrong in both directions: it would miss
+an edit that had itself been pushed, and it flagged this very repair (restoring
+the bad edit) as a violation.
+
+Stated plainly, because the brief asked and because it matters:
+- **It does not execute a migration.** It compares bytes. **Nothing in this repo
+  proves an upgraded database actually migrates** — I did not build the two-stage
+  harness, because it needs the shared test-harness DB bootstrap that rule B3
+  says not to reshape for one feature. That remains a genuine gap.
+- Its baseline is what was **committed**, not what was **built**; a build cut
+  from an unpushed commit is invisible to it. (The one that broke the owner came
+  from a pushed commit, so this would have caught it.)
+- It skips loudly, not silently, without git.
+
+**It also surfaced four PRE-EXISTING violations on `main`** — migrations in
+`chat`, `file`, `memory` and `notification` edited after their first commit,
+none touched by this branch. They are grandfathered in an explicit list that
+*may only shrink*, with a companion test that fails if an entry goes stale.
+Rewriting their bytes now would itself be an edit to a shipped migration.
+
+**Verified RED**: restoring the edited-in-place version fails the guard naming
+that exact file.
+
+**Proposal for the owner (not built):** this generalises well beyond one feature
+— any edit to a shipped migration silently bricks every existing install with a
+message that looks like a network fault. Worth running this guard in CI for the
+whole repo, and worth a real upgrade test that applies a previously-shipped
+migration set to a live database and then the current one on top. Both are
+owner-level decisions.
+
 ## Follow-up NOT done this round (recorded so it is not lost)
 
 **Enforce the pinned `DEFAULT_MODEL_FILE_SHA256`.** The descriptor now declares
