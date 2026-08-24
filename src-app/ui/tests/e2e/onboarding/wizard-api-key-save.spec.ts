@@ -93,7 +93,13 @@ test.describe('Onboarding — API key entry + save', () => {
     await byTestId(page, 'onboarding-page-next-button').click()
     expect((await saveResp).status()).toBeLessThan(400)
 
-    // The wizard advanced past the providers step.
+    // The wizard advanced past the providers step, onto the Local Model step
+    // (inserted after AI Providers by default-model-onboarding).
+    await expect(
+      byTestId(page, 'onboarding-step-default-model'),
+    ).toBeVisible({ timeout: 30000 })
+    // Skipped without installing — INV-3 keeps Next enabled — and on to MCP.
+    await byTestId(page, 'onboarding-page-next-button').press('Enter')
     await expect(
       byTestId(page, 'onboarding-step-mcp-servers'),
     ).toBeVisible({ timeout: 30000 })

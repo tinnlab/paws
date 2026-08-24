@@ -207,6 +207,43 @@ impl LlmRepository {
     pub fn has_credential(&self) -> bool {
         self.auth_config.has_credential_for(&self.auth_type)
     }
+
+    /// The `(username, secret)` pair handed to the git / LFS layer for a clone
+    /// from this repository.
+    ///
+    /// For `basic_auth` the two are kept SEPARATE — the password is the git
+    /// secret and the username is threaded through so the credential callback
+    /// can pair them correctly (libgit2 Basic auth = base64("username:password")).
+    /// For `api_key` / `bearer_token` the secret is a token paired with a
+    /// host-default username, so the username stays `None`.
+    ///
+    /// **`none` yields `(None, None)`, unconditionally.** That is the mechanism
+    /// behind "installing the default model requires no credential at any point":
+    /// an anonymous repository hands the git layer nothing to send, so there is
+    /// nothing for libgit2 to offer even if the far side challenges. It ignores
+    /// any secret material still sitting in `auth_config` — a row switched to
+    /// `none`, or seeded with stray fields, must not quietly keep
+    /// authenticating. An unknown auth_type is anonymous for the same reason:
+    /// failing closed here means sending nothing.
+    ///
+    /// Extracted from the download handler so this is directly assertable over
+    /// every input. A clone that merely succeeded would prove nothing about what
+    /// it sent.
+    pub fn git_credential(&self) -> (Option<String>, Option<String>) {
+        match self.auth_type.as_str() {
+            "api_key" => (None, self.auth_config.api_key.clone()),
+            "bearer_token" => (None, self.auth_config.token.clone()),
+            "basic_auth" => match (&self.auth_config.username, &self.auth_config.password) {
+                (Some(username), Some(password)) => {
+                    (Some(username.clone()), Some(password.clone()))
+                }
+                // A half-configured basic_auth row sends nothing, rather than a
+                // lone username or a password with no user.
+                _ => (None, None),
+            },
+            _ => (None, None),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -233,6 +270,93 @@ mod tests {
     #[test]
     fn none_always_has_credential() {
         assert!(repo("none", RepositoryAuthConfig::default()).has_credential());
+    }
+
+    /// TEST-4 (default-model-onboarding, acceptance, INV-1) — "Installing the
+    /// default model requires **no credential** — no API key, no token, no
+    /// login — at any point."
+    ///
+    /// `git_credential` is the single point where a clone's credential is
+    /// decided, and this asserts an anonymous repository yields NOTHING there —
+    /// including the case that would actually bite: a row whose `auth_config`
+    /// still carries secret material. If someone changed the `none` arm to fall
+    /// through to `api_key`, or dropped the catch-all so an unknown type leaked a
+    /// token, this goes RED. A test that merely watched a clone succeed could not
+    /// tell the difference.
+    #[test]
+    fn anonymous_repository_yields_no_credential_even_with_stray_secrets() {
+        // The shape the default-model row is seeded with: nothing configured.
+        assert_eq!(
+            repo("none", RepositoryAuthConfig::default()).git_credential(),
+            (None, None),
+            "INV-1: an anonymous repository must hand the git layer nothing"
+        );
+
+        // The dangerous shape: `none`, but with every secret field populated.
+        // A row switched to anonymous, or seeded carelessly, must still send
+        // nothing — the auth_type is the authority, not the leftover blob.
+        let littered = RepositoryAuthConfig {
+            api_key: Some("hf_should_never_be_sent".to_string()),
+            token: Some("ghp_should_never_be_sent".to_string()),
+            username: Some("someone".to_string()),
+            password: Some("hunter2".to_string()),
+            auth_test_api_endpoint: None,
+        };
+        assert_eq!(
+            repo("none", littered.clone()).git_credential(),
+            (None, None),
+            "INV-1: stray secret material on an anonymous row must NOT be sent"
+        );
+
+        // An unrecognised auth_type fails CLOSED — anonymous, not "whatever is
+        // lying around".
+        assert_eq!(
+            repo("something_new", littered).git_credential(),
+            (None, None),
+            "an unknown auth_type must send nothing rather than guess"
+        );
+    }
+
+    /// The credentialed arms still work — otherwise the test above could be
+    /// satisfied by a `git_credential` that always returned `(None, None)`,
+    /// which would break every private-repository download.
+    #[test]
+    fn credentialed_repositories_still_yield_their_secret() {
+        let api = RepositoryAuthConfig {
+            api_key: Some("hf_token".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            repo("api_key", api).git_credential(),
+            (None, Some("hf_token".to_string()))
+        );
+
+        let bearer = RepositoryAuthConfig {
+            token: Some("ghp_token".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            repo("bearer_token", bearer).git_credential(),
+            (None, Some("ghp_token".to_string()))
+        );
+
+        let basic = RepositoryAuthConfig {
+            username: Some("alice".to_string()),
+            password: Some("s3cret".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            repo("basic_auth", basic).git_credential(),
+            (Some("alice".to_string()), Some("s3cret".to_string())),
+            "basic_auth keeps username and password separate for libgit2"
+        );
+
+        // Half-configured basic_auth sends neither half.
+        let half = RepositoryAuthConfig {
+            username: Some("alice".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(repo("basic_auth", half).git_credential(), (None, None));
     }
 
     #[test]

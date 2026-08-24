@@ -59,8 +59,13 @@ test.describe('Onboarding wizard', () => {
     await expect(byTestId(page, 'onboarding-step-welcome')).toBeVisible()
     await byTestId(page, 'onboarding-page-next-button').click()
 
-    // AI Providers → MCP Servers
+    // AI Providers → Local Model
     await expect(byTestId(page, 'onboarding-step-api-keys')).toBeVisible()
+    await byTestId(page, 'onboarding-page-next-button').click()
+
+    // Local Model → MCP Servers. Skipped without installing — INV-3 keeps Next
+    // enabled, so this is a plain pass-through hop.
+    await expect(byTestId(page, 'onboarding-step-default-model')).toBeVisible()
     await byTestId(page, 'onboarding-page-next-button').click()
 
     // MCP Servers → Memory
@@ -242,10 +247,14 @@ test.describe('Onboarding wizard', () => {
     await byTestId(page, 'onboarding-apikeys-password-input').fill('sk-onboarding-user-key-123')
     await byTestId(page, 'onboarding-page-next-button').click()
 
-    // AI Providers → MCP → Memory → Finish. The save raises an "API key saved"
-    // success toast that renders over the bottom-right Next CTA and stays
-    // expanded when hovered by a click-retry, intercepting pointer events.
-    // Activate Next via the keyboard (focus+Enter doesn't pointer-hit-test).
+    // AI Providers → Local Model → MCP → Memory → Finish. The save raises an
+    // "API key saved" success toast that renders over the bottom-right Next CTA
+    // and stays expanded when hovered by a click-retry, intercepting pointer
+    // events. Activate Next via the keyboard from here on (focus+Enter doesn't
+    // pointer-hit-test) — including across the Local Model hop, which is inside
+    // the toast's lifetime.
+    await expect(byTestId(page, 'onboarding-step-default-model')).toBeVisible()
+    await byTestId(page, 'onboarding-page-next-button').press('Enter')
     await expect(byTestId(page, 'onboarding-step-mcp-servers')).toBeVisible()
     await byTestId(page, 'onboarding-page-next-button').press('Enter')
     await expect(byTestId(page, 'onboarding-step-memory-setup')).toBeVisible()

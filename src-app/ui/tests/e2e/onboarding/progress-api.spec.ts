@@ -55,6 +55,11 @@ test.describe('Onboarding — progress API via UI', () => {
     // Walk the rest of the wizard to the finish step.
     await expect(byTestId(page, 'onboarding-step-api-keys')).toBeVisible()
     await byTestId(page, 'onboarding-page-next-button').click()
+    // Local Model step (inserted after AI Providers by
+    // default-model-onboarding). Skipped without installing — INV-3 keeps Next
+    // enabled, so this is a plain pass-through hop.
+    await expect(byTestId(page, 'onboarding-step-default-model')).toBeVisible()
+    await byTestId(page, 'onboarding-page-next-button').click()
     await expect(byTestId(page, 'onboarding-step-mcp-servers')).toBeVisible()
     await byTestId(page, 'onboarding-page-next-button').click()
     await expect(
