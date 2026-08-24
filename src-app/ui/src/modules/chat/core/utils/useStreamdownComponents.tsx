@@ -7,6 +7,7 @@ import {
   LINK_CLASS,
 } from '@/components/common/markdownHeadings'
 import { renderGfmAlert } from '@/components/common/gfmAlert'
+import { isPawsHiddenModuleName } from '@/modules/pawsHiddenModules'
 import { BlockedImage } from '@/components/common/BlockedImage'
 import { ReservedImage } from '@/components/common/ReservedImage'
 import { classifyImageSrc } from '@/components/common/imageSrcPolicy'
@@ -99,7 +100,14 @@ export function useStreamdownComponents(contentId: string) {
         const { href, className, target: _target, id, ...rest } = props
         // Inline `[n]` knowledge-base citation → focusable chip (FB-11). The
         // tokenizer rewrote the model's bare `[n]` into `[n](#kb-cite-n)`.
-        const citeN = isCitationHref(href)
+        // paws: gate the CONSUMER too, not only the tokenizer. With the
+        // knowledge base hidden the tokenizer no longer manufactures these
+        // hrefs, but a model emitting the literal `[1](#kb-cite-1)` form itself
+        // would still render a dead, focusable, aria-labelled chip whose source
+        // card cannot exist. Narrow door, same defect.
+        const citeN = isPawsHiddenModuleName('knowledge-base')
+          ? null
+          : isCitationHref(href)
         if (citeN !== null) return <CitationChip n={citeN} />
         // Hide ↩ back-reference icons — they produce stray icons when footnote
         // definitions contain \n\n (multi-paragraph footnotes).

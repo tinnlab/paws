@@ -771,15 +771,15 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `isFootnoteLabel(props.id)` | 71 |
-| branch | `(rest as Record<string, unknown>)['data-footnotes'] === undefined` | 87 |
-| branch | `citeN !== null` | 103 |
-| branch | `className?.includes('data-footnote-backref') \|\| (rest as Record<string, unknown>)['data-footnote-backref'] !== undefined` | 107 |
-| branch | `scopedHref?.startsWith('#')` | 144 |
-| empty | `verdict === 'empty'` | 211 |
-| branch | `verdict === 'allowed'` | 212 |
-| branch | `typeof paperLabel === 'string'` | 226 |
-| branch | `typeof excerptLabel === 'string'` | 244 |
+| branch | `isFootnoteLabel(props.id)` | 72 |
+| branch | `(rest as Record<string, unknown>)['data-footnotes'] === undefined` | 88 |
+| branch | `citeN !== null` | 111 |
+| branch | `className?.includes('data-footnote-backref') \|\| (rest as Record<string, unknown>)['data-footnote-backref'] !== undefined` | 115 |
+| branch | `scopedHref?.startsWith('#')` | 152 |
+| empty | `verdict === 'empty'` | 219 |
+| branch | `verdict === 'allowed'` | 220 |
+| branch | `typeof paperLabel === 'string'` | 234 |
+| branch | `typeof excerptLabel === 'string'` | 252 |
 
 ### `modules/chat/extensions/compaction/components/CompactButton`
 

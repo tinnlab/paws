@@ -33,28 +33,37 @@ const RUN_JS_ROW: &str = "run_js";
 /// satisfies that while the rows the caller actually asserts on are still in
 /// flight. So the enabled side waits for the SPECIFIC names it is about to check.
 ///
-/// The disabled side passes an empty slice, which waits for ANY row — there are
-/// no specific names to wait for there, and it separately asserts the table is
-/// non-empty so "absent" cannot mean "nothing registered yet".
+/// The disabled side passes an empty slice, which waits for the set to STOP
+/// GROWING rather than for any single row.
+///
+/// Waiting for "any row" would be a real false-pass window: if the three
+/// capabilities were erroneously still registering but `memory`/`files` won the
+/// race, the loop would break on their arrival and the three "absent" assertions
+/// would pass while the rows were still in flight. The non-empty assertion does
+/// not close that — it is satisfied by the very row that ended the wait. So the
+/// empty-slice path polls until two consecutive reads agree.
 async fn registered_builtin_names(server: &TestServer, await_names: &[&str]) -> Vec<String> {
     let pool = sqlx::PgPool::connect(&server.database_url)
         .await
         .expect("connect to the test database");
 
     let mut names: Vec<String> = Vec::new();
+    let mut previous_len = usize::MAX;
     for _ in 0..50 {
         names = sqlx::query_scalar("SELECT name FROM mcp_servers WHERE is_built_in = true")
             .fetch_all(&pool)
             .await
             .expect("query built-in mcp_servers");
         let settled = if await_names.is_empty() {
-            !names.is_empty()
+            // Quiesced: non-empty AND unchanged since the previous read.
+            !names.is_empty() && names.len() == previous_len
         } else {
             await_names.iter().all(|w| names.iter().any(|n| n == w))
         };
         if settled {
             break;
         }
+        previous_len = names.len();
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 

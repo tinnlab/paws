@@ -31,6 +31,12 @@ test('citationTokenize rewrites only bare numeric [n]', () => {
   assert.equal(citationTokenize('[Smith][1] and [1]: http://x', KB_PRESENT), '[Smith][1] and [1]: http://x')
   // inside a code span / fenced block — never rewritten (would corrupt code)
   assert.equal(citationTokenize('use `x[1]` now', KB_PRESENT), 'use `x[1]` now')
+  // A bare `[1]` INSIDE a code span — the only shape that actually exercises
+  // CODE_SEGMENT_RE. The two cases around it are blocked by the lookbehind
+  // alone (`x[1]`, `arr[1]` have a word char before the bracket), so without
+  // this one the whole code-splitting stage could be deleted and the suite
+  // would stay green.
+  assert.equal(citationTokenize('see `a [1] b` here', KB_PRESENT), 'see `a [1] b` here')
   assert.equal(citationTokenize('```py\narr[1]\n```', KB_PRESENT), '```py\narr[1]\n```')
   // idempotent — an already-tokenized citation is left alone
   assert.equal(citationTokenize('[1](#kb-cite-1)', KB_PRESENT), '[1](#kb-cite-1)')

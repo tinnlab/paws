@@ -485,13 +485,16 @@ export function AgentSettingsSection() {
             <FormField
               name="delegate_enabled"
               label="Enable on-demand delegation"
-              // paws: the workflow clause names a surface the user cannot reach
+              // paws: this admin copy names a feature the user cannot reach
               // (item 6 hides the workflow module, so no workflow can be
-              // authored here). The scheduler sentence further down is
-              // deliberately NOT gated — its horizon backstop is a server-side
-              // ceiling that still applies whether or not the scheduler has a
-              // UI, so trimming it would misdescribe the setting just to make a
-              // string disappear.
+              // authored here). The scheduler sentence further down is gated the
+              // same way.
+              //
+              // I first gated only this one, arguing the scheduler's horizon was
+              // "a server-side ceiling that still applies". The blind audit
+              // pointed out that is equally true of workflow — it is also a
+              // hide-only row, so its API and agent step kind stay live too.
+              // The distinction did not exist; both are now gated.
               description={
                 isPawsHiddenModuleName('workflow')
                   ? 'Lets the agent delegate work to parallel sub-agents via the built-in delegate tool. The fan-out limits below bound each delegate call.'
@@ -571,7 +574,11 @@ export function AgentSettingsSection() {
             <FormField
               name="goal_seek_max_turns"
               label="Goal-seeking max turns"
-              description="Maximum turns a goal-seeking loop may fire before it stops 'incomplete'. The scheduler's horizon backstop is the other ceiling."
+              description={
+                isPawsHiddenModuleName('scheduler')
+                  ? "Maximum turns a goal-seeking loop may fire before it stops 'incomplete'."
+                  : "Maximum turns a goal-seeking loop may fire before it stops 'incomplete'. The scheduler's horizon backstop is the other ceiling."
+              }
             >
               <InputNumber
                 min={1}
