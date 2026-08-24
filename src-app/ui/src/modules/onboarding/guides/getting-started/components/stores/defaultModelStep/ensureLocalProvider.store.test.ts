@@ -29,7 +29,19 @@ type Provider = {
 type Group = { id: string; name: string; is_active: boolean; is_default: boolean }
 
 const state = vi.hoisted(() => ({
+  /** SERVER truth — what `GET /llm-providers` returns. */
   providers: [] as Provider[],
+  /**
+   * The STORE's snapshot, deliberately left EMPTY in every test.
+   *
+   * FB-1 regression guard. The owner hit "No local provider exists to install
+   * into" on a real install because this leg read `LlmProviderStore.$.providers`
+   * after a `loadLlmProviders()` that had silently no-opped. Keeping the store
+   * snapshot permanently empty while the API serves the real list means ANY
+   * re-introduction of a store read turns this whole file red, not just the one
+   * test named for the defect.
+   */
+  storeSnapshot: [] as Provider[],
   /** What `updateLlmProvider` resolves to — `null` reproduces the concurrent-update race. */
   updateResult: {} as unknown,
   canEditProviders: true,
@@ -48,6 +60,18 @@ const assignGroupToProvider = vi.hoisted(() =>
 )
 const getGroups = vi.hoisted(() => vi.fn(async () => state.assignedGroups))
 const listGroups = vi.hoisted(() => vi.fn(async () => ({ groups: state.allGroups })))
+/** The ADMIN provider list — the direct read that replaced the store snapshot. */
+const listProviders = vi.hoisted(() =>
+  vi.fn(async ({ page, per_page }: { page: number; per_page: number }) => {
+    const start = (page - 1) * per_page
+    return {
+      page,
+      per_page,
+      providers: state.providers.slice(start, start + per_page),
+      total: state.providers.length,
+    }
+  }),
+)
 
 vi.mock('@/modules/llm-provider/stores/llmProvider', () => ({
   LlmProvider: {
@@ -55,14 +79,14 @@ vi.mock('@/modules/llm-provider/stores/llmProvider', () => ({
     updateLlmProvider,
     assignGroupToProvider,
     get $() {
-      return { providers: state.providers }
+      return { providers: state.storeSnapshot }
     },
   },
 }))
 
 vi.mock('@/api-client', () => ({
   ApiClient: {
-    LlmProvider: { getGroups },
+    LlmProvider: { getGroups, list: listProviders },
     UserGroup: { list: listGroups },
   },
 }))
@@ -99,6 +123,7 @@ const USERS_GROUP: Group = {
 
 beforeEach(() => {
   state.providers = []
+  state.storeSnapshot = []
   state.updateResult = {}
   state.canEditProviders = true
   state.canAssignGroups = true
@@ -107,6 +132,7 @@ beforeEach(() => {
   loadLlmProviders.mockClear()
   assignGroupToProvider.mockClear()
   listGroups.mockClear()
+  listProviders.mockClear()
   resetGetGroups()
   // `mockReset`, not `mockClear`: a per-test `mockImplementation` survives
   // `mockClear`, so an earlier case's "flip enabled on update" would leak into
@@ -261,7 +287,9 @@ describe('ensureLocalProvider', () => {
       result.providerId,
       "returning updateLlmProvider's value would abort the install with 'no local provider'",
     ).toBe('local-1')
-    expect(loadLlmProviders).toHaveBeenCalledWith(true)
+    // Verified against the SERVER, not the store: one read to find the provider,
+    // a second to confirm the enable actually landed.
+    expect(listProviders.mock.calls.length).toBeGreaterThanOrEqual(2)
   })
 
   it('reports a problem when the enable did not take effect', async () => {
@@ -289,6 +317,67 @@ describe('ensureLocalProvider', () => {
     expect(result.providerId).toBeNull()
     expect(result.problem).toMatch(/administrator/i)
     expect(updateLlmProvider).not.toHaveBeenCalled()
+  })
+
+  // ---------------------------------------------------------------------
+  // FB-1 — the owner's "No local provider exists" on a real macOS install.
+  // ---------------------------------------------------------------------
+
+  it('FB-1: finds the provider even when the store is initialised and EMPTY', async () => {
+    // The exact reported shape. `loadLlmProviders()` no-ops (already
+    // initialised, or a load in flight), so the store snapshot stays empty
+    // while the server has had the built-in Local provider all along.
+    // Reading the store here produced "No local provider exists to install
+    // into. An administrator can add one" — telling the user to create
+    // something that already existed.
+    state.storeSnapshot = []
+    state.providers = [
+      { id: 'local-builtin', provider_type: 'local', enabled: false, built_in: true },
+    ]
+    loadLlmProviders.mockImplementation(async () => undefined)
+    enableOnUpdate()
+
+    await expect(run()).resolves.toEqual({ providerId: 'local-builtin', problem: null })
+    expect(updateLlmProvider).toHaveBeenCalledWith('local-builtin', { enabled: true })
+  })
+
+  it('FB-1: says the list could not be READ, not that no provider exists', async () => {
+    // "I could not look" and "I looked and there is none" send the user to
+    // different places. Only the second warrants "ask an administrator to add
+    // one"; conflating them is what made the original message unactionable.
+    listProviders.mockRejectedValueOnce(new Error('Failed to fetch'))
+
+    const result = await run()
+    expect(result.providerId).toBeNull()
+    expect(result.problem).toMatch(/could not be loaded/i)
+    expect(result.problem).not.toMatch(/no local provider exists/i)
+    expect(updateLlmProvider).not.toHaveBeenCalled()
+  })
+
+  it('FB-1: names PERMISSION distinctly when the read is refused', async () => {
+    const denied = Object.assign(new Error('HTTP error! status: 403'), { status: 403 })
+    listProviders.mockRejectedValueOnce(denied)
+
+    const result = await run()
+    expect(result.providerId).toBeNull()
+    expect(result.problem).toMatch(/not allowed to read/i)
+    expect(result.problem).not.toMatch(/check your connection/i)
+  })
+
+  it('FB-1: walks past page 1 rather than concluding "none exists"', async () => {
+    // The server caps per_page at 100. A local provider sitting at index 100+
+    // must not read as absent.
+    state.providers = [
+      ...Array.from({ length: 100 }, (_, i) => ({
+        id: `openai-${i}`,
+        provider_type: 'openai',
+        enabled: true,
+      })),
+      { id: 'local-builtin', provider_type: 'local', enabled: false, built_in: true },
+    ]
+    enableOnUpdate()
+
+    await expect(run()).resolves.toEqual({ providerId: 'local-builtin', problem: null })
   })
 
   it('names what a human must do when it cannot assign a group', async () => {

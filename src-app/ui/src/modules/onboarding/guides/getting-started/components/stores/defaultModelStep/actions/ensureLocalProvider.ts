@@ -21,6 +21,73 @@ export interface LocalProviderReadiness {
 }
 
 /**
+ * Pages walked when hunting for the local provider (the server caps `per_page`
+ * at `PAGINATION_MAX_PER_PAGE` = 100). Five pages covers 500 providers; beyond
+ * that we report honestly rather than concluding "none exists" from a partial
+ * read, because a wrong "no provider" answer is exactly the defect this
+ * function was rewritten to remove.
+ */
+const PROVIDER_PAGE_LIMIT = 5
+
+type ProviderRow = {
+  id: string
+  provider_type: string
+  enabled: boolean
+  built_in: boolean
+}
+
+/**
+ * Read the ADMIN provider list DIRECTLY, never through `LlmProviderStore`.
+ *
+ * This is the fix for the owner-reported "No local provider exists to install
+ * into" on a real install (FB-1). The store's `loadLlmProviders` early-returns
+ * SILENTLY in three cases — missing permission, `isInitialized && !force`, and
+ * `loading` (an in-flight load, which short-circuits even when `force` is set).
+ * Any of the three leaves the caller reading a stale or empty snapshot and
+ * concluding the provider does not exist, which is both wrong and unactionable:
+ * it tells the user to ask an administrator to create something that is already
+ * there.
+ *
+ * A direct read cannot no-op. It either returns the current server truth or
+ * throws, and those two outcomes are reported DIFFERENTLY — see the callers of
+ * `problem`. `GET /llm-providers` is the admin list (`LlmProvidersRead`), which
+ * returns providers regardless of `enabled`, so the disabled built-in Local
+ * provider this step exists to enable is visible in it.
+ */
+async function readProvidersDirect(): Promise<{
+  providers: ProviderRow[] | null
+  problem: string | null
+}> {
+  const collected: ProviderRow[] = []
+  try {
+    for (let page = 1; page <= PROVIDER_PAGE_LIMIT; page++) {
+      const res = await ApiClient.LlmProvider.list({ page, per_page: 100 })
+      const rows = (res.providers ?? []) as unknown as ProviderRow[]
+      collected.push(...rows)
+      if (rows.length === 0 || collected.length >= res.total) break
+    }
+    return { providers: collected, problem: null }
+  } catch (error) {
+    // Distinguish "you may not look" from "the look failed". Telling a user to
+    // contact an administrator when the real cause was a dropped request sends
+    // them somewhere that cannot help.
+    const status = (error as { status?: number } | null)?.status
+    if (status === 401 || status === 403) {
+      return {
+        providers: null,
+        problem:
+          'Your account is not allowed to read the list of LLM providers, so the model was not installed. An administrator can install it from Onboarding, or grant the LLM provider read permission.',
+      }
+    }
+    return {
+      providers: null,
+      problem:
+        'The list of LLM providers could not be loaded, so nothing was changed. Check your connection and try again.',
+    }
+  }
+}
+
+/**
  * Make a local provider ready to install into, and reachable once installed.
  *
  * TWO things are required, and only the first is obvious:
@@ -59,17 +126,18 @@ export interface LocalProviderReadiness {
  */
 export default (_set: DefaultModelStepSet, _get: DefaultModelStepGet) =>
   async (): Promise<LocalProviderReadiness> => {
-    // Read through `.$` — this runs from an install handler, not a render, and
-    // the reactive proxy calls React hooks.
-    await LlmProviderStore.loadLlmProviders()
-    const locals = () =>
-      LlmProviderStore.$.providers.filter(p => p.provider_type === 'local')
+    const firstRead = await readProvidersDirect()
+    if (!firstRead.providers) {
+      return { providerId: null, problem: firstRead.problem }
+    }
+    let known = firstRead.providers
+    const locals = () => known.filter(p => p.provider_type === 'local')
 
     // Prefer the BUILT-IN local provider explicitly rather than whatever sorts
     // first: it is the row the product seeds and the one this step exists to
     // provision. Enabling and then sharing an operator's own custom provider
     // would be a bigger action than the user asked for.
-    const pick = (candidates: typeof LlmProviderStore.$.providers) =>
+    const pick = (candidates: ProviderRow[]) =>
       candidates.find(p => p.built_in) ?? candidates[0]
 
     const enabledLocal = pick(locals().filter(p => p.enabled))
@@ -95,18 +163,28 @@ export default (_set: DefaultModelStepSet, _get: DefaultModelStepGet) =>
             'The local provider is turned off, and your account cannot turn it on. An administrator can enable it in Settings → LLM Providers.',
         }
       }
+      // The store action is used for the WRITE so the app's own
+      // `llm_provider.updated` event still fires for other surfaces.
       await LlmProviderStore.updateLlmProvider(providerId, { enabled: true })
 
       // Deliberately NOT trusting `updateLlmProvider`'s return value: it
       // resolves to `null` when a concurrent update is already in flight (it
-      // early-returns on its own `updating` flag). Re-read so the result
-      // reflects what the server actually holds.
-      await LlmProviderStore.loadLlmProviders(true)
+      // early-returns on its own `updating` flag). Verify against the SERVER —
+      // and directly, for the same reason the first read is direct: a
+      // `loadLlmProviders(true)` here would itself no-op while another load is
+      // in flight, and we would then report "could not be turned on" for a
+      // provider that is in fact enabled.
+      const verify = await readProvidersDirect()
+      if (!verify.providers) {
+        return { providerId: null, problem: verify.problem }
+      }
+      known = verify.providers
       const nowEnabled = pick(locals().filter(p => p.enabled))
       if (!nowEnabled) {
         return {
           providerId: null,
-          problem: 'The local provider could not be turned on.',
+          problem:
+            'The local provider could not be turned on — another change to it may have been in progress. Try again.',
         }
       }
       providerId = nowEnabled.id

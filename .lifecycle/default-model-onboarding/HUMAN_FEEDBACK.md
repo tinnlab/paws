@@ -1,6 +1,9 @@
 # HUMAN_FEEDBACK — default-model-onboarding
 
-**no human feedback received** — none arrived during this build. One question was escalated
+**Owner feedback received** on a real macOS install of this branch (the `.dmg`
+from run 32677521319). Two reports, recorded verbatim as FB-1 and FB-2 below and
+resolved in fix round 1. The rest of this file predates that round: no feedback
+arrived during the original build. One question was escalated
 and answered before implementation (recorded as DEC-6): whether "talk to it"
 required provisioning the llama.cpp ENGINE as well as the weights. The answer was
 **model + engine**, and that is what shipped. Nothing else was asked, and no
@@ -8,6 +11,92 @@ review comments arrived.
 
 Everything below is therefore *offered* rather than *responded to* — the things a
 reviewer should look at first, because they are judgement calls I made alone.
+
+## FB entries — owner findings on a running build
+
+### FB-1 — install fails with "No local provider exists"
+
+- **FB-1** [status: resolved] — the step read the provider list through a store
+  whose loader silently no-ops; it now reads the admin list directly, and the
+  three outcomes are reported distinctly. Regression-tested, verified RED.
+
+> The model couldn't be installed — No local provider exists to install into. An
+> administrator can add one in Settings → LLM Providers.
+
+**Verified, not assumed.** The message was wrong about the cause, exactly as this
+branch's own round-3 ledger predicted. `ensureLocalProvider` read the provider
+list through `LlmProviderStore`, whose `loadLlmProviders` early-returns SILENTLY
+in three cases — not two: missing permission; `isInitialized && !force`; and
+`loading`, an in-flight load that short-circuits **even when `force` is set**, so
+the existing `loadLlmProviders(true)` verification was unreliable too. Any of the
+three left the step reading an empty snapshot and reporting that the provider did
+not exist — telling the user to create something the server had all along.
+
+**Fix:** the step now reads `GET /llm-providers` (the admin list, which returns
+providers regardless of `enabled`) **directly**, for both the initial lookup and
+the post-enable verification. A direct read cannot no-op. Three outcomes are now
+reported distinctly, as required:
+
+| situation | message |
+|---|---|
+| read succeeded, no local provider | "No local provider exists to install into…" (now accurate) |
+| read refused (401/403) | "Your account is not allowed to read the list of LLM providers…" |
+| read failed (transport) | "The list of LLM providers could not be loaded… Check your connection and try again." |
+
+The fourth case — "the list is stale" — is **eliminated by construction** rather
+than given a message, the same way the unreachable `cancelled` state was deleted
+rather than rendered. Reading fresh means there is no stale case to report.
+
+**Regression tests:** `ensureLocalProvider.store.test.ts` now holds the store
+snapshot permanently EMPTY while the API serves the real list, so any
+re-introduction of a store read turns the whole file red — not just the one case
+named for the defect. Four cases are named for FB-1 (store-initialised-and-empty;
+read-failure distinct from none-exist; permission named distinctly; a provider
+beyond page 1, since the server caps `per_page` at 100). **Verified RED**:
+restoring the store read fails 14 of 18, including the named case.
+
+### FB-2 — Onboarding does not open after installing the app
+
+- **FB-2** [status: wontfix] — reproduced and diagnosed, but NOT changed here:
+  the cause is a deliberate, documented, pre-existing admin exemption in shared
+  onboarding code that this branch does not touch. `wontfix` is the closest
+  status this file's vocabulary offers and means "not fixed in THIS branch,
+  handed back as a follow-up" — it is emphatically not "dismissed". The impact on
+  this feature is real and is spelled out below, with three options for the owner.
+
+> the onboarding does not open after installing
+
+**Reproduced as reading (a)** — after installing the APP, Onboarding does not
+appear on launch. Not reading (b): FB-1 means the model install never succeeded,
+so there was no post-model-install state to fail to advance from.
+
+**Mechanism, confirmed in code and by a passing test:**
+`shouldRedirectToOnboarding` returns `null` when `isAdmin`, and the desktop's
+auto-login mints a session for the user literally named `admin`
+(`mint_admin_login` → `get_by_username("admin")`). So on the desktop shell,
+Onboarding **never auto-opens for anyone, ever** — the only ways in are the two
+"Onboarding" buttons on the Settings page. The owner reaching the model step at
+all is consistent with this: they got there via Settings.
+
+**This is deliberate, documented, pre-existing behaviour, and not caused by this
+feature.** `OnboardingRedirect`'s own docstring states the rationale — forcing an
+admin through the wizard traps the phone-over-tunnel session in a loop it cannot
+escape — and it is pinned by the pre-existing test `never force-onboards an
+admin`, which passes on `main`. The file is not in this branch's diff.
+
+**Why I did not absorb it:** changing who gets force-onboarded is a product
+decision with real blast radius (it exists to prevent a known trap), and it is
+shared onboarding behaviour rather than this feature's. Rule B3 and the fix
+brief's own instruction both point at recording it.
+
+**But it matters for this feature, so it should not be filed and forgotten:** the
+default-model step lives inside a wizard that the desktop's only user never sees
+automatically. On the platform where a no-API-key local model matters most, the
+feature is undiscoverable without visiting Settings. Options for the owner, in
+increasing blast radius: (a) surface the default-model install outside the wizard
+too (e.g. on the model picker's empty state); (b) exempt the *desktop* shell from
+the admin skip, since the phone-over-tunnel trap that motivated it does not apply
+there; (c) drop the admin exemption and fix the trap separately.
 
 ## Decisions a human may want to reverse
 
