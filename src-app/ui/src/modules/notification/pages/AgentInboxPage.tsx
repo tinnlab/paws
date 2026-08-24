@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import type { NotificationRendererCtx } from '@ziee/framework/notification'
 
 import { Button, Card, Empty, ErrorState, Flex, Spin } from '@ziee/kit'
+import { isPawsHiddenModuleName } from '@/modules/pawsHiddenModules'
 import { NotificationItem } from '@ziee/notification-ui'
 
 import { SettingsPageContainer } from '@/modules/settings/components/SettingsPageContainer'
@@ -97,7 +98,14 @@ export function AgentInboxPage() {
   return (
     <SettingsPageContainer
       title="Background results"
-      subtitle="Results from the background sub-agents and scheduled loops you started — open one to jump to where it landed."
+      subtitle={
+        // paws: the scheduler is hidden (design item 7), so a user cannot start
+        // a scheduled loop from any UI — do not name one in a surviving page's
+        // subtitle. Gated, so restoring the scheduler restores the wording.
+        isPawsHiddenModuleName('scheduler')
+          ? 'Results from the background sub-agents you started — open one to jump to where it landed.'
+          : 'Results from the background sub-agents and scheduled loops you started — open one to jump to where it landed.'
+      }
       data-testid="agent-inbox-page"
     >
       <Flex className="mb-3 items-center justify-end">

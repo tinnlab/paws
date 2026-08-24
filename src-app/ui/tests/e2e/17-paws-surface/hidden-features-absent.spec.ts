@@ -251,6 +251,16 @@ test.describe('paws feature surface — hidden features are absent (INV-1)', () 
         'asserts the absence of a section that was never going to render',
     ).toBeVisible({ timeout: 15000 })
 
+    // …and its BODY must have finished loading. The `onboarding-step-*` wrapper
+    // is rendered by OnboardingPage OUTSIDE the step component, so it goes
+    // visible while the step is still a spinner — in which state no prose exists
+    // and both absence assertions below resolve trivially. Waiting for the
+    // surviving sentence is the control that closes that window.
+    await expect(
+      mcpStep.getByText(/Toggle the ones you want to use/),
+      'the step body must have rendered its prose before absence is asserted',
+    ).toBeVisible({ timeout: 15000 })
+
     // Both the section AND the sentence that advertises it. Gating the list but
     // leaving the prose two lines above it still tells the admin to go to a Hub
     // this instance does not have.

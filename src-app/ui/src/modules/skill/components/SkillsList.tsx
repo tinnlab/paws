@@ -2,6 +2,7 @@ import { Import as ImportIcon } from 'lucide-react'
 import { useState } from 'react'
 import { Button, Card, Empty, ErrorState, Flex, Text } from '@ziee/kit'
 import { ListPagination } from '@/components/common/ListPagination'
+import { isPawsHiddenModuleName } from '@/modules/pawsHiddenModules'
 import { Permissions } from '@/api-client/permissions'
 import { Can } from '@/core/permissions'
 import { SettingsPageContainer } from '@/modules/settings/components/SettingsPageContainer'
@@ -119,7 +120,15 @@ export function SkillsList() {
           !loading &&
           skills.length === 0 && (
             <Empty
-              description="No skills installed yet — browse the Hub to install one"
+              // paws: the Hub is hidden (design item 11). On a fresh instance no
+              // skills are installed, so this IS the default state of
+              // /settings/skills — the most visible place the reduction could
+              // leave a pointer to a page with no nav entry, route or view.
+              description={
+                isPawsHiddenModuleName('hub')
+                  ? 'No skills installed yet'
+                  : 'No skills installed yet — browse the Hub to install one'
+              }
               className="!mt-12"
               data-testid="skill-list-empty"
             />

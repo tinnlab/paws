@@ -10,6 +10,7 @@ import type {
 } from '@/api-client/types'
 import { LlmModelDownload } from '@/modules/llm-provider/stores/llmModelDownload'
 import { HubModels } from '@/modules/hub/modules/llm-models/stores/hub-models-store'
+import { isPawsHiddenModuleName } from '@/modules/pawsHiddenModules'
 
 /**
  * Rebuild a `DownloadFromRepositoryRequest` from a failed
@@ -120,11 +121,21 @@ export function DownloadIndicatorWidget() {
     // identifier is what the backend passes as `repository_path` to
     // the download path; matching against ALL of them lets a model
     // with multiple sources still be detected on retry).
-    const hubModel = repoPath
-      ? HubModels.$.models.find(m =>
-          (m.sources ?? []).some(s => s.identifier === repoPath),
-        )
-      : undefined
+    // paws: skip the hub catalog lookup entirely when the hub is hidden.
+    //
+    // This is not just a dead branch to trim. `HubModels` is a lazy store whose
+    // proxy initialises on FIRST ACCESS, and its init fires `loadModels()` +
+    // `loadLocalProviders()` — so merely READING `HubModels.$.models` here sends
+    // GET /api/hub/models, /api/hub/models/version and /api/hub/local-providers
+    // from a SURVIVING sidebar widget, for a feature with no UI. With the hub
+    // hidden nothing can have been installed from it, so the lookup could only
+    // ever miss anyway and the fallback below is the correct path.
+    const hubModel =
+      repoPath && !isPawsHiddenModuleName('hub')
+        ? HubModels.$.models.find(m =>
+            (m.sources ?? []).some(s => s.identifier === repoPath),
+          )
+        : undefined
 
     // Order: download-first, then delete the old failed row. The
     // previous order (delete → download) erased the only record of
@@ -170,7 +181,9 @@ export function DownloadIndicatorWidget() {
     const req = buildRetryRequest(d)
     if (!req) {
       message.error(
-        'This download is missing required metadata; reinstall from the hub instead.',
+        isPawsHiddenModuleName('hub')
+          ? 'This download is missing required metadata; re-add the model from the LLM Providers page.'
+          : 'This download is missing required metadata; reinstall from the hub instead.',
       )
       return
     }

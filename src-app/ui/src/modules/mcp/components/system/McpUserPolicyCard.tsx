@@ -1,3 +1,4 @@
+import { isPawsHiddenModuleName } from '@/modules/pawsHiddenModules'
 import {
   Alert,
   Card,
@@ -118,9 +119,12 @@ export function McpUserPolicyCard() {
       ) : undefined}
     >
       <Paragraph type="secondary" className="!mb-4 text-sm">
-        Govern which MCP transports regular users may install. Disable both to
-        hide the Add button on /settings/mcp-servers and the MCP tab in the Hub
-        for non-admins.
+        {/* paws: the Hub is hidden (design item 11), so admin copy on a
+            SURVIVING settings page must not describe a Hub tab. Gated, so
+            restoring the hub restores the fuller wording (INV-5). */}
+        {isPawsHiddenModuleName('hub')
+          ? 'Govern which MCP transports regular users may install. Disable both to hide the Add button on /settings/mcp-servers for non-admins.'
+          : 'Govern which MCP transports regular users may install. Disable both to hide the Add button on /settings/mcp-servers and the MCP tab in the Hub for non-admins.'}
       </Paragraph>
 
       <Form
@@ -153,7 +157,11 @@ export function McpUserPolicyCard() {
             tone="warning"
             className="mb-3"
             data-testid="mcp-policy-no-transports-alert"
-            title="Users cannot add any MCP server. The MCP tab in the Hub is hidden."
+            title={
+              isPawsHiddenModuleName('hub')
+                ? 'Users cannot add any MCP server.'
+                : 'Users cannot add any MCP server. The MCP tab in the Hub is hidden.'
+            }
           />
         )}
 

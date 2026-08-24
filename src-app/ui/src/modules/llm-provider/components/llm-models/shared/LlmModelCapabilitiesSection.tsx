@@ -1,5 +1,6 @@
 import { forwardRef } from 'react'
 import { Card, Flex, FormField, Select, Switch, Alert, useWatch } from '@ziee/kit'
+import { isPawsHiddenModuleName } from '@/modules/pawsHiddenModules'
 
 export function LlmModelCapabilitiesSection() {
   // Memory-plan §8 polish (gap #12): when text_embedding is ticked,
@@ -34,7 +35,15 @@ export function LlmModelCapabilitiesSection() {
         <CapabilityRow
           label="Reranker"
           name="rerank"
-          help="Cross-encoder that re-scores retrieved passages. Used by Document RAG / knowledge bases to improve retrieval quality."
+          // paws: Document RAG and knowledge bases are hidden (items 10 and 9),
+          // so a live form tooltip on a SURVIVING page must not name them. The
+          // capability itself is unchanged — a reranker is still a real thing to
+          // declare on a model.
+          help={
+            isPawsHiddenModuleName('knowledge-base')
+              ? 'Cross-encoder that re-scores retrieved passages to improve retrieval quality.'
+              : 'Cross-encoder that re-scores retrieved passages. Used by Document RAG / knowledge bases to improve retrieval quality.'
+          }
         />
 
         {!grayed && (

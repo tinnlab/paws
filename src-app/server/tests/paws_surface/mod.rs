@@ -307,7 +307,32 @@ async fn test_hidden_features_keep_their_grants() {
         .await
         .expect("list groups");
     assert!(resp.status().is_success(), "admin must be able to list groups");
-    let blob = resp.text().await.expect("groups body");
+    let body: Value = resp.json().await.expect("groups json");
+
+    // EXACT membership of the parsed permission arrays, not a substring search
+    // of the raw body. `blob.contains("hub::assistants::read")` is satisfied by
+    // `hub::assistants::read_version` — which the SAME migration grants — so a
+    // future `array_remove(permissions, 'hub::assistants::read')` would leave
+    // this green while the grant it claims to pin was gone.
+    let granted: Vec<String> = body["groups"]
+        .as_array()
+        .expect("groups array")
+        .iter()
+        .flat_map(|g| {
+            g["permissions"]
+                .as_array()
+                .map(|p| {
+                    p.iter()
+                        .filter_map(|v| v.as_str().map(str::to_owned))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        })
+        .collect();
+    assert!(
+        !granted.is_empty(),
+        "no permissions parsed — the assertions below would be vacuous"
+    );
 
     // EVERY grant the five withdrawn migrations would have removed, not just the
     // two that motivated the withdrawal. A narrower pin would stay green if a
@@ -330,7 +355,7 @@ async fn test_hidden_features_keep_their_grants() {
         "notifications::read",
     ] {
         assert!(
-            blob.contains(kept),
+            granted.iter().any(|p| p == kept),
             "{kept} must remain granted — hiding a module's UI must not strip a \
              grant its still-running backend depends on"
         );

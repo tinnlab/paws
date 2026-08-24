@@ -34,8 +34,13 @@
  * ## Why a module is hidden in FOUR places and not one
  *
  * Hiding is the `shouldLoad` manifest predicate (INV-4), but the predicate alone
- * is provably not sufficient — three registries reach modules without consulting
- * it, and each needs this list:
+ * is provably not sufficient — several surfaces reach a hidden feature without
+ * consulting it, and each needs this list.
+ *
+ * **Keep this enumeration current.** It is the audit-and-revert surface INV-4
+ * and INV-5 promise; a stale count here is the "the doc claims N places" trap.
+ * Consumers today (grep `isPawsHiddenModuleName` / `PAWS_HIDDEN_MODULE_NAMES`
+ * for the authoritative set):
  *
  *  1. `<module>/module.tsx` — `shouldLoad: () => false`. The predicate CANNOT
  *     import this file: `vite-plugin-module-manifest.js` lifts each predicate's
@@ -51,6 +56,16 @@
  *  4. `projects/core/extensions/registry.tsx` — likewise for the project
  *     "knowledge kinds", which is what puts the citations "References" entry on
  *     the project page.
+ *  5. **Copy, empty states and fetches inside SURVIVING modules** that reference
+ *     a hidden feature. These are unreachable by any of the levers above,
+ *     because they live in modules that are not hidden: the onboarding MCP step
+ *     and its hub fetch, the memory-setup step's copy, the skills empty state,
+ *     the MCP user-policy admin copy, the model-capabilities tooltip, and the
+ *     llm-provider download widget's hub lookup (which would otherwise trigger a
+ *     lazy-store init and fire live `/api/hub/*` requests).
+ *  6. `chat/core/utils/citationTokenize.ts` — chat CORE turns every bare `[n]`
+ *     in an assistant message into a knowledge-base citation chip; with the KB
+ *     hidden that chip is dead but still focusable and announced.
  *
  * Keys differ per consumer, which is why there are two sets: the loader and the
  * desktop blocklist match on `metadata.name`, while the two globs only ever see
