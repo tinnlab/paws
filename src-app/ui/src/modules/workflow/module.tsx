@@ -45,7 +45,13 @@ export default createModule({
     description: 'Declarative multi-step LLM workflows',
   },
   // smart-loading gate (build-lifted into the manifest)
-  shouldLoad: (ctx) => ctx.isAuthenticated,
+  // paws: HIDDEN (design item 6). Was `(ctx) => ctx.isAuthenticated`.
+  // Source of truth is PAWS_HIDDEN_MODULE_NAMES in `@/modules/pawsHiddenModules`;
+  // this literal cannot import it (the manifest plugin lifts the predicate
+  // verbatim and rejects free identifiers), so `pawsHiddenModules.test.ts` binds
+  // the two together. Restore by deleting the entry there and putting the old
+  // predicate back.
+  shouldLoad: () => false,
   dependencies: ['router'],
   stores: [
     // BOOT-EAGER (always-mounted overlay) — must stay registered.

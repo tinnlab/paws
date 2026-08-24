@@ -16,7 +16,13 @@ export default createModule({
     description: 'Document RAG: semantic + full-text search over project/conversation files.',
   },
   // smart-loading gate (build-lifted into the manifest)
-  shouldLoad: (ctx) => ctx.isAuthenticated && ctx.can(Permissions.FileRagAdminRead),
+  // paws: HIDDEN (design item 10) — was
+  // `(ctx) => ctx.isAuthenticated && ctx.can(Permissions.FileRagAdminRead)`.
+  // Source of truth: PAWS_HIDDEN_MODULE_NAMES in `@/modules/pawsHiddenModules`
+  // (this literal cannot import it; `pawsHiddenModules.test.ts` binds them).
+  // The route/slot keep their `permission` gates so restoring the predicate
+  // restores the ORIGINAL admin gating, not an ungated page.
+  shouldLoad: () => false,
   dependencies: ['router'],
   routes: [
     {

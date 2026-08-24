@@ -28,11 +28,19 @@ pub struct WebSearchExtension {
     // extensions; not read yet.
     #[allow(dead_code)]
     pool: PgPool,
+    /// The deploy-level `web_search.enabled` kill switch, resolved once at
+    /// extension construction (mirrors `LitSearchExtension`). Checked BEFORE the
+    /// DB gate so a stale enabled `mcp_servers` / settings row from a boot when
+    /// the feature was on can never re-attach the tools.
+    config_enabled: bool,
 }
 
 impl WebSearchExtension {
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+    pub fn new(pool: PgPool, config_enabled: bool) -> Self {
+        Self {
+            pool,
+            config_enabled,
+        }
     }
 }
 
@@ -122,12 +130,39 @@ mod tests {
         }
         assert!(matches!(msgs[1].role, Role::User));
     }
+
+    // TEST-10 (paws-feature-surface): the deploy kill switch must short-circuit
+    // `should_attach` BEFORE it consults the database.
+    //
+    // This is the INV-3 hole this branch closes: the factory used to discard the
+    // config entirely, so with `web_search: { enabled: false }` a settings /
+    // provider row surviving from a boot when the feature WAS enabled still
+    // opened the attach gate and the model was still offered the tools.
+    //
+    // Asserting it without a database is the point — the gate must return false
+    // without ever reaching `Repos`. If the `config_enabled` check were removed
+    // or moved below the queries, this test panics on the missing DB pool rather
+    // than passing quietly, which is exactly the failure signal we want.
+    #[tokio::test]
+    async fn kill_switch_blocks_attach_without_touching_the_db() {
+        let ext = WebSearchExtension::new(PgPool::connect_lazy("postgres://invalid").unwrap(), false);
+        assert_eq!(
+            ext.should_attach().await.unwrap(),
+            false,
+            "web_search.enabled=false must block attach regardless of DB state"
+        );
+    }
 }
 
 impl WebSearchExtension {
     /// True when web search is enabled AND ≥1 provider in the chain is
     /// configured (so the attached tools won't immediately error).
     async fn should_attach(&self) -> Result<bool, AppError> {
+        // Deploy-level kill switch wins, and is checked FIRST — both because it
+        // is not overridable by any DB state and because it saves two queries.
+        if !self.config_enabled {
+            return Ok(false);
+        }
         let settings = Repos.web_search.get_settings().await?;
         let rows = Repos.web_search.list_providers().await?;
         Ok(providers::attach_gate_open(&settings, &rows))

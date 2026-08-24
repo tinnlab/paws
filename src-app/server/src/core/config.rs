@@ -42,17 +42,24 @@ pub struct Config {
     pub code_sandbox: Option<CodeSandboxConfig>,
     #[serde(default)]
     pub bio_mcp: Option<BioMcpConfig>,
+    /// Live literature search. **Absent = DISABLED on paws** (design item 2).
+    /// Turn on with `lit_search: { enabled: true }`.
     #[serde(default)]
     pub lit_search: Option<LitSearchConfig>,
+    /// Web search + page fetch. **Absent = DISABLED on paws** (design item 1).
+    /// Turn on with `web_search: { enabled: true }`.
     #[serde(default)]
     pub web_search: Option<WebSearchConfig>,
 
-    /// Voice dictation (managed whisper.cpp speech-to-text runtime). Absent =
-    /// enabled. Deploy-level kill switch: `voice: { enabled: false }`.
+    /// Voice dictation (managed whisper.cpp speech-to-text runtime).
+    /// **Absent = DISABLED on paws** (design item 4). Turn on with
+    /// `voice: { enabled: true }`.
     #[serde(default)]
     pub voice: Option<VoiceConfig>,
     #[serde(default)]
     pub control_mcp: Option<ControlMcpConfig>,
+    /// Programmatic tools (`run_js`). **Absent = DISABLED on paws**
+    /// (design item 5). Turn on with `js_tool: { enabled: true }`.
     #[serde(default)]
     pub js_tool: Option<JsToolConfig>,
     /// Background-run backbone (`background_mcp`) tunables. Absent = all defaults
@@ -206,21 +213,24 @@ impl Default for BioMcpConfig {
 ///
 /// Connected-only: the connectors query live public APIs (Europe PMC,
 /// Crossref, Semantic Scholar, PubMed, arXiv, CORE), so **query terms egress**.
-/// On by default for connected deployments. IP-sensitive operators turn it off
-/// with `lit_search: { enabled: false }` — a **deploy-level** kill switch that
-/// an admin cannot re-enable (distinct from the runtime admin toggle, the
-/// `lit_search_settings.enabled` row). When false, `init()` returns before the
-/// MCP row upsert, so the tools are never registered.
+/// IP-sensitive operators turn it off with `lit_search: { enabled: false }` — a
+/// **deploy-level** kill switch that an admin cannot re-enable (distinct from
+/// the runtime admin toggle, the `lit_search_settings.enabled` row). When false,
+/// `init()` returns before the MCP row upsert, so the tools are never
+/// registered.
+///
+/// **paws: OFF by default** (design item 2, `docs/design/paws-feature-surface.md`).
+/// Re-enable a deployment with `lit_search: { enabled: true }`.
 #[derive(Debug, Deserialize, Clone)]
 pub struct LitSearchConfig {
     /// Master switch. When false, the module's `init()` returns early (no MCP
-    /// row upsert). Defaults to true.
+    /// row upsert). Defaults to FALSE on paws.
     #[serde(default = "default_lit_search_enabled")]
     pub enabled: bool,
 }
 
 fn default_lit_search_enabled() -> bool {
-    true
+    false
 }
 
 impl Default for LitSearchConfig {
@@ -265,19 +275,23 @@ impl Default for BackgroundMcpConfig {
 /// Configuration for the `js_tool` built-in (`run_js` programmatic tool calling).
 /// The embedded QuickJS interpreter runs IN-PROCESS with zero ambient capability
 /// and only exposes tools the conversation already has (mutating sub-tools still
-/// require per-call approval), so it is on by default. A deploy-level operator
-/// turns it off with `js_tool: { enabled: false }` — a kill switch an admin
-/// cannot re-enable. When false, the chat extension never sets the attach flag,
-/// so `run_js` is never offered to any model.
+/// require per-call approval). A deploy-level operator controls it with
+/// `js_tool: { enabled: … }` — a kill switch an admin cannot re-enable. When
+/// false, the chat extension never sets the attach flag, so `run_js` is never
+/// offered to any model.
+///
+/// **paws: OFF by default** (design item 5, `docs/design/paws-feature-surface.md`).
+/// Re-enable a deployment with `js_tool: { enabled: true }`.
 #[derive(Debug, Deserialize, Clone)]
 pub struct JsToolConfig {
-    /// Master switch. When false, `run_js` is never attached. Defaults to true.
+    /// Master switch. When false, `run_js` is never attached. Defaults to FALSE
+    /// on paws.
     #[serde(default = "default_js_tool_enabled")]
     pub enabled: bool,
 }
 
 fn default_js_tool_enabled() -> bool {
-    true
+    false
 }
 
 impl Default for JsToolConfig {
@@ -294,17 +308,22 @@ impl Default for JsToolConfig {
 /// `web_search: { enabled: false }` — a **deploy-level** kill switch an admin
 /// cannot re-enable (distinct from the runtime `web_search_settings.enabled`
 /// row). When false, `init()` returns before the MCP row upsert, so the tools
-/// are never registered. Mirrors [`LitSearchConfig`].
+/// are never registered, AND the chat extension refuses to attach even if a
+/// stale enabled `mcp_servers` row survives from a prior boot. Mirrors
+/// [`LitSearchConfig`].
+///
+/// **paws: OFF by default** (design item 1, `docs/design/paws-feature-surface.md`).
+/// Re-enable a deployment with `web_search: { enabled: true }`.
 #[derive(Debug, Deserialize, Clone)]
 pub struct WebSearchConfig {
     /// Master switch. When false, the module's `init()` returns early (no MCP
-    /// row upsert). Defaults to true.
+    /// row upsert). Defaults to FALSE on paws.
     #[serde(default = "default_web_search_enabled")]
     pub enabled: bool,
 }
 
 fn default_web_search_enabled() -> bool {
-    true
+    false
 }
 
 impl Default for WebSearchConfig {
@@ -319,17 +338,23 @@ impl Default for WebSearchConfig {
 /// speech-to-text). Fully local — no cloud STT. `voice: { enabled: false }` is a
 /// **deploy-level** kill switch an admin cannot re-enable (distinct from the
 /// runtime `voice_runtime_settings.enabled` toggle). When false, `init()`
-/// returns before spawning the reaper / registering surfaces.
+/// returns before spawning the reaper / registering surfaces, AND
+/// `register_routes()` mounts nothing — so the transcribe/capability endpoints
+/// are unreachable and the composer's dictation button has no capability to
+/// discover.
+///
+/// **paws: OFF by default** (design item 4, `docs/design/paws-feature-surface.md`).
+/// Re-enable a deployment with `voice: { enabled: true }`.
 #[derive(Debug, Deserialize, Clone)]
 pub struct VoiceConfig {
     /// Master switch. When false, the module's `init()` returns early. Defaults
-    /// to true.
+    /// to FALSE on paws.
     #[serde(default = "default_voice_enabled")]
     pub enabled: bool,
 }
 
 fn default_voice_enabled() -> bool {
-    true
+    false
 }
 
 impl Default for VoiceConfig {
@@ -430,6 +455,50 @@ pub struct AppConfig {
 }
 
 impl Config {
+    // ── Deploy-level feature kill switches ───────────────────────────────────
+    //
+    // Read a switch through these accessors, NEVER by hand-rolling
+    // `config.<f>.as_ref().map(|c| c.enabled).unwrap_or(<default>)` at the call
+    // site. Each switch has ~4-6 read sites (init, register_routes, the chat
+    // extension factory, several handlers); with the default written out at each
+    // one, flipping a feature off means finding every copy, and the one that is
+    // missed fails OPEN — the feature stays reachable while the config claims it
+    // is off. That is not hypothetical: these switches previously defaulted
+    // `true` at every site, so changing the `default_*_enabled()` fn alone would
+    // have disabled the feature ONLY when the YAML key was present-but-empty,
+    // and left the common absent-key case fully enabled.
+    //
+    // The absent-key default now comes from the SAME `Default` impl as the
+    // present-but-empty case, so the two can never disagree.
+
+    /// Web search + page fetch (`web_search`). paws default: OFF.
+    pub fn web_search_enabled(&self) -> bool {
+        self.web_search
+            .as_ref()
+            .map_or_else(|| WebSearchConfig::default().enabled, |c| c.enabled)
+    }
+
+    /// Live literature search (`lit_search`). paws default: OFF.
+    pub fn lit_search_enabled(&self) -> bool {
+        self.lit_search
+            .as_ref()
+            .map_or_else(|| LitSearchConfig::default().enabled, |c| c.enabled)
+    }
+
+    /// Voice dictation runtime (`voice`). paws default: OFF.
+    pub fn voice_enabled(&self) -> bool {
+        self.voice
+            .as_ref()
+            .map_or_else(|| VoiceConfig::default().enabled, |c| c.enabled)
+    }
+
+    /// Programmatic tools / `run_js` (`js_tool`). paws default: OFF.
+    pub fn js_tool_enabled(&self) -> bool {
+        self.js_tool
+            .as_ref()
+            .map_or_else(|| JsToolConfig::default().enabled, |c| c.enabled)
+    }
+
     pub fn load_from(
         config_path: Option<String>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
@@ -571,38 +640,105 @@ fn find_available_port(start_port: u16, end_port: u16) -> Option<u16> {
 }
 
 #[cfg(test)]
-mod voice_config_tests {
-    use super::VoiceConfig;
+mod paws_kill_switch_tests {
+    use super::Config;
 
-    // serde_json keeps the test dependency-free; VoiceConfig derives Deserialize
-    // so the wire format is irrelevant to what we assert. Mirrors how the module
-    // resolves the deploy-level kill switch:
-    //   config.voice.as_ref().map(|c| c.enabled).unwrap_or(true)   (voice/mod.rs)
-
-    /// The exact gate the module applies: an absent `voice:` section (None) means
-    /// ENABLED; only an explicit `enabled: false` disables it.
-    fn resolve(cfg: Option<VoiceConfig>) -> bool {
-        cfg.as_ref().map(|c| c.enabled).unwrap_or(true)
+    // TEST-9 (paws-feature-surface): the four capabilities the paws feature
+    // surface disables (design items 1, 2, 4, 5) are OFF when their config key is
+    // absent, and turn back ON with an explicit `enabled: true`.
+    //
+    // These assert through the `Config` ACCESSORS, not through a local copy of
+    // the resolution expression. The previous version of this test re-implemented
+    // the gate inline (`cfg.map(|c| c.enabled).unwrap_or(true)`) and so could only
+    // ever confirm its own arithmetic — it would have stayed green while the real
+    // read sites disagreed with it. The accessors are what the modules call.
+    //
+    // serde_norway parses the same YAML the operator writes, so the absent-key
+    // path is exercised for real rather than simulated with `None`.
+    /// Parse the REAL shipped default config with `yaml` appended, so the
+    /// absent-key path is exercised against a config an operator actually boots
+    /// from rather than a hand-rolled stub. `packaging/config.default.yaml`
+    /// mentions none of the four switches (verified by
+    /// `absent_keys_default_to_disabled` below), which is precisely why the
+    /// absent-key default is the case that matters.
+    fn parse(yaml: &str) -> Config {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../packaging/config.default.yaml"
+        );
+        let base = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+        assert!(
+            !base.contains("web_search")
+                && !base.contains("lit_search")
+                && !base.contains("voice:")
+                && !base.contains("js_tool"),
+            "the packaged default must not set these keys, or this test's \
+             absent-key path is not actually absent"
+        );
+        serde_norway::from_str(&format!("{base}\n{yaml}")).expect("config must parse")
     }
 
     #[test]
-    fn absent_voice_section_defaults_to_enabled() {
-        assert!(resolve(None), "an absent voice: config must default to enabled");
-        // And an empty block `voice: {}` (present but no fields) is also enabled.
-        let empty: VoiceConfig = serde_json::from_str("{}").unwrap();
-        assert!(empty.enabled);
-        assert!(resolve(Some(empty)));
+    fn absent_keys_default_to_disabled() {
+        let cfg = parse("");
+        assert!(!cfg.web_search_enabled(), "web_search must default OFF on paws");
+        assert!(!cfg.lit_search_enabled(), "lit_search must default OFF on paws");
+        assert!(!cfg.voice_enabled(), "voice must default OFF on paws");
+        assert!(!cfg.js_tool_enabled(), "js_tool must default OFF on paws");
     }
 
     #[test]
-    fn explicit_enabled_false_disables() {
-        let cfg: VoiceConfig = serde_json::from_str(r#"{"enabled":false}"#).unwrap();
-        assert!(!cfg.enabled);
-        assert!(!resolve(Some(cfg)), "voice enabled:false must disable");
+    fn present_but_empty_block_also_disabled() {
+        // `web_search: {}` takes the serde field-default path rather than the
+        // absent-key path. The two MUST agree — they disagreed before this
+        // change, which is the bug the shared accessors exist to prevent.
+        let cfg = parse(
+            "\
+web_search: {}
+lit_search: {}
+voice: {}
+js_tool: {}
+",
+        );
+        assert!(!cfg.web_search_enabled());
+        assert!(!cfg.lit_search_enabled());
+        assert!(!cfg.voice_enabled());
+        assert!(!cfg.js_tool_enabled());
+    }
 
-        let on: VoiceConfig = serde_json::from_str(r#"{"enabled":true}"#).unwrap();
-        assert!(on.enabled);
-        assert!(resolve(Some(on)));
+    #[test]
+    fn explicit_true_re_enables() {
+        // INV-5: the reduction is reversible by configuration. A deployment that
+        // wants a capability back sets one key.
+        let cfg = parse(
+            "\
+web_search:
+  enabled: true
+lit_search:
+  enabled: true
+voice:
+  enabled: true
+js_tool:
+  enabled: true
+",
+        );
+        assert!(cfg.web_search_enabled());
+        assert!(cfg.lit_search_enabled());
+        assert!(cfg.voice_enabled());
+        assert!(cfg.js_tool_enabled());
+    }
+
+    #[test]
+    fn bio_mcp_is_untouched_by_the_reduction() {
+        // bio_mcp is NOT one of the 13 items — it appears in the design only as
+        // an example of an existing kill switch. Its absent-key default must stay
+        // ENABLED, or this branch has silently disabled a feature nobody asked to
+        // disable.
+        let cfg = parse("");
+        assert!(
+            cfg.bio_mcp.as_ref().map(|c| c.enabled).unwrap_or(true),
+            "bio_mcp must remain enabled by default"
+        );
     }
 }
 

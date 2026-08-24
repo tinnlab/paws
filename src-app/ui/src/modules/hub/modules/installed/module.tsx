@@ -26,12 +26,14 @@ export default createModule({
   // Loose gate matching the Installed tab's own read perm — any of the three
   // hub-read perms (ctx.can takes one perm, so OR them). Gating on HubModelsRead
   // alone wrongly excluded assistants-only / mcp-only users from their Installed tab.
-  shouldLoad: (ctx) =>
-    ctx.isAuthenticated &&
-    (ctx.can(Permissions.HubModelsRead) ||
-      ctx.can(Permissions.HubAssistantsRead) ||
-      ctx.can(Permissions.HubMCPServersRead)) &&
-    (ctx.path === '/hub' || ctx.path.startsWith('/hub/')),
+  // paws: HIDDEN with its parent hub (design item 11). Restore by putting back:
+  //   (ctx) => ctx.isAuthenticated &&
+  //     (ctx.can(Permissions.HubModelsRead) ||
+  //      ctx.can(Permissions.HubAssistantsRead) ||
+  //      ctx.can(Permissions.HubMCPServersRead)) &&
+  //     (ctx.path === '/hub' || ctx.path.startsWith('/hub/'))
+  // and deleting 'hub-installed' from PAWS_HIDDEN_MODULE_NAMES.
+  shouldLoad: () => false,
   dependencies: [],
   slots: {
     hubTabs: [

@@ -9,6 +9,7 @@ import {
 import { useAuthStore } from '@/modules/auth/Auth.store'
 import { useAppStore } from '@/modules/app/stores/app'
 import { buildLoadContext } from '@/modules/loadContext'
+import { isPawsHiddenModuleName } from '@/modules/pawsHiddenModules'
 
 /**
  * SMART module loader.
@@ -185,6 +186,17 @@ export function isPathModulePending(pathname: string): boolean {
 export function isPathModuleForbidden(pathname: string): boolean {
   const entry = entryForPath(manifest, pathname)
   if (!entry) return false
+  // paws feature-surface reduction: a hidden module's routes stay in the build
+  // manifest (the plugin collects `routePaths` regardless of the predicate), so
+  // without this branch `/workflows` would render the in-place 403 and tell the
+  // user they lack PERMISSION for a feature this instance simply does not have.
+  // Treat a hidden module as having no owner, so the path falls through to the
+  // normal not-found handling — which is already what desktop does, since its
+  // loader stubs this to `false` (`loader.desktop.ts`).
+  //
+  // This is a presentation change only: the module's code is not delivered in
+  // either case, so nothing here widens what a user can reach.
+  if (isPawsHiddenModuleName(entry.name)) return false
   return !isEligible(entry, buildLoadContext(pathname))
 }
 

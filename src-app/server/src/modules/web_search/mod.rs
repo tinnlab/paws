@@ -82,16 +82,12 @@ impl AppModule for WebSearchModule {
     fn init(&mut self, ctx: &ModuleContext) -> Result<(), Box<dyn Error>> {
         self.pool = Some(ctx.db_pool.clone());
 
-        // Deploy-level kill switch — ON by default (an absent `web_search:`
-        // config section means enabled). IP-sensitive operators opt OUT with
-        // `web_search: { enabled: false }` so query terms never egress; an
-        // admin cannot re-enable it (distinct from the runtime
-        // `web_search_settings.enabled` toggle). Mirrors lit_search.
-        let enabled = crate::module_api::app_config(ctx)
-            .web_search
-            .as_ref()
-            .map(|c| c.enabled)
-            .unwrap_or(true);
+        // Deploy-level kill switch — OFF by default on paws (design item 1), so
+        // query terms never egress. Operators opt IN with
+        // `web_search: { enabled: true }`; an admin cannot re-enable it
+        // (distinct from the runtime `web_search_settings.enabled` toggle).
+        // Mirrors lit_search.
+        let enabled = crate::module_api::app_config(ctx).web_search_enabled();
         if !enabled {
             tracing::info!("web_search: disabled in config; skipping registration");
             return Ok(());

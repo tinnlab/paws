@@ -60,8 +60,11 @@ pub fn run_js_mcp_server_id() -> Uuid {
 }
 
 /// Is the js_tool feature enabled for this deployment (config kill switch)?
+///
+/// paws default: OFF (design item 5). Delegates to the single accessor so the
+/// absent-key default cannot drift from the present-but-empty one.
 pub fn is_enabled(config: &crate::core::config::Config) -> bool {
-    config.js_tool.as_ref().map(|c| c.enabled).unwrap_or(true)
+    config.js_tool_enabled()
 }
 
 #[distributed_slice(MODULE_ENTRIES)]
@@ -155,10 +158,12 @@ mod tests {
         assert_eq!(JsToolModule::new().name(), "js_tool");
     }
 
-    // TEST-26: config defaults to enabled; an explicit false disables.
+    // TEST-9 (paws-feature-surface): config defaults to DISABLED on paws
+    // (design item 5); an explicit true re-enables. Replaces the former
+    // assertion that the default was `true`.
     #[test]
-    fn config_default_enabled() {
-        assert!(crate::core::config::JsToolConfig::default().enabled);
-        assert!(!crate::core::config::JsToolConfig { enabled: false }.enabled);
+    fn config_default_disabled_on_paws() {
+        assert!(!crate::core::config::JsToolConfig::default().enabled);
+        assert!(crate::core::config::JsToolConfig { enabled: true }.enabled);
     }
 }

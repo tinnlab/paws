@@ -19,10 +19,11 @@ export default createModule({
     description: 'Hub catalog for MCP servers',
   },
   // smart-loading gate (build-lifted into the manifest)
-  shouldLoad: (ctx) =>
-    ctx.isAuthenticated &&
-    ctx.can(Permissions.HubMCPServersRead) &&
-    (ctx.path === '/hub' || ctx.path.startsWith('/hub/')),
+  // paws: HIDDEN with its parent hub (design item 11). Restore by putting back:
+  //   (ctx) => ctx.isAuthenticated && ctx.can(Permissions.HubMCPServersRead) &&
+  //     (ctx.path === '/hub' || ctx.path.startsWith('/hub/'))
+  // and deleting 'hub-mcp' from PAWS_HIDDEN_MODULE_NAMES.
+  shouldLoad: () => false,
   dependencies: [],
   stores: [],
   slots: {

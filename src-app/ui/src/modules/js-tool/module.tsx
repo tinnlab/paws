@@ -19,7 +19,12 @@ export default createModule({
     description: 'Admin-configurable resource limits for the built-in run_js tool',
   },
   // smart-loading gate (build-lifted into the manifest)
-  shouldLoad: (ctx) => ctx.isAuthenticated && ctx.can(Permissions.JsToolSettingsRead),
+  // paws: HIDDEN (design item 5, hide + disable) — was
+  // `(ctx) => ctx.isAuthenticated && ctx.can(Permissions.JsToolSettingsRead)`.
+  // Source of truth: PAWS_HIDDEN_MODULE_NAMES in `@/modules/pawsHiddenModules`
+  // (this literal cannot import it; `pawsHiddenModules.test.ts` binds them).
+  // The capability itself is off via the server `js_tool.enabled` switch.
+  shouldLoad: () => false,
   dependencies: ['router'],
   routes: [
     {

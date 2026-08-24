@@ -175,18 +175,19 @@ impl DesktopModule for BackendModule {
         let bio_cfg = config.bio_mcp.get_or_insert_with(Default::default);
         bio_cfg.enabled = true;
 
-        // Web Search: force the master config switch on so the built-in
-        // web_search MCP server registers on desktop. Like BioMCP it's
-        // connected-only and self-gates at attach time — the chat
-        // extension only attaches the tools when web search is enabled in
-        // admin settings AND at least one chain provider is configured, so
-        // an unconfigured / offline desktop user isn't broken; the tools
-        // simply stay unattached. The matching admin UI module
-        // (/settings/web-search) is NOT in CORE_MODULE_BLOCKLIST, so the
-        // desktop user can configure providers. (Mirrors lit_search, whose
-        // config switch also defaults on.)
-        let web_search_cfg = config.web_search.get_or_insert_with(Default::default);
-        web_search_cfg.enabled = true;
+        // Web Search: NOT forced on. paws disables it at the deploy level
+        // (design item 1, docs/design/paws-feature-surface.md), and this
+        // override used to defeat that: `get_or_insert_with(..).enabled = true`
+        // writes unconditionally, so it overwrote an operator's explicit
+        // `web_search: { enabled: false }` as well as the default. The desktop
+        // build is the paws target, so forcing it on here would have made the
+        // kill switch a no-op on the very platform it needs to work.
+        //
+        // Re-enabling for a desktop build is a config change
+        // (`web_search: { enabled: true }`), not a code change.
+        //
+        // NOTE bio_mcp above is deliberately still forced on — it is not one of
+        // the 13 items in the feature-surface reduction.
 
         tracing::info!("Backend will use port {}", port);
 

@@ -21,7 +21,14 @@ export default createModule({
     description: 'Voice dictation: whisper runtime + model + settings admin',
   },
   // smart-loading gate (build-lifted into the manifest)
-  shouldLoad: (ctx) => ctx.isAuthenticated && ctx.can(Permissions.VoiceAdminRead),
+  // paws: HIDDEN (design item 4, hide + disable) — was
+  // `(ctx) => ctx.isAuthenticated && ctx.can(Permissions.VoiceAdminRead)`.
+  // Source of truth: PAWS_HIDDEN_MODULE_NAMES in `@/modules/pawsHiddenModules`
+  // (this literal cannot import it; `pawsHiddenModules.test.ts` binds them).
+  // This hides the ADMIN page only; the composer dictation button lives in
+  // `chat/extensions/voice/` and is dropped by the chat discovery filter, and
+  // the capability itself is off via the server `voice.enabled` switch.
+  shouldLoad: () => false,
   dependencies: ['router'],
   routes: [
     {

@@ -34,11 +34,17 @@ export default createModule({
   // sidebar entry) — NOT just HubModelsRead, or an MCP-servers-only user can't
   // load the hub module and loses its sidebar entry / page. `ctx.can` takes a
   // single permission, so OR the three explicitly.
-  shouldLoad: (ctx) =>
-    ctx.isAuthenticated &&
-    (ctx.can(Permissions.HubModelsRead) ||
-      ctx.can(Permissions.HubAssistantsRead) ||
-      ctx.can(Permissions.HubMCPServersRead)),
+  // paws: HIDDEN (design item 11). The original predicate is preserved in the
+  // comment above and below; source of truth is PAWS_HIDDEN_MODULE_NAMES in
+  // `@/modules/pawsHiddenModules` (this literal cannot import it;
+  // `pawsHiddenModules.test.ts` binds them). Restoring means putting back:
+  //   (ctx) => ctx.isAuthenticated &&
+  //     (ctx.can(Permissions.HubModelsRead) ||
+  //      ctx.can(Permissions.HubAssistantsRead) ||
+  //      ctx.can(Permissions.HubMCPServersRead))
+  // The six hub/modules/* sub-modules are SEPARATE manifest entries and are
+  // hidden individually — hiding this parent does not hide them.
+  shouldLoad: () => false,
   dependencies: ['router'],
   // NOTE: HubCatalog / HubInstalled are page stores (the /hub page). They are
   // registerLazyStore proxies that self-register when the lazy HubPage imports

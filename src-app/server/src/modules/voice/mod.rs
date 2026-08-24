@@ -89,15 +89,11 @@ impl AppModule for VoiceModule {
     fn init(&mut self, ctx: &ModuleContext) -> Result<(), Box<dyn Error>> {
         self.pool = Some(ctx.db_pool.clone());
 
-        // Deploy-level kill switch — ON by default (an absent `voice:` config
-        // section means enabled). Operators opt OUT with `voice: { enabled:
-        // false }`; an admin cannot re-enable it (distinct from the runtime
-        // `voice_runtime_settings.enabled` toggle).
-        let enabled = crate::module_api::app_config(ctx)
-            .voice
-            .as_ref()
-            .map(|c| c.enabled)
-            .unwrap_or(true);
+        // Deploy-level kill switch — OFF by default on paws (design item 4).
+        // Operators opt IN with `voice: { enabled: true }`; an admin cannot
+        // re-enable it (distinct from the runtime `voice_runtime_settings.enabled`
+        // toggle).
+        let enabled = crate::module_api::app_config(ctx).voice_enabled();
         self.enabled = enabled;
         if !enabled {
             tracing::info!("voice: disabled in config; skipping reaper + route registration");

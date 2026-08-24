@@ -46,6 +46,7 @@
 import { useEffect, useState } from 'react'
 import { chatExtensionRegistry } from '@/modules/chat/core/extensions'
 import type { ChatExtension } from '@/modules/chat/core/extensions'
+import { shouldRegisterDiscoveredExtension } from '@/modules/pawsHiddenModules'
 
 // LAZY globs (no `{ eager: true }`): each extension.tsx becomes its OWN chunk
 // instead of being inlined into the eager chat module → the entry chunk. Every
@@ -65,8 +66,23 @@ const siblingModuleExtensions = import.meta.glob<{ default: ChatExtension }>(
 /** Resolves once every discovered chat-extension has been registered. */
 export const chatExtensionsReady: Promise<void> = (async () => {
   const loaders = { ...inChatExtensions, ...siblingModuleExtensions }
+  // paws feature-surface reduction: drop the chat-side half of a hidden feature.
+  //
+  // This filter is NOT redundant with the modules' `shouldLoad` predicates. This
+  // glob belongs to the CHAT module and runs whenever chat loads, so without it
+  // a hidden module still contributes its composer pill, toolbar status row,
+  // panel renderer and rail steps — the module predicate never gets consulted.
+  // It also covers `chat/extensions/{schedule,voice}`, which are chat-owned
+  // affordances for hidden features and have no manifest entry at all.
+  //
+  // Filtering here (before `load()`) rather than after also means the hidden
+  // extension's chunk is never fetched. Source of truth:
+  // `@/modules/pawsHiddenModules`.
+  const eligible = Object.entries(loaders).filter(([path]) =>
+    shouldRegisterDiscoveredExtension(path),
+  )
   const modules = await Promise.all(
-    Object.entries(loaders).map(async ([path, load]) => ({
+    eligible.map(async ([path, load]) => ({
       path,
       ext: (await load()).default,
     })),

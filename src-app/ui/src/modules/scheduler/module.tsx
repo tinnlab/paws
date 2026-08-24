@@ -33,7 +33,10 @@ export default createModule({
     description: 'Scheduled / recurring tasks',
   },
   // smart-loading gate (build-lifted into the manifest)
-  shouldLoad: (ctx) => ctx.isAuthenticated,
+  // paws: HIDDEN (design item 7) — was `(ctx) => ctx.isAuthenticated`. Source of
+  // truth: PAWS_HIDDEN_MODULE_NAMES in `@/modules/pawsHiddenModules` (this
+  // literal cannot import it; `pawsHiddenModules.test.ts` binds them).
+  shouldLoad: () => false,
   dependencies: ['router'],
   routes: [
     {

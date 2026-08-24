@@ -19,15 +19,10 @@ pub const METADATA: ExtensionMetadata = ExtensionMetadata {
 };
 
 pub fn create(pool: PgPool, config: Arc<crate::core::config::Config>) -> Arc<dyn ChatExtension> {
-    // Deploy-level kill switch — ON by default (an absent `lit_search:` config
-    // section means enabled), mirroring `lit_search::mod::init`. When off, the
-    // extension must never attach even if a stale enabled row survives from a
-    // prior boot.
-    let config_enabled = config
-        .lit_search
-        .as_ref()
-        .map(|c| c.enabled)
-        .unwrap_or(true);
+    // Deploy-level kill switch — OFF by default on paws, mirroring
+    // `lit_search::mod::init`. When off, the extension must never attach even if
+    // a stale enabled row survives from a prior boot.
+    let config_enabled = config.lit_search_enabled();
     Arc::new(super::lit_search::LitSearchExtension::new(
         pool,
         config_enabled,

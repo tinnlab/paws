@@ -19,8 +19,21 @@ pub const METADATA: ExtensionMetadata = ExtensionMetadata {
     order: 26,
 };
 
-pub fn create(pool: PgPool, _config: Arc<crate::core::config::Config>) -> Arc<dyn ChatExtension> {
-    Arc::new(super::web_search::WebSearchExtension::new(pool))
+pub fn create(pool: PgPool, config: Arc<crate::core::config::Config>) -> Arc<dyn ChatExtension> {
+    // Deploy-level kill switch, mirroring `lit_search` / `bio_mcp` / `js_tool`.
+    //
+    // This factory previously DISCARDED the config, and `should_attach` consults
+    // only DB rows — so with `web_search: { enabled: false }` the module's
+    // `init()` skipped its MCP row upsert but a row left over from a boot when
+    // the feature WAS enabled still satisfied the attach gate, and the model was
+    // still offered the web_search tools. The kill switch therefore did not
+    // actually make the capability unreachable. `lit_search` guards exactly this
+    // case and says so in its own comment; web_search was the odd one out.
+    let config_enabled = config.web_search_enabled();
+    Arc::new(super::web_search::WebSearchExtension::new(
+        pool,
+        config_enabled,
+    ))
 }
 
 #[distributed_slice(CHAT_EXTENSIONS)]
