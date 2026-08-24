@@ -370,3 +370,49 @@ not this feature's to make unilaterally.
   `tokio::time::timeout` around the `stream.next()` await rather than around the
   whole download. Not applied: it changes shared git-utils behaviour for every
   LFS consumer, and the owner's decision on DEC-15 is still open.
+
+## Fix rounds 3-5 (FB-5 … FB-8)
+
+- **DEC-20 — LFS progress is forwarded through a helper that OWNS both channel
+  ends, throttled to 1 write/s, in BYTES.**
+  The defect was a receiver nobody read. Rather than fix the call site and trust
+  the next edit, `lfs_progress::spawn_forwarder` returns only the sender, so
+  "bind a receiver and forget it" is no longer expressible there. Throttle: 1
+  write/second — `LfsProgress` fires per HTTP chunk (order 10^5–10^6 for 5.68 GB)
+  and per-chunk UPDATEs would be a self-inflicted DoS; 1 s is far below human
+  reading speed yet visibly live. Units: BYTES, because `DownloadItem.tsx` runs
+  these fields through `formatBytes` — the pre-existing `current: 20, total: 100`
+  was literally rendering as "20 B / 100 B". `speed_bps`/`eta_seconds` are now
+  filled rather than left at 0: after DEC-19 replaced the absolute cap with a
+  stall bound, a visible RATE is exactly what tells a user "slow but alive"
+  instead of "hung", which is the judgement the owner could not make. Progress
+  writes are `let _ =` — reporting must never break the transfer it reports on.
+
+- **DEC-21 — the macOS ggml backend shim SYMLINKS rather than renames.**
+  The engine release ships `libggml-{cpu,blas,metal}.so` inside a macOS bundle
+  with no `.dylib` equivalents. Verified from the published artifact that all
+  three are `Mach-O 64-bit arm64 bundle` — correct binaries, wrong extension —
+  which is what makes aliasing sound rather than a cover-up. Symlink over rename
+  because: the extracted tree stays a faithful copy of the artifact that was
+  downloaded and hash-verified, and `libggml-metal.dylib -> libggml-metal.so` is
+  self-documenting where a rename would look like a correct release. The shim is
+  macOS-only, matches only `libggml-*.so`, never overwrites an existing
+  `.dylib` (so a FIXED future release is untouched), is idempotent, and logs at
+  info so the day it stops firing is visible. The platform gate is separated from
+  the logic so the behaviour is testable on a non-macOS host — a shim only
+  testable on the platform we lack would ship unverified.
+
+- **DEC-22 — the default model installs from `tinnlab/Qwen3.5-9B-GGUF`, the
+  owner's mirror.** Re-derived independently rather than taken on report:
+  anonymous `git ls-remote` from a scrubbed env returns `refs/heads/main` at
+  `d6a7d0fa…`; the blob HEAD returns 302 to a CDN URL carrying `user_id=public`
+  with `x-linked-size: 5680522464` and
+  `x-linked-etag: 03b74727…b7e8`; and the SAME oid and size are returned for
+  `unsloth/Qwen3.5-9B-GGUF`, so the mirror is byte-identical to what shipped
+  before. Rationale: nothing pins a revision at install time (the LFS client asks
+  for `refs/heads/main` and takes what is there), so a shipped first-run flow
+  should not depend on a third-party repo staying put.
+  **The declared sha256 is NOT enforced this round** — the descriptor records it,
+  but nothing compares it to a downloaded file yet. Wiring verification into the
+  server download path is its own change with its own tests and must not ride on
+  a URL swap; tracked as a follow-up in `HUMAN_FEEDBACK.md`.

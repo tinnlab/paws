@@ -220,6 +220,188 @@ would have kept one client, but it makes the tight metadata bound a property of 
 single call site that a later edit can silently drop. Two named clients make
 neither call able to inherit the other's budget by accident.
 
+### FB-5 — the progress bar sat at 0% for the entire multi-GB download
+
+- **FB-5** [status: resolved] — nothing consumed the LFS progress channel, so the
+  download record stayed frozen at "Checking for LFS files...". Now forwarded,
+  throttled, in bytes, with speed and ETA. See DEC-20.
+
+> "it stopped at step 2, showing downloading with 0%, and keep being like that,
+> I'm not sure if it is running or not" … "it only has 0%, but the model is still
+> downloaded."
+
+The transfer was healthy; the UI could not see it. That is its own defect: with
+no resume, a user who concludes the app has hung and kills it loses everything.
+
+**Diagnosis verified — and the reported MECHANISM is wrong in a way that hid a
+second defect.** The brief (and the ledger note it came from) said the receiver
+was "dropped immediately" and every send went into a channel with no receiver,
+failing silently. Not so: `_lfs_progress_rx` is an underscore-PREFIXED BINDING,
+not the bare `_` pattern, so it stays ALIVE to the end of scope. The sends
+therefore SUCCEEDED — and every one of them queued in an unbounded channel that
+nothing drained, for the whole 5.68 GB transfer. So alongside the frozen bar
+there was steady memory growth proportional to chunk count (order 10^5–10^6
+messages, each carrying a heap-allocated `String`), and the converter task inside
+`pull_lfs_files_with_cancellation` never took its `is_err()` break either.
+Consuming the receiver fixes both; had I only "un-dropped" the receiver as
+described, the leak would have survived.
+
+**Also corrected:** the record's `current`/`total` are rendered by
+`DownloadItem.tsx` through `formatBytes`, so the pre-existing `current: 20,
+total: 100` was being shown to users as the literal string **"20 B / 100 B"**.
+They now carry real byte counts.
+
+**Tests** (`llm_model::handlers::lfs_progress::tests`, 7, pure and clock-injected
+— no DB, no sleeping): progress ADVANCES across a transfer; the first
+observation is never withheld (the complaint was a bar pinned at zero); 10,000
+chunk reports coalesce to ≤8 writes; speed/ETA appear once a rate is known and
+are withheld rather than fabricated when it is not; a backwards counter produces
+neither a wrapped nor a negative ETA.
+
+**One of those tests caught a real bug in my own first implementation**: the rate
+window anchored at zero bytes rather than at the first observation, so a transfer
+whose first report was non-zero reported a wildly inflated opening rate, and a
+backwards counter reported a positive one. Fixed by anchoring on first write.
+
+**Stated limit:** no test drives the real handler end-to-end, so what is proven is
+the forwarder's behaviour, not the call site's wiring. The call site is instead
+made correct BY CONSTRUCTION — `spawn_forwarder` hands back only the sender, so
+the original bug is not expressible there.
+
+### FB-6 — "check if user has installed libseccomp … ask user sudo permission"
+
+- **FB-6** [status: wontfix] — investigation only, as scoped. The premise is
+  partly mistaken; the underlying worry is legitimate and there IS a real gap,
+  but it is not the one the question assumes. No code changed.
+
+**1. `libseccomp` is not part of the macOS product at all.** It is Linux-only and
+target-conditional in `server/Cargo.toml`; the macOS bundle never links it. A
+libseccomp check in onboarding would be checking for something that is not used.
+
+**2. I did not add a sudo-install flow, and recommend against one.** A signed,
+notarized `.app` should ship self-contained; prompting for admin rights to
+install system libraries is both a security smell and a distribution smell, and
+it would be the app asking users to work around its own packaging.
+
+**3. The real gap.** `src-app/server/tests/macos_brewless_boot.rs` exists exactly
+to prove the bundle boots with no Homebrew dylibs on the runtime path — it
+poisons `DYLD_LIBRARY_PATH`/`DYLD_FALLBACK_LIBRARY_PATH` so an accidental dlopen
+of a brew dylib fails loudly. It is `#[ignore]`d and referenced by **no**
+workflow. So the one test that would catch "works on the dev's Mac, missing a
+library on the user's Mac" never runs — which is precisely the failure class the
+owner is worried about.
+
+**What I could NOT determine:** the bundle's actual dynamic dependencies. `otool
+-L` needs a Darwin toolchain and this is a Linux box. **Proposed way to get the
+answer:** add a step to the existing macOS `devbuild` GitHub Actions job that
+runs `otool -L` on the built binary plus its bundled dylibs and fails on any
+non-OS, non-bundled path (`/opt/homebrew`, `/usr/local`). That is where the
+question is cheaply answerable, and it is a few lines.
+
+**Recommendation:** wire `macos_brewless_boot` into the macOS CI job (it is
+`--ignored`, boots a libkrun microVM, ~3 s — negligible next to a build) and add
+the `otool -L` assertion beside it. **Owner's call**; I did not implement either.
+
+### FB-7 — the model downloads but never runs: ggml backends are `.so` on macOS
+
+- **FB-7** [status: resolved] — a narrow macOS-only shim ships now so users are
+  unblocked; the REAL fix belongs in the engine release build and is escalated
+  below as the owner's decision. See DEC-21.
+
+**Verified from the published artifact, not taken on report.** I downloaded
+`ziee-ai/llama.cpp` `v0.0.3-alpha` `llama-server-macos-aarch64-metal.tar.gz`
+(HTTP 200, 12,904,087 bytes) on this box and listed it:
+
+- ships `libggml-cpu.so`, `libggml-blas.so`, `libggml-metal.so`
+- ships correct `libggml.dylib`, `libggml-base.dylib`, `libllama.dylib`, …
+- has **no** `.dylib` equivalent for any of the three
+
+`strings libggml.dylib`: the `libggml-` backend-prefix literal and
+`ggml_backend_load_all` / `ggml_backend_load_best` are present; `.so` occurs
+**zero** times.
+
+**A finding the report did not have, and it is the one that makes the shim
+correct:** `file` reports all three `.so` modules as **`Mach-O 64-bit arm64
+bundle`**. They are correct macOS binaries carrying a Linux extension — only the
+NAME is wrong. That is why aliasing them is sound engineering rather than
+papering over a mis-built artifact; had they been ELF, no rename would have
+helped and the whole release would need rebuilding.
+
+**One honest caveat on the mechanism.** The 5 `.dylib` strings in `libggml.dylib`
+are all install-names/dependencies, not a bare `".dylib"` extension literal — a
+6-character string is inlined rather than stored, so `strings` cannot settle how
+the loader builds the filename. The inference (ggml's
+`backend_filename_extension()` returns `.dylib` on Apple) is consistent with
+every piece of evidence and with `.so` appearing zero times, but **it is an
+inference**. The decisive proof is the owner's symlink retest on their Mac. I am
+not claiming the shim works until that returns.
+
+**Escalation — the real fix, and its real cost.** The engine release must name
+macOS backend modules `.dylib`. Two constraints shape how to do that:
+
+- **The engine repos are SHARED with other instances.** Per the owner's standing
+  rule, paws builds any engine fix on its **own repo/branch** first, and whether
+  it ever goes to that repo's `main` is a separate, later decision — same shape
+  as the sdk `paws` branch. So this is explicitly **not** "open a PR upstream".
+- **A shipped app cannot be redirected by configuration.** Verified:
+  `engine_repo()` (`llm_local_runtime/engine/download.rs:241`) returns a
+  hardcoded `&'static str`, and the `LLM_RUNTIME_RELEASE_MIRROR` /
+  `LLM_RUNTIME_API_MIRROR` overrides are `cfg(debug_assertions)` — compiled out
+  of release builds. Pointing paws at a paws-owned engine line therefore needs a
+  **paws code change**, plus its **own GitHub Actions release pipeline on macOS
+  runners**, because the engine is consumed as a release artifact rather than a
+  checkout.
+
+So: the shim is cheap and unblocks users today; owning the engine line is a
+genuine project (own repo + release pipeline + a code change), not a one-line
+redirect. **I did not start that work** — FB-7 is a recommendation.
+
+### FB-8 — the model is stored twice (models 5.3 GB + cache 5.3 GB)
+
+- **FB-8** [status: wontfix] — real and confirmed, but NOT improvised away: it is
+  already bounded by an existing retention policy, and shortening that is a
+  disk-vs-bandwidth product decision. Escalated with a concrete proposal.
+
+**Confirmed at the mechanism:** `uploads.rs` does
+`tokio::fs::copy(&source_path, &dest_path)` from the clone cache into model
+storage and nothing reclaims the cache at the end of the download. So a freshly
+installed 5.68 GB model does occupy ~11.4 GB.
+
+**But it is NOT permanent, which changes the recommendation.** `llm_model::prune`
+already sweeps the git and LFS caches — `evict_dir_by_mtime(git_cache_dir)` and
+`(lfs_cache_dir)` with `CACHE_UNUSED_DAYS = 30`. The duplication therefore
+self-heals after 30 days of non-use; it is a 30-day 2× cost, not a permanent one.
+Reporting it as "every model costs users double" would have overstated it.
+
+**Why I did not just delete the cache after the copy** (the obvious one-liner):
+it changes an existing, deliberate retention policy; the cache legitimately
+serves a second install from the same repo without re-downloading; and a
+concurrent download from the same repo could be reading it. That is exactly the
+"needs a real retention policy, escalate rather than improvise" case.
+
+**Proposal, for the owner to choose:**
+1. *Cheapest and probably right for a desktop app*: after a SUCCESSFUL copy,
+   evict just the LFS object(s) that download materialised, leaving the rest of
+   the cache and the 30-day policy alone. Bounded, targeted, no policy change.
+2. *Policy tuning*: lower `CACHE_UNUSED_DAYS` for the LFS cache specifically —
+   multi-GB blobs are a different economic case from small git objects.
+3. *Make it visible*: surface cache size with a "reclaim" action in settings, so
+   the user decides. Most transparent, most work.
+
+I recommend (1), and did not implement it because it is still a behaviour change
+to shared download code in a round that already carries three fixes.
+
+## Follow-up NOT done this round (recorded so it is not lost)
+
+**Enforce the pinned `DEFAULT_MODEL_FILE_SHA256`.** The descriptor now declares
+the expected digest of the default model file, but nothing compares it against
+what is downloaded. The LFS client already verifies bytes against the oid in the
+pointer it was served (`ChecksumMismatch`), so transit corruption is covered;
+what is NOT covered is the repository publishing a different file at the same
+path, which is the exact risk the pin exists to close. Wiring that into the
+server download path is its own change with its own tests and must not ride on a
+URL swap. The lead is tracking it.
+
 ## Decisions a human may want to reverse
 
 **1. The audit loop was stopped at round 3 on judgement, not on a satisfied
