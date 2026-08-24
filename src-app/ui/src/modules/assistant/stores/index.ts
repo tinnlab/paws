@@ -1,6 +1,7 @@
 // Only export hooks, not action functions
 export { useUserAssistantsStore } from './userAssistants'
-export { useTemplateAssistantsStore } from './templateAssistants'
+// paws: the templateAssistants store is removed with the assistant-templates
+// admin surface (design item 12).
 export { useAssistantPickerStore } from './assistantPicker'
 
 

@@ -15,16 +15,14 @@ import { z } from 'zod'
 import { Drawer } from '@/modules/layouts/app-layout/components/Drawer'
 import { usePermission } from '@/core/permissions'
 import { Permissions } from '@/api-client/permissions'
-import { TemplateAssistants } from '@/modules/assistant/stores/templateAssistants'
 import { UserAssistants } from '@/modules/assistant/stores/userAssistants'
 import { AssistantDrawer } from '@/modules/assistant/components/assistantDrawer'
 
-// Template assistants vs user assistants gate on different permission
-// namespaces. `isTemplate` selects which set applies at render time.
-const TEMPLATE_PERMS = {
-  create: Permissions.AssistantsTemplateCreate,
-  edit: Permissions.AssistantsTemplateEdit,
-} as const
+// paws: this drawer serves USER assistants only (design item 12 removed the
+// template admin surface, so nothing ever opens it with `isTemplate`). The
+// `assistants::templates::*` permission set it used to switch to is gone with
+// it; `assistant_templates` remains a backend concept (the seeded row +
+// clone-on-signup), it just has no UI here.
 const USER_PERMS = {
   create: Permissions.AssistantsCreate,
   edit: Permissions.AssistantsEdit,
@@ -84,12 +82,10 @@ export function AssistantFormDrawer() {
   })
 
   // Use drawer store
-  const { open, loading, editingAssistant, isTemplate, isCloning } =
-    AssistantDrawer
+  const { open, loading, editingAssistant, isCloning } = AssistantDrawer
 
-  const perms = isTemplate ? TEMPLATE_PERMS : USER_PERMS
-  const canCreate = usePermission(perms.create)
-  const canEdit = usePermission(perms.edit)
+  const canCreate = usePermission(USER_PERMS.create)
+  const canEdit = usePermission(USER_PERMS.edit)
   const canSave = editingAssistant && !isCloning ? canEdit : canCreate
 
   // Initialize form when drawer opens or editing assistant changes
@@ -190,25 +186,11 @@ export function AssistantFormDrawer() {
       // If cloning or creating new, always create (not update)
       if (editingAssistant && !isCloning) {
         // Update existing assistant
-        if (isTemplate) {
-          await TemplateAssistants.updateTemplateAssistant(
-            editingAssistant.id,
-            payload,
-          )
-        } else {
-          await UserAssistants.updateUserAssistant(
-            editingAssistant.id,
-            payload,
-          )
-        }
+        await UserAssistants.updateUserAssistant(editingAssistant.id, payload)
         message.success('Assistant updated successfully')
       } else {
         // Create new assistant (including when cloning from template)
-        if (isTemplate) {
-          await TemplateAssistants.createTemplateAssistant(payload)
-        } else {
-          await UserAssistants.createUserAssistant(payload)
-        }
+        await UserAssistants.createUserAssistant(payload)
         message.success('Assistant created successfully')
       }
       AssistantDrawer.closeAssistantDrawer()
@@ -225,9 +207,9 @@ export function AssistantFormDrawer() {
       return 'Create from Template'
     }
     if (editingAssistant) {
-      return isTemplate ? 'Edit Template Assistant' : 'Edit Assistant'
+      return 'Edit Assistant'
     }
-    return isTemplate ? 'Create Template Assistant' : 'Create Assistant'
+    return 'Create Assistant'
   }
 
   return (
@@ -312,11 +294,7 @@ export function AssistantFormDrawer() {
           name="is_default"
           label="Set as Default"
           valuePropName="checked"
-          description={
-            isTemplate
-              ? 'Set as the default template assistant for all users'
-              : 'Set as your default assistant'
-          }
+          description="Set as your default assistant"
         >
           <Switch data-testid="assistant-form-default" />
         </FormField>

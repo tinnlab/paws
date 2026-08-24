@@ -19,11 +19,10 @@ export async function goToUserAssistantsPage(page: Page, baseURL: string) {
   await byTestId(page, 'user-assistants-card').waitFor({ timeout: 15000 })
 }
 
-export async function goToTemplateAssistantsSettings(page: Page, baseURL: string) {
-  await page.goto(`${baseURL}/settings/assistant-templates`)
-  await page.waitForLoadState('load')
-  await byTestId(page, 'template-assistants-card').waitFor({ timeout: 15000 })
-}
+// paws: `goToTemplateAssistantsSettings` removed — /settings/assistant-templates
+// no longer exists (design item 12), and its only caller
+// (template-assistants.spec.ts) went with it. The BACKEND template concept is
+// unchanged, so template-clone-on-signup.spec.ts still covers it via the API.
 
 /**
  * Assistant Form Drawer helpers

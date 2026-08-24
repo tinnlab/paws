@@ -5,7 +5,8 @@ export const assistantDrawerState = {
   open: false,
   loading: false,
   editingAssistant: null as Assistant | null,
-  isTemplate: false,
+  // paws: `isTemplate` removed with the assistant-templates admin surface
+  // (design item 12) — nothing could ever set it true again.
   isCloning: false,
 }
 
