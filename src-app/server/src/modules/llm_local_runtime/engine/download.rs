@@ -237,6 +237,106 @@ fn is_auth_rejection(status: reqwest::StatusCode, headers: &reqwest::header::Hea
     }
 }
 
+/// Give ggml's backend registry discoverable names for macOS backend modules
+/// that the engine release ships with a Linux `.so` extension.
+///
+/// ## The defect this works around is in the ENGINE RELEASE, not here
+///
+/// `ziee-ai/llama.cpp` `v0.0.3-alpha`'s `llama-server-macos-aarch64-metal.tar.gz`
+/// ships `libggml-cpu.so`, `libggml-blas.so` and `libggml-metal.so` alongside
+/// correctly-named `libggml.dylib` / `libggml-base.dylib` / `libllama.dylib`,
+/// with no `.dylib` equivalents for the three. ggml discovers backends
+/// dynamically by scanning for `libggml-<name><ext>` where `ext` is `.dylib` on
+/// Apple platforms, so those three modules are invisible to it: `llama-server`
+/// comes up with neither a CPU nor a Metal backend and never loads a model —
+/// the owner's "sat loading for 5+ minutes with no llama-server doing work".
+///
+/// The files themselves are FINE. Verified by inspecting the published artifact:
+/// each is a `Mach-O 64-bit arm64 bundle`, i.e. a correct macOS binary carrying
+/// the wrong filename extension. Only the NAME is wrong, which is precisely what
+/// makes a link-by-another-name workaround appropriate rather than a hack.
+///
+/// The real fix belongs in the engine's release build. That is tracked as FB-7
+/// and is the owner's call; this shim exists because paws does not control that
+/// release cadence and users are blocked today.
+///
+/// ## Why a SYMLINK rather than a rename
+///
+/// The extracted tree stays a faithful copy of the artifact that was downloaded
+/// and hash-verified, so anything later inspecting it (a support request, an
+/// integrity check) sees what upstream actually shipped. It is also
+/// self-documenting: `libggml-metal.dylib -> libggml-metal.so` announces that a
+/// shim ran, where a rename would silently look like a correct release.
+///
+/// ## Guarantees
+///
+/// - **macOS only** — a no-op elsewhere, where `.so` is the correct extension.
+/// - **Narrow** — only `libggml-*.so`, never a blanket `.so` sweep.
+/// - **Never clobbers** — an existing `libggml-<name>.dylib` is left untouched,
+///   so a FIXED future release is not broken by this shim.
+/// - **Idempotent** — re-extraction over an existing alias is not an error.
+fn alias_macos_ggml_backends(dest_dir: &Path) {
+    // The platform gate lives HERE; the work lives in `alias_ggml_backends_in`
+    // so it is exercisable by tests on any host. A shim that could only be
+    // tested on the platform we do not have would ship unverified.
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    alias_ggml_backends_in(dest_dir);
+}
+
+/// The platform-independent body of [`alias_macos_ggml_backends`].
+fn alias_ggml_backends_in(dest_dir: &Path) {
+    let entries = match std::fs::read_dir(dest_dir) {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::warn!(
+                "ggml backend alias: could not read {}: {e}",
+                dest_dir.display()
+            );
+            return;
+        }
+    };
+
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let Some(stem) = name.strip_suffix(".so") else {
+            continue;
+        };
+        if !stem.starts_with("libggml-") {
+            continue;
+        }
+
+        let alias = dest_dir.join(format!("{stem}.dylib"));
+        // A correctly-named module already present means the release was fixed
+        // (or a previous extraction aliased it). Either way: do not touch it.
+        // `symlink_metadata`, not `exists`, so a pre-existing symlink counts
+        // even when its target is momentarily missing — that keeps re-extraction
+        // idempotent instead of erroring on a dangling link.
+        if alias.symlink_metadata().is_ok() {
+            continue;
+        }
+
+        #[cfg(unix)]
+        let result = std::os::unix::fs::symlink(name, &alias);
+        #[cfg(not(unix))]
+        let result: std::io::Result<()> = Ok(());
+
+        match result {
+            Ok(()) => tracing::info!(
+                "ggml backend alias: linked {} -> {} (engine release ships macOS backend modules with a .so extension; see FB-7)",
+                alias.display(),
+                name,
+            ),
+            Err(e) => tracing::warn!(
+                "ggml backend alias: could not link {}: {e}. The engine may start with no CPU/Metal backend.",
+                alias.display(),
+            ),
+        }
+    }
+}
+
 /// GitHub repo slug for an engine's fork.
 fn engine_repo(engine: EngineType) -> &'static str {
     match engine {
@@ -1104,6 +1204,8 @@ impl BinaryDownloader {
             )));
         }
 
+        alias_macos_ggml_backends(dest_dir);
+
         Ok(())
     }
 
@@ -1337,6 +1439,76 @@ mod tests {
         assert!(safe_same_dir_symlink_target(Path::new("../../etc/passwd")).is_none());
         assert!(safe_same_dir_symlink_target(Path::new("sub/libfoo.so")).is_none());
         assert!(safe_same_dir_symlink_target(Path::new("..")).is_none());
+    }
+
+    // --- FB-7: macOS ggml backend modules ship with a `.so` extension --------
+    //
+    // Verified against the published artifact (`ziee-ai/llama.cpp` v0.0.3-alpha,
+    // `llama-server-macos-aarch64-metal.tar.gz`, 12,904,087 B): it contains
+    // `libggml-cpu.so`, `libggml-blas.so` and `libggml-metal.so` with NO
+    // `.dylib` equivalents, while every core lib is correctly `.dylib`. `file`
+    // reports each of the three as `Mach-O 64-bit arm64 bundle` — right binary,
+    // wrong name — so aliasing them is sound rather than papering over a
+    // mis-built artifact.
+    //
+    // NOTE ON WHAT THESE TESTS CANNOT DO: they exercise the aliasing on any
+    // host, but NOTHING here can prove `llama-server` then loads a model. That
+    // needs macOS, which this box does not have. The owner's retest is the
+    // proof; see FB-7.
+
+    #[cfg(unix)]
+    #[test]
+    fn ggml_backend_alias_creates_dylib_names_without_clobbering() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+
+        // The shape the real artifact has, plus a correctly-named module that a
+        // FIXED future release would ship.
+        std::fs::write(dir.join("libggml-metal.so"), b"macho").unwrap();
+        std::fs::write(dir.join("libggml-cpu.so"), b"macho").unwrap();
+        std::fs::write(dir.join("libggml-cpu.dylib"), b"ALREADY-CORRECT").unwrap();
+        // Must be left alone: not a ggml backend module.
+        std::fs::write(dir.join("libsomething-else.so"), b"other").unwrap();
+
+        alias_ggml_backends_in(dir);
+
+        assert!(
+            dir.join("libggml-metal.dylib").symlink_metadata().is_ok(),
+            "a .so backend module must gain a .dylib name ggml can discover",
+        );
+        assert_eq!(
+            std::fs::read(dir.join("libggml-metal.dylib")).unwrap(),
+            b"macho",
+            "the alias must resolve to the extracted module",
+        );
+        assert_eq!(
+            std::fs::read(dir.join("libggml-cpu.dylib")).unwrap(),
+            b"ALREADY-CORRECT",
+            "an existing correctly-named module must NEVER be clobbered — that would break a fixed release",
+        );
+        assert!(
+            !dir.join("libsomething-else.dylib").exists(),
+            "the shim must be narrow: only libggml-* modules, not every .so",
+        );
+        assert!(
+            dir.join("libggml-metal.so").exists(),
+            "the original artifact file stays in place (symlink, not rename)",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ggml_backend_alias_is_idempotent() {
+        // Re-extraction over an existing install must not error.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::write(dir.join("libggml-metal.so"), b"macho").unwrap();
+
+        alias_ggml_backends_in(dir);
+        alias_ggml_backends_in(dir);
+        alias_ggml_backends_in(dir);
+
+        assert!(dir.join("libggml-metal.dylib").symlink_metadata().is_ok());
     }
 
     /// A dynamically-linked engine release ships SONAME symlinks the loader
