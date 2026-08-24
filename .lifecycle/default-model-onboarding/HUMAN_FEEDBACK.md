@@ -1,8 +1,9 @@
 # HUMAN_FEEDBACK — default-model-onboarding
 
-**Owner feedback received** on a real macOS install of this branch (the `.dmg`
-from run 32677521319). Two reports, recorded verbatim as FB-1 and FB-2 below and
-resolved in fix round 1. The rest of this file predates that round: no feedback
+**Owner feedback received** on real macOS installs of this branch. Fix round 1
+covered FB-1 and FB-2 (build `5be6fbe`, run 32677521319); fix round 2 covers FB-3,
+found once FB-1's fix let the install reach the actual download (run 32682504841).
+FB-1 is **confirmed fixed by the owner**. The rest of this file predates that round: no feedback
 arrived during the original build. One question was escalated
 and answered before implementation (recorded as DEC-6): whether "talk to it"
 required provisioning the llama.cpp ENGINE as well as the weights. The answer was
@@ -97,6 +98,127 @@ increasing blast radius: (a) surface the default-model install outside the wizar
 too (e.g. on the model picker's empty state); (b) exempt the *desktop* shell from
 the admin skip, since the phone-over-tunnel trap that motivated it does not apply
 there; (c) drop the admin exemption and fix the trap separately.
+
+### FB-3 — LFS download dies instantly with EROFS
+
+- **FB-3** [status: resolved] — LFS objects were staged in the process CWD,
+  which for a Finder-launched `.app` is `/`, the read-only macOS system volume.
+  Staged in the object's cache directory now. Regression-tested, verified RED.
+
+> The model couldn't be installed
+> Failed to download LFS files: Git error: TempFile error: Read-only file system
+> (os error 30) at path "/./03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8.lfstmp"
+> You can retry, or continue — you can install it later from Settings.
+
+**The lead's diagnosis was correct, and I verified it end-to-end rather than
+taking it.** The chain, each link checked:
+
+1. `service.rs` had exactly ONE staging site (grepped `tempfile_in`/`lfstmp`
+   across `utils/git/`) — `const TEMP_FOLDER: &str = "./"`.
+2. `tempfile` 3.27's `util.rs:33` makes a relative base **absolute against the
+   CWD**, and `absolute()` does not normalize `.`.
+3. So `CWD = /` yields literally `/./<oid>.lfstmp` — the exact string the owner
+   saw. That leading `/.` is the FINGERPRINT of the diagnosis, not a
+   contradiction of it; it is what told me the CWD really was `/` rather than
+   some other unwritable directory.
+4. `at path "…"` is `tempfile`'s own `PathError` Display (`"{err} at path
+   {path:?}"`), confirming the failure came from the staging call and not from a
+   later rename.
+5. macOS ≥ 10.15 mounts `/` read-only ⇒ `os error 30`.
+
+**Fix:** `download_file` takes a `staging_dir` parameter; the caller passes
+`cache_dir`, which it already `create_dir_all`s immediately above. The final
+`rename` therefore becomes same-directory — atomic and same-filesystem by
+construction — and the multi-GB object never crosses volumes.
+
+**Pre-existing, not introduced by this branch.** `TEMP_FOLDER = "./"` is shared
+`ziee` git-utils code that predates PR #10. It was invisible upstream because a
+server's CWD is a writable app dir. Unlike FB-2 this is not a product decision —
+a process may not assume anything about its CWD — so it is fixed here.
+
+**Tests** (`utils::git::lfs::service::tests`, both **verified RED** — restoring
+`"./"` fails both, with the failure printing `left: …/src-app/server` (the CWD)
+against `right: /tmp/.tmpXXXX` (the staging dir)):
+- `staging_file_is_created_in_the_directory_it_was_given` pins the temp file's
+  **parent directory**. "The download succeeded" would have passed on the broken
+  code whenever the CWD happened to be writable — which is precisely why this
+  shipped.
+- `staging_leaves_no_temp_file_in_the_process_cwd` pins the same invariant from
+  the other side.
+
+**Stated limit, not substituted away.** Neither test literally runs with a
+read-only CWD. Doing so means mutating the **process-global** current directory
+inside a binary that runs ~1500 tests in parallel threads, which risks breaking
+unrelated tests that resolve relative paths; isolating it in a child process
+would be far more apparatus than a ten-line fix warrants, and this repo has
+already paid twice for oversized test rigs. The CWD-cleanliness assertion covers
+the same property without touching global state. What remains unproven by test is
+the OS-level EROFS behaviour itself, which only a macOS run can show — hence the
+owner's retest.
+
+**Also corrected while here:** two comments that were actively false — the EXDEV
+fallback's claim that "tempfile picks the OS default /tmp" (it picked `./`), and
+"the OS reaps /tmp anyway" (the temp file is in the LFS cache dir, which nothing
+reaps). The fallback itself is kept deliberately — see DEC-17.
+
+### FB-4 — the 30-minute LFS cap is a hard 25.2 Mbps floor
+
+- **FB-4** [status: resolved] — owner-approved in this round (superseding the
+  "not in scope" line in FIX-2). The absolute cap is replaced by a stall timeout
+  plus a size cap; recorded as a security revision in **DEC-19**, which
+  supersedes DEC-15.
+
+The cap was never a flaky-failure problem: 5.68 GB in 30 minutes is a sustained
+**3.16 MB/s (~25.2 Mbps)** requirement, so below that the download cannot succeed
+no matter how many times it is retried — and with no resume it throws away ~28
+minutes of healthy progress first, behind a dialog that says "You can retry".
+
+**Now:** `.read_timeout(60s)` (reqwest resets it on every successful read, so
+slow-but-alive survives and silent dies) + a 6h absolute backstop (~2.1 Mbps
+floor on the same file) + a hard byte cap at the object's declared size.
+
+**I did not treat the security angle as a formality.** The old cap closes
+07-llm-model F-07, so I checked each attack dimension separately rather than
+asserting the new bound was fine. Three dimensions get **better** (a silent peer
+is now cut off in 60s instead of 30 minutes; unbounded disk consumption is now
+bounded by the object's declared size instead of only by the clock). **One gets
+weaker**: a server that dribbles just fast enough can hold one task for 6h
+instead of 30min. I judged that acceptable — the endpoint is admin-configured,
+the cost is one socket and one task, and it stays bounded — and DEC-19 states the
+reasoning in full so a reviewer can overrule it with `LFS_ABSOLUTE_BACKSTOP`.
+
+**I found a hole while doing it that nobody flagged.** The streaming loop had
+**no byte cap at all**, so "how much disk can a malicious LFS server consume" was
+bounded only by the timeout. Simply lengthening that timeout to hours would have
+widened the exposure 12×. The size cap closes it properly, which is why the net
+result is stronger than what it replaces rather than a trade.
+
+**Blast radius is wider than the desktop bug that prompted it:** `utils/git` is
+shared, so this changes LFS behaviour for **web/server deployments too**, not
+just the desktop default-model flow.
+
+**Tests** (all in `utils::git::lfs::service::tests`, on a real loopback socket
+with millisecond budgets — nothing sleeps for real; the whole file runs in 0.61s):
+- `a_slow_but_progressing_transfer_survives_an_absolute_cap_that_would_kill_it`
+  carries a **positive control in the same test**: the old absolute-cap-only
+  shape kills the identical healthy stream. That is the 30-minute cap in
+  miniature, and it is permanent rather than a one-off manual mutation.
+- `a_transfer_that_goes_silent_is_cut_off_promptly` — **verified RED**: dropping
+  `.read_timeout` makes it fail *and take 30.01s*, falling through to the
+  backstop. The stall bound is load-bearing, not decorative.
+- `the_metadata_call_keeps_its_own_tight_budget` — the regression a naive fix
+  causes, pinned on its own line as asked.
+- `an_object_may_not_exceed_its_declared_size` — the new size cap, including the
+  `u64::MAX` saturation case.
+
+**Stated limit:** no test drives a full LFS batch+blob flow, so the size cap is
+proven at its predicate rather than end-to-end; doing the latter needs a mock LFS
+server, which is more apparatus than this change warrants.
+
+**Not chosen:** a per-request `RequestBuilder::timeout` override on the batch POST
+would have kept one client, but it makes the tight metadata bound a property of a
+single call site that a later edit can silently drop. Two named clients make
+neither call able to inherit the other's budget by accident.
 
 ## Decisions a human may want to reverse
 

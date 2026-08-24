@@ -290,3 +290,83 @@ The mount proves behaviour, not pixels. Flagged to the owner as the one place
 the shipped approach differs from the design's wording; converting the module to
 a seeded cassette is a coherent follow-up, but it is an Onboarding-wide change,
 not this feature's to make unilaterally.
+
+## Fix round 2 (FB-3)
+
+- **DEC-17 — the EXDEV copy+remove fallback is KEPT, not deleted.**
+  With the object staged in `cache_dir` and renamed to a sibling in that same
+  directory, `rename` is same-filesystem by construction and EXDEV is
+  **unreachable today**. I kept the fallback anyway. Reasons, in order of
+  weight: (1) `staging_dir` is now a PARAMETER, so the invariant that makes
+  EXDEV impossible is a property of the CALLER, not of this function — a future
+  caller staging elsewhere makes the branch live again, and the failure it
+  prevents is a multi-GB download dying at the last step; (2) its cost is one
+  `raw_os_error()` comparison on a path that is already an error path. The
+  argument against — §15 "dead code = unfinished work" — is real, and the
+  tiebreak is that this is defensive ERROR HANDLING guarding an invariant a
+  refactor could silently break, not an unwired feature.
+  The comment above it was **wrong before this round** (it claimed tempfile
+  "picks the OS default /tmp"; it picked `./`, which is the bug) and is now
+  corrected to state that the branch is unreachable and why it is retained.
+  A second stale claim — "the OS reaps /tmp anyway" — is likewise corrected:
+  the temp file lives in the LFS cache dir, which nothing reaps.
+
+- **DEC-19 — SUPERSEDES DEC-15. The LFS transfer bound is a STALL timeout plus a
+  size cap, not a 30-minute wall clock.** Owner-approved this round.
+
+  **What changed.** `.timeout(30min)` (an absolute cap on the whole request
+  *including body streaming*) → `.read_timeout(60s)` + `.timeout(6h)` on the blob
+  client, plus a hard byte cap at the object's declared size + 1 MiB. The batch
+  API POST moved to its own client at `.timeout(60s)`.
+
+  **Why the old bound had to go.** It could not distinguish a slow download from
+  a malicious one, so it charged the whole cost to honest users: 5.68 GB in 30
+  minutes is a sustained 3.16 MB/s (~25.2 Mbps) floor. Below that the download
+  CANNOT succeed at any retry count, and because there is no resume it discards
+  ~28 minutes of healthy progress first. That is a hard ceiling presented as a
+  transient failure.
+
+  **Does this still close 07-llm-model F-07 (Medium)?** F-07 is "a
+  malicious/compromised LFS server holds a connection open forever". Taken
+  dimension by dimension, because the honest answer is not uniform:
+
+  | attack | before (30-min cap) | after | verdict |
+  |---|---|---|---|
+  | connect and send nothing | bounded at 30 min | bounded at **60s** | **30× better** |
+  | send headers, then go silent mid-body | bounded at 30 min | bounded at **60s** | **30× better** |
+  | dribble bytes forever, just fast enough | bounded at 30 min | bounded at **6h** | **weaker** |
+  | stream unbounded data to fill the disk | bounded at 30 min (implicitly) | bounded by the object's **declared size**, regardless of clock | **strictly better** |
+
+  The one weakened cell is the slow-drip hold: a hostile server can now pin one
+  task and one socket for up to 6h instead of 30min. I judged that acceptable and
+  did not just assert it: the endpoint is an ADMIN-configured repository (the
+  built-in HF/GitHub rows or one an admin added), not attacker-chosen; the cost
+  is one socket, one task and one temp file, not amplification; it remains
+  BOUNDED, not indefinite; and the same change removes an unbounded-disk hole
+  that was strictly worse and that lengthening the timeout alone would have
+  widened 12×. Net, the remedy is stronger than what it replaces.
+
+  **This is a deliberate security revision, recorded as one.** The `SECURITY:`
+  comment at the client construction now describes the new bound rather than the
+  old one, and points here. If a reviewer disagrees with the slow-drip trade, the
+  contained lever is `LFS_ABSOLUTE_BACKSTOP` — lowering it re-tightens that cell
+  at the cost of raising the throughput floor, and
+  `lfs_absolute_backstop_is_not_the_binding_constraint` will fail if it is
+  lowered far enough to break real downloads again.
+
+  **Blast radius: every LFS consumer, not just the desktop default-model flow** —
+  this is shared `utils/git` code used by web/server deployments too.
+
+- **DEC-18 — a stall-based LFS timeout is PROPOSED, not applied.** *(Superseded
+  by DEC-19 within the same round: the owner approved the change while it was
+  being written. Kept as the record of what was proposed before approval.)*
+  The 30-minute absolute timeout (DEC-15) is untouched, per the round's scope.
+  Flagging for the owner, since FB-3's fix is what makes it reachable: the
+  current bound is absolute wall-clock, so it fails a HEALTHY 5.68 GB transfer on
+  any link slower than ~25 Mbps. A **stall** timeout (reset on each chunk
+  received) is the shape that matches intent — kill a transfer that has stopped
+  progressing, never one that is merely slow — and would be contained: the
+  download loop at `service.rs` already awaits chunk-by-chunk, so it is a
+  `tokio::time::timeout` around the `stream.next()` await rather than around the
+  whole download. Not applied: it changes shared git-utils behaviour for every
+  LFS consumer, and the owner's decision on DEC-15 is still open.
