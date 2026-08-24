@@ -91,6 +91,12 @@ server:
       - "PUT"
       - "DELETE"
       - "OPTIONS"
+    # NOTE: the three "X-" headers below are ones the API itself reads, and the
+    # server UNIONS them into whatever you list here (see
+    # core::app_builder::REQUIRED_CUSTOM_REQUEST_HEADERS) — a deployment that
+    # forgets one is broken, not configured, and broken silently: the browser
+    # refuses the request before sending it, so nothing is logged server-side.
+    # They are spelled out anyway so this example documents the real surface.
     allow_headers:
       - "Content-Type"
       - "Authorization"
@@ -101,6 +107,16 @@ server:
       # same-origin reverse proxy) don't need it. Cross-origin cookie mode
       # additionally requires allow_credentials + explicit (non-"*") origins.
       - "X-Refresh-Cookie"
+      # Self-echo suppression for realtime sync: the SPA stamps its SSE
+      # connection id on every mutation so the originating tab is skipped in
+      # fan-out.
+      - "X-Sync-Connection-Id"
+      # Scopes a chat-token SSE connection to one conversation
+      # (PUT /api/chat/stream/subscription). Without it that PUT never reaches
+      # the server, every stream stays scoped to nothing, and live assistant
+      # tokens are dropped — the reply still persists, so the UI shows a spinner
+      # that only a reload resolves.
+      - "X-Chat-Stream-Connection-Id"
 
 # Logging settings
 logging:

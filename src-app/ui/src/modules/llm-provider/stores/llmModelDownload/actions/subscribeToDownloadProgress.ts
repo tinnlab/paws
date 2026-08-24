@@ -3,15 +3,87 @@ import { useLlmProviderStore } from '@/modules/llm-provider/stores/llmProvider'
 import { useLlmModelDownloadStore } from '@/modules/llm-provider/stores/llmModelDownload'
 import type {
   DownloadInstance,
+  DownloadProgressData,
   DownloadProgressUpdate,
+  DownloadStatus,
   SSEDownloadProgressConnectedData,
 } from '@/api-client/types'
+
 import type { LlmModelDownloadGet, LlmModelDownloadSet } from '../state'
 import loadExistingDownloadsFactory from './_loadExistingDownloads'
 import {
   emitLlmModelDownloadCompleted,
   emitLlmModelDownloadFailed,
 } from '@/modules/llm-provider/events/emitters'
+
+/**
+ * Merge one SSE progress frame into the stored download row.
+ *
+ * The wire event is **FLAT** — the server's `From<&DownloadInstance>` lifts
+ * `current` / `total` / `speed_bps` / `eta_seconds` / `message` / `phase` to the
+ * TOP level (`llm_model/handlers/downloads.rs`, pinned by TEST-9) — while every
+ * surface that renders a download reads `download.progress_data.*`:
+ * `DownloadItem` ("N Bytes / M Bytes"), `DownloadProgress` (the percent), and the
+ * hub's `ModelHubCard`.
+ *
+ * This used to be `{ ...download, ...update } as DownloadInstance`, which grafted
+ * the flat keys on as strays and left `progress_data` at whatever the initial
+ * REST snapshot held — zeros for a just-started download. So the bar sat at 0%
+ * and the byte counts read "0 Bytes / 0 Bytes" for an entire 5.68 GB transfer,
+ * in the onboarding step AND the LLM-providers view, because both read this one
+ * store. The `as DownloadInstance` cast is what stopped `tsc` reporting it; it is
+ * gone, and this function is typed end-to-end instead.
+ *
+ * Each field falls back to the value already on screen: the server sends them as
+ * `Option`, and a `null` means "unknown right now", never "zero" — blanking a
+ * figure the user is watching would be its own bug (TEST-9 pins that the absent
+ * case really is `null` and not `0`).
+ */
+const DOWNLOAD_STATUSES: readonly DownloadStatus[] = [
+  'pending',
+  'downloading',
+  'completed',
+  'failed',
+  'cancelled',
+]
+
+/**
+ * The wire carries `status` as a bare `string` (the server stringifies its enum),
+ * so it cannot be assigned to `DownloadInstance['status']` directly. Narrow it,
+ * and keep the row's existing status for anything unrecognised rather than
+ * writing a value the rest of the store would then compare against and miss —
+ * the old `as DownloadInstance` cast is precisely what let this mismatch through.
+ */
+function narrowStatus(
+  wire: string,
+  previous: DownloadStatus,
+): DownloadStatus {
+  return DOWNLOAD_STATUSES.includes(wire as DownloadStatus)
+    ? (wire as DownloadStatus)
+    : previous
+}
+
+export function applyProgressUpdate(
+  download: DownloadInstance,
+  update: DownloadProgressUpdate,
+): DownloadInstance {
+  const previous = download.progress_data
+  const progress_data: DownloadProgressData = {
+    phase: update.phase ?? previous?.phase ?? 'created',
+    current: update.current ?? previous?.current ?? 0,
+    total: update.total ?? previous?.total ?? 0,
+    message: update.message ?? previous?.message ?? '',
+    speed_bps: update.speed_bps ?? previous?.speed_bps ?? 0,
+    eta_seconds: update.eta_seconds ?? previous?.eta_seconds ?? 0,
+  }
+  return {
+    ...download,
+    status: narrowStatus(update.status, download.status),
+    error_message: update.error_message ?? download.error_message,
+    model_id: update.model_id ?? download.model_id,
+    progress_data,
+  }
+}
 
 export default (set: LlmModelDownloadSet, get: LlmModelDownloadGet) => {
   const loadExistingDownloads = loadExistingDownloadsFactory(set, get)
@@ -88,9 +160,7 @@ export default (set: LlmModelDownloadSet, get: LlmModelDownloadGet) => {
             set((state) => {
               const updatedDownloads = state.downloads.map((download) => {
                 const update = updates.find((u) => u.id === download.id)
-                return update
-                  ? ({ ...download, ...update } as DownloadInstance)
-                  : download
+                return update ? applyProgressUpdate(download, update) : download
               })
               const filteredDownloads = updatedDownloads.filter(
                 (download) => download.status !== 'cancelled' && download.status !== 'completed',

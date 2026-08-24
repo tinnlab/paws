@@ -26,6 +26,7 @@ export type Actions = {
   loadNewerMessages: typeof import('./actions/loadNewerMessages')['default']
   loadOlderMessages: typeof import('./actions/loadOlderMessages')['default']
   reconcileTail: typeof import('./actions/reconcileTail')['default']
+  reportStreamSubscriptionError: typeof import('./actions/reportStreamSubscriptionError')['default']
   reset: typeof import('./actions/reset')['default']
   saveConversationState: typeof import('./actions/saveConversationState')['default']
   scheduleCacheClear: typeof import('./actions/scheduleCacheClear')['default']

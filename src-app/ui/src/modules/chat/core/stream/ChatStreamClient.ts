@@ -24,6 +24,13 @@ import './types'
 const INITIAL_BACKOFF_MS = 1_000
 const MAX_BACKOFF_MS = 30_000
 const STABLE_AFTER_MS = 3_000
+// Consecutive failed subscription PUTs before the owner is told the stream is
+// undeliverable. The connect loop keeps retrying underneath with the backoff
+// above, so this only decides WHEN the user is told — hence a small number: at
+// 1s/2s/4s the report lands within ~7s of a hard failure, while a single
+// transient blip stays silent. Fixed constant, alongside its three neighbours
+// (DEC-4).
+const SUBSCRIPTION_FAILURE_LIMIT = 3
 
 /** An independent chat-token SSE client bound to one conversation at a time. */
 export interface ChatStreamClient {
@@ -46,6 +53,21 @@ export interface ChatStreamClient {
 export interface ChatStreamHandlers {
   onFrame?: (conversationId: string, event: unknown) => void
   onReconnect?: () => void
+  /**
+   * The stream could not be SCOPED to a conversation after
+   * `SUBSCRIPTION_FAILURE_LIMIT` consecutive attempts, so no live token can ever
+   * arrive on it. Reported once per failure run (a success resets it).
+   *
+   * This exists because the failure it reports was previously SILENT. A CORS
+   * preflight refusal makes `fetch` REJECT — a network error, not a status — so
+   * it missed the `!resp.ok` branch below and landed in a `catch` that only
+   * logged a warning. The connection then sat open and healthy, scoped to
+   * nothing, forever: `publish_frame` matched no connection, `applyStreamFrame`
+   * never saw `complete`, `isStreaming` never cleared, and `reloadOpen` bails
+   * while it is true — so the pane could not even self-heal. The user saw a
+   * spinner that only a page reload resolved.
+   */
+  onSubscriptionError?: (message: string) => void
 }
 
 /** Create an independent chat-token SSE client (see the per-instance note). */
@@ -62,6 +84,9 @@ export function createChatStreamClient(
   // survive reconnects: a new connection re-PUTs the desired subscription.
   let connectionId: string | null = null
   let desiredConversationId: string | null = null
+  // Consecutive failed subscription PUTs. Reset by a successful PUT and by
+  // `stop()`; see `onSubscriptionAttemptFailed`.
+  let subscriptionFailures = 0
 
   function start(): void {
     if (started) return
@@ -78,12 +103,48 @@ export function createChatStreamClient(
     activeAbort = null
     connectionId = null
     desiredConversationId = null
+    subscriptionFailures = 0
   }
 
   function setActiveConversation(conversationId: string | null): Promise<void> {
     if (desiredConversationId === conversationId) return Promise.resolve()
     desiredConversationId = conversationId
     return putSubscription()
+  }
+
+  /**
+   * A subscription attempt failed. Every failure means this connection is NOT
+   * scoped to a conversation, so it can never deliver a token — treat them all
+   * the same way regardless of whether the transport gave us a status:
+   *
+   *   - drop the connection id and abort the live stream, so the connect loop
+   *     reconnects with a fresh handshake and re-PUTs (the pre-existing non-2xx
+   *     behaviour);
+   *   - once the failures stop being plausibly transient, TELL SOMEONE.
+   *
+   * The `catch` half used to only `console.warn`, which is how a permanent,
+   * total delivery failure presented as an ordinary spinner.
+   */
+  function onSubscriptionAttemptFailed(reason: string): void {
+    connectionId = null
+    activeAbort?.abort()
+    subscriptionFailures += 1
+    if (subscriptionFailures < SUBSCRIPTION_FAILURE_LIMIT) {
+      console.warn(`[chat-stream] subscription failed (${reason}); forcing reconnect`)
+      return
+    }
+    // Report once per failure run — the loop keeps retrying underneath, and a
+    // banner per retry would be its own defect.
+    if (subscriptionFailures === SUBSCRIPTION_FAILURE_LIMIT) {
+      console.error(
+        `[chat-stream] subscription failed ${subscriptionFailures}× (${reason}); ` +
+          'live updates are not reaching this conversation',
+      )
+      handlers?.onSubscriptionError?.(
+        'Live updates are not reaching this conversation. The reply is still being ' +
+          'generated and saved — reload to see it.',
+      )
+    }
   }
 
   async function putSubscription(): Promise<void> {
@@ -102,19 +163,20 @@ export function createChatStreamClient(
         body: JSON.stringify({ conversation_id: desiredConversationId }),
       })
       if (!resp.ok) {
-        // A non-2xx PUT (stale connection id, 401, or 429 under the per-user
-        // cap) means this connection is not subscribed. Don't swallow it: drop
-        // the connection id and abort the live stream so the connect loop
-        // reconnects with a fresh handshake and re-PUTs the desired
-        // subscription — otherwise the pane would sit token-less silently.
-        console.warn(
-          `[chat-stream] subscription PUT failed: ${resp.status}; forcing reconnect`,
-        )
-        connectionId = null
-        activeAbort?.abort()
+        // A non-2xx PUT: a stale connection id, 401, or 429 under the per-user
+        // cap.
+        onSubscriptionAttemptFailed(`HTTP ${resp.status}`)
+        return
       }
+      subscriptionFailures = 0
     } catch (error) {
-      console.warn('[chat-stream] subscription update failed', error)
+      // A REJECTION, not a status — the transport never got a response. A CORS
+      // preflight refusal lands here (measured: WebKitGTK reports
+      // `TypeError: Load failed`), and so does a genuine network drop. The
+      // former is permanent and total; the latter clears on reconnect. Both are
+      // "this connection is not subscribed", so both take the same path, and the
+      // failure COUNT is what distinguishes them.
+      onSubscriptionAttemptFailed(String(error))
     }
   }
 

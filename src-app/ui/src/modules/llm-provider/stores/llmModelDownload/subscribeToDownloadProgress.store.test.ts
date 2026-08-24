@@ -33,7 +33,8 @@ vi.mock('./actions/_loadExistingDownloads', () => ({
   default: () => async () => undefined,
 }))
 
-import makeSubscribe from './actions/subscribeToDownloadProgress'
+import makeSubscribe, { applyProgressUpdate } from './actions/subscribeToDownloadProgress'
+import type { DownloadInstance, DownloadProgressUpdate } from '@/api-client/types'
 
 type State = { downloads: unknown[]; sseConnected: boolean; sseError: string | null; reconnectAttempts: number }
 
@@ -107,5 +108,108 @@ describe('subscribeToDownloadProgress reconnect accounting', () => {
 
     expect(state.sseConnected).toBe(true)
     expect(state.reconnectAttempts).toBe(0)
+  })
+})
+
+/**
+ * TEST-8 — acceptance test for INV-3: "a download's progress, as RENDERED by the
+ * UI, must advance while the transfer runs."
+ *
+ * The owner watched a 5.68 GB model download run to completion while the
+ * onboarding bar sat at 0% and the LLM-providers view read "0 Bytes / 0 Bytes".
+ * The record was correct throughout — queried live mid-transfer it held
+ * `current 5637699037 / total 5680522464` with a real speed and ETA — and the
+ * server was broadcasting. The CONSUMER was wrong: `{ ...download, ...update }`
+ * grafted the wire event's FLAT fields on as strays and never touched
+ * `progress_data`, which is the only thing `DownloadItem` / `DownloadProgress` /
+ * `ModelHubCard` read.
+ *
+ * These assert what a VIEW would render, not what the server wrote. The previous
+ * round asserted the write, and the write was never the broken half.
+ */
+describe('TEST-8: the progress a view renders advances', () => {
+  const BASE: DownloadInstance = {
+    id: 'd1',
+    provider_id: 'p1',
+    repository_id: 'r1',
+    request_data: {},
+    status: 'downloading',
+    // What `listDownloads` returns for a just-started download — the zeros the
+    // UI was stuck on.
+    progress_data: {
+      phase: 'created',
+      current: 0,
+      total: 0,
+      message: '',
+      speed_bps: 0,
+      eta_seconds: 0,
+    },
+    error_message: null,
+    started_at: '2026-08-24T18:29:00Z',
+    completed_at: null,
+    model_id: null,
+    created_at: '2026-08-24T18:29:00Z',
+    updated_at: '2026-08-24T18:29:00Z',
+  } as unknown as DownloadInstance
+
+  /** A flat wire frame, typed — so `tsc` pins the shape this maps from. */
+  function frame(over: Partial<DownloadProgressUpdate>): DownloadProgressUpdate {
+    return {
+      id: 'd1',
+      provider_id: 'p1',
+      status: 'downloading',
+      phase: 'downloading',
+      ...over,
+    } as DownloadProgressUpdate
+  }
+
+  it('lifts the flat wire fields into progress_data, and keeps advancing', () => {
+    const first = applyProgressUpdate(
+      BASE,
+      frame({ current: 5_147_144_752, total: 5_680_522_464, speed_bps: 516_096, eta_seconds: 1033 }),
+    )
+    // The literal symptom: this used to stay 0 / 0.
+    expect(first.progress_data?.current).toBe(5_147_144_752)
+    expect(first.progress_data?.total).toBe(5_680_522_464)
+    expect(first.progress_data?.speed_bps).toBe(516_096)
+    expect(first.progress_data?.phase).toBe('downloading')
+
+    const second = applyProgressUpdate(
+      first,
+      frame({ current: 5_637_699_037, total: 5_680_522_464, speed_bps: 1_606_723, eta_seconds: 26 }),
+    )
+    expect(second.progress_data!.current).toBeGreaterThan(first.progress_data!.current)
+
+    // …and what the views actually compute from it.
+    const percent = Math.round(
+      (second.progress_data!.current / second.progress_data!.total) * 100,
+    )
+    expect(percent).toBe(99)
+  })
+
+  it('a null field does NOT blank a figure already on screen', () => {
+    const shown = applyProgressUpdate(
+      BASE,
+      frame({ current: 5_147_144_752, total: 5_680_522_464, speed_bps: 516_096 }),
+    )
+    // The server sends these as Option; a frame that omits speed must not reset
+    // the byte counts the user is watching to zero.
+    const next = applyProgressUpdate(shown, frame({ current: 5_200_000_000, total: 5_680_522_464 }))
+    expect(next.progress_data?.total).toBe(5_680_522_464)
+    expect(next.progress_data?.speed_bps).toBe(516_096)
+  })
+
+  it('does not leave the flat wire keys on the row', () => {
+    const merged = applyProgressUpdate(BASE, frame({ current: 1, total: 2 }))
+    // The old spread put `current`/`total` at the top level, where nothing reads
+    // them — the shape mismatch that hid behind `as DownloadInstance`.
+    expect(merged).not.toHaveProperty('current')
+    expect(merged).not.toHaveProperty('total')
+    expect(merged).not.toHaveProperty('speed_bps')
+  })
+
+  it('still carries the terminal status through (the half that always worked)', () => {
+    const done = applyProgressUpdate(BASE, frame({ status: 'completed', current: 5, total: 5 }))
+    expect(done.status).toBe('completed')
   })
 })

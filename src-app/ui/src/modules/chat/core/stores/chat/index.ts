@@ -417,6 +417,11 @@ export interface ChatState {
   applyStreamFrame: (conversationId: string, event: any) => Promise<void>
   updateConversation: (updates: { title?: string }) => Promise<void>
   clearError: () => Promise<void>
+  /** The chat-token stream could not be scoped to this conversation, so no live
+   *  token can ever arrive — reach a terminal, visible state instead of leaving
+   *  the turn claiming to generate. See the action for why this used to be
+   *  silent. */
+  reportStreamSubscriptionError: (message: string) => Promise<void>
   reset: () => void
 
   // ── Branch actions ────────────────────────────────────────────────────────
@@ -631,6 +636,14 @@ const chatStoreConfig = {
     const streamClient = createChatStreamClient({
       onFrame: (conversationId, event) => enqueueFrame(conversationId, event),
       onReconnect: () => onStreamReconnect(),
+      // The stream could not be scoped to a conversation, so no token will ever
+      // arrive on it. Surface it through the EXISTING error banner
+      // (`ConversationPane` renders `store.error` as
+      // `chat-conversation-error-alert`) and clear the flags that would
+      // otherwise leave the turn claiming to be generating forever — a lost
+      // delivery channel must not present as "still working".
+      onSubscriptionError: (message: string) =>
+        get().reportStreamSubscriptionError(message),
     })
     set({ chatStreamClient: streamClient })
 
