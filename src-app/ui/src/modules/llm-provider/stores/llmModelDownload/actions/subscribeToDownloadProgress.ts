@@ -3,7 +3,6 @@ import { useLlmProviderStore } from '@/modules/llm-provider/stores/llmProvider'
 import { useLlmModelDownloadStore } from '@/modules/llm-provider/stores/llmModelDownload'
 import type {
   DownloadInstance,
-  DownloadProgressData,
   DownloadProgressUpdate,
   SSEDownloadProgressConnectedData,
 } from '@/api-client/types'
@@ -89,30 +88,9 @@ export default (set: LlmModelDownloadSet, get: LlmModelDownloadGet) => {
             set((state) => {
               const updatedDownloads = state.downloads.map((download) => {
                 const update = updates.find((u) => u.id === download.id)
-                if (!update) return download
-                // The SSE payload is FLAT — `current` / `total` / `speed_bps` /
-                // `eta_seconds` / `message` / `phase` sit at the TOP LEVEL of
-                // `DownloadProgressUpdate`. Every UI that renders a download
-                // reads `progress_data.*`. Spreading the update therefore added
-                // stray top-level keys and left `progress_data` untouched, so
-                // the bar sat at 0% and the byte counts read "0 bytes / 0 bytes"
-                // — in the onboarding step AND the LLM-providers view, because
-                // both read this one store. The `as DownloadInstance` cast is
-                // what stopped the compiler from noticing (FB-12).
-                //
-                // Rebuild `progress_data` from the delivered fields, falling
-                // back to the previous value per-field: the server sends these
-                // as `Option`, so a null must not blank a figure we already had.
-                const progress_data: DownloadProgressData = {
-                  phase: update.phase ?? download.progress_data?.phase ?? 'created',
-                  current: update.current ?? download.progress_data?.current ?? 0,
-                  total: update.total ?? download.progress_data?.total ?? 0,
-                  message: update.message ?? download.progress_data?.message ?? '',
-                  speed_bps: update.speed_bps ?? download.progress_data?.speed_bps ?? 0,
-                  eta_seconds:
-                    update.eta_seconds ?? download.progress_data?.eta_seconds ?? 0,
-                }
-                return { ...download, ...update, progress_data } as DownloadInstance
+                return update
+                  ? ({ ...download, ...update } as DownloadInstance)
+                  : download
               })
               const filteredDownloads = updatedDownloads.filter(
                 (download) => download.status !== 'cancelled' && download.status !== 'completed',

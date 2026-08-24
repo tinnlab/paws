@@ -571,9 +571,14 @@ the process CWD.
 
 ### FB-12 — the bar still read 0%, because the UI never received the numbers
 
-- **FB-12** [status: resolved] — the record was RIGHT and the consumer was
-  wrong. The SSE payload is flat; the UI renders `progress_data.*`; the handler
-  spread the flat update and never rebuilt `progress_data`. See DEC-26.
+- **FB-12** [status: wontfix] — **REASSIGNED. Diagnosed here, fixed elsewhere.**
+  A dedicated worker now owns FB-12 and FB-13 together, cutting from
+  `origin/main`. The fix I had written (commit `cdddbba7b`) has been **reverted
+  off this branch** so the two lines of work cannot collide in
+  `subscribeToDownloadProgress.ts`. Everything below is retained as HANDOVER: the
+  root cause is established and evidence-backed, and the incoming owner should
+  not have to re-derive it. The reverted fix remains recoverable from
+  `cdddbba7b` if they want it as a starting point.
 
 **Established from the running instance, not inferred.** I queried the live
 embedded Postgres (port 38759) mid-download:
@@ -656,6 +661,15 @@ content persisted — but it is a genuine trap.
 chat-core for every provider and every chat path, on a branch that is already
 carrying seven rounds of fixes, and I have no evidence tying it to a live
 failure. Per the brief's own instruction, escalated with the diagnosis instead.
+
+**REASSIGNED, and the lead reached the same correction independently.** The
+owner reloaded the page and the full Anthropic answer was there, persisted —
+confirming from the product side what the log showed from the server side:
+nothing was lost, only the REALTIME delivery to the UI failed. That makes FB-13
+the same underlying problem as FB-12 — an operation that succeeds while the live
+update to the UI does not — so both now belong to one dedicated worker, and
+neither is mine. I have made no further edits to the chat-streaming or
+download-monitoring paths.
 
 ## Follow-up NOT done this round (recorded so it is not lost)
 

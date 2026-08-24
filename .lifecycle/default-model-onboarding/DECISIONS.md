@@ -469,7 +469,13 @@ not this feature's to make unilaterally.
 
 ## Fix round 8 (FB-12, FB-13)
 
-- **DEC-26 — progress is rebuilt into `progress_data` at the SSE consumer.**
+- **DEC-26 — SUPERSEDED BY REASSIGNMENT (not by a better answer).** The analysis
+  below stands and was verified against a live instance, but the FIX IS NO LONGER
+  ON THIS BRANCH: FB-12 and FB-13 were handed to a dedicated worker, and the code
+  change was reverted so the two branches cannot collide in the same file. Kept
+  as the handover record.
+
+  Original decision — progress is rebuilt into `progress_data` at the SSE consumer.
   The server's `DownloadProgressUpdate` is flat by design (it is the "simplified
   progress data for SSE streaming"); the UI renders `progress_data.*`. The
   handler now reconstructs that object from the delivered fields, per-field
