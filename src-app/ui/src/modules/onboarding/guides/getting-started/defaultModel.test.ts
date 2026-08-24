@@ -44,6 +44,11 @@ test('the descriptor is internally coherent', () => {
     DEFAULT_MODEL.mainFilename.includes(DEFAULT_MODEL.quantization),
     'the quant named in the descriptor must be the quant of the file it downloads',
   )
+  assert.match(
+    DEFAULT_MODEL.mainFileSha256,
+    /^[0-9a-f]{64}$/,
+    'the drift pin must be a lowercase hex sha256',
+  )
   assert.equal(
     DEFAULT_MODEL_MIN_MEMORY_BYTES,
     DEFAULT_MODEL_MIN_MEMORY_GB * 1024 ** 3,
@@ -72,8 +77,12 @@ test('the descriptor matches the seed migration', () => {
 
 test('the descriptor matches the design doc', () => {
   const design = read('docs/design/default-model-onboarding.md')
+  // Derive the org from the seeded base instead of hardcoding it. This
+  // assertion used to pin `unsloth/` as a literal, which made a provider-URL
+  // swap fail here for a reason that has nothing to do with what it checks.
+  const org = DEFAULT_MODEL_REPOSITORY_URL.split('/').pop()
   assert.ok(
-    design.includes(`unsloth/${DEFAULT_MODEL.repositoryPath}`),
+    design.includes(`${org}/${DEFAULT_MODEL.repositoryPath}`),
     'the design doc names the repository this descriptor installs from',
   )
   assert.ok(

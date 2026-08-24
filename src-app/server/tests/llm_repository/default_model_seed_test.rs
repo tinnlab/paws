@@ -12,7 +12,7 @@ use crate::common::TestServer;
 const DEFAULT_MODEL_REPOSITORY_ID: &str = "b3f1c5d2-7a48-4e91-9c26-5d0e8f3a1b74";
 /// ORG-SCOPED — the bare origin is taken by the credentialed built-in row, which
 /// `UNIQUE (url)` makes unshareable.
-const DEFAULT_MODEL_REPOSITORY_URL: &str = "https://huggingface.co/unsloth";
+const DEFAULT_MODEL_REPOSITORY_URL: &str = "https://huggingface.co/tinnlab";
 
 async fn connect(server: &TestServer) -> sqlx::PgPool {
     PgPoolOptions::new()

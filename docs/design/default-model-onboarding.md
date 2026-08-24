@@ -30,18 +30,28 @@ Goal: **finish Onboarding, have a model, talk to it.** No key, no settings page.
 
 | | |
 |---|---|
-| repo | `unsloth/Qwen3.5-9B-GGUF` |
+| repo | `tinnlab/Qwen3.5-9B-GGUF` (our mirror of `unsloth/Qwen3.5-9B-GGUF`) |
 | file | `Qwen3.5-9B-Q4_K_M.gguf` |
 | size | **5.68 GB** |
+| sha256 | `03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8` |
 | engine | llama.cpp (GGUF — the verified path) |
 
 Qwen publishes no official GGUF for this model. `unsloth` is the highest-usage
 third-party build (1.35M downloads, not gated); `lmstudio-community/Qwen3.5-9B-GGUF`
 (542k) is the fallback if unsloth is ever unavailable.
 
-`Q4_K_M` is the standard quality/size default. The repo holds 25 quants from
+We install from **our own mirror** of that build, `tinnlab/Qwen3.5-9B-GGUF`,
+rather than from `unsloth` directly. Nothing pins a revision at install time,
+so a shipped first-run flow must not depend on a third-party repository staying
+put. The mirror is byte-identical to unsloth's file (sha256 above, pinned in
+`defaultModel.ts`) and credits Qwen and unsloth in its README and NOTICE: it is
+a redistribution under Apache-2.0, not our own conversion. It carries only
+`Q4_K_M`, so it serves text chat and tools — not the vision projector.
+
+`Q4_K_M` is the standard quality/size default. Upstream holds 25 quants from
 `UD-IQ2_XXS` to `BF16` (17.92 GB), so the download **must select one file** — it
-must not clone the repo wholesale.
+must not clone the repo wholesale. The mirror carries only `Q4_K_M`, but that
+requirement stands regardless: it is the app's contract, not the mirror's.
 
 > **Not the base repo.** `Qwen/Qwen3.5-9B` is safetensors, which routes to
 > **mistral.rs**, whose subcommand flags CLAUDE.md records as *"not yet verified
@@ -53,7 +63,7 @@ must not clone the repo wholesale.
 Researched before designing; this is most of the work already done.
 
 - **Hugging Face public repos are anonymously clonable.** Verified:
-  `GIT_TERMINAL_PROMPT=0 git ls-remote https://huggingface.co/unsloth/Qwen3.5-9B-GGUF`
+  `GIT_TERMINAL_PROMPT=0 git ls-remote https://huggingface.co/tinnlab/Qwen3.5-9B-GGUF`
   → exit 0, no credential. So `auth_type: 'none'` against `huggingface.co` works
   and **no self-hosted git server is needed** (INV-1).
 - `auth_type: "none"` is already first-class —
@@ -87,14 +97,14 @@ deterministic UUID. Prefix must sort above the current **server** max
 independent.
 
 > **Amended during implementation.** The row's URL is **org-scoped** —
-> `https://huggingface.co/unsloth`, not the bare origin. `llm_repositories`
+> `https://huggingface.co/tinnlab`, not the bare origin. `llm_repositories`
 > carries `UNIQUE (url)` and the credentialed `Hugging Face Hub` row already
 > holds `https://huggingface.co`, so a second row there is impossible. An
 > org-scoped Hugging Face base is an explicitly supported shape
 > (`llm_repository/utils.rs::is_usable_repository_base`) and
 > `GitService::build_repository_url` composes it with the model's
 > `repository_path` — which is therefore `Qwen3.5-9B-GGUF`, **not**
-> `unsloth/Qwen3.5-9B-GGUF`.
+> `tinnlab/Qwen3.5-9B-GGUF`.
 
 **2. Onboarding step** — a new entry in `guides/getting-started/module.tsx`'s
 `steps` array, after `api-keys` (a user who added a key can skip) and before

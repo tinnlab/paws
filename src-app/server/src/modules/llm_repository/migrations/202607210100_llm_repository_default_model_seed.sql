@@ -14,7 +14,7 @@
 -- repos clone anonymously, so this needs no hosting, no LFS store and no
 -- credential of any kind (INV-1).
 --
--- WHY THE URL IS ORG-SCOPED (`…/unsloth`, not `https://huggingface.co`)
+-- WHY THE URL IS ORG-SCOPED (`…/tinnlab`, not `https://huggingface.co`)
 -- ---------------------------------------------------------------------
 -- `llm_repositories` carries `UNIQUE (url)` and the credentialed
 -- `Hugging Face Hub` row already holds the bare origin, so a second row there
@@ -24,7 +24,7 @@
 -- repository_path of `<model>` builds `huggingface.co/<org>/<model>`, which is
 -- a real model URL", and `GitService::build_repository_url` composes it that
 -- way. The model's `repository_path` is therefore `Qwen3.5-9B-GGUF`, NOT
--- `unsloth/Qwen3.5-9B-GGUF`.
+-- `tinnlab/Qwen3.5-9B-GGUF`.
 --
 -- The row is `built_in` + `enabled` so a fresh install has it with no admin
 -- action (INV-5); `built_in` also makes its name / URL / auth_type immutable
@@ -40,6 +40,24 @@
 -- already added this exact URL by hand — their row wins and the migration is a
 -- no-op rather than a failed upgrade. On a fresh database the insert always
 -- applies, which is the case INV-5 is about.
+--
+-- WHY `tinnlab` AND NOT `unsloth`
+-- ------------------------------
+-- `tinnlab/Qwen3.5-9B-GGUF` is a byte-identical mirror of
+-- `unsloth/Qwen3.5-9B-GGUF`, published by Tin Nguyen Lab so that a shipped
+-- first-run flow does not depend on a third-party repository that can be
+-- deleted, renamed or rewritten. It is a REDISTRIBUTION, not our own build:
+-- the weights are Qwen's (`Qwen/Qwen3.5-9B`, Apache-2.0) and the GGUF
+-- quantization is unsloth's. Both are credited in the mirror's README and
+-- NOTICE.
+--
+-- Mirrored from `unsloth/Qwen3.5-9B-GGUF` at upstream commit
+-- 3885219b6810b007914f3a7950a8d1b469d598a5. The mirrored `Qwen3.5-9B-Q4_K_M.gguf`
+-- has sha256 03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8
+-- (5680522464 bytes) — identical to the Git-LFS oid upstream publishes for
+-- the same file at that commit. That sha256 is pinned app-side at
+-- `defaultModel.ts::DEFAULT_MODEL_FILE_SHA256`; see the note there for why
+-- the pin lives in the descriptor rather than in this row.
 
 INSERT INTO public.llm_repositories (
     id,
@@ -57,8 +75,8 @@ INSERT INTO public.llm_repositories (
     last_health_check_reason
 ) VALUES (
     'b3f1c5d2-7a48-4e91-9c26-5d0e8f3a1b74',
-    'Hugging Face (unsloth, anonymous)',
-    'https://huggingface.co/unsloth',
+    'Hugging Face (tinnlab, anonymous)',
+    'https://huggingface.co/tinnlab',
     'none',
     '{}'::jsonb,
     true,

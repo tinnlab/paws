@@ -23,18 +23,27 @@
  * The safetensors base repo would route to mistral.rs, whose flags CLAUDE.md
  * records as unverified against a real binary.
  *
+ * The repository below is OUR MIRROR of that build
+ * (`tinnlab/Qwen3.5-9B-GGUF`), not unsloth's repo directly. Nothing pins a
+ * revision at install time — the LFS download asks for `refs/heads/main` and
+ * takes what is there — so a shipped flow must not depend on a third-party
+ * repository staying put. The mirrored file is byte-identical to unsloth's;
+ * see `DEFAULT_MODEL_FILE_SHA256`.
+ *
  * ## These strings are load-bearing and NOT covered by any test
  *
  * A wrong org, repo or quant name would ship green and 404 at clone time for
  * every user — no test can catch it, because the design forbids contacting the
  * real Hugging Face from tests, and a fixture necessarily uses its own names.
  * They were therefore verified by hand against the live upstream on
- * **2026-08-23**:
+ * **2026-08-23** against upstream, and again on **2026-08-24** against the
+ * mirror:
  *
- * - `GIT_TERMINAL_PROMPT=0 git ls-remote https://huggingface.co/unsloth/Qwen3.5-9B-GGUF`
+ * - `GIT_TERMINAL_PROMPT=0 git ls-remote https://huggingface.co/tinnlab/Qwen3.5-9B-GGUF`
  *   → exit 0, no credential prompt (which is also the INV-1 premise).
- * - `https://huggingface.co/api/models/unsloth/Qwen3.5-9B-GGUF` lists
- *   `Qwen3.5-9B-Q4_K_M.gguf` among its 28 files.
+ * - `https://huggingface.co/api/models/tinnlab/Qwen3.5-9B-GGUF` lists
+ *   `Qwen3.5-9B-Q4_K_M.gguf` at 5680522464 bytes with LFS sha256
+ *   matching `DEFAULT_MODEL_FILE_SHA256`.
  *
  * **Re-run both if you change any of them.**
  */
@@ -58,7 +67,37 @@ export const DEFAULT_MODEL_REPOSITORY_ID =
  * composes this base with `repositoryPath` — which is why that path is the bare
  * model name and NOT `unsloth/Qwen3.5-9B-GGUF`.
  */
-export const DEFAULT_MODEL_REPOSITORY_URL = 'https://huggingface.co/unsloth'
+export const DEFAULT_MODEL_REPOSITORY_URL = 'https://huggingface.co/tinnlab'
+
+/**
+ * The exact bytes the default install must land — the DRIFT PIN.
+ *
+ * `repositoryBranch: 'main'` is a moving target: the LFS client asks for
+ * `refs/heads/main` (`utils/git/lfs/service.rs`) and takes whatever the branch
+ * points at on the day the user installs. That client ALREADY verifies the
+ * downloaded bytes against the oid in the pointer it was served (it fails with
+ * `ChecksumMismatch`), so corruption in transit is covered. What is NOT covered
+ * is the pointer itself changing — the repository publishing a DIFFERENT file at
+ * the same path. This constant closes that gap: it names the file that was
+ * actually reviewed, so a silent republish fails loudly instead of installing.
+ *
+ * It lives here, beside the rest of the descriptor, and NOT in the seed
+ * migration: that migration seeds a REPOSITORY row (a URL and its auth), it
+ * never names a file, and `llm_repositories` has no column for a per-file
+ * digest. Versioning the pin with the binary — as `SEED_HUB_VERSION` and
+ * `BIOMCP_VERSION` are — also means an upgrade ships a new expected hash,
+ * whereas a row already in a user's database would not.
+ */
+export const DEFAULT_MODEL_FILE_SHA256 =
+  '03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8'
+
+/**
+ * Upstream provenance of the mirrored file: the commit of
+ * `unsloth/Qwen3.5-9B-GGUF` that `tinnlab/Qwen3.5-9B-GGUF` was mirrored from.
+ * Recorded so the chain can be re-derived later; not used at runtime.
+ */
+export const DEFAULT_MODEL_UPSTREAM_COMMIT =
+  '3885219b6810b007914f3a7950a8d1b469d598a5'
 
 export interface DefaultModelDescriptor {
   /** Repository row the weights are cloned from. */
@@ -66,8 +105,13 @@ export interface DefaultModelDescriptor {
   /** Path UNDER the org-scoped repository base — not org-qualified. */
   repositoryPath: string
   repositoryBranch: string
-  /** The single quant file to fetch. The repo holds 25 quants up to a 17.92 GB BF16. */
+  /**
+   * The single quant file to fetch. Upstream holds 25 quants up to a 17.92 GB
+   * BF16; the mirror carries only this one.
+   */
   mainFilename: string
+  /** Expected sha256 of `mainFilename` — see `DEFAULT_MODEL_FILE_SHA256`. */
+  mainFileSha256: string
   /**
    * STABLE model name — never timestamped.
    *
@@ -95,6 +139,7 @@ export const DEFAULT_MODEL: DefaultModelDescriptor = {
   repositoryPath: 'Qwen3.5-9B-GGUF',
   repositoryBranch: 'main',
   mainFilename: 'Qwen3.5-9B-Q4_K_M.gguf',
+  mainFileSha256: DEFAULT_MODEL_FILE_SHA256,
   name: 'ziee-default-qwen3-5-9b-q4-k-m',
   displayName: 'Qwen3.5 9B (Q4_K_M)',
   description:
