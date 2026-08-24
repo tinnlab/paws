@@ -13,12 +13,20 @@ import { byTestId } from '../testid'
  * fields onto the row as strays and never touched `progress_data`, which is the
  * only thing any download surface reads.
  *
- * This drives the REAL client path: the store's own SSE subscription against the
- * real `/api/llm-models/downloads/subscribe` route, parsed by the real
- * api-client transport, rendered by the real `DownloadItem`. Only the two
- * endpoints are served from fixtures — a genuine 5.68 GB transfer is not
- * something an e2e can run, and the store only subscribes once a download is
- * already in it (`setupDownloadTracking.ts`), so the list has to be seeded.
+ * SCOPE, stated honestly. `CODING_GUIDELINES` §14 says e2e specs must drive the
+ * real backend and not `page.route()`-mock the API. This spec is a deliberate
+ * exception, and it is a real one: the two endpoints served from fixtures ARE
+ * the entire server side of this feature, and the `update` frame is hand-written
+ * here. What that buys is coverage of everything downstream of the wire — the
+ * real api-client SSE transport, the real store merge, the real `DownloadItem`
+ * render — which is exactly where the defect was.
+ *
+ * The alternative was not a better test but no test: a genuine 5.68 GB transfer
+ * cannot run in e2e, and the store only subscribes once a download is already in
+ * it (`setupDownloadTracking.ts`), so the list must be seeded either way. The
+ * frame's SHAPE is not trusted to this file — TEST-9 pins it server-side against
+ * the real `From<&DownloadInstance>`, so a wire change fails there rather than
+ * silently making this fixture a lie.
  *
  * The fixture starts the row at the exact zeros the user was stuck on, so a
  * regression reproduces the reported symptom rather than an abstract one.

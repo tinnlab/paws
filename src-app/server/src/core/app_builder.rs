@@ -39,7 +39,7 @@ pub use ziee_framework::app_builder::{
 ///
 /// `X-Sync-Connection-Id` is contributed by the framework itself
 /// (`FRAMEWORK_REQUIRED_REQUEST_HEADERS`) and so is not repeated here.
-pub const REQUIRED_CUSTOM_REQUEST_HEADERS: &[&str] = &[
+pub const REQUIRED_CUSTOM_REQUEST_HEADERS: &[&'static str] = &[
     // Scopes a chat-token SSE connection to one conversation.
     crate::modules::chat::stream::handler::CHAT_STREAM_CONNECTION_HEADER,
     // Opts the web client into httpOnly refresh-token cookies. Only meaningful
@@ -55,7 +55,7 @@ pub const REQUIRED_CUSTOM_REQUEST_HEADERS: &[&str] = &[
 pub fn create_cors_layer(
     config: &ziee_core::ServerConfig,
 ) -> tower_http::cors::CorsLayer {
-    let mut required: Vec<&str> =
+    let mut required: Vec<&'static str> =
         ziee_framework::app_builder::FRAMEWORK_REQUIRED_REQUEST_HEADERS.to_vec();
     required.extend_from_slice(REQUIRED_CUSTOM_REQUEST_HEADERS);
     ziee_framework::app_builder::create_cors_layer_with(config, &required)
@@ -240,11 +240,16 @@ mod required_request_header_tests {
         assert!(allowed.contains("content-type"), "got {allowed:?}");
     }
 
-    /// The list is assembled from the handlers' own constants, so a rename
-    /// cannot leave the allowlist stale. Asserting the VALUES here would just
-    /// re-spell them; asserting the SOURCE is what has content.
+    /// Both custom headers are present in the required list.
+    ///
+    /// HONEST LIMIT (audit FIX-7): this compares `&str` VALUES, so a maintainer
+    /// who replaced the constant reference with an equal literal would leave it
+    /// green. It detects a drift in SPELLING, not in sourcing — and spelling is
+    /// already covered by the preflight test above. It is kept because it names
+    /// the two headers explicitly, which is what makes a future reader look for
+    /// the constants; it is NOT evidence that the sourcing survived.
     #[test]
-    fn the_required_list_is_sourced_from_the_handler_constants() {
+    fn the_required_list_contains_both_custom_headers() {
         assert!(
             REQUIRED_CUSTOM_REQUEST_HEADERS
                 .contains(&crate::modules::chat::stream::handler::CHAT_STREAM_CONNECTION_HEADER),

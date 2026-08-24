@@ -111,8 +111,26 @@ test.describe('Chat — an undeliverable stream is surfaced, not silent', () => 
 
     await page.goto(`${baseURL}/chat/${conv.id}`)
 
-    // The conversation loads and the composer is ready…
+    // Watch the real subscription PUT go out and come back, in a real browser.
+    // This is the one browser-level assertion that the client half of INV-2
+    // works end to end: it issues the PUT, carrying the connection-id header,
+    // and the server accepts it. (The CORS cause is not reproducible here — this
+    // harness is same-origin, so there is no preflight — which is why the
+    // preflight itself is asserted where it lives, in TEST-1/TEST-3.)
+    const subscription = page.waitForResponse(
+      (r) => SUBSCRIPTION_ROUTE.test(r.url()) && r.request().method() === 'PUT',
+      { timeout: 30000 },
+    )
+
     await expect(byTestId(page, 'chat-message-textarea')).toBeVisible({ timeout: 30000 })
+
+    const resp = await subscription
+    expect(resp.status(), 'the subscription PUT must be accepted').toBeLessThan(300)
+    expect(
+      resp.request().headers()['x-chat-stream-connection-id'],
+      'the PUT must carry the header the server keys the subscription on',
+    ).toBeTruthy()
+
     // …and after a window comfortably longer than the failure path needs
     // (3 attempts at 1s/2s backoff), no error banner has appeared.
     await page.waitForTimeout(8000)

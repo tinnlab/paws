@@ -56,6 +56,9 @@ server:
     # "X-Refresh-Cookie" matters ONLY for cross-origin browser deployments (SPA
     # on a different origin than the API) — the web client sends it to opt into
     # httpOnly refresh-token cookies. Same-origin deployments don't need it.
+    # NOTE: cross-origin COOKIE mode additionally needs
+    # `Access-Control-Allow-Credentials`, which this config block cannot express
+    # and nothing in the server sets, so it is not usable today (it fails closed).
     #
     # The three "X-" headers are ones the API itself reads, and the server
     # UNIONS them into whatever you list here (see

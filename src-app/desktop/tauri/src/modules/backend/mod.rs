@@ -505,10 +505,16 @@ fn capture_server_addr(server: &ziee::HttpServerConfig) {
 /// Desktop runs an embedded server reachable from three origins:
 /// (a) `tauri://localhost` — the Tauri webview's custom protocol,
 /// (b) `http://localhost:<port>` / `http://127.0.0.1:<port>` — the dev Vite
-/// server + same-port self-fetches, (c) the public ngrok tunnel domain when a
-/// tunnel is up (added at tunnel-start time; the static origins are here).
-/// An explicit allowlist, not the "permissive default" branch — that one gives
-/// Any origin Any method Any header, readable by any tab the user has open.
+/// server + same-port self-fetches. An explicit allowlist, not the "permissive
+/// default" branch — that one gives Any origin Any method Any header, readable
+/// by any tab the user has open.
+///
+/// (This comment previously also claimed the ngrok tunnel domain is "added at
+/// tunnel-start time". It is not: `allow_origins` has exactly one producer in
+/// the whole tree — this function — and nothing mutates it later. The tunnel
+/// path is same-origin, so nothing depends on the claim; it was simply false,
+/// and the extraction was re-asserting it as this function's contract.
+/// Audit FIX-8.)
 ///
 /// **Extracted as a free function so it is TESTABLE.** It used to be an inline
 /// literal inside `BackendModule::init(&mut self, app: &mut App)`, which needs a

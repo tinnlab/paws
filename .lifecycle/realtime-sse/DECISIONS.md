@@ -36,12 +36,26 @@ is the STRONGER signal of the same condition, and it is the one the reported bug
 The cost (a transient offline blip now reconnects instead of being ignored) is bounded by
 the existing exponential backoff to 30 s (`ChatStreamClient.ts:24-26,132-133`).
 Recorded against the ITEM-5 CONCERN in PLAN.md's phase-2 audit.
+**Sharpened by the blind correctness audit**, which put the cost precisely: on a
+link that drops PUTs while holding the SSE open, the stream is now torn down on
+every drop instead of surviving it, and a PUT for a NEWLY-selected conversation
+that blips will abort a stream that was healthy for the previous one. Accepted
+unchanged: it self-heals via the registry's replay, it is bounded by the backoff,
+and the alternative — keeping a connection whose scope we could not set — is the
+silence that produced the reported bug.
 
-### DEC-4: `SUBSCRIPTION_FAILURE_LIMIT` (and the SSE keep-alive interval) — fixed constant or admin-configurable settings row?
-**Resolution:** Both fixed constants. `SUBSCRIPTION_FAILURE_LIMIT = 3` is a named
-module-level constant in `ChatStreamClient.ts` alongside the existing
-`INITIAL_BACKOFF_MS` / `MAX_BACKOFF_MS` / `STABLE_AFTER_MS`. The download stream uses
-axum's `KeepAlive::default()` rather than a configured interval.
+### DEC-4: `SUBSCRIPTION_FAILURE_LIMIT` / `SUBSCRIPTION_REREPORT_EVERY` (and the SSE keep-alive interval) — fixed constants or admin-configurable settings rows?
+**Resolution:** All fixed constants. `SUBSCRIPTION_FAILURE_LIMIT = 3` and
+`SUBSCRIPTION_REREPORT_EVERY = 5` are named module-level constants in
+`ChatStreamClient.ts` alongside the existing `INITIAL_BACKOFF_MS` /
+`MAX_BACKOFF_MS` / `STABLE_AFTER_MS`. The download stream uses axum's
+`KeepAlive::default()` rather than a configured interval.
+**Amended after the audit:** the re-report interval did not exist in the first
+implementation — reporting fired once, on `failures === LIMIT`, and could never
+fire again. Two independent audit angles showed that reverts to the reported bug
+on the user's SECOND message. The resulting user-visible policy (banner at ~7 s,
+re-raised every 5 further failures — minutes apart once the backoff saturates) is
+now stated in the design doc rather than left as an accident of the code.
 **Basis:** convention. The mandatory configurable-settings rule targets OPERATIONAL
 tunables an admin has a reason to weigh (resource caps, retention, quotas). Neither of
 these is one: the failure limit is a client-side UX threshold in a bundle the operator
@@ -122,6 +136,27 @@ happened before); it belongs in a strip commit of its own, not smuggled into a b
 Consequence for this branch: `lifecycle-check.mjs` must be run with an explicit
 `--dir .lifecycle/realtime-sse`, since auto-discovery refuses a `.lifecycle/` holding two
 features.
+
+### DEC-13: Should the subscription-failure banner ever fire when no turn is in flight?
+**Resolution:** Yes — the banner, but NOT the turn-failure reset, and with different
+wording. At rest the action sets only `error`; mid-turn it additionally applies
+`buildSendFailureState`.
+**Basis:** codebase + the blind audit. `buildSendFailureState` always sets
+`lastTurnInterrupted: true`, which `MessageList` renders as an "interrupted" badge
+on the last assistant message — so applying it at conversation-open decorated a
+reply that had completed normally, possibly days earlier. And the single message
+("the reply is still being generated") is false in that path, which is the most
+common trigger. The user still needs to know live updates are not arriving before
+they type, so suppressing the banner entirely would be worse than either.
+
+### DEC-14: Which error wins when a turn already surfaced one and the stream then becomes undeliverable?
+**Resolution:** The delivery failure replaces it.
+**Basis:** the blind audit. The first implementation kept the earlier text, which —
+combined with the one-shot reporting defect — meant the user was never told the
+real, ongoing problem. The earlier error describes something that already finished;
+the delivery failure is live, is still true, and is the one with an action attached
+(reload). Recorded as a decision because the reverse is defensible and was in fact
+what shipped first.
 
 ### DEC-12: How is `ITEM-8` (the keep-alive) tested without waiting on production timings?
 **Resolution:** An integration test subscribes to the real endpoint and asserts a keep-alive

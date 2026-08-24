@@ -159,8 +159,13 @@ describe('TEST-8: the progress a view renders advances', () => {
       provider_id: 'p1',
       status: 'downloading',
       phase: 'downloading',
+      // The real wire always carries these keys (TEST-9 pins that an absent
+      // value serialises as null, not as a missing field), so the fixture does
+      // too — otherwise the whole-row semantics below would be untested.
+      error_message: null,
+      model_id: null,
       ...over,
-    } as DownloadProgressUpdate
+    } as unknown as DownloadProgressUpdate
   }
 
   it('lifts the flat wire fields into progress_data, and keeps advancing', () => {
@@ -206,6 +211,42 @@ describe('TEST-8: the progress a view renders advances', () => {
     expect(merged).not.toHaveProperty('current')
     expect(merged).not.toHaveProperty('total')
     expect(merged).not.toHaveProperty('speed_bps')
+  })
+
+  it('a row with NO progress yet stays without progress_data', () => {
+    // `DownloadItem.renderProgressInfo()` returns null when progress_data is
+    // absent, so materialising a zeroed object here would put the literal
+    // "0 Bytes / 0 Bytes" back on screen for every queued download between
+    // enqueue and its first tick — the exact string this fix removes, in a
+    // different state (audit FIX-4).
+    const queued = { ...BASE, progress_data: undefined } as unknown as DownloadInstance
+    const merged = applyProgressUpdate(queued, {
+      id: 'd1',
+      provider_id: 'p1',
+      status: 'pending',
+    } as unknown as DownloadProgressUpdate)
+    expect(merged.progress_data).toBeUndefined()
+  })
+
+  it('a server-side CLEAR of error_message is observable', () => {
+    // These whole-row fields are the opposite of the progress figures: the frame
+    // carries the row's current value every time, so a null means "cleared", not
+    // "unknown". Falling back to the previous value left stale red error text on
+    // a row whose error the server had cleared (audit FIX-5).
+    const failed = { ...BASE, error_message: 'network unreachable' } as DownloadInstance
+    const recovered = applyProgressUpdate(
+      failed,
+      frame({ current: 10, total: 100 }),
+    )
+    expect(recovered.error_message).toBeNull()
+  })
+
+  it('an unrecognised wire status leaves the row alone', () => {
+    const merged = applyProgressUpdate(
+      BASE,
+      frame({ status: 'not-a-real-status' as never }),
+    )
+    expect(merged.status).toBe('downloading')
   })
 
   it('still carries the terminal status through (the half that always worked)', () => {

@@ -34,18 +34,30 @@ import {
  * store. The `as DownloadInstance` cast is what stopped `tsc` reporting it; it is
  * gone, and this function is typed end-to-end instead.
  *
- * Each field falls back to the value already on screen: the server sends them as
- * `Option`, and a `null` means "unknown right now", never "zero" — blanking a
- * figure the user is watching would be its own bug (TEST-9 pins that the absent
- * case really is `null` and not `0`).
+ * The progress FIGURES fall back to the value already on screen: the server
+ * sends them as `Option`, and a `null` means "unknown right now", never "zero" —
+ * blanking a figure the user is watching would be its own bug (TEST-9 pins that
+ * the absent case really is `null` and not `0`). `error_message` and `model_id`
+ * are the opposite: those carry the WHOLE ROW's value on every frame, so a null
+ * there means genuinely cleared and is taken as-is. Getting that backwards left
+ * stale red error text on a row whose error the server had cleared (audit FIX-5).
  */
-const DOWNLOAD_STATUSES: readonly DownloadStatus[] = [
-  'pending',
-  'downloading',
-  'completed',
-  'failed',
-  'cancelled',
-]
+
+/**
+ * Exhaustive by construction: this is a `Record` keyed on the generated
+ * `DownloadStatus` union, so adding a status server-side is a COMPILE error here
+ * rather than a silent fall-through. A plain `readonly DownloadStatus[]` (what
+ * this was) accepts a short list happily — the same "a literal that can drift
+ * from its source" defect this file's own comments condemn for the CORS header
+ * (audit FIX-6).
+ */
+const DOWNLOAD_STATUSES: Record<DownloadStatus, true> = {
+  pending: true,
+  downloading: true,
+  completed: true,
+  failed: true,
+  cancelled: true,
+}
 
 /**
  * The wire carries `status` as a bare `string` (the server stringifies its enum),
@@ -54,13 +66,8 @@ const DOWNLOAD_STATUSES: readonly DownloadStatus[] = [
  * writing a value the rest of the store would then compare against and miss —
  * the old `as DownloadInstance` cast is precisely what let this mismatch through.
  */
-function narrowStatus(
-  wire: string,
-  previous: DownloadStatus,
-): DownloadStatus {
-  return DOWNLOAD_STATUSES.includes(wire as DownloadStatus)
-    ? (wire as DownloadStatus)
-    : previous
+function narrowStatus(wire: string, previous: DownloadStatus): DownloadStatus {
+  return wire in DOWNLOAD_STATUSES ? (wire as DownloadStatus) : previous
 }
 
 export function applyProgressUpdate(
@@ -68,19 +75,45 @@ export function applyProgressUpdate(
   update: DownloadProgressUpdate,
 ): DownloadInstance {
   const previous = download.progress_data
-  const progress_data: DownloadProgressData = {
-    phase: update.phase ?? previous?.phase ?? 'created',
-    current: update.current ?? previous?.current ?? 0,
-    total: update.total ?? previous?.total ?? 0,
-    message: update.message ?? previous?.message ?? '',
-    speed_bps: update.speed_bps ?? previous?.speed_bps ?? 0,
-    eta_seconds: update.eta_seconds ?? previous?.eta_seconds ?? 0,
-  }
+  // Everything the frame and the row jointly know about progress. All-absent
+  // means the row has no progress yet.
+  const phase = update.phase ?? previous?.phase
+  const current = update.current ?? previous?.current
+  const total = update.total ?? previous?.total
+  const message = update.message ?? previous?.message
+  const speed_bps = update.speed_bps ?? previous?.speed_bps
+  const eta_seconds = update.eta_seconds ?? previous?.eta_seconds
+
+  // A queued download's row has NO progress_data, and `DownloadItem` renders no
+  // byte line at all in that case. Materialising a zeroed object here would put
+  // the literal "0 Bytes / 0 Bytes" back on screen — the very string this fix
+  // exists to remove — for every download between enqueue and its first tick
+  // (audit FIX-4). So stay absent until something is actually known.
+  const known =
+    current !== undefined ||
+    total !== undefined ||
+    speed_bps !== undefined ||
+    eta_seconds !== undefined ||
+    message !== undefined ||
+    phase !== undefined
+
+  const progress_data: DownloadProgressData | undefined = known
+    ? {
+        phase: phase ?? 'created',
+        current: current ?? 0,
+        total: total ?? 0,
+        message: message ?? '',
+        speed_bps: speed_bps ?? 0,
+        eta_seconds: eta_seconds ?? 0,
+      }
+    : undefined
+
   return {
     ...download,
     status: narrowStatus(update.status, download.status),
-    error_message: update.error_message ?? download.error_message,
-    model_id: update.model_id ?? download.model_id,
+    // Whole-row fields: a null is a CLEAR, not "unknown" (see the header).
+    error_message: update.error_message,
+    model_id: update.model_id,
     progress_data,
   }
 }

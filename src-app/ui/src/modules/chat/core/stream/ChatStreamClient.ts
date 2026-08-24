@@ -31,6 +31,21 @@ const STABLE_AFTER_MS = 3_000
 // transient blip stays silent. Fixed constant, alongside its three neighbours
 // (DEC-4).
 const SUBSCRIPTION_FAILURE_LIMIT = 3
+// After the first report, re-report every N FURTHER consecutive failures, so a
+// permanently-undeliverable stream can say so again on the next turn instead of
+// going quiet forever (audit FIX-1). By the time this matters the connect loop's
+// backoff has saturated at MAX_BACKOFF_MS, so 5 further failures is minutes
+// apart — loud enough to be seen, far too slow to be a banner storm.
+const SUBSCRIPTION_REREPORT_EVERY = 5
+/**
+ * What the client knows and can always truthfully say. Deliberately NOT
+ * "the reply is still being generated": whether a turn is in flight is the
+ * STORE's knowledge, not this client's, and the most common trigger is a
+ * conversation being opened with nothing generating at all. The store appends
+ * the situational advice.
+ */
+const SUBSCRIPTION_ERROR_MESSAGE =
+  'Live updates are not reaching this conversation.'
 
 /** An independent chat-token SSE client bound to one conversation at a time. */
 export interface ChatStreamClient {
@@ -56,7 +71,11 @@ export interface ChatStreamHandlers {
   /**
    * The stream could not be SCOPED to a conversation after
    * `SUBSCRIPTION_FAILURE_LIMIT` consecutive attempts, so no live token can ever
-   * arrive on it. Reported once per failure run (a success resets it).
+   * arrive on it. Reported at the limit and then every
+   * `SUBSCRIPTION_REREPORT_EVERY` further consecutive failures; a success resets
+   * the count. It re-arms rather than firing once because the next turn clears
+   * the banner and re-enters the spinning state (see
+   * `onSubscriptionAttemptFailed`).
    *
    * This exists because the failure it reports was previously SILENT. A CORS
    * preflight refusal makes `fetch` REJECT — a network error, not a status — so
@@ -120,10 +139,27 @@ export function createChatStreamClient(
    *   - drop the connection id and abort the live stream, so the connect loop
    *     reconnects with a fresh handshake and re-PUTs (the pre-existing non-2xx
    *     behaviour);
-   *   - once the failures stop being plausibly transient, TELL SOMEONE.
+   *   - once the failures stop being plausibly transient, TELL SOMEONE — and
+   *     keep being able to tell them again.
    *
    * The `catch` half used to only `console.warn`, which is how a permanent,
    * total delivery failure presented as an ordinary spinner.
+   *
+   * ## Why re-arming matters (audit FIX-1, found by two independent angles)
+   *
+   * The first version of this reported on `subscriptionFailures === LIMIT`, i.e.
+   * exactly once, and the counter only reset on a SUCCESSFUL PUT. For the case
+   * this whole invariant exists for — a subscription that can never succeed —
+   * the counter climbed past the limit and `=== LIMIT` was never true again. So:
+   * the banner appeared once, `sendMessage` then cleared `error` and set
+   * `isStreaming: true` at the start of the very next turn, nothing could report
+   * again, and the second message reverted to the exact infinite spinner this
+   * branch exists to remove. INV-4 held for one occurrence per page load.
+   *
+   * Re-arming on an interval fixes that without turning the banner into a
+   * per-retry storm: the report fires at the limit and then every
+   * `SUBSCRIPTION_REREPORT_EVERY` further failures, which — because the connect
+   * loop's backoff has saturated at 30s by then — is minutes apart, not seconds.
    */
   function onSubscriptionAttemptFailed(reason: string): void {
     connectionId = null
@@ -133,18 +169,14 @@ export function createChatStreamClient(
       console.warn(`[chat-stream] subscription failed (${reason}); forcing reconnect`)
       return
     }
-    // Report once per failure run — the loop keeps retrying underneath, and a
-    // banner per retry would be its own defect.
-    if (subscriptionFailures === SUBSCRIPTION_FAILURE_LIMIT) {
-      console.error(
-        `[chat-stream] subscription failed ${subscriptionFailures}× (${reason}); ` +
-          'live updates are not reaching this conversation',
-      )
-      handlers?.onSubscriptionError?.(
-        'Live updates are not reaching this conversation. The reply is still being ' +
-          'generated and saved — reload to see it.',
-      )
-    }
+    const sinceLimit = subscriptionFailures - SUBSCRIPTION_FAILURE_LIMIT
+    if (sinceLimit % SUBSCRIPTION_REREPORT_EVERY !== 0) return
+
+    console.error(
+      `[chat-stream] subscription failed ${subscriptionFailures}× (${reason}); ` +
+        'live updates are not reaching this conversation',
+    )
+    handlers?.onSubscriptionError?.(SUBSCRIPTION_ERROR_MESSAGE)
   }
 
   async function putSubscription(): Promise<void> {

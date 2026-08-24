@@ -203,10 +203,19 @@ These are the non-negotiables this fix must deliver. They are lifted verbatim in
 
 1. **A custom request header the API reads must be accepted by the API's own CORS
    preflight, in every deployment shape, without a config file having to remember
-   it.** The failure here was not "someone forgot a string" — it was that forgetting
-   the string is possible and silent. Today's mechanism requires every explicit
-   `allow_headers` list (desktop's, `dev.example.yaml`'s, and every operator's) to
-   independently re-list a header the server itself defines.
+   it.** Today's mechanism requires every explicit `allow_headers` list (desktop's,
+   `dev.example.yaml`'s, and every operator's) to independently re-list a header the
+   server itself defines, and forgetting one is silent.
+
+   **Honest limit of what this delivers.** It removes the N-places problem, not the
+   remembering: a single server-side list is now the one place a header must appear,
+   and no deployment can drop it. Adding a FOURTH custom header still requires
+   adding it to that list, and no test can fail if someone forgets — nothing
+   mechanically connects the list to the headers the client actually sends. A
+   source-scanning guard was deliberately NOT written: that guard class has failed
+   to converge twice in this repo (the activity rail's 20 non-converging audit
+   rounds, and `gate-ui`'s port guard), and a predicate over "which headers does the
+   frontend send" has exactly the unbounded evasion space those had.
 
 2. **A chat turn's tokens must reach the client that is viewing the conversation,
    while the turn is generating — not only on reload.**
@@ -217,10 +226,35 @@ These are the non-negotiables this fix must deliver. They are lifted verbatim in
 
 4. **A realtime delivery failure must not present to the user as "still working".**
    A subscription that cannot be established is a hard failure and must be
-   surfaced, not swallowed into a `console.warn` behind a permanent spinner.
+   surfaced, not swallowed into a `console.warn` behind a permanent spinner. It
+   must also stay surfaceable: reporting once per page load is not enough, because
+   the next turn clears the banner and re-enters the spinning state.
 
-## Out of scope (recorded, not fixed)
+   The user-visible policy this implies, stated so it is a decision and not an
+   accident: the banner appears after **3** consecutive failed subscription
+   attempts (~7 s, given the client's 1s/2s/4s reconnect backoff) and re-appears
+   every 5 further consecutive failures while the condition persists. A transient
+   blip shorter than three attempts stays silent.
 
+## Scope boundaries (recorded, not silently dropped)
+
+- **The `reloadOpen` self-heal hole.** This document's own causal chain names it:
+  `reloadOpen` bails while `isStreaming` is true, so the pane cannot recover on its
+  own. A mid-turn stream drop that loses the `complete` frame reproduces the
+  identical wedge — and reports nothing, because the post-reconnect subscription
+  PUT succeeds. That is a PRE-EXISTING hole, not one this change introduces, and it
+  is left alone deliberately: the `isStreaming` guard exists to stop a refetch
+  clobbering a live streaming buffer, so relaxing it is a change to the streaming
+  data path with its own failure modes, not a one-line fix. Escalated rather than
+  attempted here. (Surfaced by the blind design-conformance audit, which was right
+  that leaving it unrecorded amounted to silently dropping it.)
+- **A download row that exists only on another device.** The SSE `update` handler
+  merges into rows already in the store; an update for an unknown id is discarded
+  and no row is created, so a download started in another tab renders nothing until
+  a refetch. Pre-existing, and not a patch: the wire event does not carry the
+  fields a row needs (`request_data.display_name` and friends), so materialising
+  one is a feature with its own design. Recorded because INV-3 is stated
+  unconditionally and this is a case it does not reach.
 - **A global end-to-end streaming deadline** that flips a stalled turn to a terminal
   error. It affects every provider and every slow model and is a product decision,
   not a bugfix. Invariant 4 above is satisfied at the actual defect — the

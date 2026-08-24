@@ -14,11 +14,17 @@
 //! being fed during generation.
 //!
 //! What this does NOT cover, stated plainly: `reqwest` performs no CORS
-//! preflight, so this test passed even while the desktop app was completely
-//! broken. The browser half of INV-2 is covered by TEST-1/TEST-3 (the preflight
-//! the desktop config must answer) and by the e2e. This test is what proves the
-//! server-side delivery path itself is incremental, which the preflight tests
-//! assume.
+//! preflight, so this file passes with the entire fix deleted — it passed while
+//! the desktop app was completely broken. It is therefore a REGRESSION GUARD on
+//! server-side incrementality, not by itself a proof of INV-2.
+//!
+//! INV-2's acceptance is the CONJUNCTION recorded in TESTS.md: this file (the
+//! server really streams during the turn) AND TEST-1/TEST-3 (the preflight a
+//! browser must pass in order to receive it) AND the e2e's assertion that a real
+//! browser issues the subscription PUT and gets a 2xx. No single test can span
+//! both halves, because the failure lived in a browser policy that no
+//! same-origin harness enforces — which is exactly why the defect survived a
+//! green suite for so long.
 
 use std::time::{Duration, Instant};
 
@@ -31,7 +37,17 @@ const TURN_TIMEOUT: Duration = Duration::from_secs(30);
 /// Per-delta pacing. Large enough that "streamed during the turn" and "delivered
 /// in one batch at the end" are separable by a clock, small enough to keep the
 /// test quick.
-const CHUNK_DELAY_MS: u64 = 120;
+const CHUNK_DELAY_MS: u64 = 400;
+/// The gap the first `content` frame must precede `complete` by.
+///
+/// Deliberately well BELOW `CHUNK_DELAY_MS`. The probe drains the HTTP body in a
+/// spawned task and hands frames over an unbounded channel, so what is timed
+/// here is when the TEST task dequeues, not when the byte arrived: on a loaded
+/// box a long deschedule could leave both frames already queued and collapse the
+/// measured gap. Pacing at 400ms and asserting only 150ms keeps the assertion
+/// meaningful (a batched delivery measures ~0) while leaving a wide margin for
+/// scheduling jitter on the shared host this repo documents.
+const MIN_OBSERVED_LEAD_MS: u64 = 150;
 
 async fn chat_user(server: &crate::common::TestServer, name: &str) -> TestUser {
     crate::common::test_helpers::create_user_with_permissions(
@@ -90,7 +106,7 @@ async fn a_subscribed_consumer_sees_content_before_the_turn_completes() {
 
     let lead = completed_at.duration_since(first_content_at);
     assert!(
-        lead >= Duration::from_millis(CHUNK_DELAY_MS),
+        lead >= Duration::from_millis(MIN_OBSERVED_LEAD_MS),
         "the first token must reach the consumer DURING generation, not with the \
          terminal frame: only {lead:?} separated the first `content` from \
          `complete` (stub pacing is {CHUNK_DELAY_MS}ms/delta). A batch delivered \
@@ -143,6 +159,12 @@ async fn every_delta_arrives_as_its_own_frame_not_one_batch() {
 
 #[tokio::test]
 async fn an_unsubscribed_connection_is_the_broken_case_and_receives_nothing() {
+    // Overlaps `chat_stream_test.rs::unsubscribed_connection_receives_nothing`
+    // on the silence half, deliberately: what THIS adds is the second assertion,
+    // that the turn nevertheless PERSISTS. The pair is the whole reported
+    // symptom — nothing live, everything on reload — and asserting only the
+    // silence half would leave the more surprising claim untested.
+    //
     // The NEGATIVE control that gives the two tests above their meaning, and the
     // exact state the desktop app was stuck in: the stream is open and healthy,
     // but never scoped — so `publish_frame` matches no connection and every
@@ -192,8 +214,3 @@ async fn an_unsubscribed_connection_is_the_broken_case_and_receives_nothing() {
 
 /// Keeps the enumerated id greppable in the test this branch added (A11).
 const _TEST_ID: &str = "TEST-5";
-
-/// Sanity: the ChatStreamProbe subscribes with the same header name the server
-/// keys on, so this file's tests genuinely exercise the subscription path.
-#[allow(dead_code)]
-const _SUBSCRIPTION_HEADER: &str = "X-Chat-Stream-Connection-Id";

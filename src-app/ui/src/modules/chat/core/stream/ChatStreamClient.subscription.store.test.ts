@@ -151,7 +151,17 @@ describe('TEST-6: a subscription that cannot be established is reported', () => 
     client.stop()
   })
 
-  it('reports at most ONCE per failure run, not once per retry', async () => {
+  it('does not report once per retry, but DOES stay able to report again', async () => {
+    // The first version of this test asserted `errors.length === 1` after seven
+    // cycles, and that assertion is what hid the real defect (audit FIX-1): the
+    // client reported on `failures === LIMIT` exactly, so under a permanently
+    // broken subscription it went silent forever after the first banner. Since
+    // `sendMessage` clears `error` and sets `isStreaming: true` at the start of
+    // every turn, the SECOND message then reverted to the exact infinite spinner
+    // this whole branch exists to remove.
+    //
+    // Both properties matter, so both are asserted: far fewer reports than
+    // attempts (no banner storm), and strictly more than one (it re-arms).
     const r = rig(async () => {
       throw new TypeError('Load failed')
     })
@@ -160,12 +170,31 @@ describe('TEST-6: a subscription that cannot be established is reported', () => 
       onSubscriptionError: (m) => errors.push(m),
     })
     client.start()
-    await runCycles(7)
+    await runCycles(14)
 
-    // Many more attempts than the limit…
-    expect(r.putAttempts()).toBeGreaterThan(3)
-    // …but a banner per retry would be its own defect.
-    expect(errors.length).toBe(1)
+    const attempts = r.putAttempts()
+    expect(attempts).toBeGreaterThan(8)
+    expect(errors.length).toBeGreaterThan(1)
+    expect(errors.length).toBeLessThan(attempts / 2)
+    client.stop()
+  })
+
+  it('the message it reports is one the client can always truthfully say', async () => {
+    // "The reply is still being generated" is the STORE's knowledge, not the
+    // client's — and the most common trigger is opening a conversation with
+    // nothing generating at all, where it would be false (audit FIX-3).
+    rig(async () => {
+      throw new TypeError('Load failed')
+    })
+    const errors: string[] = []
+    const client = createChatStreamClient({
+      onSubscriptionError: (m) => errors.push(m),
+    })
+    client.start()
+    await runCycles(5)
+
+    expect(errors[0]).toBe('Live updates are not reaching this conversation.')
+    expect(errors[0]).not.toMatch(/still being generated/i)
     client.stop()
   })
 
