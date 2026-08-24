@@ -18,19 +18,25 @@ const WEB_SEARCH_ROW: &str = "web_search";
 const LIT_SEARCH_ROW: &str = "lit_search";
 const RUN_JS_ROW: &str = "run_js";
 
-/// The `mcp_servers.name`s of the built-in servers currently registered.
+/// The `mcp_servers.name`s of the built-in servers currently registered, waiting
+/// for `await_names` to all appear.
 ///
 /// Read from the DATABASE rather than `/api/mcp/system-servers`: built-in rows
 /// are deliberately hidden from that endpoint (they are not operator-editable),
 /// so the REST list is empty of them whether the capability is on or off. The
 /// first draft of this test asserted against that endpoint and its positive
 /// control caught it — the "absent" assertions were passing vacuously.
-/// `expect_any` polls until at least one built-in row exists. The upsert is a
-/// fire-and-forget `tokio::spawn` inside each module's `init()`, so querying
-/// immediately after the server reports healthy can lose the race — which would
-/// make the ENABLED positive control flaky rather than wrong. The DISABLED side
-/// passes `false`: there is nothing to wait for, and waiting would only slow it.
-async fn registered_builtin_names(server: &TestServer, expect_any: bool) -> Vec<String> {
+///
+/// Each upsert is an independent fire-and-forget `tokio::spawn` inside its
+/// module's `init()`, so querying right after the server reports healthy can lose
+/// the race. Waiting for "any row" is NOT enough: `memory`/`files` landing first
+/// satisfies that while the rows the caller actually asserts on are still in
+/// flight. So the enabled side waits for the SPECIFIC names it is about to check.
+///
+/// The disabled side passes an empty slice — there is nothing to wait for, and
+/// it separately asserts the table is non-empty so "absent" cannot mean "nothing
+/// registered yet".
+async fn registered_builtin_names(server: &TestServer, await_names: &[&str]) -> Vec<String> {
     let pool = sqlx::PgPool::connect(&server.database_url)
         .await
         .expect("connect to the test database");
@@ -41,7 +47,12 @@ async fn registered_builtin_names(server: &TestServer, expect_any: bool) -> Vec<
             .fetch_all(&pool)
             .await
             .expect("query built-in mcp_servers");
-        if !expect_any || !names.is_empty() {
+        let settled = if await_names.is_empty() {
+            !names.is_empty()
+        } else {
+            await_names.iter().all(|w| names.iter().any(|n| n == w))
+        };
+        if settled {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -76,7 +87,7 @@ async fn test_disabled_capabilities_register_no_mcp_server() {
     // Other built-ins (memory, files, …) still register, so wait for the table
     // to populate before concluding these four are absent — otherwise a fast
     // query could "prove" absence simply by arriving first.
-    let off_names = registered_builtin_names(&off, true).await;
+    let off_names = registered_builtin_names(&off, &[]).await;
 
     for name in [WEB_SEARCH_ROW, LIT_SEARCH_ROW, RUN_JS_ROW] {
         assert!(
@@ -164,7 +175,7 @@ async fn test_disabled_capabilities_register_no_mcp_server() {
     })
     .await;
     let on_admin = create_user_with_permissions(&on, "paws_on_admin", &["*"]).await;
-    let on_names = registered_builtin_names(&on, true).await;
+    let on_names = registered_builtin_names(&on, &[WEB_SEARCH_ROW, LIT_SEARCH_ROW, RUN_JS_ROW]).await;
 
     for name in [WEB_SEARCH_ROW, LIT_SEARCH_ROW, RUN_JS_ROW] {
         assert!(

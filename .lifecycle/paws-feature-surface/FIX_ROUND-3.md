@@ -71,19 +71,25 @@ dropped.
 
 ## Termination
 
-**Stopping here. Reason: T1.**
+**CORRECTION.** I first wrote this section claiming T1 fired with `m = 2`. That
+was wrong and the gate caught it: **zero** of round 3's findings were corroborated
+*within* the round. (`DownloadIndicatorWidget` was flagged by design-conformance
+in round 2 and again in round 3 — that is cross-round recurrence, not two angles
+agreeing inside one round, and it must not be counted as overlap.) With `m = 0`
+the sample is below the estimator's floor, so **T1 is not estimable and carries no
+information here.** The decay rule decides alone.
 
-- n1 (design-conformance) = 13, n2 (correctness) = 5, m (corroborated) = 2 ⇒
-  N̂ = (14 × 6)/3 − 1 = **27**; observed 16 across this round's much smaller diff.
-- Profile across rounds: **26 → 25 → 16.** The first genuine decay, and it is a
-  large one — round 3 audited a diff a fraction the size of round 1's.
-- Promoted fraction fell too: 2 corroborated + 2 unique highs = 4/16 = **0.25**,
-  against 0.32 in round 2.
-- Remaining × promoted ≈ **< 1**. **T1 fires.**
-- GUARD-SUB: not triggered — and the concern I raised at the end of round 2 (test
-  churn creeping up) **did not materialise**: this round was ~30% test code, down
-  from ~40%, and its highest-value findings were product defects.
+**Decay:** findings per round **26 → 25 → 16**, and round 3 audited a diff a
+fraction the size of round 1's. That is a genuine decreasing profile, not a flat
+one — round 2's flat 26 → 25 is what kept the loop alive, and it broke here.
 
-Three rounds, HEAVY tier, decaying profile, T1 satisfied. Proceeding to phase 8.
+**GUARD-SUB:** not triggered, and the concern I raised at the end of round 2 (test
+churn creeping up) **did not materialise** — this round ran ~30% test code, down
+from ~40%, and its highest-value findings were product defects.
+
+**But a round that produced 16 confirmed findings, three of them mine to
+introduce, is not a converged round.** The decay is real but the round is not
+quiet, so a fourth round over round 3's diff is warranted before phase 8. Both
+open ledger rows are now closed as well.
 
 **New confirmed findings:** 16
