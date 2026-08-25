@@ -41,12 +41,46 @@ fn is_windows_absolute(raw: &str) -> bool {
     raw.starts_with(r"\\")
 }
 
-/// Accept an environment-supplied directory only if it is Windows-absolute and
-/// free of `..`. Split on BOTH separators because Windows accepts either and
-/// `Path::components` on a Linux test host would not see `\`.
+/// Accept an environment-supplied Unix directory only if it is absolute and
+/// free of `..`. The Unix counterpart of [`sanitize_env_dir`], applied to
+/// `$ROCM_PATH` so the "never build a path out of an unvalidated environment
+/// value" rule holds on both platforms rather than only where it was most
+/// obviously needed.
+fn is_safe_unix_env_root(raw: &str) -> bool {
+    let trimmed = raw.trim();
+    !trimmed.is_empty()
+        && trimmed.starts_with('/')
+        && !trimmed.split('/').any(|c| c == "..")
+}
+
+/// Accept an environment-supplied directory only if it is a **local**,
+/// Windows-absolute, `..`-free path. Split on BOTH separators because Windows
+/// accepts either and `Path::components` on a Linux test host would not see `\`.
+///
+/// **UNC paths are refused.** `\\host\share` is absolute and `..`-free, so an
+/// earlier version of this accepted it — and a test actually asserted that it
+/// did, pinning the worst case. A vendor probe must never be resolved from a
+/// network share: `SystemRoot=\\attacker\share` would make the server execute a
+/// remote binary and authenticate to the attacker's SMB host on the way (NTLM
+/// capture / relay), with no filesystem foothold needed on the victim at all.
+///
+/// Understand what this does and does not buy. It is path hygiene, not proof
+/// of trust: `SystemRoot=C:\Users\bob\x` is local, absolute and `..`-free, and
+/// still points somewhere an unprivileged user owns. On Windows these are
+/// ordinary environment variables — a user can set `SystemRoot` in
+/// `HKCU\Environment` — so the "OS-controlled" label below is a statement about
+/// intent, not an OS-enforced guarantee. The real containment is that the
+/// candidate list is short, each entry is joined with a fixed vendor suffix we
+/// control, and (see [`windows_trusted_dirs`]) no user-settable variable
+/// contributes an executable path at all.
 fn sanitize_env_dir(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() || !is_windows_absolute(trimmed) {
+        return None;
+    }
+    // Reject UNC (`\\host\share`) and the extended-length `\\?\` form, which
+    // can itself carry a UNC target (`\\?\UNC\host\share`).
+    if trimmed.starts_with(r"\\") || trimmed.starts_with("//") {
         return None;
     }
     if trimmed.split(['\\', '/']).any(|c| c == "..") {
@@ -63,12 +97,20 @@ fn sanitize_env_dir(raw: &str) -> Option<String> {
 /// and `CUDA_PATH` points at a version-stamped directory (`…\CUDA\v13.3`) that
 /// no constant can track across toolkit upgrades.
 ///
-/// **`nvidia-smi` — the authoritative probe — deliberately resolves ONLY from
-/// OS-controlled locations.** `CUDA_PATH`/`HIP_PATH`/`ROCM_PATH` are
-/// user-settable, so they contribute candidates for toolkit binaries only.
-/// That keeps the F-14 property (never trust a user-controlled search path)
-/// intact for the probe that decides GPU capability, while still finding a
-/// toolkit installed somewhere only its installer knows about.
+/// **No user-settable variable contributes an executable path.** An earlier
+/// version let `CUDA_PATH`/`HIP_PATH`/`ROCM_PATH` supply candidates for the
+/// "toolkit" binaries (`nvcc`, `rocm-smi`, `hipconfig`) on the theory that only
+/// `nvidia-smi`, the authoritative probe, needed protecting. That was the wrong
+/// distinction: F-14 is about **which binary gets executed**, not which answer
+/// is believed. `rocm-smi` is spawned unconditionally from `detect_all()` on
+/// Windows, so `%HIP_PATH%\bin\rocm-smi.exe` was arbitrary code execution in
+/// the server process for anyone who could set one environment variable —
+/// exactly the PATH-shadowing class F-14 closed, wearing a different hat.
+///
+/// The cost of removing them is small and worth naming: on Windows, `nvcc` in a
+/// custom toolkit directory is no longer found. `nvidia-smi` lives in
+/// `%SystemRoot%\System32` and is the primary source anyway, so CUDA detection
+/// is unaffected; only the toolkit-derived fallback loses a lookup path.
 ///
 /// `get_env` is injected so the policy is unit-testable on a non-Windows host.
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -79,26 +121,17 @@ fn windows_trusted_dirs(name: &str, get_env: impl Fn(&str) -> Option<String>) ->
         ("ProgramW6432", r"\NVIDIA Corporation\NVSMI"),
         ("ProgramFiles", r"\NVIDIA Corporation\NVSMI"),
     ];
-    const USER_SETTABLE: &[(&str, &str)] = &[
-        ("CUDA_PATH", r"\bin"),
-        ("HIP_PATH", r"\bin"),
-        ("ROCM_PATH", r"\bin"),
-    ];
-
     let mut dirs = Vec::new();
-    let collect = |pairs: &[(&str, &str)], out: &mut Vec<String>| {
-        for (var, suffix) in pairs {
-            if let Some(raw) = get_env(var)
-                && let Some(base) = sanitize_env_dir(&raw)
-            {
-                out.push(format!("{base}{suffix}"));
-            }
+    for (var, suffix) in OS_CONTROLLED {
+        if let Some(raw) = get_env(var)
+            && let Some(base) = sanitize_env_dir(&raw)
+        {
+            dirs.push(format!("{base}{suffix}"));
         }
-    };
-    collect(OS_CONTROLLED, &mut dirs);
-    if name != "nvidia-smi" {
-        collect(USER_SETTABLE, &mut dirs);
     }
+    // `name` is accepted so the policy can differ per binary if it ever needs
+    // to; today every probe gets the same, deliberately minimal, list.
+    let _ = name;
     dirs
 }
 
@@ -109,10 +142,23 @@ fn windows_trusted_dirs(name: &str, get_env: impl Fn(&str) -> Option<String>) ->
 /// Returns None when the binary isn't in any trusted dir; callers skip the
 /// detection step in that case.
 ///
-/// The per-binary Windows policy is **additive**: any name without one still
-/// falls through to the generic scan below. Making this an exhaustive
+/// On Unix the per-binary policy is **additive**: any name without one falls
+/// through to the generic [`UNIX_TRUSTED_DIRS`] scan. Making that an exhaustive
 /// allowlist would silently stop resolving `sleep`/`true`, and the two probe
 /// timeout regression tests would go green while no longer testing anything.
+///
+/// **The Unix scan is `cfg`-gated OFF on Windows, and that gate is
+/// security-critical.** These are POSIX paths, but they are not inert on
+/// Windows: `PathBuf::from("/usr/bin").join("nvidia-smi.exe")` resolves against
+/// the current drive as `C:\usr\bin\nvidia-smi.exe`, and the default `C:\` ACL
+/// lets an unprivileged user create `C:\usr\bin` and own what is inside it. The
+/// server would then execute an attacker-supplied binary as its own user and
+/// parse its stdout as the host's CUDA version. This was harmless before only
+/// because the old resolver joined the bare name (`…\nvidia-smi`, which
+/// `CreateProcess` will not launch) — adding `EXE_SUFFIX` is exactly what would
+/// have armed it. Leaving it on would reopen F-14 on the very platform this
+/// change exists to support, and would bypass the `USER_SETTABLE` split below
+/// without the attacker needing any environment variable at all.
 fn resolve_system_binary(name: &str) -> Option<std::path::PathBuf> {
     // "" on Unix, ".exe" on Windows. Compile-time is correct here for the same
     // reason `host_platform` gives: a Windows binary only runs on Windows.
@@ -126,15 +172,20 @@ fn resolve_system_binary(name: &str) -> Option<std::path::PathBuf> {
                 return Some(candidate);
             }
         }
+        // No POSIX fallback here — see the doc comment above.
+        return None;
     }
 
-    for dir in UNIX_TRUSTED_DIRS {
-        let candidate = std::path::PathBuf::from(dir).join(&file_name);
-        if candidate.is_file() {
-            return Some(candidate);
+    #[cfg(not(windows))]
+    {
+        for dir in UNIX_TRUSTED_DIRS {
+            let candidate = std::path::PathBuf::from(dir).join(&file_name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
         }
+        None
     }
-    None
 }
 
 /// Hard cap on how long a single host/GPU probe subprocess may run. A cold
@@ -332,7 +383,25 @@ pub fn detect_all() -> GpuDetection {
 pub fn detect_gpu_backend() -> GpuBackend {
     // Check for NVIDIA CUDA
     if is_cuda_available() {
-        tracing::info!("Detected NVIDIA GPU (CUDA available)");
+        // Name the version and its source here too, not only on the
+        // `recommend_backend` path. This function is what `/detect-gpu` (the
+        // settings-page GPU card) reaches; `recommend_backend` is only reached
+        // by the release-listing endpoints. Without this, a user who opened the
+        // GPU card and then read the log found "Detected NVIDIA GPU" and no
+        // evidence at all — which is the situation this whole change exists to
+        // fix. `cuda_evidence()` is memoised, so the detail is computed once.
+        match cuda_evidence() {
+            Some(e) => tracing::info!(
+                cuda_version = %e.version,
+                source = e.source.as_str(),
+                "Detected NVIDIA GPU (CUDA available)"
+            ),
+            None => tracing::warn!(
+                sources_tried = CUDA_SOURCES_TRIED,
+                "Detected NVIDIA GPU (CUDA available) but could NOT determine a CUDA \
+                 version — engine downloads will fall back to the CPU build"
+            ),
+        }
         return GpuBackend::Cuda;
     }
 
@@ -471,8 +540,25 @@ fn detect_cuda_evidence_uncached() -> Option<CudaEvidence> {
     ];
 
     for (args, source) in DRIVER_PROBES {
-        if let Some(out) = probe_trusted("nvidia-smi", args)
-            && out.status.success()
+        // A `None` here means the probe could not be spawned OR blew the
+        // PROBE_TIMEOUT. Both mean `nvidia-smi` is unusable right now, and
+        // retrying the same binary with different flags will hit the same wall
+        // — so STOP rather than paying the timeout again per variant.
+        //
+        // This matters because these calls are made synchronously from an
+        // `async fn` with no `spawn_blocking` (`handlers.rs` detect_gpu,
+        // `binary_manager.rs` check_for_updates). Without the early exit, a
+        // wedged driver costs 3 × PROBE_TIMEOUT here plus more below, on a
+        // tokio worker — which is the very 502 that PROBE_TIMEOUT was
+        // introduced to prevent.
+        let Some(out) = probe_trusted("nvidia-smi", args) else {
+            tracing::debug!(
+                "gpu_detect: nvidia-smi did not answer within the probe timeout; \
+                 skipping the remaining driver probes"
+            );
+            return None;
+        };
+        if out.status.success()
             && let Some(version) =
                 gpu_version::parse_cuda_smi_version(&String::from_utf8_lossy(&out.stdout))
         {
@@ -588,7 +674,16 @@ fn detect_rocm_evidence_uncached() -> Option<(MajorMinor, &'static str)> {
     }
 
     // 2 — $ROCM_PATH/.info/version, for a non-default install prefix.
+    //
+    // `$ROCM_PATH` is environment-supplied, so it gets the same treatment the
+    // Windows env-derived directories get: absolute, no `..`, and only ever
+    // joined with a fixed suffix we control. Without that this is an
+    // env-controlled arbitrary-file read. The impact is bounded — the content
+    // is parsed for a version and never echoed — but applying the rule in one
+    // place and not the other is the inconsistency that becomes a real hole
+    // the next time someone extends this.
     if let Ok(root) = std::env::var("ROCM_PATH")
+        && is_safe_unix_env_root(&root)
         && let Ok(raw) = std::fs::read_to_string(format!("{root}/.info/version"))
         && let Some((major, minor)) = parse_rocm_version_str(&raw)
     {
@@ -609,11 +704,18 @@ fn detect_rocm_evidence_uncached() -> Option<(MajorMinor, &'static str)> {
     if let Some(out) = probe_trusted("rocm-smi", &["--version"])
         && out.status.success()
     {
+        // ONLY the `ROCM version` label. `ROCM-SMI-LIB version` is
+        // `rocm_smi_lib`'s own semver and is DECOUPLED from the ROCm release —
+        // ROCm 6.x ships librocm_smi64.so.7 — so reading it here would report
+        // major 7 for a ROCm 6 host. Today that merely degrades to CPU (no
+        // rocm7.* artifact exists), but the moment one is published it would
+        // install a build that cannot load. That is precisely the outcome this
+        // module refuses to risk elsewhere (DEC-11: never guess a ROCm major),
+        // so the lib label is not consulted at all rather than used as a
+        // fallback.
         let text = String::from_utf8_lossy(&out.stdout);
-        for key in ["rocm-smi-lib version", "rocm version"] {
-            if let Some(version) = gpu_version::find_labeled_version(&text, key) {
-                return Some((version, "rocm-smi --version"));
-            }
+        if let Some(version) = gpu_version::find_labeled_version(&text, "rocm version") {
+            return Some((version, "rocm-smi --version"));
         }
     }
 
@@ -733,7 +835,18 @@ pub fn recommend_backend_for(
 /// known version, so it fires for BOTH failure modes — a version that could
 /// not be read (the reported bug) and a version read fine with no compatible
 /// artifact published.
-fn gpu_present_but_cpu_chosen(gpu_present: bool, chosen: Option<&str>) -> bool {
+/// `published` is required, not incidental: a release with NO assets for this
+/// platform yields an empty list, `recommend_backend_for` returns `None`, and
+/// that is **not a verdict** — nothing was selected, so the CPU build was not
+/// selected either. `recommend_backend` runs once per catalogue release, so
+/// without this guard the first build-pending row on a perfectly healthy host
+/// both emits a factually wrong warning AND spends the one-shot latch, silently
+/// swallowing the genuine occurrence later in the same process. That would
+/// defeat the entire point of the warning.
+fn gpu_present_but_cpu_chosen(gpu_present: bool, published: &[String], chosen: Option<&str>) -> bool {
+    if published.is_empty() {
+        return false;
+    }
     gpu_present && matches!(chosen, None | Some("cpu"))
 }
 
@@ -768,7 +881,7 @@ pub fn recommend_backend(available: &[String]) -> Option<String> {
 
     let gpu_present =
         is_cuda_available() || nvidia_gpu_present() || is_rocm_available() || metal;
-    if gpu_present_but_cpu_chosen(gpu_present, chosen.as_deref())
+    if gpu_present_but_cpu_chosen(gpu_present, available, chosen.as_deref())
         && !WARNED_GPU_BUT_CPU.swap(true, Ordering::Relaxed)
     {
         tracing::warn!(
@@ -994,16 +1107,36 @@ mod tests {
     /// modes must warn; neither healthy case may.
     #[test]
     fn warns_when_gpu_present_but_cpu_chosen() {
+        let published = published_today();
         // GPU present, version known, but only a CPU build published.
-        assert!(gpu_present_but_cpu_chosen(true, Some("cpu")));
+        assert!(gpu_present_but_cpu_chosen(true, &published, Some("cpu")));
         // GPU present, version could NOT be read — the reported bug.
-        assert!(gpu_present_but_cpu_chosen(true, None));
+        assert!(gpu_present_but_cpu_chosen(true, &published, None));
         // Healthy: a GPU artifact was actually selected.
-        assert!(!gpu_present_but_cpu_chosen(true, Some("cuda13.2")));
-        assert!(!gpu_present_but_cpu_chosen(true, Some("metal")));
+        assert!(!gpu_present_but_cpu_chosen(true, &published, Some("cuda13.2")));
+        assert!(!gpu_present_but_cpu_chosen(true, &published, Some("metal")));
         // Healthy: no GPU at all — CPU is the correct answer, stay quiet.
-        assert!(!gpu_present_but_cpu_chosen(false, Some("cpu")));
-        assert!(!gpu_present_but_cpu_chosen(false, None));
+        assert!(!gpu_present_but_cpu_chosen(false, &published, Some("cpu")));
+        assert!(!gpu_present_but_cpu_chosen(false, &published, None));
+    }
+
+    /// A release with no assets for this platform is NOT a verdict.
+    ///
+    /// `recommend_backend` runs once per catalogue release, so without this
+    /// guard the first build-pending row on a healthy host emits a factually
+    /// wrong warning ("the CPU build was selected" — nothing was selected) AND
+    /// spends the one-shot latch, silently swallowing the genuine occurrence
+    /// later in the same process.
+    #[test]
+    fn build_pending_release_is_not_a_cpu_fallback() {
+        let nothing_published: Vec<String> = Vec::new();
+        assert!(!gpu_present_but_cpu_chosen(true, &nothing_published, None));
+        // And the selector really does return None for that input, so this is
+        // the state actually reached rather than a hypothetical one.
+        assert_eq!(
+            recommend_backend_for("linux", Some((13, 3)), None, false, &nothing_published),
+            None
+        );
     }
 
     /// TEST-25 — the machine-readable presence probe.
@@ -1047,16 +1180,39 @@ mod tests {
             _ => None,
         };
 
-        let smi = windows_trusted_dirs("nvidia-smi", hostile);
-        assert!(
-            !smi.iter().any(|d| d.contains("hostile")),
-            "nvidia-smi must not resolve from CUDA_PATH/HIP_PATH/ROCM_PATH: {smi:?}"
-        );
-        assert!(smi.iter().any(|d| d == r"D:\Windows\System32"));
+        // NO binary resolves from a user-settable variable — not the
+        // authoritative probe, and not the toolkit binaries either. `rocm-smi`
+        // is spawned unconditionally from `detect_all()` on Windows, so
+        // letting %HIP_PATH% supply its directory was arbitrary code execution
+        // in the server process for anyone who could set one env var.
+        for name in ["nvidia-smi", "nvcc", "rocm-smi", "hipconfig"] {
+            let dirs = windows_trusted_dirs(name, hostile);
+            assert!(
+                !dirs.iter().any(|d| d.contains("hostile")),
+                "{name} must not resolve from CUDA_PATH/HIP_PATH/ROCM_PATH: {dirs:?}"
+            );
+            assert!(dirs.iter().any(|d| d == r"D:\Windows\System32"));
+        }
+    }
 
-        // The toolkit binaries MAY use them — that is the whole point of the split.
-        let nvcc = windows_trusted_dirs("nvcc", hostile);
-        assert!(nvcc.iter().any(|d| d == r"D:\hostile\cuda\bin"));
+    /// A vendor probe must never resolve from a network share. `\\host\share`
+    /// is absolute and `..`-free, so path hygiene alone accepts it — and an
+    /// earlier version of this test asserted it SHOULD be accepted, which
+    /// pinned the worst case rather than guarding against it.
+    #[test]
+    fn unc_paths_are_refused() {
+        assert_eq!(sanitize_env_dir(r"\\attacker\share"), None);
+        assert_eq!(sanitize_env_dir(r"\\?\UNC\attacker\share"), None);
+        assert_eq!(sanitize_env_dir("//attacker/share"), None);
+
+        let unc = |var: &str| match var {
+            "SystemRoot" => Some(r"\\attacker\share".to_string()),
+            _ => None,
+        };
+        assert!(
+            windows_trusted_dirs("nvidia-smi", unc).is_empty(),
+            "a UNC SystemRoot must contribute no candidate at all"
+        );
     }
 
     /// TEST-28 — Windows dirs come from the environment, never a drive letter.
@@ -1072,7 +1228,6 @@ mod tests {
 
         assert!(dirs.iter().any(|d| d == r"D:\Windows\System32"));
         assert!(dirs.iter().any(|d| d == r"D:\Program Files\NVIDIA Corporation\NVSMI"));
-        assert!(dirs.iter().any(|d| d == r"D:\CT\CUDA\v13.3\bin"));
         assert!(
             !dirs.iter().any(|d| d.starts_with("C:\\")),
             "no hardcoded C: drive: {dirs:?}"
@@ -1090,12 +1245,9 @@ mod tests {
         assert_eq!(sanitize_env_dir(r"D:\ok\..\evil"), None);
         assert_eq!(sanitize_env_dir(""), None);
         assert_eq!(sanitize_env_dir("   "), None);
-        // Absolute forms that ARE accepted.
+        // Local absolute forms ARE accepted; UNC is not (see unc_paths_are_refused).
         assert_eq!(sanitize_env_dir(r"D:\Windows"), Some(r"D:\Windows".to_string()));
-        assert_eq!(
-            sanitize_env_dir(r"\\server\share"),
-            Some(r"\\server\share".to_string())
-        );
+        assert_eq!(sanitize_env_dir(r"D:\"), Some("D:".to_string()));
 
         let env = |var: &str| match var {
             "CUDA_PATH" => Some(r"..\evil".to_string()),
@@ -1103,6 +1255,20 @@ mod tests {
             _ => None,
         };
         assert!(windows_trusted_dirs("nvcc", env).is_empty());
+    }
+
+    /// TEST-29b — the Unix counterpart of the env-path guard, applied to
+    /// `$ROCM_PATH`. Without it, an environment-supplied value is joined into
+    /// a filesystem read unvalidated.
+    #[test]
+    fn unix_env_root_rejects_relative_and_dotdot() {
+        assert!(is_safe_unix_env_root("/opt/rocm"));
+        assert!(is_safe_unix_env_root("  /opt/rocm-6.1.2  "));
+        assert!(!is_safe_unix_env_root("opt/rocm"));
+        assert!(!is_safe_unix_env_root("/opt/../etc"));
+        assert!(!is_safe_unix_env_root("/opt/rocm/.."));
+        assert!(!is_safe_unix_env_root(""));
+        assert!(!is_safe_unix_env_root("   "));
     }
 
     /// TEST-30 — DEC-4. A name with no per-binary policy must still resolve
@@ -1131,7 +1297,7 @@ mod tests {
         // No ROCm version determined → no rocm artifact, and the warning fires.
         let chosen = recommend_backend_for("linux", None, None, false, &published);
         assert_eq!(chosen.as_deref(), Some("cpu"));
-        assert!(gpu_present_but_cpu_chosen(true, chosen.as_deref()));
+        assert!(gpu_present_but_cpu_chosen(true, &published, chosen.as_deref()));
     }
 
     /// TEST-34 — the only Metal property observable from a non-macOS host.
@@ -1171,14 +1337,34 @@ mod tests {
             "a working nvidia-smi that yields NO CUDA version is exactly the reported bug",
         );
 
-        let chosen = recommend_backend(&published_today());
+        let published = published_today();
+        let chosen = recommend_backend(&published);
         eprintln!("host_truth: chosen={chosen:?}");
-        assert_ne!(
-            chosen.as_deref(),
-            Some("cpu"),
-            "an NVIDIA host with CUDA {} must not be handed the CPU build",
-            evidence.version
-        );
+
+        // Only assert "not cpu" when a compatible artifact actually exists for
+        // this host's CUDA major. On a host whose driver caps at CUDA 11, no
+        // published tag satisfies `maj <= 11`, so `cpu` is the CORRECT answer —
+        // asserting otherwise would turn an old-driver runner red and blame it
+        // on the bug this test guards.
+        let has_compatible = published
+            .iter()
+            .filter_map(|tag| parse_backend_version(tag, "cuda"))
+            .any(|(maj, _)| maj <= evidence.version.major);
+
+        if has_compatible {
+            assert_ne!(
+                chosen.as_deref(),
+                Some("cpu"),
+                "an NVIDIA host with CUDA {} must not be handed the CPU build",
+                evidence.version
+            );
+        } else {
+            eprintln!(
+                "host_truth: no published cuda artifact is compatible with CUDA {} — \
+                 cpu is the correct answer here",
+                evidence.version
+            );
+        }
     }
 
     #[test]
