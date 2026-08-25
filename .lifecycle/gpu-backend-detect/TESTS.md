@@ -18,12 +18,12 @@ hand-written approximations. That distinction is what makes them evidence.
 
 ## Regression — hosts that work today must keep working
 
-- **TEST-6** (tier: unit) [acceptance] [invariant: INV-3] [covers: ITEM-2] file: `sdk/crates/ziee-hardware/src/gpu_version.rs` — asserts: the legacy driver-550 banner `CUDA Version: 12.4` still yields `12.4`.
+- **TEST-6** (tier: unit) [acceptance] [invariant: INV-3] [covers: ITEM-2] file: `src-app/server/src/modules/llm_local_runtime/utils/gpu_detect.rs` — asserts: the legacy driver-550 banner `CUDA Version: 12.4` still parses AND still selects `cuda12.9` — the newest compatible 12.x build, not `cpu` and not `cuda13.2`. Asserted at the consuming layer because the invariant is about what gets SELECTED; the parser-level fixture is `cuda_version_from_550_banner_still_works` in the sdk crate.
 - **TEST-7** (tier: unit) [covers: ITEM-2] file: `sdk/crates/ziee-hardware/src/gpu_version.rs` — asserts: prose and empty input yield `None`.
 
 ## Never fabricate a version
 
-- **TEST-8** (tier: unit) [acceptance] [invariant: INV-4] [covers: ITEM-1] file: `sdk/crates/ziee-hardware/src/gpu_version.rs` — asserts: `NVIDIA-SMI version : 610.43.02` alone yields `None`. This is the guard against the naive fix ("match any `version` label"), which would return `610.43` here.
+- **TEST-8** (tier: unit) [acceptance] [invariant: INV-4] [covers: ITEM-1] file: `src-app/server/src/modules/llm_local_runtime/utils/gpu_detect.rs` — asserts: `NVIDIA-SMI version : 610.43.02` alone yields `None` AND selection falls to `cpu` rather than inventing a CUDA major; the deprecated-placeholder form behaves identically. Asserted through to selection because that is where the consequence of a fabricated version lands — a `cuda610` artifact that does not exist, or a major the host cannot run. The parser-level fixtures are `driver_version_is_never_read_as_cuda_version` and `deprecated_placeholder_yields_no_version` in the sdk crate.
 - **TEST-9** (tier: unit) [covers: ITEM-1] file: `sdk/crates/ziee-hardware/src/gpu_version.rs` — asserts: `CUDA version : Deprecated, see "CUDA UMD version" instead` yields `None`.
 - **TEST-10** (tier: unit) [covers: ITEM-1] file: `sdk/crates/ziee-hardware/src/gpu_version.rs` — asserts: an unparseable match for the key does NOT abort the scan — the real value two lines later is still found. Driver 610's actual ordering; first-match-wins would return `None`.
 - **TEST-11** (tier: unit) [covers: ITEM-1] file: `sdk/crates/ziee-hardware/src/gpu_version.rs` — asserts: `CUDA Version: N/A` yields `None`.

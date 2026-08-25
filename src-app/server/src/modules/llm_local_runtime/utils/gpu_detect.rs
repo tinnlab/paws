@@ -10,11 +10,14 @@
 // That means the fixture suite proving this module's behaviour sits behind a
 // submodule boundary, in `sdk/crates/ziee-hardware/src/`:
 //
-//   gpu_version.rs  TEST-2..TEST-22  (nvidia-smi banner / --version / -q
-//                                     fixtures, the never-fabricate-a-version
-//                                     negatives, nvcc + libcudart soname)
-//                   TEST-31, TEST-32 (ROCm string shapes, UNVERIFIED vs hardware)
-//   detection.rs    TEST-35, TEST-36 (the telemetry copy + the NVML field)
+//   gpu_version.rs — nvidia-smi banner / --version / -q fixtures, the
+//     never-fabricate-a-version negatives, nvcc + libcudart soname, and the
+//     ROCm string shapes (the last UNVERIFIED against real hardware):
+//     TEST-2, TEST-3, TEST-4, TEST-5, TEST-7, TEST-9, TEST-10, TEST-11,
+//     TEST-12, TEST-13, TEST-14, TEST-15, TEST-16, TEST-17, TEST-18, TEST-19,
+//     TEST-20, TEST-21, TEST-22, TEST-31, TEST-32
+//   detection.rs — the telemetry copy and the NVML field:
+//     TEST-35, TEST-36
 //
 // They are NOT run by `cargo test --workspace` from `src-app`: ziee-hardware
 // belongs to the *sdk* workspace and declares no default feature set, so
@@ -1197,6 +1200,49 @@ mod tests {
             Some("cuda13.2"),
             "an H200 host on CUDA 13.3 must not be handed the CPU build"
         );
+    }
+
+    /// TEST-6 [acceptance] INV-3 — hosts that work TODAY must keep working.
+    ///
+    /// Asserted here, at the consuming layer, and not only in the parser crate:
+    /// the invariant is about what this module SELECTS, so it should be proven
+    /// where selection happens. The legacy driver-550 banner is the shape every
+    /// pre-R6xx host emits.
+    #[test]
+    fn legacy_550_banner_still_selects_a_cuda_artifact() {
+        let legacy = "| NVIDIA-SMI 550.90  Driver Version: 550.90  CUDA Version: 12.4 |";
+        let cuda = gpu_version::parse_cuda_smi_version(legacy).map(MajorMinor::as_pair);
+        assert_eq!(cuda, Some((12, 4)), "the pre-R6xx banner must still parse");
+
+        let chosen = recommend_backend_for("linux", cuda, None, false, &published_today());
+        assert_eq!(
+            chosen.as_deref(),
+            Some("cuda12.9"),
+            "a CUDA 12.4 host must get the newest compatible 12.x build, not cpu and not cuda13"
+        );
+    }
+
+    /// TEST-8 [acceptance] INV-4 — never fabricate a version.
+    ///
+    /// The failure this guards is worse than returning nothing: reading the
+    /// DRIVER version (610.43) as if it were the CUDA version would select a
+    /// `cuda610` artifact that does not exist, or on a nearer miss a major the
+    /// host cannot run. Asserted through to selection, so the property is
+    /// proven where its consequence lands.
+    #[test]
+    fn a_driver_version_never_becomes_a_cuda_artifact() {
+        // Real `nvidia-smi --version` lines, with the CUDA field absent.
+        let driver_only = "NVIDIA-SMI version  : 610.43.02\nNVML version        : 610.43\n";
+        let cuda = gpu_version::parse_cuda_smi_version(driver_only).map(MajorMinor::as_pair);
+        assert_eq!(cuda, None, "610.43 is the DRIVER version, not a CUDA version");
+
+        // With no CUDA version, selection must fall to cpu rather than invent one.
+        let chosen = recommend_backend_for("linux", cuda, None, false, &published_today());
+        assert_eq!(chosen.as_deref(), Some("cpu"));
+
+        // And the deprecated-placeholder form must behave identically.
+        let deprecated = "CUDA version : Deprecated, see \"CUDA UMD version\" instead\n";
+        assert_eq!(gpu_version::parse_cuda_smi_version(deprecated), None);
     }
 
     /// TEST-23 — a major-only version (minor genuinely unknown, e.g. from
