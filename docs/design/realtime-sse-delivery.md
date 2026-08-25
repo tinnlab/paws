@@ -122,10 +122,22 @@ cannot self-heal either. "Only a reload shows it" follows directly.
 
 ### Corroborating detail
 
-The conversation **title** did appear. Titles ride the `sync` stream, whose header
-**is** allowed. That asymmetry is the fingerprint of this bug rather than of a
-transport failure: two SSE streams built the same way, one working and one not,
-differing only in whether their control header survived preflight.
+The conversation **title** did appear, and that asymmetry is the fingerprint of
+this bug rather than of a transport failure: two SSE streams built the same way,
+one working and one not, differing only in whether their control header survived
+preflight.
+
+Precisely, because the obvious version of this claim is wrong and was written
+that way at first: the title does NOT ride a title-specific sync emit —
+`chat/extensions/title/title.rs` calls no `sync_publish` at all, and pushes its
+`titleUpdated` frame over the CHAT stream, gated by the same `active_conversation`
+match as every other frame. What reaches the sidebar is the turn-end
+`SyncEntity::Conversation` publish (`chat/core/services/streaming.rs:1101`), which
+travels on the `sync` stream — whose `X-Sync-Connection-Id` **is** in the
+allowlist. So the conclusion holds and the mechanism is the conversation-updated
+emit, not the title extension. (Caught by the round-4 whole-feature audit; a false
+mechanism in the corroborating evidence is worth more than a false conclusion,
+because a reader who checks it finds nothing and distrusts the rest.)
 
 ## Root cause B — the download consumer writes the wrong shape
 

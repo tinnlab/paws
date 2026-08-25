@@ -66,7 +66,8 @@ server:
     #
     # The two CONNECTION-ID headers are ones the API itself reads, and the
     # server UNIONS them into whatever you list here (see
-    # core::app_builder::REQUIRED_CUSTOM_REQUEST_HEADERS): a deployment that
+    # core::app_builder::REQUIRED_CUSTOM_REQUEST_HEADERS for the chat one, and
+    # ziee_framework::app_builder::FRAMEWORK_REQUIRED_REQUEST_HEADERS for the sync one): a deployment that
     # omits one is broken, not configured — and broken silently, because the
     # browser refuses the request before sending it and nothing is logged
     # server-side. Listed explicitly so this example documents the real surface.

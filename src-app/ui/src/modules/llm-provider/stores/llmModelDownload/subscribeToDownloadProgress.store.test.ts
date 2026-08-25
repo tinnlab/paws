@@ -234,10 +234,11 @@ describe('TEST-8: the progress a view renders advances', () => {
 
   it('a row with NO progress yet stays without progress_data', () => {
     // `DownloadItem.renderProgressInfo()` returns null when progress_data is
-    // absent, so materialising a zeroed object here would put the literal
-    // "0 Bytes / 0 Bytes" back on screen for every queued download between
-    // enqueue and its first tick — the exact string this fix removes, in a
-    // different state.
+    // absent, so materialising a zeroed object for a row that has none would put
+    // a byte line on screen where there was none. NOTE this is NOT the reason a
+    // queued download shows "0 Bytes / 0 Bytes" — see the fixture note above;
+    // that comes from the INSERT seeding zeros, and the claim that this guard
+    // removed it was withdrawn.
     //
     // The frame below carries `phase: 'created'` (required on the wire, filled
     // in by `From<&DownloadInstance>` even with no progress_data) and every

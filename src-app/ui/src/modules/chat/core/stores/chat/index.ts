@@ -418,9 +418,8 @@ export interface ChatState {
   updateConversation: (updates: { title?: string }) => Promise<void>
   clearError: () => Promise<void>
   /** The chat-token stream could not be scoped to this conversation, so no live
-   *  token can ever arrive — reach a terminal, visible state instead of leaving
-   *  the turn claiming to generate. See the action for why this used to be
-   *  silent. */
+   *  token can ever arrive — raise the visible banner. Deliberately does not
+   *  touch turn state; see the action for why. */
   reportStreamSubscriptionError: (message: string) => Promise<void>
   /** The stream subscribed again — clear the banner the above raised. */
   clearStreamSubscriptionError: () => Promise<void>
@@ -640,10 +639,11 @@ const chatStoreConfig = {
       onReconnect: () => onStreamReconnect(),
       // The stream could not be scoped to a conversation, so no token will ever
       // arrive on it. Surface it through the EXISTING error banner
-      // (`ConversationPane` renders `store.error` as
-      // `chat-conversation-error-alert`) and clear the flags that would
-      // otherwise leave the turn claiming to be generating forever — a lost
-      // delivery channel must not present as "still working".
+      // (`ConversationPage` renders `store.error` as
+      // `chat-conversation-error-alert`). Surfacing is ALL it does: coupling the
+      // report to the turn's state produced a defect in three consecutive audit
+      // rounds, and terminating a stalled turn is the deadline the owner
+      // descoped. See the action.
       onSubscriptionError: (message: string) =>
         get().reportStreamSubscriptionError(message),
       // …and take it back down when delivery recovers, so the banner cannot

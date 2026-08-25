@@ -93,7 +93,8 @@ server:
       - "OPTIONS"
     # NOTE: the two CONNECTION-ID headers below are ones the API itself reads,
     # and the server UNIONS them into whatever you list here (see
-    # core::app_builder::REQUIRED_CUSTOM_REQUEST_HEADERS) — a deployment that
+    # core::app_builder::REQUIRED_CUSTOM_REQUEST_HEADERS for the chat one,
+    # and ziee_framework's FRAMEWORK_REQUIRED_REQUEST_HEADERS for the sync one) — a deployment that
     # forgets one is broken, not configured, and broken silently: the browser
     # refuses the request before sending it, so nothing is logged server-side.
     # They are spelled out anyway so this example documents the real surface.

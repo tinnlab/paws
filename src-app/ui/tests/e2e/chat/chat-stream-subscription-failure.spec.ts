@@ -23,13 +23,20 @@ import { loginAsAdmin, getAdminToken } from '../../common/auth-helpers'
  * e2e is same-origin, so there is no preflight at all. It is covered where it
  * actually lives, by TEST-1/TEST-3 against the real CORS layer.)
  *
- * The failing clause each assertion isolates:
- *   - the spinner stops        → the turn is not still claiming to generate;
- *   - the error is RENDERED    → the user is told, not left guessing;
- *   - the composer is usable   → they can act on it.
- * Each alone passes while the surface is still broken, so they are asserted
- * together — mirroring `failed-stream-error-state.spec.ts`, the sibling spec for
- * the same class of defect.
+ * SCOPE — what INV-4 delivers, and what it does not. The fix SURFACES the
+ * failure; it does not terminate a turn's UI state. Three audit rounds each
+ * found a defect in coupling the report to the turn (a completed reply badged
+ * `interrupted`; then one badged mid-handoff; then a turn reset inside
+ * `sendMessage`'s own setup, before its POST), so that coupling was removed.
+ * Terminating a stalled turn is a DEADLINE — the product decision the owner
+ * explicitly descoped.
+ *
+ * So this spec asserts what the branch actually promises: the banner appears,
+ * carries real text naming the remedy, the client genuinely RETRIED before
+ * giving up, and the composer is usable. An earlier version of this file also
+ * asserted "the spinner stops"; that clause was vacuous here (the spec never
+ * starts a turn, so no indicator ever exists) and named a contract the branch
+ * had deliberately abandoned (audit round 4).
  */
 
 const SUBSCRIPTION_ROUTE = /\/api\/chat\/stream\/subscription$/
@@ -49,7 +56,7 @@ async function seedConversation(
 }
 
 test.describe('Chat — an undeliverable stream is surfaced, not silent', () => {
-  test('a subscription that can never succeed reaches a visible terminal state', async ({
+  test('a subscription that can never succeed is surfaced, loudly and with a remedy', async ({
     page,
     testInfra,
   }) => {
@@ -86,17 +93,17 @@ test.describe('Chat — an undeliverable stream is surfaced, not silent', () => 
     // catch never aborted the stream, so it never reconnected and never re-PUT).
     expect(attempts).toBeGreaterThanOrEqual(3)
 
-    // Nothing is left claiming to generate…
-    await expect(byTestId(page, 'chat-streaming-indicator')).toHaveCount(0)
-    await expect(page.locator('[data-busy="streaming"]')).toHaveCount(0)
+    // The remedy is named, not just the problem.
+    expect(alertText).toMatch(/reload/i)
 
-    // …and the user can still act.
+    // And the user can still act — the banner is informational, not a lockout.
     await expect(byTestId(page, 'chat-message-textarea')).toBeEnabled({ timeout: 30000 })
     await expect(byTestId(page, 'chat-input-send-btn')).toBeEnabled()
 
-    // It stays terminal — no spinner creeps back after a settle window.
+    // It persists rather than flashing: a banner the user can miss is no better
+    // than the silence it replaced.
     await page.waitForTimeout(3000)
-    await expect(byTestId(page, 'chat-streaming-indicator')).toHaveCount(0)
+    await expect(alert).toBeVisible()
   })
 
   test('POSITIVE CONTROL: a healthy subscription raises no error banner', async ({

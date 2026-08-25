@@ -21,10 +21,23 @@ import { SUBSCRIPTION_ERROR_MESSAGE } from '@/modules/chat/core/stream/ChatStrea
  * provider error, a failed history fetch) has nothing to do with the stream
  * coming back, and silently wiping it would be the same class of bug in the
  * other direction.
+ *
+ * ## And NOT while a turn is still open (audit round 4)
+ *
+ * The stream coming back does not bring back the tokens it dropped. A turn that
+ * was mid-flight during the outage will never receive its `complete` frame, so
+ * `isStreaming` stays true and `reloadOpen` cannot self-heal it. Clearing the
+ * banner then produces the one state INV-4 forbids outright — a spinner running
+ * with no explanation and no way back — and it was reachable ONLY after the
+ * banner became the sole signal. So the advice stays up for exactly as long as
+ * the turn it applies to; the next turn clears `error` on its own.
  */
 export default (set: ChatSet, getRaw: () => ChatInitialState) => {
   const get = getRaw as unknown as () => ChatState
   return async () => {
-    if (get().error === SUBSCRIPTION_ERROR_MESSAGE) set({ error: null })
+    const state = get()
+    if (state.error !== SUBSCRIPTION_ERROR_MESSAGE) return
+    if (state.sending || state.isStreaming || state.finalizingTurn) return
+    set({ error: null })
   }
 }

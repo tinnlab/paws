@@ -119,4 +119,9 @@ INV-4 is one `set({ error })` with no inputs beyond the message.
 The guard-substitution tripwire does not fire: this round's findings span
 production code (4 files), two test files, three docs and two config files.
 
-**New confirmed findings:** 0
+**New confirmed findings:** 17
+
+(The count round 3's own re-audit returned — two angles, regression/removal-safety
+and whole-feature conformance. Two of them are regressions this round's REMOVAL
+introduced, which is the specific risk of a re-scope and the reason the re-audit
+was pointed at removals. Worked in `FIX_ROUND-4.md`.)

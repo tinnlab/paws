@@ -1,19 +1,16 @@
 /**
- * TEST-7 — an undeliverable stream must leave the turn in a TERMINAL state.
+ * TEST-7 — an undeliverable stream must be SURFACED.
  *
  * When `ChatStreamClient` reports that it cannot scope its connection to a
- * conversation, no live token can ever arrive on it. Clearing `error` alone
- * would not be enough, and neither would clearing the flags alone:
+ * conversation, no live token can ever arrive on it, and the user is otherwise
+ * left with an unexplained spinner that only a reload resolves.
  *
- *   - `isStreaming` left true is worse than a stuck spinner — `reloadOpen` in
- *     `stores/chat/index.ts` BAILS while it is true, so the pane cannot even
- *     self-heal on the next reconnect. That is why "only a reload shows it".
- *   - `sending` left true keeps the composer disabled, so the user cannot retry.
- *
- * The action therefore reuses `buildSendFailureState` — the one recovery shape a
- * failed turn resets to — rather than hand-rolling a second, subtly different
- * one. `sendFailureState.ts`'s own header warns that a half-recovery is exactly
- * how a store ends up permanently wedged.
+ * What the action does is raise the banner — and nothing else. Coupling the
+ * report to the turn's state produced a defect in three consecutive audit
+ * rounds, every one the same mistake: inferring "the turn is over" from a stream
+ * that had merely stopped delivering. Terminating a stalled turn is a deadline,
+ * which is the product decision the owner explicitly descoped; these tests pin
+ * that the action stays out of it.
  */
 import { describe, expect, it } from 'vitest'
 
@@ -93,11 +90,18 @@ describe('TEST-7: an undeliverable stream is surfaced, and only surfaced', () =>
     expect(state.lastTurnInterrupted).toBe(false)
   })
 
-  it('the message is never blank, and names the remedy', () => {
-    // The one banner text is the client's exported constant, so this pins the
-    // property that matters about it rather than re-asserting its words.
-    expect(MESSAGE.trim().length).toBeGreaterThan(0)
-    expect(MESSAGE).toMatch(/reload/i)
+  it('what lands on the banner names the problem AND the remedy', async () => {
+    // Asserted on what the ACTION puts on `error`, not on the constant in
+    // isolation: a test that only inspects an import passes with the action
+    // deleted (audit round 4). The two clauses are what make the banner
+    // actionable rather than merely present.
+    const { state, get, set } = harness()
+    await makeReportStreamSubscriptionError(set, get)(MESSAGE)
+    expect((state.error ?? '').trim().length).toBeGreaterThan(0)
+    expect(state.error).toMatch(/live updates/i)
+    expect(state.error).toMatch(/reload/i)
+    // …and it never claims a turn is in flight, in any state it can be shown in.
+    expect(state.error).not.toMatch(/still being (generated|saved)/i)
   })
 
   it('the live delivery failure REPLACES a stale earlier error', async () => {
@@ -114,6 +118,23 @@ describe('clearStreamSubscriptionError: the banner must not outlive the outage',
     await makeReportStreamSubscriptionError(set, get)(MESSAGE)
     expect(state.error).toBeTruthy()
 
+    await makeClearStreamSubscriptionError(set, get)()
+    expect(state.error).toBeNull()
+  })
+
+  it('does NOT clear while a turn is still open', async () => {
+    // The stream coming back does not bring back the tokens it dropped: a turn
+    // that was mid-flight keeps `isStreaming` true, will never get its `complete`
+    // frame, and `reloadOpen` bails on it. Clearing the banner then leaves a
+    // spinner running with no explanation — the one state INV-4 forbids outright,
+    // and reachable only once the banner became the sole signal (audit round 4).
+    const { state, get, set } = harness({ sending: false, isStreaming: true })
+    await makeReportStreamSubscriptionError(set, get)(MESSAGE)
+    await makeClearStreamSubscriptionError(set, get)()
+    expect(state.error).toBe(MESSAGE)
+
+    // …and it DOES clear once that turn is over.
+    state.isStreaming = false
     await makeClearStreamSubscriptionError(set, get)()
     expect(state.error).toBeNull()
   })

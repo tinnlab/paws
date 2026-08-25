@@ -44,15 +44,17 @@ const SUBSCRIPTION_REREPORT_EVERY = 5
  * elsewhere: a reword here would have silently stopped the banner ever being
  * cleared, with every test still green (audit round 3).
  *
- * Phrased to be true in every state it can be shown in. It deliberately does NOT
- * say "still being generated": the most common trigger is a conversation being
- * opened with nothing generating at all. "Still being saved" holds for a turn in
- * flight and is vacuously true otherwise, and "reload to see it" is the remedy in
- * both cases.
+ * Phrased to be true in EVERY state it can be shown in — which rules out naming
+ * a reply at all. The most common trigger is a conversation being opened with
+ * nothing generating, where "the reply is still being generated" and "still being
+ * saved" are both simply false. (The second of those was the first attempt, and
+ * it slipped past a guard asserting the message must not claim a turn is in
+ * flight, because that guard matched on the word "generated" — one word changed
+ * and the guard went green while the property it protected regressed. Audit
+ * round 4.) "Reload to see the latest" is the remedy in every case.
  */
 export const SUBSCRIPTION_ERROR_MESSAGE =
-  'Live updates are not reaching this conversation. The reply is still being ' +
-  'saved — reload to see it.'
+  'Live updates are not reaching this conversation. Reload to see the latest.'
 
 /** An independent chat-token SSE client bound to one conversation at a time. */
 export interface ChatStreamClient {
@@ -149,13 +151,22 @@ export function createChatStreamClient(
 
   function setActiveConversation(conversationId: string | null): Promise<void> {
     // A stream we already KNOW is unscoped must speak up whenever the store
-    // scopes it — same conversation or not. The store does this at the start of
-    // every turn and on every conversation open, right after `sendMessage`
-    // clears `error`; the connect loop's own interval cannot cover it, because
-    // by then the backoff has saturated at 30s. Covering only the
+    // scopes it to a CONVERSATION — same one or not. The store does this at the
+    // start of every turn and on every conversation open, right after
+    // `sendMessage` clears `error`; the connect loop's own interval cannot cover
+    // it, because by then the backoff has saturated at 30s. Covering only the
     // same-conversation branch left the FIRST turn on a new or switched
     // conversation silent for minutes (audit round 3).
-    if (subscriptionFailures >= SUBSCRIPTION_FAILURE_LIMIT) reportSubscriptionFailure()
+    //
+    // `null` is excluded: that is an UNSUBSCRIBE (`reset`, and the fresh
+    // handshake), whose banner would be wiped microseconds later by the same
+    // action's own `error: null` — and reporting still advances
+    // `lastReportedAtFailure`, so each invisible report pushed the next VISIBLE
+    // one out by another `REREPORT_EVERY` failures. It made the flow it was
+    // added for measurably worse (audit round 4).
+    if (conversationId !== null && subscriptionFailures >= SUBSCRIPTION_FAILURE_LIMIT) {
+      reportSubscriptionFailure()
+    }
     if (desiredConversationId === conversationId) {
       return Promise.resolve()
     }
@@ -239,16 +250,20 @@ export function createChatStreamClient(
         onSubscriptionAttemptFailed(`HTTP ${resp.status}`)
         return
       }
-      // Recovered. Tell the owner if we had told them it was broken, so a
-      // banner cannot outlive the condition it describes. Gated on actually
-      // having scoped to a CONVERSATION: a 204 for `conversation_id: null` (the
-      // fresh-handshake unsubscribe) proves nothing about delivery, and clearing
-      // the banner on it would be a false all-clear (audit round 3).
-      if (lastReportedAtFailure >= 0 && desiredConversationId !== null) {
-        lastReportedAtFailure = -1
+      // Recovered. Both counters reset TOGETHER — resetting `subscriptionFailures`
+      // while leaving `lastReportedAtFailure` set meant the next outage's first
+      // banner needed `lastReported + 5` failures instead of 3, i.e. several extra
+      // minutes of the silent spinner (audit round 4).
+      const hadReported = lastReportedAtFailure >= 0
+      subscriptionFailures = 0
+      lastReportedAtFailure = -1
+      // But only ANNOUNCE recovery when we actually scoped to a CONVERSATION: a
+      // 204 for `conversation_id: null` (the fresh-handshake unsubscribe) proves
+      // nothing about delivery, and clearing the banner on it is a false
+      // all-clear (audit round 3).
+      if (hadReported && desiredConversationId !== null) {
         handlers?.onSubscriptionRecovered?.()
       }
-      subscriptionFailures = 0
     } catch (error) {
       // A REJECTION, not a status — the transport never got a response. A CORS
       // preflight refusal lands here (measured: WebKitGTK reports

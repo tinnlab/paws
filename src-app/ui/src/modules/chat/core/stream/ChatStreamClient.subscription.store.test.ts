@@ -201,6 +201,28 @@ describe('TEST-6: a subscription that cannot be established is reported', () => 
     client.stop()
   })
 
+  it('does NOT re-report for an unsubscribe', async () => {
+    // `setActiveConversation(null)` is `reset`'s unsubscribe. Reporting there
+    // raised a banner the same action wiped microseconds later, while still
+    // advancing the counter — pushing the next VISIBLE report out by another
+    // interval and making the flow worse (audit round 4).
+    rig(async () => {
+      throw new TypeError('Load failed')
+    })
+    const errors: string[] = []
+    const client = createChatStreamClient({
+      onSubscriptionError: (m) => errors.push(m),
+    })
+    client.start()
+    await runCycles(5)
+    const before = errors.length
+    expect(before).toBeGreaterThanOrEqual(1)
+
+    await client.setActiveConversation(null)
+    expect(errors.length).toBe(before)
+    client.stop()
+  })
+
   it('re-reports when a turn starts on a DIFFERENT conversation too', async () => {
     // The per-turn re-arm first covered only the same-conversation early return,
     // so the FIRST turn after New-chat or a conversation switch — on a stream

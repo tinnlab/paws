@@ -158,27 +158,35 @@ dead. Trading a loud failure for a silent one inverts the point of the list.
 
 ### DEC-16: What clears the delivery-failure banner when the stream recovers?
 **Resolution:** The client reports recovery (`onSubscriptionRecovered`) on the
-first successful subscription after having reported a failure, and the store
-clears ONLY a banner whose text this feature raised (prefix match), never an
-unrelated error.
+first successful subscription TO A CONVERSATION after having reported a failure,
+and the store clears ONLY a banner whose text this feature raised — matched by
+EQUALITY against the client's exported constant, never a re-spelled prefix — and
+never while a turn is still open.
 **Basis:** the round-2 audit. Nothing else clears `error` except the user
 dismissing it, a new send, or a cache-miss conversation load — so after a
 transient outage the banner outlived the condition, telling the user live updates
 were not arriving on a conversation that was receiving them. A blanket
 `error: null` was rejected: a provider failure has nothing to do with the stream
 coming back, and wiping it would be the same class of bug in the other direction.
+**Amended twice after later rounds:** the prefix match became an equality check
+against an exported constant (three re-spelled literals meant a reword would
+strand the clear path with every test green); recovery is not announced for a bare
+`conversation_id: null` unsubscribe, which proves nothing about delivery; and the
+clear is suppressed while a turn is still open, because the stream returning does
+not bring back the tokens it dropped — clearing then leaves a spinner running with
+no explanation, which is the one state INV-4 forbids outright.
 
 ### DEC-13: Should the subscription-failure banner ever fire when no turn is in flight?
-**Resolution:** Yes — the banner, but NOT the turn-failure reset, and with different
-wording. At rest the action sets only `error`; mid-turn it additionally applies
-`buildSendFailureState`.
-**Basis:** codebase + the blind audit. `buildSendFailureState` always sets
-`lastTurnInterrupted: true`, which `MessageList` renders as an "interrupted" badge
-on the last assistant message — so applying it at conversation-open decorated a
-reply that had completed normally, possibly days earlier. And the single message
-("the reply is still being generated") is false in that path, which is the most
-common trigger. The user still needs to know live updates are not arriving before
-they type, so suppressing the banner entirely would be worse than either.
+**Resolution:** Yes — the banner, and ONLY the banner, in every state. The action
+does not touch turn state at all.
+**Basis:** codebase + three blind audits. This DEC originally said "the banner but
+NOT the turn-failure reset, and with different wording", i.e. it still coupled the
+report to the turn. That coupling produced a defect in every subsequent round — a
+reply that completed days ago badged `interrupted`, then one badged mid-handoff,
+then a turn reset inside `sendMessage`'s own setup before its POST — always the
+same mistake, inferring "the turn is over" from a stream that had merely stopped
+delivering. **Superseded by the round-3 re-scope**: one message, one `set({ error })`,
+no branch on turn state. Recorded in amended form rather than renumbered.
 
 ### DEC-14: Which error wins when a turn already surfaced one and the stream then becomes undeliverable?
 **Resolution:** The delivery failure replaces it.

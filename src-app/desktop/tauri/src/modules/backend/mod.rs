@@ -563,13 +563,19 @@ fn desktop_cors_config(port: u16) -> ziee::CorsConfig {
             // live assistant tokens were dropped at the registry while the reply
             // persisted normally — a spinner only a reload resolved.
             "X-Chat-Stream-Connection-Id".to_string(),
-            // Sent by the web client on the token-minting endpoints whenever it
-            // is NOT running inside Tauri — which includes a plain browser
-            // pointed at the dev origin above. It is deliberately NOT in the
-            // server's force-allowed union (DEC-15), so it has to be listed
-            // somewhere, and this is the allowlist that owns those origins.
-            // Without it that browser's login is refused at preflight.
-            "X-Refresh-Cookie".to_string(),
+            // `X-Refresh-Cookie` is deliberately ABSENT. It was added here for
+            // one round on the theory that a plain browser at the dev origin
+            // would otherwise have its login refused at preflight — and that
+            // scenario could not be substantiated: the header is only sent when
+            // NOT running inside Tauri, the desktop dev server binds a
+            // key-derived port rather than 1420, `desktop/ui`'s Vite config
+            // proxies no `/api`, and the tunnel path is same-origin so it never
+            // preflights at all. Meanwhile allowing it is the exact silent
+            // failure DEC-15 removed it from the union to prevent: cross-origin,
+            // the client sends the opt-in, the server blanks the body's refresh
+            // token, and with no `Access-Control-Allow-Credentials` anywhere the
+            // browser drops the cookie — a session with no refresh token. Loud
+            // beats silent (audit round 4).
         ],
     }
 }
