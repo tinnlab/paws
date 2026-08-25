@@ -7,6 +7,8 @@ mod default_model_install_test;
 mod deprecation_sweep_test;
 mod download_management_test;
 mod download_progress_test;
+// TEST-10: an idle download SSE stream must keep-alive rather than go silent.
+mod download_stream_keepalive_test;
 pub mod download_test;
 mod repo_files_real_test;
 mod storage_test;
