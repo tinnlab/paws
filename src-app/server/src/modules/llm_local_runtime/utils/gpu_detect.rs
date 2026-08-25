@@ -1,46 +1,239 @@
 // GPU backend detection for LLM runtime
 // Detects available GPU acceleration: CUDA (NVIDIA), ROCm (AMD), Metal (Apple Silicon)
+//
+// ── Where the parser tests live ────────────────────────────────────────────
+// The version PARSERS this module depends on are not in this crate. They live
+// in `ziee_hardware::gpu_version`, shared with `ziee-hardware`'s own hardware
+// telemetry so the two cannot re-diverge — they previously held two
+// independent copies of the same broken `"CUDA Version:"` scrape.
+//
+// That means the fixture suite proving this module's behaviour sits behind a
+// submodule boundary, in `sdk/crates/ziee-hardware/src/`:
+//
+//   gpu_version.rs — nvidia-smi banner / --version / -q fixtures, the
+//     never-fabricate-a-version negatives, nvcc + libcudart soname, and the
+//     ROCm string shapes (the last UNVERIFIED against real hardware):
+//     TEST-2, TEST-3, TEST-4, TEST-5, TEST-7, TEST-9, TEST-10, TEST-11,
+//     TEST-12, TEST-13, TEST-14, TEST-15, TEST-16, TEST-17, TEST-18, TEST-19,
+//     TEST-20, TEST-21, TEST-22, TEST-31, TEST-32
+//   detection.rs — the telemetry copy and the NVML field:
+//     TEST-35, TEST-36
+//
+// They are NOT run by `cargo test --workspace` from `src-app`: ziee-hardware
+// belongs to the *sdk* workspace and declares no default feature set, so
+// TEST-35/36 are not even compiled without the flag. Run them with:
+//
+//   cargo test -p ziee-hardware --features gpu-detect --lib
+//
+// The tests in THIS file (TEST-1, TEST-23..TEST-30, TEST-33, TEST-34, TEST-37)
+// cover selection, probe ordering, resolution policy and the on-box host-truth
+// check.
 
 use std::process::Command;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-/// Resolve a binary by name to its absolute path, searching only the
-/// trusted system directories (NOT $PATH). Closes
-/// 08-llm-local-runtime F-14 (Low): the previous `Command::new("nvidia-smi")`
-/// inherits the server's PATH, so a directory at the front of PATH
-/// containing a malicious `nvidia-smi` shadows the real one. Returns
-/// None when the binary isn't in any trusted dir; callers skip the
-/// detection step in that case.
-fn resolve_system_binary(name: &str) -> Option<std::path::PathBuf> {
-    // Vendor-specific tools live under these well-known prefixes. We
-    // prefer absolute paths so PATH injection / DLL search-order
-    // attacks can't pivot through GPU detection.
-    const TRUSTED_DIRS: &[&str] = &[
-        // Linux distros
-        "/usr/bin",
-        "/usr/sbin",
-        "/usr/local/bin",
-        // CUDA / ROCm typical install
-        "/usr/local/cuda/bin",
-        "/opt/rocm/bin",
-        // macOS
-        "/usr/local/bin",
-        "/opt/homebrew/bin",
-        "/System/Library",
+use ziee_hardware::gpu_version::{self, MajorMinor};
+
+/// Unix directories trusted to hold vendor/system binaries.
+///
+/// `/System/Library` is not a bin dir and cannot resolve any name we ask for,
+/// but it is kept: removing it would be an untestable macOS behaviour change
+/// for no measurable gain. `/usr/sbin` above it is where macOS actually keeps
+/// `system_profiler` and `sysctl`.
+#[cfg_attr(windows, allow(dead_code))]
+const UNIX_TRUSTED_DIRS: &[&str] = &[
+    // Linux distros
+    "/usr/bin",
+    "/usr/sbin",
+    "/usr/local/bin",
+    // CUDA / ROCm typical installs
+    "/usr/local/cuda/bin",
+    "/opt/cuda/bin",
+    "/opt/rocm/bin",
+    // macOS
+    "/opt/homebrew/bin",
+    "/System/Library",
+];
+
+/// True for a Windows-absolute path (`D:\…`, `\\server\share`).
+///
+/// Decided **lexically** rather than via `Path::is_absolute`, so it behaves
+/// identically when unit-tested on Linux — where `Path::new(r"D:\Windows")`
+/// is not absolute and the guard would otherwise be untestable here.
+fn is_windows_absolute(raw: &str) -> bool {
+    let bytes = raw.as_bytes();
+    if bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        return matches!(bytes[2], b'\\' | b'/');
+    }
+    raw.starts_with(r"\\")
+}
+
+/// Accept an environment-supplied Unix directory only if it is absolute and
+/// free of `..`. The Unix counterpart of [`sanitize_env_dir`], applied to
+/// `$ROCM_PATH` so the "never build a path out of an unvalidated environment
+/// value" rule holds on both platforms rather than only where it was most
+/// obviously needed.
+/// Returns the **trimmed** value on success. Returning a bool while trimming
+/// only internally would let the caller validate one string and then use a
+/// different one: `ROCM_PATH="  /opt/rocm  "` would pass, and the caller would
+/// then read `"  /opt/rocm  /.info/version"` — a relative path that silently
+/// never matches, leaving the source quietly non-functional.
+fn safe_unix_env_root(raw: &str) -> Option<&str> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || !trimmed.starts_with('/') {
+        return None;
+    }
+    if trimmed.split('/').any(|c| c == "..") {
+        return None;
+    }
+    Some(trimmed)
+}
+
+/// Accept an environment-supplied directory only if it is a **local**,
+/// Windows-absolute, `..`-free path. Split on BOTH separators because Windows
+/// accepts either and `Path::components` on a Linux test host would not see `\`.
+///
+/// **UNC paths are refused.** `\\host\share` is absolute and `..`-free, so an
+/// earlier version of this accepted it — and a test actually asserted that it
+/// did, pinning the worst case. A vendor probe must never be resolved from a
+/// network share: `SystemRoot=\\attacker\share` would make the server execute a
+/// remote binary and authenticate to the attacker's SMB host on the way (NTLM
+/// capture / relay), with no filesystem foothold needed on the victim at all.
+///
+/// Understand what this does and does not buy. It is path hygiene, not proof
+/// of trust: `SystemRoot=C:\Users\bob\x` is local, absolute and `..`-free, and
+/// still points somewhere an unprivileged user owns. On Windows these are
+/// ordinary environment variables — a user can set `SystemRoot` in
+/// `HKCU\Environment` — so the "OS-controlled" label below is a statement about
+/// intent, not an OS-enforced guarantee. The real containment is that the
+/// candidate list is short, each entry is joined with a fixed vendor suffix we
+/// control, and (see [`windows_trusted_dirs`]) no user-settable variable
+/// contributes an executable path at all.
+fn sanitize_env_dir(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || !is_windows_absolute(trimmed) {
+        return None;
+    }
+    // Reject UNC (`\\host\share`) and the extended-length `\\?\` form, which
+    // can itself carry a UNC target (`\\?\UNC\host\share`).
+    if trimmed.starts_with(r"\\") || trimmed.starts_with("//") {
+        return None;
+    }
+    if trimmed.split(['\\', '/']).any(|c| c == "..") {
+        return None;
+    }
+    Some(trimmed.trim_end_matches(['\\', '/']).to_string())
+}
+
+/// Windows candidate directories for `name`, built from OS- and
+/// installer-provided environment rather than hardcoded drive letters.
+///
+/// Hardcoding `C:\…` is wrong three ways: Windows need not be installed on
+/// `C:`; `%ProgramFiles%` is WOW64-redirected depending on process bitness;
+/// and `CUDA_PATH` points at a version-stamped directory (`…\CUDA\v13.3`) that
+/// no constant can track across toolkit upgrades.
+///
+/// **No user-settable variable contributes an executable path.** An earlier
+/// version let `CUDA_PATH`/`HIP_PATH`/`ROCM_PATH` supply candidates for the
+/// "toolkit" binaries (`nvcc`, `rocm-smi`, `hipconfig`) on the theory that only
+/// `nvidia-smi`, the authoritative probe, needed protecting. That was the wrong
+/// distinction: F-14 is about **which binary gets executed**, not which answer
+/// is believed. `rocm-smi` is spawned from `detect_all()` with no gate, so
+/// `%HIP_PATH%\bin\rocm-smi.exe` was arbitrary code execution in the server
+/// process for anyone who could set one environment variable — exactly the
+/// PATH-shadowing class F-14 closed, wearing a different hat.
+///
+/// **State the cost precisely, because the first draft of this comment
+/// understated it.** On Windows `nvcc`, `rocm-smi` and `hipconfig` now resolve
+/// **nowhere at all** — not merely "not in a custom directory". The CUDA
+/// toolkit installs to `%ProgramFiles%\NVIDIA GPU Computing Toolkit\CUDA\vX.Y\bin`
+/// and the HIP SDK to `%ProgramFiles%\AMD\ROCm\X.Y\bin`, neither of which is
+/// listed. That is acceptable today: `nvidia-smi` lives in
+/// `%SystemRoot%\System32` and is the primary CUDA source, so **CUDA detection
+/// on Windows is unaffected** — only the toolkit-derived fallback is lost. Note
+/// also that `is_rocm_available()` is already unconditionally `false` on
+/// Windows (its file fast-path is Linux-gated), so ROCm there was dead before
+/// this change, not because of it.
+///
+/// If Windows toolkit probes are ever wanted, the fix is a FIXED suffix under
+/// `%ProgramFiles%`/`%ProgramW6432%` — not restoring the user-settable vars.
+///
+/// `get_env` is injected so the policy is unit-testable on a non-Windows host.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn windows_trusted_dirs(name: &str, get_env: impl Fn(&str) -> Option<String>) -> Vec<String> {
+    // (environment variable, fixed vendor subdirectory beneath it)
+    const OS_CONTROLLED: &[(&str, &str)] = &[
+        ("SystemRoot", r"\System32"),
+        ("ProgramW6432", r"\NVIDIA Corporation\NVSMI"),
+        ("ProgramFiles", r"\NVIDIA Corporation\NVSMI"),
     ];
-    for dir in TRUSTED_DIRS {
-        let candidate = std::path::PathBuf::from(dir).join(name);
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-        // macOS sometimes has system_profiler under /usr/sbin/
-        let alt = std::path::PathBuf::from(dir).join("usr").join("sbin").join(name);
-        if alt.is_file() {
-            return Some(alt);
+    let mut dirs = Vec::new();
+    for (var, suffix) in OS_CONTROLLED {
+        if let Some(raw) = get_env(var)
+            && let Some(base) = sanitize_env_dir(&raw)
+        {
+            dirs.push(format!("{base}{suffix}"));
         }
     }
-    None
+    // `name` is accepted so the policy can differ per binary if it ever needs
+    // to; today every probe gets the same, deliberately minimal, list.
+    let _ = name;
+    dirs
+}
+
+/// Resolve a binary by name to its absolute path, searching only trusted
+/// system directories (NOT `$PATH`). Closes 08-llm-local-runtime F-14 (Low):
+/// `Command::new("nvidia-smi")` inherits the server's PATH, so a directory at
+/// the front of PATH containing a malicious `nvidia-smi` shadows the real one.
+/// Returns None when the binary isn't in any trusted dir; callers skip the
+/// detection step in that case.
+///
+/// On Unix the per-binary policy is **additive**: any name without one falls
+/// through to the generic [`UNIX_TRUSTED_DIRS`] scan. Making that an exhaustive
+/// allowlist would silently stop resolving `sleep`/`true`, and the two probe
+/// timeout regression tests would go green while no longer testing anything.
+///
+/// **The Unix scan is `cfg`-gated OFF on Windows, and that gate is
+/// security-critical.** These are POSIX paths, but they are not inert on
+/// Windows: `PathBuf::from("/usr/bin").join("nvidia-smi.exe")` resolves against
+/// the current drive as `C:\usr\bin\nvidia-smi.exe`, and the default `C:\` ACL
+/// lets an unprivileged user create `C:\usr\bin` and own what is inside it. The
+/// server would then execute an attacker-supplied binary as its own user and
+/// parse its stdout as the host's CUDA version. This was harmless before only
+/// because the old resolver joined the bare name (`…\nvidia-smi`, which
+/// `CreateProcess` will not launch) — adding `EXE_SUFFIX` is exactly what would
+/// have armed it. Leaving it on would reopen F-14 on the very platform this
+/// change exists to support, and would bypass the `USER_SETTABLE` split below
+/// without the attacker needing any environment variable at all.
+fn resolve_system_binary(name: &str) -> Option<std::path::PathBuf> {
+    // "" on Unix, ".exe" on Windows. Compile-time is correct here for the same
+    // reason `host_platform` gives: a Windows binary only runs on Windows.
+    let file_name = format!("{name}{}", std::env::consts::EXE_SUFFIX);
+
+    #[cfg(windows)]
+    {
+        for dir in windows_trusted_dirs(name, |var| std::env::var(var).ok()) {
+            let candidate = std::path::PathBuf::from(dir).join(&file_name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+        // No POSIX fallback here — see the doc comment above.
+        return None;
+    }
+
+    #[cfg(not(windows))]
+    {
+        for dir in UNIX_TRUSTED_DIRS {
+            let candidate = std::path::PathBuf::from(dir).join(&file_name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+        None
+    }
 }
 
 /// Hard cap on how long a single host/GPU probe subprocess may run. A cold
@@ -238,7 +431,25 @@ pub fn detect_all() -> GpuDetection {
 pub fn detect_gpu_backend() -> GpuBackend {
     // Check for NVIDIA CUDA
     if is_cuda_available() {
-        tracing::info!("Detected NVIDIA GPU (CUDA available)");
+        // Name the version and its source here too, not only on the
+        // `recommend_backend` path. This function is what `/detect-gpu` (the
+        // settings-page GPU card) reaches; `recommend_backend` is only reached
+        // by the release-listing endpoints. Without this, a user who opened the
+        // GPU card and then read the log found "Detected NVIDIA GPU" and no
+        // evidence at all — which is the situation this whole change exists to
+        // fix. `cuda_evidence()` is memoised, so the detail is computed once.
+        match cuda_evidence() {
+            Some(e) => tracing::info!(
+                cuda_version = %e.version,
+                source = e.source.as_str(),
+                "Detected NVIDIA GPU (CUDA available)"
+            ),
+            None => tracing::warn!(
+                sources_tried = CUDA_SOURCES_TRIED,
+                "Detected NVIDIA GPU (CUDA available) but could NOT determine a CUDA \
+                 version — engine downloads will fall back to the CPU build"
+            ),
+        }
         return GpuBackend::Cuda;
     }
 
@@ -262,18 +473,252 @@ pub fn detect_gpu_backend() -> GpuBackend {
     GpuBackend::Cpu
 }
 
-/// Parse the `CUDA Version: X.Y` field out of `nvidia-smi` header output.
-/// That field reports the **maximum** CUDA runtime the installed driver
-/// supports (driver-version-derived, not toolkit), which is exactly what
-/// we match build artifacts against.
-fn parse_cuda_smi_version(stdout: &str) -> Option<(u32, u32)> {
-    let idx = stdout.find("CUDA Version:")?;
-    let rest = &stdout[idx + "CUDA Version:".len()..];
-    let tok = rest.split_whitespace().next()?; // e.g. "12.4"
-    let mut parts = tok.split('.');
-    let major = parts.next()?.parse().ok()?;
-    let minor = parts.next().unwrap_or("0").parse().unwrap_or(0);
-    Some((major, minor))
+/// Where a CUDA version came from, so the decision log names its evidence.
+///
+/// The split matters. Driver-reported sources answer "what CUDA runtime can
+/// this driver execute" — exactly the artifact-selection question.
+/// Toolkit-derived sources answer "what happens to be installed here", which
+/// is only a proxy: a toolkit newer than the driver over-reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CudaVersionSource {
+    SmiVersionFlag,
+    SmiBanner,
+    SmiQuery,
+    NvccRelease,
+    CudartSoname,
+}
+
+impl CudaVersionSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::SmiVersionFlag => "nvidia-smi --version",
+            Self::SmiBanner => "nvidia-smi (banner)",
+            Self::SmiQuery => "nvidia-smi -q",
+            Self::NvccRelease => "nvcc --version (toolkit)",
+            Self::CudartSoname => "libcudart soname (toolkit)",
+        }
+    }
+
+    fn is_driver_reported(self) -> bool {
+        matches!(self, Self::SmiVersionFlag | Self::SmiBanner | Self::SmiQuery)
+    }
+}
+
+/// Every source tried, for the "could not determine a version" warning. Users
+/// reporting the failure should be told what was already attempted.
+const CUDA_SOURCES_TRIED: &str =
+    "nvidia-smi --version, nvidia-smi, nvidia-smi -q, nvcc --version, libcudart soname";
+
+#[derive(Debug, Clone, Copy)]
+struct CudaEvidence {
+    version: MajorMinor,
+    source: CudaVersionSource,
+}
+
+/// `libcudart` locations, shared by the availability check and the version
+/// probe so a host that counts as "CUDA available" is the same host we try to
+/// read a version from.
+const CUDART_PATHS: &[&str] = &[
+    "/usr/local/cuda/lib64/libcudart.so",
+    "/usr/lib/x86_64-linux-gnu/libcudart.so",
+    "/usr/lib/aarch64-linux-gnu/libcudart.so",
+    "/usr/lib64/libcudart.so",
+];
+
+/// Recover a CUDA version from the resolved `libcudart` soname, no subprocess.
+///
+/// `canonicalize` follows the WHOLE symlink chain
+/// (`libcudart.so → .so.13 → .so.13.3.29`), so this usually yields major AND
+/// minor. Note the sibling trick does NOT work for the toolkit directory:
+/// `/usr/local/cuda` resolves to `/etc/alternatives/cuda`, not `cuda-13.3`.
+fn detect_cuda_version_from_cudart() -> Option<MajorMinor> {
+    for path in CUDART_PATHS {
+        if let Ok(real) = std::fs::canonicalize(path)
+            && let Some(name) = real.file_name().and_then(|n| n.to_str())
+            && let Some(version) = gpu_version::parse_cudart_soname(name)
+        {
+            return Some(version);
+        }
+    }
+    None
+}
+
+/// Count devices in `nvidia-smi --query-gpu=name --format=csv,noheader`.
+fn parse_query_gpu_count(stdout: &str) -> usize {
+    stdout.lines().filter(|l| !l.trim().is_empty()).count()
+}
+
+/// Whether `nvidia-smi` enumerates at least one real device.
+///
+/// Uses the machine-readable `--query-gpu` interface, which is stable across
+/// driver releases in a way the human-readable banner is not. It carries NO
+/// CUDA-version field (verified via `--help-query-gpu`), so it is a
+/// presence/identity source only — never a version source.
+fn nvidia_gpu_present() -> bool {
+    static CACHE: OnceLock<bool> = OnceLock::new();
+    *CACHE.get_or_init(|| {
+        let Some(out) = probe_trusted("nvidia-smi", &["--query-gpu=name", "--format=csv,noheader"])
+        else {
+            return false;
+        };
+        out.status.success() && parse_query_gpu_count(&String::from_utf8_lossy(&out.stdout)) > 0
+    })
+}
+
+/// Probe the host's CUDA version, strongest evidence first.
+///
+/// 1. `nvidia-smi --version` — cheapest: driver/NVML strings only, no per-GPU
+///    enumeration (the bare banner walks every GPU's temperature and memory).
+/// 2. `nvidia-smi` banner — the path that existed before; kept so nothing that
+///    works today regresses.
+/// 3. `nvidia-smi -q` — structured, present across driver generations.
+/// 4. `nvcc --version` — TOOLKIT, and only with a confirmed device.
+/// 5. `libcudart` soname — TOOLKIT, no subprocess, last resort.
+///
+/// Sources 4-5 are gated behind [`nvidia_gpu_present`] on purpose:
+/// `is_cuda_available()` returns true from a `libcudart.so` file check with no
+/// driver check at all, so without the gate a box with the toolkit installed
+/// and no working driver would newly select a CUDA build — trading a silent
+/// downgrade for a loud-but-wrong upgrade.
+fn detect_cuda_evidence_uncached() -> Option<CudaEvidence> {
+    const DRIVER_PROBES: &[(&[&str], CudaVersionSource)] = &[
+        (&["--version"], CudaVersionSource::SmiVersionFlag),
+        (&[], CudaVersionSource::SmiBanner),
+        (&["-q"], CudaVersionSource::SmiQuery),
+    ];
+
+    for (args, source) in DRIVER_PROBES {
+        // A `None` here means the probe could not be spawned OR blew the
+        // PROBE_TIMEOUT. Both mean `nvidia-smi` is unusable right now, and
+        // retrying the same binary with different flags will hit the same wall
+        // — so STOP rather than paying the timeout again per variant.
+        //
+        // This matters because these calls are made synchronously from an
+        // `async fn` with no `spawn_blocking` (`handlers.rs` detect_gpu,
+        // `binary_manager.rs` check_for_updates). Without the early exit, a
+        // wedged driver costs 3 × PROBE_TIMEOUT here plus more below, on a
+        // tokio worker — which is the very 502 that PROBE_TIMEOUT was
+        // introduced to prevent.
+        let Some(out) = probe_trusted("nvidia-smi", args) else {
+            tracing::debug!(
+                "gpu_detect: nvidia-smi did not answer within the probe timeout; \
+                 skipping the remaining driver probes"
+            );
+            return None;
+        };
+        if out.status.success()
+            && let Some(version) =
+                gpu_version::parse_cuda_smi_version(&String::from_utf8_lossy(&out.stdout))
+        {
+            return Some(CudaEvidence { version, source: *source });
+        }
+    }
+
+    if !nvidia_gpu_present() {
+        return None;
+    }
+
+    if let Some(out) = probe_trusted("nvcc", &["--version"])
+        && out.status.success()
+        && let Some(version) =
+            gpu_version::parse_nvcc_version(&String::from_utf8_lossy(&out.stdout))
+    {
+        return Some(CudaEvidence { version, source: CudaVersionSource::NvccRelease });
+    }
+
+    detect_cuda_version_from_cudart()
+        .map(|version| CudaEvidence { version, source: CudaVersionSource::CudartSoname })
+}
+
+/// Emit the detection verdict exactly once per process.
+///
+/// This is the answer to "neither spammy nor invisible": it is called from
+/// inside the memoising closure, so it fires once no matter how many of the
+/// (up to 500) release rows ask for a recommendation.
+fn log_cuda_evidence(evidence: Option<CudaEvidence>) {
+    match evidence {
+        Some(e) if e.source.is_driver_reported() => tracing::info!(
+            cuda_version = %e.version,
+            source = e.source.as_str(),
+            "gpu_detect: CUDA runtime version detected (driver-reported)"
+        ),
+        Some(e) => tracing::warn!(
+            cuda_version = %e.version,
+            source = e.source.as_str(),
+            "gpu_detect: CUDA version came from the local TOOLKIT, not the driver — the \
+             driver could not be queried, so the selected GPU build may fail to load"
+        ),
+        None if is_cuda_available() || nvidia_gpu_present() => tracing::warn!(
+            sources_tried = CUDA_SOURCES_TRIED,
+            "gpu_detect: an NVIDIA GPU / CUDA runtime is present but NO CUDA version could be \
+             determined — engine downloads will fall back to the CPU build. Please report the \
+             output of `nvidia-smi --version`."
+        ),
+        None => tracing::debug!("gpu_detect: no NVIDIA CUDA runtime detected"),
+    }
+}
+
+/// How many times a FAILED CUDA probe may be retried across the process.
+///
+/// Not unbounded, because `recommend_backend` runs once per release row (up to
+/// 500) at three call sites, and not 1, because of the reason below.
+const MAX_CUDA_PROBE_ATTEMPTS: usize = 3;
+
+static CUDA_EVIDENCE: OnceLock<CudaEvidence> = OnceLock::new();
+static CUDA_PROBE_ATTEMPTS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Memoised CUDA evidence.
+///
+/// `recommend_backend` runs once per release row inside `.map()` at three hot
+/// sites (`llm_local_runtime/binary_manager.rs:287` and `:407`,
+/// `voice/binary_manager.rs:140`) with `per_page` up to 500. Unmemoised, that
+/// re-spawned `nvidia-smi` once per row per request.
+///
+/// **Only a SUCCESSFUL detection is cached permanently.** Caching the failure
+/// too — the obvious `OnceLock<Option<_>>` — would turn a *transient* probe
+/// failure into a permanent CPU fallback for the life of the process, which is
+/// the very bug this feature exists to remove, merely with a different cause.
+/// The failure is genuinely transient in at least two ordinary situations:
+///
+/// - `probe_command_with_timeout` returns `None` for a **spawn error** as well
+///   as a timeout, so momentary fd/memory pressure (`EMFILE`, `EAGAIN`) when
+///   the first request lands would latch the CPU build until restart.
+/// - `PROBE_TIMEOUT`'s own doc notes a cold `nvidia-smi` "can take tens of
+///   seconds" while the driver initialises. The first call on a many-GPU box
+///   can legitimately blow a 3s budget and then answer instantly afterwards.
+///
+/// So failures are retried, but a BOUNDED number of times, so a permanently
+/// broken host does not pay the probe cost 500 times per request.
+fn cuda_evidence() -> Option<CudaEvidence> {
+    use std::sync::atomic::Ordering;
+
+    if let Some(evidence) = CUDA_EVIDENCE.get() {
+        return Some(*evidence);
+    }
+
+    // Budget the retries. `fetch_add` means concurrent callers each consume
+    // one attempt rather than all piling onto the same probe; the cap bounds
+    // the total either way.
+    if CUDA_PROBE_ATTEMPTS.fetch_add(1, Ordering::Relaxed) >= MAX_CUDA_PROBE_ATTEMPTS {
+        return None;
+    }
+
+    let evidence = detect_cuda_evidence_uncached();
+    match evidence {
+        Some(e) => {
+            // First writer wins; a concurrent probe that lost the race is
+            // discarded, since both observed the same host.
+            if CUDA_EVIDENCE.set(e).is_ok() {
+                log_cuda_evidence(Some(e));
+            }
+        }
+        None => {
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| log_cuda_evidence(None));
+        }
+    }
+    evidence
 }
 
 /// Parse a ROCm release string like `6.1.2-...` (the contents of
@@ -286,19 +731,126 @@ fn parse_rocm_version_str(s: &str) -> Option<(u32, u32)> {
     Some((major, minor))
 }
 
-/// Host CUDA version the driver supports (from `nvidia-smi`), if NVIDIA.
+/// Host CUDA version the driver supports, if NVIDIA.
+///
+/// Returns the `(major, minor)` pair the selector takes. An unknown minor is
+/// lowered to `0` here — the single boundary where that is safe, because
+/// `recommend_backend_for` destructures `Some((host_major, _))` and provably
+/// never reads it.
 fn detect_cuda_version() -> Option<(u32, u32)> {
-    let output = probe_trusted("nvidia-smi", &[])?;
-    if !output.status.success() {
-        return None;
-    }
-    parse_cuda_smi_version(&String::from_utf8_lossy(&output.stdout))
+    cuda_evidence().map(|e| e.version.as_pair())
 }
 
-/// Host ROCm release version (from `/opt/rocm/.info/version`), if AMD.
+/// Ordered ROCm version probes.
+///
+/// Source 1 is UNCHANGED and stays first, so every host that resolves today
+/// keeps resolving identically. Sources 2-6 exist because "ROCm available but
+/// versionless" currently falls silently to CPU — the same defect class as the
+/// CUDA bug, since `recommend_backend_for` requires an exact ROCm major match.
+///
+/// ⚠ UNVERIFIED: no AMD hardware was available. Sources 2-6 are written
+/// against documented layouts, not observed ones. Each is parse-or-skip, so a
+/// wrong guess degrades to today's behaviour rather than producing a wrong
+/// answer. Deliberately absent: any attempt to GUESS a major when every source
+/// is silent — ROCm has no cross-major compatibility guarantee, so a wrong
+/// guess loads a build that cannot run, which is strictly worse than CPU.
+fn detect_rocm_evidence_uncached() -> Option<(MajorMinor, &'static str)> {
+    // 1 — the pre-existing source, byte-identical.
+    for (path, label) in [
+        ("/opt/rocm/.info/version", "/opt/rocm/.info/version"),
+        ("/opt/rocm/.info/version-dev", "/opt/rocm/.info/version-dev"),
+    ] {
+        if let Ok(raw) = std::fs::read_to_string(path)
+            && let Some((major, minor)) = parse_rocm_version_str(&raw)
+        {
+            return Some((MajorMinor::new(major, Some(minor)), label));
+        }
+    }
+
+    // 2 — $ROCM_PATH/.info/version, for a non-default install prefix.
+    //
+    // `$ROCM_PATH` is environment-supplied, so it gets the same treatment the
+    // Windows env-derived directories get: absolute, no `..`, and only ever
+    // joined with a fixed suffix we control. Without that this is an
+    // env-controlled arbitrary-file read. The impact is bounded — the content
+    // is parsed for a version and never echoed — but applying the rule in one
+    // place and not the other is the inconsistency that becomes a real hole
+    // the next time someone extends this.
+    if let Ok(root) = std::env::var("ROCM_PATH")
+        && let Some(root) = safe_unix_env_root(&root)
+        && let Ok(raw) = std::fs::read_to_string(format!("{root}/.info/version"))
+        && let Some((major, minor)) = parse_rocm_version_str(&raw)
+    {
+        return Some((MajorMinor::new(major, Some(minor)), "$ROCM_PATH/.info/version"));
+    }
+
+    // 3 — canonicalize /opt/rocm → /opt/rocm-6.1.2. The AMD mirror of the
+    // libcudart soname trick, and the highest-value addition: AMD packages do
+    // install to a version-stamped directory with /opt/rocm as the symlink.
+    if let Ok(real) = std::fs::canonicalize("/opt/rocm")
+        && let Some(name) = real.to_str()
+        && let Some(version) = gpu_version::parse_rocm_dir_name(name)
+    {
+        return Some((version, "/opt/rocm symlink target"));
+    }
+
+    // 4 — rocm-smi --version.
+    if let Some(out) = probe_trusted("rocm-smi", &["--version"])
+        && out.status.success()
+    {
+        // ONLY the `ROCM version` label. `ROCM-SMI-LIB version` is
+        // `rocm_smi_lib`'s own semver and is DECOUPLED from the ROCm release —
+        // ROCm 6.x ships librocm_smi64.so.7 — so reading it here would report
+        // major 7 for a ROCm 6 host. Today that merely degrades to CPU (no
+        // rocm7.* artifact exists), but the moment one is published it would
+        // install a build that cannot load. That is precisely the outcome this
+        // module refuses to risk elsewhere (DEC-11: never guess a ROCm major),
+        // so the lib label is not consulted at all rather than used as a
+        // fallback.
+        let text = String::from_utf8_lossy(&out.stdout);
+        if let Some(version) = gpu_version::find_labeled_version(&text, "rocm version") {
+            return Some((version, "rocm-smi --version"));
+        }
+    }
+
+    // 5 — hipconfig --version.
+    if let Some(out) = probe_trusted("hipconfig", &["--version"])
+        && out.status.success()
+        && let Some((major, minor)) =
+            parse_rocm_version_str(&String::from_utf8_lossy(&out.stdout))
+    {
+        return Some((MajorMinor::new(major, Some(minor)), "hipconfig --version"));
+    }
+
+    None
+}
+
+/// Memoised ROCm evidence; logs its verdict once per process.
+fn rocm_evidence() -> Option<(MajorMinor, &'static str)> {
+    static CACHE: OnceLock<Option<(MajorMinor, &'static str)>> = OnceLock::new();
+    *CACHE.get_or_init(|| {
+        let evidence = detect_rocm_evidence_uncached();
+        match evidence {
+            Some((version, source)) => tracing::info!(
+                rocm_version = %version,
+                source,
+                "gpu_detect: ROCm version detected"
+            ),
+            None if is_rocm_available() => tracing::warn!(
+                "gpu_detect: an AMD ROCm runtime is present but NO ROCm version could be \
+                 determined — engine downloads will fall back to the CPU build. A ROCm major \
+                 is deliberately NOT guessed: artifact selection requires an exact major match, \
+                 so a wrong guess would install a build that cannot load."
+            ),
+            None => tracing::debug!("gpu_detect: no AMD ROCm runtime detected"),
+        }
+        evidence
+    })
+}
+
+/// Host ROCm release version, if AMD.
 fn detect_rocm_version() -> Option<(u32, u32)> {
-    let raw = std::fs::read_to_string("/opt/rocm/.info/version").ok()?;
-    parse_rocm_version_str(&raw)
+    rocm_evidence().map(|(version, _)| version.as_pair())
 }
 
 /// Extract `(major, minor)` from a backend artifact tag with the given
@@ -368,6 +920,38 @@ pub fn recommend_backend_for(
     cpu()
 }
 
+/// Pure predicate behind the "we have a GPU but shipped the CPU build"
+/// warning.
+///
+/// Extracted rather than inlined into the `warn!` so the guarantee is
+/// unit-testable: an invariant that exists only inside a log line nobody
+/// asserts is not a guarantee. Deliberately keyed on GPU *presence*, not on a
+/// known version, so it fires for BOTH failure modes — a version that could
+/// not be read (the reported bug) and a version read fine with no compatible
+/// artifact published.
+/// `published` is required, not incidental: a release with NO assets for this
+/// platform yields an empty list, `recommend_backend_for` returns `None`, and
+/// that is **not a verdict** — nothing was selected, so the CPU build was not
+/// selected either. `recommend_backend` runs once per catalogue release, so
+/// without this guard the first build-pending row on a perfectly healthy host
+/// both emits a factually wrong warning AND spends the one-shot latch, silently
+/// swallowing the genuine occurrence later in the same process. That would
+/// defeat the entire point of the warning.
+fn gpu_present_but_cpu_chosen(gpu_present: bool, published: &[String], chosen: Option<&str>) -> bool {
+    if published.is_empty() {
+        return false;
+    }
+    gpu_present && matches!(chosen, None | Some("cpu"))
+}
+
+/// Latch so the warning is emitted once per process rather than once per
+/// release row (up to 500 per request, times three call sites).
+///
+/// Accepted cost: it can mask a second, differently-caused occurrence later in
+/// the same process. The per-row `debug!` below carries that detail when
+/// someone needs it.
+static WARNED_GPU_BUT_CPU: AtomicBool = AtomicBool::new(false);
+
 /// Host-aware wrapper over [`recommend_backend_for`]: detects this machine's
 /// GPU versions and picks the best artifact from `available`.
 pub fn recommend_backend(available: &[String]) -> Option<String> {
@@ -375,7 +959,38 @@ pub fn recommend_backend(available: &[String]) -> Option<String> {
     let cuda = if is_cuda_available() { detect_cuda_version() } else { None };
     let rocm = if is_rocm_available() { detect_rocm_version() } else { None };
     let metal = os == "macos" && is_metal_available();
-    recommend_backend_for(&os, cuda, rocm, metal, available)
+    let chosen = recommend_backend_for(&os, cuda, rocm, metal, available);
+
+    // Per-call detail, off by default. `RUST_LOG=…gpu_detect=debug` turns the
+    // full decision on without the once-per-process latch hiding anything.
+    tracing::debug!(
+        os = %os,
+        ?cuda,
+        ?rocm,
+        metal,
+        published = ?available,
+        ?chosen,
+        "gpu_detect: local runtime backend selection"
+    );
+
+    let gpu_present =
+        is_cuda_available() || nvidia_gpu_present() || is_rocm_available() || metal;
+    if gpu_present_but_cpu_chosen(gpu_present, available, chosen.as_deref())
+        && !WARNED_GPU_BUT_CPU.swap(true, Ordering::Relaxed)
+    {
+        tracing::warn!(
+            ?cuda,
+            ?rocm,
+            metal,
+            published = ?available,
+            ?chosen,
+            "gpu_detect: a GPU is present but the CPU engine build was selected — either no \
+             compatible GPU artifact was published for this release, or the host GPU version \
+             could not be read (see the earlier gpu_detect warning for which)"
+        );
+    }
+
+    chosen
 }
 
 fn is_cuda_available() -> bool {
@@ -393,8 +1008,26 @@ fn is_cuda_available_uncached() -> bool {
     // matches.
     #[cfg(target_os = "linux")]
     {
-        if std::path::Path::new("/usr/local/cuda/lib64/libcudart.so").exists()
-            || std::path::Path::new("/usr/lib/x86_64-linux-gnu/libcudart.so").exists()
+        // NOTE this proves the RUNTIME LIBRARY exists, not that a working
+        // driver does. That asymmetry is why toolkit-derived version sources
+        // are gated behind `nvidia_gpu_present()` — see
+        // `detect_cuda_evidence_uncached`.
+        //
+        // Deliberately the ORIGINAL two paths, not the wider `CUDART_PATHS`
+        // used for version lookup. Sharing the wider list here would silently
+        // widen what counts as "CUDA available": a RHEL/Fedora or aarch64 box
+        // with the toolkit and no driver would newly report `cuda` from
+        // `/detect-gpu` and emit the "could not determine a CUDA version"
+        // warning on a machine with no GPU at all. Artifact selection is
+        // unaffected either way (the presence gate holds), so widening this
+        // buys nothing and costs a false report.
+        const CUDART_AVAILABILITY_PATHS: &[&str] = &[
+            "/usr/local/cuda/lib64/libcudart.so",
+            "/usr/lib/x86_64-linux-gnu/libcudart.so",
+        ];
+        if CUDART_AVAILABILITY_PATHS
+            .iter()
+            .any(|p| std::path::Path::new(p).exists())
         {
             tracing::debug!("Found CUDA libraries in system");
             return true;
@@ -418,6 +1051,28 @@ fn is_metal_available() -> bool {
     *CACHE.get_or_init(is_metal_available_uncached)
 }
 
+/// Metal availability.
+///
+/// **Deliberately left unchanged by the cross-platform detection work**, and
+/// the reasoning is recorded so it is not re-litigated:
+///
+/// - This function returns `true` on BOTH macOS arms. The Intel arm's
+///   `system_profiler` probe falls through to an unconditional `return true`,
+///   making it decorative. So replacing the compile-time
+///   `#[cfg(target_arch = "aarch64")]` with a runtime `host_arch()` check —
+///   which would otherwise look more consistent with `host_arch()`'s
+///   deliberate runtime Rosetta detection — has **zero** behavioural delta.
+/// - No Darwin toolchain exists on the machine this was written on, so any
+///   edit inside the `cfg(target_os = "macos")` block cannot even be
+///   type-checked here, let alone run.
+/// - The Rosetta hazard that actually matters is selecting an x86_64 *artifact
+///   slice* on Apple Silicon, and `host_arch()` already handles that with its
+///   runtime `sysctl hw.optional.arm64` probe. Metal availability was never
+///   the exposed surface.
+///
+/// Trading a guaranteed-unverifiable change for a provably nil gain is the
+/// wrong trade. If this ever does need touching, the safe form is a pure
+/// deletion of both inner `#[cfg(target_arch)]` gates.
 fn is_metal_available_uncached() -> bool {
     // Metal is available on all modern macOS with Apple Silicon or modern Intel GPUs
     #[cfg(target_os = "macos")]
@@ -518,11 +1173,357 @@ mod tests {
         ));
     }
 
+    /// The exact banner from the bug report, on driver 610.43.02.
+    const BANNER_610: &str =
+        "| NVIDIA-SMI 610.43.02              KMD Version: 610.43.02     CUDA UMD Version: 13.3     |";
+
+    /// The tag set actually published for linux-x86_64 today
+    /// (`engine/download.rs`), NOT the invented `cuda12.6`/`cuda13.0` the
+    /// older fixture below uses.
+    fn published_today() -> Vec<String> {
+        ["cpu", "cuda12.9", "cuda13.2"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    }
+
+    /// TEST-1 [acceptance] INV-1 — the reported bug, end to end through the
+    /// pure path. RED before the fix: `left: Some("cpu")`.
     #[test]
-    fn test_parse_cuda_smi_version() {
-        let smi = "| NVIDIA-SMI 550.90  Driver Version: 550.90  CUDA Version: 12.4 |";
-        assert_eq!(parse_cuda_smi_version(smi), Some((12, 4)));
-        assert_eq!(parse_cuda_smi_version("no cuda here"), None);
+    fn banner_610_selects_cuda13_2_not_cpu() {
+        let cuda = gpu_version::parse_cuda_smi_version(BANNER_610).map(MajorMinor::as_pair);
+        assert_eq!(cuda, Some((13, 3)), "driver-610 banner must yield 13.3");
+
+        let chosen = recommend_backend_for("linux", cuda, None, false, &published_today());
+        assert_eq!(
+            chosen.as_deref(),
+            Some("cuda13.2"),
+            "an H200 host on CUDA 13.3 must not be handed the CPU build"
+        );
+    }
+
+    /// TEST-6 [acceptance] INV-3 — hosts that work TODAY must keep working.
+    ///
+    /// Asserted here, at the consuming layer, and not only in the parser crate:
+    /// the invariant is about what this module SELECTS, so it should be proven
+    /// where selection happens. The legacy driver-550 banner is the shape every
+    /// pre-R6xx host emits.
+    #[test]
+    fn legacy_550_banner_still_selects_a_cuda_artifact() {
+        let legacy = "| NVIDIA-SMI 550.90  Driver Version: 550.90  CUDA Version: 12.4 |";
+        let cuda = gpu_version::parse_cuda_smi_version(legacy).map(MajorMinor::as_pair);
+        assert_eq!(cuda, Some((12, 4)), "the pre-R6xx banner must still parse");
+
+        let chosen = recommend_backend_for("linux", cuda, None, false, &published_today());
+        assert_eq!(
+            chosen.as_deref(),
+            Some("cuda12.9"),
+            "a CUDA 12.4 host must get the newest compatible 12.x build, not cpu and not cuda13"
+        );
+    }
+
+    /// TEST-8 [acceptance] INV-4 — never fabricate a version.
+    ///
+    /// The failure this guards is worse than returning nothing: reading the
+    /// DRIVER version (610.43) as if it were the CUDA version would select a
+    /// `cuda610` artifact that does not exist, or on a nearer miss a major the
+    /// host cannot run. Asserted through to selection, so the property is
+    /// proven where its consequence lands.
+    #[test]
+    fn a_driver_version_never_becomes_a_cuda_artifact() {
+        // Real `nvidia-smi --version` lines, with the CUDA field absent.
+        let driver_only = "NVIDIA-SMI version  : 610.43.02\nNVML version        : 610.43\n";
+        let cuda = gpu_version::parse_cuda_smi_version(driver_only).map(MajorMinor::as_pair);
+        assert_eq!(cuda, None, "610.43 is the DRIVER version, not a CUDA version");
+
+        // With no CUDA version, selection must fall to cpu rather than invent one.
+        let chosen = recommend_backend_for("linux", cuda, None, false, &published_today());
+        assert_eq!(chosen.as_deref(), Some("cpu"));
+
+        // And the deprecated-placeholder form must behave identically.
+        let deprecated = "CUDA version : Deprecated, see \"CUDA UMD version\" instead\n";
+        assert_eq!(gpu_version::parse_cuda_smi_version(deprecated), None);
+    }
+
+    /// TEST-23 — a major-only version (minor genuinely unknown, e.g. from
+    /// `libcudart.so.13`) must still select a CUDA artifact. This is what
+    /// proves lowering `minor: None` to `0` cannot break the untouched
+    /// selector.
+    #[test]
+    fn unknown_minor_still_selects_a_cuda_artifact() {
+        let cuda = Some(MajorMinor::new(13, None).as_pair());
+        let chosen = recommend_backend_for("linux", cuda, None, false, &published_today());
+        assert_eq!(chosen.as_deref(), Some("cuda13.2"));
+    }
+
+    /// TEST-24 [acceptance] INV-2 — the loud-failure predicate. Both failure
+    /// modes must warn; neither healthy case may.
+    #[test]
+    fn warns_when_gpu_present_but_cpu_chosen() {
+        let published = published_today();
+        // GPU present, version known, but only a CPU build published.
+        assert!(gpu_present_but_cpu_chosen(true, &published, Some("cpu")));
+        // GPU present, version could NOT be read — the reported bug.
+        assert!(gpu_present_but_cpu_chosen(true, &published, None));
+        // Healthy: a GPU artifact was actually selected.
+        assert!(!gpu_present_but_cpu_chosen(true, &published, Some("cuda13.2")));
+        assert!(!gpu_present_but_cpu_chosen(true, &published, Some("metal")));
+        // Healthy: no GPU at all — CPU is the correct answer, stay quiet.
+        assert!(!gpu_present_but_cpu_chosen(false, &published, Some("cpu")));
+        assert!(!gpu_present_but_cpu_chosen(false, &published, None));
+    }
+
+    /// A release with no assets for this platform is NOT a verdict.
+    ///
+    /// `recommend_backend` runs once per catalogue release, so without this
+    /// guard the first build-pending row on a healthy host emits a factually
+    /// wrong warning ("the CPU build was selected" — nothing was selected) AND
+    /// spends the one-shot latch, silently swallowing the genuine occurrence
+    /// later in the same process.
+    #[test]
+    fn build_pending_release_is_not_a_cpu_fallback() {
+        let nothing_published: Vec<String> = Vec::new();
+        assert!(!gpu_present_but_cpu_chosen(true, &nothing_published, None));
+        // And the selector really does return None for that input, so this is
+        // the state actually reached rather than a hypothetical one.
+        assert_eq!(
+            recommend_backend_for("linux", Some((13, 3)), None, false, &nothing_published),
+            None
+        );
+    }
+
+    /// TEST-25 — the machine-readable presence probe.
+    #[test]
+    fn query_gpu_output_counts_devices() {
+        let four = "NVIDIA H200 NVL\nNVIDIA H200 NVL\nNVIDIA H200 NVL\nNVIDIA H200 NVL\n";
+        assert_eq!(parse_query_gpu_count(four), 4);
+        assert_eq!(parse_query_gpu_count(""), 0);
+        assert_eq!(parse_query_gpu_count("\n  \n"), 0);
+    }
+
+    /// TEST-26 — a driver-reported source outranks a toolkit-derived one, and
+    /// the distinction is carried, not lost.
+    #[test]
+    fn driver_sources_outrank_toolkit_sources() {
+        for source in [
+            CudaVersionSource::SmiVersionFlag,
+            CudaVersionSource::SmiBanner,
+            CudaVersionSource::SmiQuery,
+        ] {
+            assert!(source.is_driver_reported(), "{source:?}");
+        }
+        for source in [CudaVersionSource::NvccRelease, CudaVersionSource::CudartSoname] {
+            assert!(!source.is_driver_reported(), "{source:?}");
+            assert!(
+                source.as_str().contains("toolkit"),
+                "a toolkit source must say so in the log: {source:?}"
+            );
+        }
+    }
+
+    /// TEST-27 [acceptance] INV-5 — the authoritative probe must never be
+    /// redirectable by a user-settable variable.
+    #[test]
+    fn nvidia_smi_never_resolves_from_user_settable_env() {
+        let hostile = |var: &str| match var {
+            "CUDA_PATH" => Some(r"D:\hostile\cuda".to_string()),
+            "HIP_PATH" => Some(r"D:\hostile\hip".to_string()),
+            "ROCM_PATH" => Some(r"D:\hostile\rocm".to_string()),
+            "SystemRoot" => Some(r"D:\Windows".to_string()),
+            _ => None,
+        };
+
+        // NO binary resolves from a user-settable variable — not the
+        // authoritative probe, and not the toolkit binaries either. `rocm-smi`
+        // is spawned unconditionally from `detect_all()` on Windows, so
+        // letting %HIP_PATH% supply its directory was arbitrary code execution
+        // in the server process for anyone who could set one env var.
+        for name in ["nvidia-smi", "nvcc", "rocm-smi", "hipconfig"] {
+            let dirs = windows_trusted_dirs(name, hostile);
+            assert!(
+                !dirs.iter().any(|d| d.contains("hostile")),
+                "{name} must not resolve from CUDA_PATH/HIP_PATH/ROCM_PATH: {dirs:?}"
+            );
+            assert!(dirs.iter().any(|d| d == r"D:\Windows\System32"));
+        }
+    }
+
+    /// A vendor probe must never resolve from a network share. `\\host\share`
+    /// is absolute and `..`-free, so path hygiene alone accepts it — and an
+    /// earlier version of this test asserted it SHOULD be accepted, which
+    /// pinned the worst case rather than guarding against it.
+    #[test]
+    fn unc_paths_are_refused() {
+        assert_eq!(sanitize_env_dir(r"\\attacker\share"), None);
+        assert_eq!(sanitize_env_dir(r"\\?\UNC\attacker\share"), None);
+        assert_eq!(sanitize_env_dir("//attacker/share"), None);
+
+        let unc = |var: &str| match var {
+            "SystemRoot" => Some(r"\\attacker\share".to_string()),
+            _ => None,
+        };
+        assert!(
+            windows_trusted_dirs("nvidia-smi", unc).is_empty(),
+            "a UNC SystemRoot must contribute no candidate at all"
+        );
+    }
+
+    /// TEST-28 — Windows dirs come from the environment, never a drive letter.
+    #[test]
+    fn windows_trusted_dirs_come_from_env_not_drive_letters() {
+        let env = |var: &str| match var {
+            "SystemRoot" => Some(r"D:\Windows".to_string()),
+            "ProgramFiles" => Some(r"D:\Program Files".to_string()),
+            "CUDA_PATH" => Some(r"D:\CT\CUDA\v13.3".to_string()),
+            _ => None,
+        };
+        let dirs = windows_trusted_dirs("nvcc", env);
+
+        assert!(dirs.iter().any(|d| d == r"D:\Windows\System32"));
+        assert!(dirs.iter().any(|d| d == r"D:\Program Files\NVIDIA Corporation\NVSMI"));
+        assert!(
+            !dirs.iter().any(|d| d.starts_with("C:\\")),
+            "no hardcoded C: drive: {dirs:?}"
+        );
+
+        // Missing environment must yield nothing, not panic.
+        assert!(windows_trusted_dirs("nvcc", |_| None).is_empty());
+    }
+
+    /// TEST-29 — relative and `..` values are refused outright.
+    #[test]
+    fn windows_trusted_dirs_reject_relative_and_dotdot() {
+        assert_eq!(sanitize_env_dir(r"..\evil"), None);
+        assert_eq!(sanitize_env_dir("relative"), None);
+        assert_eq!(sanitize_env_dir(r"D:\ok\..\evil"), None);
+        assert_eq!(sanitize_env_dir(""), None);
+        assert_eq!(sanitize_env_dir("   "), None);
+        // Local absolute forms ARE accepted; UNC is not (see unc_paths_are_refused).
+        assert_eq!(sanitize_env_dir(r"D:\Windows"), Some(r"D:\Windows".to_string()));
+        assert_eq!(sanitize_env_dir(r"D:\"), Some("D:".to_string()));
+
+        let env = |var: &str| match var {
+            "CUDA_PATH" => Some(r"..\evil".to_string()),
+            "SystemRoot" => Some("relative".to_string()),
+            _ => None,
+        };
+        assert!(windows_trusted_dirs("nvcc", env).is_empty());
+    }
+
+    /// TEST-29b — the Unix counterpart of the env-path guard, applied to
+    /// `$ROCM_PATH`. Without it, an environment-supplied value is joined into
+    /// a filesystem read unvalidated.
+    #[test]
+    fn unix_env_root_rejects_relative_and_dotdot() {
+        assert_eq!(safe_unix_env_root("/opt/rocm"), Some("/opt/rocm"));
+        // The TRIMMED value must come back, so the caller cannot validate one
+        // string and then build a path out of a different one.
+        assert_eq!(
+            safe_unix_env_root("  /opt/rocm-6.1.2  "),
+            Some("/opt/rocm-6.1.2")
+        );
+        for bad in ["opt/rocm", "/opt/../etc", "/opt/rocm/..", "", "   "] {
+            assert_eq!(safe_unix_env_root(bad), None, "{bad:?}");
+        }
+    }
+
+    /// TEST-30 — DEC-4. A name with no per-binary policy must still resolve
+    /// via the generic scan. Without this the two probe-timeout regression
+    /// tests below would silently stop running: they are written
+    /// `let Some(x) = … else { return }`, so they would go green while
+    /// testing nothing at all.
+    /// Unix-only: on Windows none of these names live in the candidate dirs,
+    /// so the asserts would fail on the platform this change exists to add.
+    #[test]
+    #[cfg(not(windows))]
+    fn unknown_binary_name_falls_back_to_generic_trusted_dirs() {
+        assert!(
+            resolve_system_binary("uname").is_some(),
+            "uname must still resolve after the resolver became name-aware"
+        );
+        assert!(
+            resolve_system_binary("sleep").is_some() || resolve_system_binary("true").is_some(),
+            "the timeout tests' binaries must still resolve"
+        );
+        assert!(resolve_system_binary("definitely-not-a-real-binary").is_none());
+    }
+
+    /// TEST-33 — ROCm available but versionless must NOT invent a major.
+    #[test]
+    fn rocm_without_a_version_never_guesses_a_major() {
+        let published: Vec<String> =
+            ["cpu", "rocm6.1"].iter().map(|s| s.to_string()).collect();
+        // No ROCm version determined → no rocm artifact, and the warning fires.
+        let chosen = recommend_backend_for("linux", None, None, false, &published);
+        assert_eq!(chosen.as_deref(), Some("cpu"));
+        assert!(gpu_present_but_cpu_chosen(true, &published, chosen.as_deref()));
+    }
+
+    /// TEST-34 — the only Metal property observable from a non-macOS host.
+    /// Documents that the `cfg(target_os = "macos")` gate is what makes the
+    /// two untestable macOS arms unreachable here. No macOS claim is made.
+    #[test]
+    #[cfg(not(target_os = "macos"))]
+    fn metal_is_unavailable_off_macos() {
+        assert!(!is_metal_available());
+    }
+
+    /// TEST-37 — host truth. On a machine with a working `nvidia-smi`, a CUDA
+    /// version MUST be recoverable and the selection MUST NOT be `cpu`. This
+    /// is the on-box end-to-end proof; it allocates no GPU memory and
+    /// downloads nothing. Self-skips loudly elsewhere rather than passing
+    /// vacuously.
+    #[test]
+    fn host_truth_nvidia_host_never_falls_back_to_cpu() {
+        let Some(out) = probe_trusted("nvidia-smi", &["--query-gpu=name", "--format=csv,noheader"])
+        else {
+            eprintln!("SKIP host_truth: nvidia-smi not resolvable on this host");
+            return;
+        };
+        if !out.status.success() || parse_query_gpu_count(&String::from_utf8_lossy(&out.stdout)) == 0
+        {
+            eprintln!("SKIP host_truth: nvidia-smi resolved but enumerated no GPU");
+            return;
+        }
+
+        let evidence = cuda_evidence();
+        eprintln!(
+            "host_truth: gpus={} evidence={:?}",
+            parse_query_gpu_count(&String::from_utf8_lossy(&out.stdout)),
+            evidence.map(|e| (e.version.to_string(), e.source.as_str()))
+        );
+        let evidence = evidence.expect(
+            "a working nvidia-smi that yields NO CUDA version is exactly the reported bug",
+        );
+
+        let published = published_today();
+        let chosen = recommend_backend(&published);
+        eprintln!("host_truth: chosen={chosen:?}");
+
+        // Only assert "not cpu" when a compatible artifact actually exists for
+        // this host's CUDA major. On a host whose driver caps at CUDA 11, no
+        // published tag satisfies `maj <= 11`, so `cpu` is the CORRECT answer —
+        // asserting otherwise would turn an old-driver runner red and blame it
+        // on the bug this test guards.
+        let has_compatible = published
+            .iter()
+            .filter_map(|tag| parse_backend_version(tag, "cuda"))
+            .any(|(maj, _)| maj <= evidence.version.major);
+
+        if has_compatible {
+            assert_ne!(
+                chosen.as_deref(),
+                Some("cpu"),
+                "an NVIDIA host with CUDA {} must not be handed the CPU build",
+                evidence.version
+            );
+        } else {
+            eprintln!(
+                "host_truth: no published cuda artifact is compatible with CUDA {} — \
+                 cpu is the correct answer here",
+                evidence.version
+            );
+        }
     }
 
     #[test]
