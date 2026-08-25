@@ -14,6 +14,7 @@ use ziee_hardware::gpu_version::{self, MajorMinor};
 /// but it is kept: removing it would be an untestable macOS behaviour change
 /// for no measurable gain. `/usr/sbin` above it is where macOS actually keeps
 /// `system_profiler` and `sysctl`.
+#[cfg_attr(windows, allow(dead_code))]
 const UNIX_TRUSTED_DIRS: &[&str] = &[
     // Linux distros
     "/usr/bin",
@@ -46,11 +47,20 @@ fn is_windows_absolute(raw: &str) -> bool {
 /// `$ROCM_PATH` so the "never build a path out of an unvalidated environment
 /// value" rule holds on both platforms rather than only where it was most
 /// obviously needed.
-fn is_safe_unix_env_root(raw: &str) -> bool {
+/// Returns the **trimmed** value on success. Returning a bool while trimming
+/// only internally would let the caller validate one string and then use a
+/// different one: `ROCM_PATH="  /opt/rocm  "` would pass, and the caller would
+/// then read `"  /opt/rocm  /.info/version"` — a relative path that silently
+/// never matches, leaving the source quietly non-functional.
+fn safe_unix_env_root(raw: &str) -> Option<&str> {
     let trimmed = raw.trim();
-    !trimmed.is_empty()
-        && trimmed.starts_with('/')
-        && !trimmed.split('/').any(|c| c == "..")
+    if trimmed.is_empty() || !trimmed.starts_with('/') {
+        return None;
+    }
+    if trimmed.split('/').any(|c| c == "..") {
+        return None;
+    }
+    Some(trimmed)
 }
 
 /// Accept an environment-supplied directory only if it is a **local**,
@@ -102,15 +112,25 @@ fn sanitize_env_dir(raw: &str) -> Option<String> {
 /// "toolkit" binaries (`nvcc`, `rocm-smi`, `hipconfig`) on the theory that only
 /// `nvidia-smi`, the authoritative probe, needed protecting. That was the wrong
 /// distinction: F-14 is about **which binary gets executed**, not which answer
-/// is believed. `rocm-smi` is spawned unconditionally from `detect_all()` on
-/// Windows, so `%HIP_PATH%\bin\rocm-smi.exe` was arbitrary code execution in
-/// the server process for anyone who could set one environment variable —
-/// exactly the PATH-shadowing class F-14 closed, wearing a different hat.
+/// is believed. `rocm-smi` is spawned from `detect_all()` with no gate, so
+/// `%HIP_PATH%\bin\rocm-smi.exe` was arbitrary code execution in the server
+/// process for anyone who could set one environment variable — exactly the
+/// PATH-shadowing class F-14 closed, wearing a different hat.
 ///
-/// The cost of removing them is small and worth naming: on Windows, `nvcc` in a
-/// custom toolkit directory is no longer found. `nvidia-smi` lives in
-/// `%SystemRoot%\System32` and is the primary source anyway, so CUDA detection
-/// is unaffected; only the toolkit-derived fallback loses a lookup path.
+/// **State the cost precisely, because the first draft of this comment
+/// understated it.** On Windows `nvcc`, `rocm-smi` and `hipconfig` now resolve
+/// **nowhere at all** — not merely "not in a custom directory". The CUDA
+/// toolkit installs to `%ProgramFiles%\NVIDIA GPU Computing Toolkit\CUDA\vX.Y\bin`
+/// and the HIP SDK to `%ProgramFiles%\AMD\ROCm\X.Y\bin`, neither of which is
+/// listed. That is acceptable today: `nvidia-smi` lives in
+/// `%SystemRoot%\System32` and is the primary CUDA source, so **CUDA detection
+/// on Windows is unaffected** — only the toolkit-derived fallback is lost. Note
+/// also that `is_rocm_available()` is already unconditionally `false` on
+/// Windows (its file fast-path is Linux-gated), so ROCm there was dead before
+/// this change, not because of it.
+///
+/// If Windows toolkit probes are ever wanted, the fix is a FIXED suffix under
+/// `%ProgramFiles%`/`%ProgramW6432%` — not restoring the user-settable vars.
 ///
 /// `get_env` is injected so the policy is unit-testable on a non-Windows host.
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -610,21 +630,67 @@ fn log_cuda_evidence(evidence: Option<CudaEvidence>) {
     }
 }
 
+/// How many times a FAILED CUDA probe may be retried across the process.
+///
+/// Not unbounded, because `recommend_backend` runs once per release row (up to
+/// 500) at three call sites, and not 1, because of the reason below.
+const MAX_CUDA_PROBE_ATTEMPTS: usize = 3;
+
+static CUDA_EVIDENCE: OnceLock<CudaEvidence> = OnceLock::new();
+static CUDA_PROBE_ATTEMPTS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
 /// Memoised CUDA evidence.
 ///
 /// `recommend_backend` runs once per release row inside `.map()` at three hot
 /// sites (`llm_local_runtime/binary_manager.rs:287` and `:407`,
 /// `voice/binary_manager.rs:140`) with `per_page` up to 500. Unmemoised, that
-/// re-spawned `nvidia-smi` once per row per request. Driver state is fixed for
-/// the process lifetime, so `OnceLock` is the right granularity — the same
-/// shape `is_cuda_available()` already uses.
+/// re-spawned `nvidia-smi` once per row per request.
+///
+/// **Only a SUCCESSFUL detection is cached permanently.** Caching the failure
+/// too — the obvious `OnceLock<Option<_>>` — would turn a *transient* probe
+/// failure into a permanent CPU fallback for the life of the process, which is
+/// the very bug this feature exists to remove, merely with a different cause.
+/// The failure is genuinely transient in at least two ordinary situations:
+///
+/// - `probe_command_with_timeout` returns `None` for a **spawn error** as well
+///   as a timeout, so momentary fd/memory pressure (`EMFILE`, `EAGAIN`) when
+///   the first request lands would latch the CPU build until restart.
+/// - `PROBE_TIMEOUT`'s own doc notes a cold `nvidia-smi` "can take tens of
+///   seconds" while the driver initialises. The first call on a many-GPU box
+///   can legitimately blow a 3s budget and then answer instantly afterwards.
+///
+/// So failures are retried, but a BOUNDED number of times, so a permanently
+/// broken host does not pay the probe cost 500 times per request.
 fn cuda_evidence() -> Option<CudaEvidence> {
-    static CACHE: OnceLock<Option<CudaEvidence>> = OnceLock::new();
-    *CACHE.get_or_init(|| {
-        let evidence = detect_cuda_evidence_uncached();
-        log_cuda_evidence(evidence);
-        evidence
-    })
+    use std::sync::atomic::Ordering;
+
+    if let Some(evidence) = CUDA_EVIDENCE.get() {
+        return Some(*evidence);
+    }
+
+    // Budget the retries. `fetch_add` means concurrent callers each consume
+    // one attempt rather than all piling onto the same probe; the cap bounds
+    // the total either way.
+    if CUDA_PROBE_ATTEMPTS.fetch_add(1, Ordering::Relaxed) >= MAX_CUDA_PROBE_ATTEMPTS {
+        return None;
+    }
+
+    let evidence = detect_cuda_evidence_uncached();
+    match evidence {
+        Some(e) => {
+            // First writer wins; a concurrent probe that lost the race is
+            // discarded, since both observed the same host.
+            if CUDA_EVIDENCE.set(e).is_ok() {
+                log_cuda_evidence(Some(e));
+            }
+        }
+        None => {
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| log_cuda_evidence(None));
+        }
+    }
+    evidence
 }
 
 /// Parse a ROCm release string like `6.1.2-...` (the contents of
@@ -683,7 +749,7 @@ fn detect_rocm_evidence_uncached() -> Option<(MajorMinor, &'static str)> {
     // place and not the other is the inconsistency that becomes a real hole
     // the next time someone extends this.
     if let Ok(root) = std::env::var("ROCM_PATH")
-        && is_safe_unix_env_root(&root)
+        && let Some(root) = safe_unix_env_root(&root)
         && let Ok(raw) = std::fs::read_to_string(format!("{root}/.info/version"))
         && let Some((major, minor)) = parse_rocm_version_str(&raw)
     {
@@ -918,7 +984,23 @@ fn is_cuda_available_uncached() -> bool {
         // driver does. That asymmetry is why toolkit-derived version sources
         // are gated behind `nvidia_gpu_present()` — see
         // `detect_cuda_evidence_uncached`.
-        if CUDART_PATHS.iter().any(|p| std::path::Path::new(p).exists()) {
+        //
+        // Deliberately the ORIGINAL two paths, not the wider `CUDART_PATHS`
+        // used for version lookup. Sharing the wider list here would silently
+        // widen what counts as "CUDA available": a RHEL/Fedora or aarch64 box
+        // with the toolkit and no driver would newly report `cuda` from
+        // `/detect-gpu` and emit the "could not determine a CUDA version"
+        // warning on a machine with no GPU at all. Artifact selection is
+        // unaffected either way (the presence gate holds), so widening this
+        // buys nothing and costs a false report.
+        const CUDART_AVAILABILITY_PATHS: &[&str] = &[
+            "/usr/local/cuda/lib64/libcudart.so",
+            "/usr/lib/x86_64-linux-gnu/libcudart.so",
+        ];
+        if CUDART_AVAILABILITY_PATHS
+            .iter()
+            .any(|p| std::path::Path::new(p).exists())
+        {
             tracing::debug!("Found CUDA libraries in system");
             return true;
         }
@@ -1262,13 +1344,16 @@ mod tests {
     /// a filesystem read unvalidated.
     #[test]
     fn unix_env_root_rejects_relative_and_dotdot() {
-        assert!(is_safe_unix_env_root("/opt/rocm"));
-        assert!(is_safe_unix_env_root("  /opt/rocm-6.1.2  "));
-        assert!(!is_safe_unix_env_root("opt/rocm"));
-        assert!(!is_safe_unix_env_root("/opt/../etc"));
-        assert!(!is_safe_unix_env_root("/opt/rocm/.."));
-        assert!(!is_safe_unix_env_root(""));
-        assert!(!is_safe_unix_env_root("   "));
+        assert_eq!(safe_unix_env_root("/opt/rocm"), Some("/opt/rocm"));
+        // The TRIMMED value must come back, so the caller cannot validate one
+        // string and then build a path out of a different one.
+        assert_eq!(
+            safe_unix_env_root("  /opt/rocm-6.1.2  "),
+            Some("/opt/rocm-6.1.2")
+        );
+        for bad in ["opt/rocm", "/opt/../etc", "/opt/rocm/..", "", "   "] {
+            assert_eq!(safe_unix_env_root(bad), None, "{bad:?}");
+        }
     }
 
     /// TEST-30 — DEC-4. A name with no per-binary policy must still resolve
@@ -1276,7 +1361,10 @@ mod tests {
     /// tests below would silently stop running: they are written
     /// `let Some(x) = … else { return }`, so they would go green while
     /// testing nothing at all.
+    /// Unix-only: on Windows none of these names live in the candidate dirs,
+    /// so the asserts would fail on the platform this change exists to add.
     #[test]
+    #[cfg(not(windows))]
     fn unknown_binary_name_falls_back_to_generic_trusted_dirs() {
         assert!(
             resolve_system_binary("uname").is_some(),
