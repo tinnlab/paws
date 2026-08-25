@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { isPawsHiddenModuleName } from '@/modules/pawsHiddenModules'
 import {
   Title,
   Paragraph,
@@ -24,7 +25,18 @@ export default function McpServersStep({ registerBeforeNext }: OnboardingStepPro
   // The step renders for every authenticated user, but the controls are
   // admin-only. Non-admins see just the intro paragraph and continue.
   const canManageSystemMcp = usePermission(Permissions.McpServersAdminEdit)
-  const canInstallFromHub = usePermission(Permissions.HubMcpServersCreate)
+  // paws: the hub is hidden (design item 11), so this step must not offer an
+  // "Install from Hub" list.
+  //
+  // None of the reduction's four levers reaches this: the section lives inside
+  // the SURVIVING `onboarding` guide module, not in `hub/`, not in a
+  // chat-extension glob, and not in the project registry. Its only gate was
+  // `HubMcpServersCreate`, which administrators hold via the `*` wildcard — so
+  // an admin walking onboarding would still see and use the hub. Gate it on the
+  // same single list instead, so restoring the hub restores this with it.
+  const canInstallFromHub =
+    usePermission(Permissions.HubMcpServersCreate) &&
+    !isPawsHiddenModuleName('hub')
   const canSeeAdminControls = canManageSystemMcp || canInstallFromHub
 
   useEffect(() => {
@@ -58,7 +70,12 @@ export default function McpServersStep({ registerBeforeNext }: OnboardingStepPro
 
       <Paragraph tone="secondary">
         {canSeeAdminControls
-          ? 'MCP servers extend your AI assistant with tools and data access. Toggle the ones you want to use, or install new ones from the Hub.'
+          ? canInstallFromHub
+            ? 'MCP servers extend your AI assistant with tools and data access. Toggle the ones you want to use, or install new ones from the Hub.'
+            : // paws: the hub is hidden, so do not point the admin at it. Gating
+              // the section below while leaving this sentence would still
+              // advertise a feature that does not exist here.
+              'MCP servers extend your AI assistant with tools and data access. Toggle the ones you want to use.'
           : 'MCP servers extend your AI assistant with tools and data access. Your administrator has already configured the servers available to you.'}
       </Paragraph>
 

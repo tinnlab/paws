@@ -1,6 +1,29 @@
 # Minimal config for OpenAPI generation using docker build database
+#
+# Every deploy-level feature switch is forced ON here. The OpenAPI document
+# describes the API SURFACE the codebase can serve, not the subset one
+# deployment happens to enable — and `register_routes` is config-gated, so the
+# emitted spec is config-dependent.
+#
+# Without this, paws' shipping defaults (web_search / lit_search / voice /
+# js_tool OFF — docs/design/paws-feature-surface.md) make `just openapi-regen`
+# DELETE `/api/voice/*` and `/api/js-tool/settings` from both workspaces'
+# `openapi.json` and their generated `types.ts`. That is invisible locally — the
+# `types_ts_parity` golden test regenerates from the COMMITTED spec, so it stays
+# green — and only surfaces at the merge-gate's regen-parity check.
 app:
   data_dir: "/tmp/ziee-openapi-gen"
+
+web_search:
+  enabled: true
+lit_search:
+  enabled: true
+voice:
+  enabled: true
+js_tool:
+  enabled: true
+bio_mcp:
+  enabled: true
 
 postgresql:
   use_embedded: false

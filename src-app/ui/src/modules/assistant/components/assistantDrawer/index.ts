@@ -6,27 +6,20 @@ const AssistantDrawerDef = defineStore<AssistantDrawerState, Actions>('Assistant
   state: assistantDrawerState,
   actions: import.meta.glob('./actions/*.ts'),
   init: ({ on, get, set, actions }) => {
+    // paws: the `assistant_template.*` subscriptions are removed with the
+    // templates admin surface (design item 12). They only ever fired while the
+    // drawer was open ON a template, which nothing can do now. The events
+    // themselves still exist on the backend (the seeded template row and
+    // clone-on-signup are unchanged) — they simply have no listener here.
     on('assistant.updated', event => {
       const s = get()
-      if (!s.isTemplate && !s.isCloning && s.editingAssistant?.id === event.data.assistant.id) {
+      if (!s.isCloning && s.editingAssistant?.id === event.data.assistant.id) {
         set({ editingAssistant: event.data.assistant })
       }
     })
     on('assistant.deleted', event => {
       const s = get()
-      if (!s.isTemplate && !s.isCloning && s.editingAssistant?.id === event.data.assistantId) {
-        actions.closeAssistantDrawer()
-      }
-    })
-    on('assistant_template.updated', event => {
-      const s = get()
-      if (s.isTemplate && !s.isCloning && s.editingAssistant?.id === event.data.template.id) {
-        set({ editingAssistant: event.data.template })
-      }
-    })
-    on('assistant_template.deleted', event => {
-      const s = get()
-      if (s.isTemplate && !s.isCloning && s.editingAssistant?.id === event.data.templateId) {
+      if (!s.isCloning && s.editingAssistant?.id === event.data.assistantId) {
         actions.closeAssistantDrawer()
       }
     })

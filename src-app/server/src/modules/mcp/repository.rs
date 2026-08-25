@@ -1831,15 +1831,16 @@ pub async fn list_system_mcp_servers(
         WHERE is_system = true
           -- Hide the built-ins configured elsewhere (files, memory, elicitation,
           -- web_search, tool_result, lit_search, citations, skill_mcp,
-          -- workflow_mcp): they have no editable surface on this page
-          -- (web_search/lit_search use their own settings pages; citations is
-          -- per-user, configured on Settings → Citations; skill_mcp/workflow_mcp
+          -- workflow_mcp, knowledge_base): they have no editable surface on this
+          -- page (web_search/lit_search use their own settings pages; citations
+          -- is per-user, configured on Settings → Citations; knowledge_base is
+          -- per-user, configured on the Knowledge pages; skill_mcp/workflow_mcp
           -- are zero-config loopback built-ins), so they never appear here.
           -- Excluding them in SQL (not client-side) also keeps the pagination
           -- total/label honest. The other built-ins
           -- (fetch, code_sandbox) remain visible. filesystem/browser/git were
           -- removed by migration 157.
-          AND id NOT IN ($5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+          AND id NOT IN ($5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
           AND ($3::text IS NULL
                OR name ILIKE '%' || $3 || '%'
                OR display_name ILIKE '%' || $3 || '%'
@@ -1864,6 +1865,12 @@ pub async fn list_system_mcp_servers(
         // run_js is a zero-config loopback built-in executed inline (never over
         // the loopback), so it has no editable surface here — hide it.
         crate::modules::js_tool::run_js_mcp_server_id(),
+        // knowledge_base is per-user (its bases are managed on the Knowledge
+        // pages, not here) and has no editable surface, so it is hidden for the
+        // same reason as citations. On paws it is additionally a hidden feature
+        // (design item 9), and this row was the last place its name still
+        // reached a menu.
+        crate::modules::knowledge_base::knowledge_base_server_id(),
     )
     .fetch_all(pool)
     .await?;
@@ -1911,9 +1918,11 @@ pub async fn list_system_mcp_servers(
         WHERE is_system = true
           -- Match the rows query: exclude the built-ins configured elsewhere
           -- (files, memory, elicitation, web_search, tool_result, lit_search,
-          -- citations, skill_mcp, workflow_mcp) so the pagination total stays in
-          -- sync with the page.
-          AND id NOT IN ($3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+          -- citations, skill_mcp, workflow_mcp, run_js, knowledge_base) so the
+          -- pagination total stays in sync with the page. Adding an id to one
+          -- of these two lists and not the other shows a total that counts rows
+          -- the page will not display.
+          AND id NOT IN ($3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
           AND ($1::text IS NULL
                OR name ILIKE '%' || $1 || '%'
                OR display_name ILIKE '%' || $1 || '%'
@@ -1932,6 +1941,7 @@ pub async fn list_system_mcp_servers(
         crate::modules::skill_mcp::skill_mcp_server_id(),
         crate::modules::workflow_mcp::workflow_mcp_server_id(),
         crate::modules::js_tool::run_js_mcp_server_id(),
+        crate::modules::knowledge_base::knowledge_base_server_id(),
     )
     .fetch_one(pool)
     .await?

@@ -6,7 +6,6 @@ export default (set: AssistantDrawerSet, _get: AssistantDrawerGet) =>
       open: false,
       loading: false,
       editingAssistant: null,
-      isTemplate: false,
       isCloning: false,
     })
   }

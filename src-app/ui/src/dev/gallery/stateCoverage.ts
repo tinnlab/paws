@@ -129,8 +129,7 @@ export const STATE_COVERAGE = {
   },
   "modules/assistant/components/AssistantFormDrawer:open": { via: 'overlay' },
   "modules/chat/core/components/ChatRightPanel:open": { via: 'overlay' },
-  "modules/assistant/pages/AssistantsSettings:delayed": { via: 'page-state-mode' },
-  "modules/assistant/pages/AssistantsSettings:empty": { via: 'page-state-mode' },
+  // paws: `AssistantsSettings` (Assistant Templates) removed — design item 12.
   "modules/assistant/pages/UserAssistantsSettings:delayed": { via: 'page-state-mode' },
   "modules/assistant/pages/UserAssistantsSettings:empty": { via: 'page-state-mode' },
   "modules/assistant/pages/UserAssistantsSettings:error": { via: 'page-state-mode' },
@@ -449,7 +448,6 @@ export const STATE_COVERAGE = {
   "modules/workflow/components/admin/AdminWorkflowsPage:error": { via: 'page-state-mode' },
   "modules/workflow/components/admin/AdminWorkflowsPage:open": { skip: true, reason: "data-page surface — rendered within its page; 'open' branch proven by Part 2 runtime coverage" },
   "modules/workflow/widgets/GroupSystemWorkflowsAssignmentDrawer:open": { via: 'overlay' },
-  "modules/assistant/pages/AssistantsSettings:error": { via: 'page-state-mode' },
   "modules/citations/pages/CitationsSettingsPage:error": { via: 'page-state-mode' },
   "modules/llm-local-runtime/components/RuntimeConfigCard:error": { skip: true, reason: "via surface — rendered within its page; 'error' branch proven by Part 2 runtime coverage" },
   "modules/llm-provider/components/LlmProviderSettings:error": { via: 'page-state-mode' },

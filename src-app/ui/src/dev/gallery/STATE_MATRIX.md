@@ -7,18 +7,18 @@
 
 ## Summary
 
-- **354** surfaces carry at least one renderable-state signal.
-- **2193** signals total: 1724 branch, 141 empty, 127 error, 94 loading, 102 overlay, 5 panel.
+- **353** surfaces carry at least one renderable-state signal.
+- **2187** signals total: 1722 branch, 140 empty, 125 error, 93 loading, 102 overlay, 5 panel.
 - **5** right-panel renderers registered (each a right-panel-open state).
-- **35** slot registrations (sidebar / settings / chat mount points).
+- **34** slot registrations (sidebar / settings / chat mount points).
 
 ### Surfaces demanding each gallery state
 
 | state | surfaces |
 |---|---|
-| `delayed` | 84 |
-| `empty` | 114 |
-| `error` | 98 |
+| `delayed` | 83 |
+| `empty` | 113 |
+| `error` | 97 |
 | `open` | 85 |
 | `panel-open` | 5 |
 
@@ -42,38 +42,37 @@ conversation page.
 |---|---|
 | `chatConversationHeaderTrailing` | `modules/chat/module`:124 |
 | `settingsAdminPages` | `modules/agent/module`:46 |
-| `settingsAdminPages` | `modules/assistant/module`:59 |
 | `settingsAdminPages` | `modules/auth-providers/module`:40 |
 | `settingsAdminPages` | `modules/auth/module`:75 |
 | `settingsAdminPages` | `modules/code-sandbox/module`:50 |
-| `settingsAdminPages` | `modules/file-rag/module`:32 |
+| `settingsAdminPages` | `modules/file-rag/module`:38 |
 | `settingsAdminPages` | `modules/hardware/module`:42 |
-| `settingsAdminPages` | `modules/js-tool/module`:36 |
-| `settingsAdminPages` | `modules/literature/module`:57 |
+| `settingsAdminPages` | `modules/js-tool/module`:41 |
+| `settingsAdminPages` | `modules/literature/module`:65 |
 | `settingsAdminPages` | `modules/llm-local-runtime/module`:54 |
 | `settingsAdminPages` | `modules/llm-provider/module`:122 |
 | `settingsAdminPages` | `modules/llm-repository/module`:55 |
 | `settingsAdminPages` | `modules/mcp/module`:101 |
 | `settingsAdminPages` | `modules/memory/module`:63 |
-| `settingsAdminPages` | `modules/scheduler/module`:79 |
+| `settingsAdminPages` | `modules/scheduler/module`:82 |
 | `settingsAdminPages` | `modules/server-update/module`:32 |
 | `settingsAdminPages` | `modules/skill/module`:83 |
 | `settingsAdminPages` | `modules/summarization/module`:36 |
 | `settingsAdminPages` | `modules/user/module`:51 |
-| `settingsAdminPages` | `modules/voice/module`:38 |
-| `settingsAdminPages` | `modules/web-search/module`:52 |
-| `settingsAdminPages` | `modules/workflow/module`:107 |
-| `settingsUserPages` | `modules/assistant/module`:49 |
-| `settingsUserPages` | `modules/citations/module`:38 |
-| `settingsUserPages` | `modules/literature/module`:69 |
+| `settingsAdminPages` | `modules/voice/module`:45 |
+| `settingsAdminPages` | `modules/web-search/module`:59 |
+| `settingsAdminPages` | `modules/workflow/module`:113 |
+| `settingsUserPages` | `modules/assistant/module`:40 |
+| `settingsUserPages` | `modules/citations/module`:44 |
+| `settingsUserPages` | `modules/literature/module`:77 |
 | `settingsUserPages` | `modules/mcp/module`:91 |
 | `settingsUserPages` | `modules/memory/module`:53 |
 | `settingsUserPages` | `modules/profile/module`:38 |
 | `settingsUserPages` | `modules/settings-general/module`:27 |
 | `settingsUserPages` | `modules/skill/module`:73 |
 | `settingsUserPages` | `modules/user-llm-providers/module`:36 |
-| `settingsUserPages` | `modules/web-search/module`:62 |
-| `settingsUserPages` | `modules/workflow/module`:97 |
+| `settingsUserPages` | `modules/web-search/module`:69 |
+| `settingsUserPages` | `modules/workflow/module`:103 |
 | `sidebarContent` | `modules/chat/module`:109 |
 
 ## Per-surface required states
@@ -84,11 +83,11 @@ Required states: `delayed`, `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!canRead` | 235 |
-| error | `error` | 280 |
-| loading | `loading && !settings` | 290 |
-| branch | `canManage` | 297 |
-| branch | `!canManage` | 317 |
+| branch | `!canRead` | 236 |
+| error | `error` | 281 |
+| loading | `loading && !settings` | 291 |
+| branch | `canManage` | 298 |
+| branch | `!canManage` | 318 |
 
 ### `modules/app/SetupPage`
 
@@ -131,25 +130,10 @@ Required states: `open`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `form.formState.isDirty` | 135 |
-| branch | `!value \|\| !value.trim()` | 155 |
-| overlay | `<Drawer open>` | 234 |
-| branch | `canSave` | 245 |
-
-### `modules/assistant/pages/AssistantsSettings`
-
-Required states: `delayed`, `empty`, `error`
-
-| kind | condition | line |
-|---|---|---|
-| loading | `loading` | 138 |
-| error | `error && assistants.length === 0` | 140 |
-| empty | `assistants.length === 0` | 148 |
-| error | `error` | 149 |
-| branch | `assistant.is_default && assistants.length > 1` | 201 |
-| branch | `!assistant.enabled` | 204 |
-| branch | `index < assistants.length - 1` | 227 |
-| branch | `assistants.length > 0` | 235 |
+| branch | `form.formState.isDirty` | 131 |
+| branch | `!value \|\| !value.trim()` | 151 |
+| overlay | `<Drawer open>` | 216 |
+| branch | `canSave` | 227 |
 
 ### `modules/assistant/pages/UserAssistantsSettings`
 
@@ -789,13 +773,13 @@ Required states: `empty`
 |---|---|---|
 | branch | `isFootnoteLabel(props.id)` | 71 |
 | branch | `(rest as Record<string, unknown>)['data-footnotes'] === undefined` | 87 |
-| branch | `citeN !== null` | 103 |
-| branch | `className?.includes('data-footnote-backref') \|\| (rest as Record<string, unknown>)['data-footnote-backref'] !== undefined` | 107 |
-| branch | `scopedHref?.startsWith('#')` | 144 |
-| empty | `verdict === 'empty'` | 211 |
-| branch | `verdict === 'allowed'` | 212 |
-| branch | `typeof paperLabel === 'string'` | 226 |
-| branch | `typeof excerptLabel === 'string'` | 244 |
+| branch | `citeN !== null` | 106 |
+| branch | `className?.includes('data-footnote-backref') \|\| (rest as Record<string, unknown>)['data-footnote-backref'] !== undefined` | 110 |
+| branch | `scopedHref?.startsWith('#')` | 147 |
+| empty | `verdict === 'empty'` | 214 |
+| branch | `verdict === 'allowed'` | 215 |
+| branch | `typeof paperLabel === 'string'` | 229 |
+| branch | `typeof excerptLabel === 'string'` | 247 |
 
 ### `modules/chat/extensions/compaction/components/CompactButton`
 
@@ -2809,10 +2793,10 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `grayed` | 19 |
-| branch | `!grayed` | 40 |
-| branch | `help` | 156 |
-| branch | `help` | 203 |
+| branch | `grayed` | 20 |
+| branch | `!grayed` | 55 |
+| branch | `help` | 171 |
+| branch | `help` | 218 |
 
 ### `modules/llm-provider/components/llm-models/shared/LlmModelParametersSection`
 
@@ -2828,15 +2812,15 @@ Required states: `empty`, `open`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!d.provider_id \|\| !d.repository_id \|\| !r.model_name \|\| !r.repository_path \|\| !r.file_format \|\| !r.main_filename \|\| !r.display_name` | 34 |
-| branch | `!KNOWN_FILE_FORMATS.includes(r.file_format as FileFormat)` | 49 |
-| empty | `activeDownloads.length === 0 && failedDownloads.length === 0` | 88 |
-| branch | `hubModel` | 136 |
-| branch | `!gateResult.ok` | 138 |
-| branch | `!req` | 171 |
-| branch | `activeDownloads.length > 0` | 204 |
-| branch | `failedDownloads.length > 0` | 218 |
-| overlay | `<Popover open>` | 260 |
+| branch | `!d.provider_id \|\| !d.repository_id \|\| !r.model_name \|\| !r.repository_path \|\| !r.file_format \|\| !r.main_filename \|\| !r.display_name` | 35 |
+| branch | `!KNOWN_FILE_FORMATS.includes(r.file_format as FileFormat)` | 50 |
+| empty | `activeDownloads.length === 0 && failedDownloads.length === 0` | 89 |
+| branch | `hubModel` | 155 |
+| branch | `!gateResult.ok` | 157 |
+| branch | `!req` | 190 |
+| branch | `activeDownloads.length > 0` | 225 |
+| branch | `failedDownloads.length > 0` | 239 |
+| overlay | `<Popover open>` | 281 |
 
 ### `modules/llm-provider/widgets/LLMProviderGroupWidget`
 
@@ -3190,13 +3174,13 @@ Required states: `empty`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `rawFlavors.length` | 45 |
-| branch | `!multiUserMode` | 79 |
-| branch | `saving` | 82 |
-| branch | `v.stdio && !v.flavor` | 83 |
-| branch | `canEdit` | 109 |
-| empty | `noTransports` | 151 |
-| branch | `stdio` | 160 |
+| branch | `rawFlavors.length` | 46 |
+| branch | `!multiUserMode` | 80 |
+| branch | `saving` | 83 |
+| branch | `v.stdio && !v.flavor` | 84 |
+| branch | `canEdit` | 110 |
+| empty | `noTransports` | 155 |
+| branch | `stdio` | 168 |
 
 ### `modules/mcp/components/system/SystemMcpServersPage`
 
@@ -3433,10 +3417,10 @@ Required states: `delayed`, `empty`, `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!n` | 82 |
-| loading | `loading && list.length === 0` | 114 |
-| error | `error && list.length === 0` | 118 |
-| empty | `list.length === 0` | 126 |
+| branch | `!n` | 83 |
+| loading | `loading && list.length === 0` | 122 |
+| error | `error && list.length === 0` | 126 |
+| empty | `list.length === 0` | 134 |
 
 ### `modules/onboarding/OnboardingPage`
 
@@ -3491,14 +3475,14 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `loadingServers` | 42 |
-| branch | `applyErrors.length > 0 && canSeeAdminControls` | 65 |
-| branch | `serversError && canSeeAdminControls` | 86 |
-| branch | `canManageSystemMcp && systemServers.length > 0` | 90 |
-| branch | `server.description` | 112 |
-| branch | `canInstallFromHub && hubServers.length > 0` | 125 |
-| branch | `alreadyInstalled` | 163 |
-| branch | `server.description` | 165 |
+| branch | `loadingServers` | 54 |
+| branch | `applyErrors.length > 0 && canSeeAdminControls` | 82 |
+| branch | `serversError && canSeeAdminControls` | 103 |
+| branch | `canManageSystemMcp && systemServers.length > 0` | 107 |
+| branch | `server.description` | 129 |
+| branch | `canInstallFromHub && hubServers.length > 0` | 142 |
+| branch | `alreadyInstalled` | 180 |
+| branch | `server.description` | 182 |
 
 ### `modules/onboarding/guides/getting-started/components/MemorySetupStep`
 
@@ -3506,16 +3490,17 @@ Required states: `delayed`, `empty`, `error`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!canManageMemory` | 56 |
-| branch | `!canManageMemory` | 72 |
-| loading | `loading` | 91 |
-| branch | `screen === 'pick' && enableMemory` | 100 |
-| error | `error` | 132 |
-| branch | `saving` | 156 |
-| error | `error` | 204 |
-| empty | `noModelsAvailable` | 210 |
-| empty | `noModelsAvailable` | 215 |
-| branch | `saving` | 280 |
+| branch | `!canManageMemory` | 57 |
+| branch | `!canManageMemory` | 73 |
+| loading | `loading` | 92 |
+| branch | `screen === 'pick' && enableMemory` | 101 |
+| error | `error` | 133 |
+| branch | `saving` | 157 |
+| error | `error` | 205 |
+| empty | `noModelsAvailable` | 211 |
+| empty | `noModelsAvailable` | 216 |
+| branch | `isPawsHiddenModuleName('hub')` | 229 |
+| branch | `saving` | 297 |
 
 ### `modules/profile/pages/ProfileSettingsPage`
 
@@ -3634,8 +3619,9 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `name === 'knowledge_kinds'` | 102 |
-| branch | `name === 'advanced_settings'` | 119 |
+| branch | `isPawsHiddenModuleName(registration.name)` | 57 |
+| branch | `name === 'knowledge_kinds'` | 119 |
+| branch | `name === 'advanced_settings'` | 136 |
 
 ### `modules/projects/core/extensions/slots`
 
@@ -3905,12 +3891,12 @@ Required states: `delayed`, `error`, `open`
 
 | kind | condition | line |
 |---|---|---|
-| error | `loading && !error` | 55 |
-| branch | `skill.description` | 84 |
-| branch | `skills.length > 0` | 95 |
-| error | `error && skills.length === 0` | 110 |
-| loading | `!loading && skills.length === 0` | 119 |
-| overlay | `<ImportSkillDialog open>` | 130 |
+| error | `loading && !error` | 56 |
+| branch | `skill.description` | 85 |
+| branch | `skills.length > 0` | 96 |
+| error | `error && skills.length === 0` | 111 |
+| loading | `!loading && skills.length === 0` | 120 |
+| overlay | `<ImportSkillDialog open>` | 139 |
 
 ### `modules/skill/components/admin/AdminSkillGroupAssignment`
 

@@ -11,18 +11,11 @@ const UserAssistantsSettings = lazyWithPreload(() =>
     default: m.UserAssistantsSettings,
   })),
 )
-const AssistantsSettings = lazyWithPreload(() =>
-  import('./pages/AssistantsSettings').then(m => ({
-    default: m.AssistantsSettings,
-  })),
-)
-
 export default createModule({
   metadata: {
     name: 'assistants',
     version: '1.0.0',
-    description:
-      'AI Assistants module for managing user and template assistants',
+    description: 'AI Assistants module for managing user assistants',
   },
   // smart-loading gate (build-lifted into the manifest)
   shouldLoad: (ctx) => ctx.isAuthenticated,
@@ -35,13 +28,11 @@ export default createModule({
       permission: Permissions.AssistantsRead,
       layout: SettingsLayoutDef,
     },
-    {
-      path: '/settings/assistant-templates',
-      element: AssistantsSettings,
-      requiresAuth: true,
-      permission: Permissions.AssistantsTemplateRead,
-      layout: SettingsLayoutDef,
-    },
+    // paws: the /settings/assistant-templates route is REMOVED (design item 12).
+    // Only the admin template SURFACE goes — `is_template`, the seeded
+    // "Default Assistant" row and clone-on-signup all stay, so a new user still
+    // gets an assistant (see DEC-2). The `assistant` module itself is core and
+    // is NOT hidden.
   ],
   stores: [
   ],
@@ -56,16 +47,8 @@ export default createModule({
         permission: Permissions.AssistantsRead,
       },
     ],
-    settingsAdminPages: [
-      {
-        id: 'assistant-templates',
-        icon: <Bot />,
-        label: 'Assistant Templates',
-        path: 'assistant-templates',
-        order: 25,
-        permission: Permissions.AssistantsTemplateRead,
-      },
-    ],
+    // paws: no `settingsAdminPages` entry — the "Assistant Templates" admin page
+    // is removed (design item 12). See the routes note above.
   },
   initialize: () => {
     console.log('Assistants module initialized')

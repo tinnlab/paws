@@ -581,6 +581,7 @@ pub fn github_fetch_server_options(
         refresh_token_expiry_days: None,
         max_file_upload_mb: None,
         voice_enabled: None,
+        ..Default::default()
     })
 }
 

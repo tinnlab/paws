@@ -82,11 +82,7 @@ impl AppModule for BioMcpModule {
         // config section means enabled). Operators opt OUT with
         // `bio_mcp: { enabled: false }`. The module still self-disables
         // below when the embedded binary is a build stub.
-        let enabled = crate::module_api::app_config(ctx)
-            .bio_mcp
-            .as_ref()
-            .map(|c| c.enabled)
-            .unwrap_or(true);
+        let enabled = crate::module_api::app_config(ctx).bio_mcp_enabled();
         if !enabled {
             tracing::info!("bio_mcp: disabled in config; skipping registration");
             return Ok(());
@@ -133,6 +129,22 @@ impl AppModule for BioMcpModule {
     }
 
     fn register_routes(&self, router: ApiRouter) -> ApiRouter {
+        // NOT config-gated, deliberately.
+        //
+        // bio_mcp has the same latent hole the paws reduction closed for
+        // web_search / lit_search / js_tool — with `enabled: false`, `init`
+        // early-returns without clearing the `mcp_servers` row, so a row from a
+        // prior enabled boot survives and this still-mounted route could serve
+        // it. A guard was added here and then REVERTED: bio_mcp is not one of
+        // the 13 items in `docs/design/paws-feature-surface.md`, and unmounting
+        // the route changes its disabled contract from 401/403/503/405 to a bare
+        // 404, which the proxy tests in `tests/bio_mcp/` assert deliberately —
+        // one of them relies on the disabled path to reach the graceful-503
+        // branch. Redefining that contract belongs to whoever owns bio_mcp, not
+        // to this feature.
+        //
+        // Recorded as a follow-up in the PR body instead of silently reshaping
+        // an unrelated module.
         router.merge(routes::bio_mcp_router())
     }
 }

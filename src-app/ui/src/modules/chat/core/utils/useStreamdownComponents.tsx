@@ -11,7 +11,7 @@ import { BlockedImage } from '@/components/common/BlockedImage'
 import { ReservedImage } from '@/components/common/ReservedImage'
 import { classifyImageSrc } from '@/components/common/imageSrcPolicy'
 import { CitationChip } from '@/modules/chat/core/utils/CitationChip'
-import { isCitationHref } from '@/modules/chat/core/utils/citationTokenize'
+import { citationChipNumber } from '@/modules/chat/core/utils/citationTokenize'
 import {
   scopeFootnoteId,
   scopeHref,
@@ -99,7 +99,10 @@ export function useStreamdownComponents(contentId: string) {
         const { href, className, target: _target, id, ...rest } = props
         // Inline `[n]` knowledge-base citation → focusable chip (FB-11). The
         // tokenizer rewrote the model's bare `[n]` into `[n](#kb-cite-n)`.
-        const citeN = isCitationHref(href)
+        // paws: gates the CONSUMER too, not only the tokenizer — see
+        // `citationChipNumber`, which is a pure function precisely so this gate
+        // is unit-testable rather than only reachable through a rendered chat.
+        const citeN = citationChipNumber(href)
         if (citeN !== null) return <CitationChip n={citeN} />
         // Hide ↩ back-reference icons — they produce stray icons when footnote
         // definitions contain \n\n (multi-paragraph footnotes).

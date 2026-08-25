@@ -62,11 +62,16 @@ pub struct VoiceModule {
 
 impl VoiceModule {
     pub fn new() -> Self {
-        // Default enabled (an absent `voice:` config section means on); `init`
-        // overwrites this from the resolved config before `register_routes`.
+        // Fail CLOSED. `init()` overwrites this from the resolved config before
+        // `register_routes()`, so the value here only matters on a path where
+        // init never ran or returned early — and on such a path the safe answer
+        // is "not mounted". It used to be `true` with a comment claiming an
+        // absent `voice:` section meant on; that is no longer the default
+        // (paws design item 4), and a stale initializer defaulting a kill switch
+        // to ON is precisely how a switch gets bypassed.
         Self {
             pool: None,
-            enabled: true,
+            enabled: false,
         }
     }
 }
@@ -89,15 +94,11 @@ impl AppModule for VoiceModule {
     fn init(&mut self, ctx: &ModuleContext) -> Result<(), Box<dyn Error>> {
         self.pool = Some(ctx.db_pool.clone());
 
-        // Deploy-level kill switch — ON by default (an absent `voice:` config
-        // section means enabled). Operators opt OUT with `voice: { enabled:
-        // false }`; an admin cannot re-enable it (distinct from the runtime
-        // `voice_runtime_settings.enabled` toggle).
-        let enabled = crate::module_api::app_config(ctx)
-            .voice
-            .as_ref()
-            .map(|c| c.enabled)
-            .unwrap_or(true);
+        // Deploy-level kill switch — OFF by default on paws (design item 4).
+        // Operators opt IN with `voice: { enabled: true }`; an admin cannot
+        // re-enable it (distinct from the runtime `voice_runtime_settings.enabled`
+        // toggle).
+        let enabled = crate::module_api::app_config(ctx).voice_enabled();
         self.enabled = enabled;
         if !enabled {
             tracing::info!("voice: disabled in config; skipping reaper + route registration");

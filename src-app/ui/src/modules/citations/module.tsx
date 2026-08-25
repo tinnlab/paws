@@ -22,7 +22,13 @@ export default createModule({
     description: 'Citation management + verification: a verified CSL-JSON library.',
   },
   // smart-loading gate (build-lifted into the manifest)
-  shouldLoad: (ctx) => ctx.isAuthenticated,
+  // paws: HIDDEN (design item 8) — was `(ctx) => ctx.isAuthenticated`. Source of
+  // truth: PAWS_HIDDEN_MODULE_NAMES in `@/modules/pawsHiddenModules` (this
+  // literal cannot import it; `pawsHiddenModules.test.ts` binds them).
+  // NOTE: this predicate does NOT remove the project "References" entry (design
+  // item 13) — that registration is owned by the projects module's extension
+  // registry, which filters on the same list.
+  shouldLoad: () => false,
   dependencies: ['router'],
   routes: [
     {

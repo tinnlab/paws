@@ -25,7 +25,14 @@ export default createModule({
     description: 'Web search + page fetch admin settings (provider chain + keys)',
   },
   // smart-loading gate (build-lifted into the manifest)
-  shouldLoad: (ctx) => ctx.isAuthenticated,
+  //
+  // paws hides this module (design item 1 — see `modules/pawsHiddenModules.ts`).
+  // The capability is already off server-side (`web_search.enabled = false`), so
+  // the two settings pages below could only ever configure something that cannot
+  // run; the owner's ruling is that a disabled feature keeps no menu entry.
+  // Original predicate — restore it together with the pawsHiddenModules entry:
+  //   shouldLoad: (ctx) => ctx.isAuthenticated,
+  shouldLoad: () => false,
   dependencies: ['router'],
   routes: [
     {

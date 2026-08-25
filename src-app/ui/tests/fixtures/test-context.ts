@@ -399,6 +399,37 @@ bio_mcp:
   # tool-capable chat). A dedicated bio spec enables it explicitly via
   # test.use({ bioMcpEnabled: true }).
   enabled: ${bioMcpEnabled}
+
+# web_search / lit_search / voice / js_tool ship OFF on paws (the feature-surface
+# reduction, docs/design/paws-feature-surface.md items 1/2/4/5). They are opt-IN
+# features, not deleted ones — the backend capability and its integration suite
+# both stay — so the E2E deployment turns all four ON.
+#
+# All four modules are HIDDEN in the UI, so nothing here can reach them by
+# clicking. That is deliberate rather than incidental: booting the capability ON
+# while the UI is hidden makes 17-paws-surface prove the hide against the
+# HARDEST case — a fully live backend — instead of a deployment where the feature
+# was absent anyway and absence proved nothing. voice and js_tool have been set
+# this way since the reduction landed; web_search and lit_search now match.
+#
+# What changed for those two: they were ON because suites COVERED them
+# (literature/**, sync/lit-search-sync, sync/web-search-*-sync,
+# settings/web-search-*). The owner ruled that a disabled capability must not keep
+# a menu entry, both modules became hidden, and every one of those suites is
+# deleted. They stay ON for the reason above, not the original one.
+#
+# This mirrors what the Rust integration harness does
+# (server/tests/common/harness_inner.rs), which defaults the same four to ON. The
+# two harnesses MUST agree: when only the Rust one was updated, every e2e run
+# silently booted with all four off and the suites of the day lost their subject.
+web_search:
+  enabled: true
+lit_search:
+  enabled: true
+voice:
+  enabled: true
+js_tool:
+  enabled: true
 ${
   // Code sandbox is OFF by default in E2E (enabling it spawns squashfuse and
   // requires a mounted rootfs). The real-sandbox-via-chat E2E

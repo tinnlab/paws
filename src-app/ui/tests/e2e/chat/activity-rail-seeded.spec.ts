@@ -257,75 +257,12 @@ test.describe('Activity rail — the seeded turn shapes (TEST-38)', () => {
     await expect(stepByKey(rail, 'toolu_rail_ok')).toHaveAttribute('data-status', 'success')
   })
 
-  test('C19 knowledge base: two KB tools render as one rail in knowledge-base language', async ({
-    page,
-    testInfra,
-  }) => {
-    const { baseURL, apiURL } = testInfra
-    const token = await getAdminToken(apiURL)
-    const seeded = await seedRailConversation(page, testInfra, token, 'rail-c19', [
-      { role: 'user', blocks: [textBlock('What does our knowledge base say about build time?')] },
-      {
-        role: 'assistant',
-        blocks: [
-          ...toolPair({
-            id: 'toolu_rail_kb_list',
-            name: 'list_knowledge_bases',
-            serverId: BUILTIN_SERVER.knowledgeBase,
-            result: '1 knowledge base(s).',
-            structuredContent: {
-              knowledge_bases: [
-                {
-                  id: '9a5f3c10-0000-0000-0000-000000000001',
-                  name: 'Vector Search Notes',
-                  document_count: 9,
-                  indexed: 7,
-                  total: 9,
-                },
-              ],
-            },
-          }),
-          ...toolPair({
-            id: 'toolu_rail_kb_search',
-            name: 'search_knowledge',
-            serverId: BUILTIN_SERVER.knowledgeBase,
-            input: { query: 'index build time vs query latency', top_k: 3 },
-            result: 'report.pdf:p2: HNSW build is O(N log N).',
-            structuredContent: {
-              hits: [
-                { file_id: 'f1000000-0000-0000-0000-000000000005', filename: 'report.pdf', page: 2, char_start: 1024, char_end: 1146, score: 0.912, content: 'HNSW build is O(N log N).' },
-                { file_id: 'f1000000-0000-0000-0000-000000000007', filename: 'notes.md', page: 1, char_start: 88, char_end: 176, score: 0.874, content: 'Query latency is set at read time.' },
-              ],
-              query: 'index build time vs query latency',
-              mode: 'Hybrid',
-              truncated: false,
-              indexing_incomplete: { searchable: 7, total: 9 },
-            },
-          }),
-          textBlock('Build cost and query latency are **separate knobs**.'),
-        ],
-      },
-    ])
-    const assistantId = seeded.messageIds[1]
-    await openSeededConversation(page, baseURL, seeded.conversationId)
-
-    const rail = railIn(page, assistantId)
-    await expect(rail).toBeVisible({ timeout: 20000 })
-    await expect(rail).toHaveAttribute('data-rail-shape', 'rail')
-    await rail.getByTestId('activity-rail-summary').click()
-    await expect(rail.getByTestId('rail-step')).toHaveCount(2)
-
-    await expect(
-      stepByKey(rail, 'toolu_rail_kb_list').getByTestId('rail-step-label'),
-    ).toHaveText('Listing your knowledge bases')
-    const search = stepByKey(rail, 'toolu_rail_kb_search')
-    await expect(search.getByTestId('rail-step-label')).toHaveText(
-      'Searching your knowledge base',
-    )
-    // A half-indexed corpus must say so ON THE ROW — a step that answered as if
-    // the corpus were complete is the failure mode this detail exists to stop.
-    await expect(search.getByTestId('rail-step-detail')).toContainText('partial index')
-  })
+  // NOTE: a C19 test — "two KB tools render as one rail in knowledge-base
+  // language" — stood here. paws hides the `knowledge-base` module, so its
+  // chat-extension never registers and there is no knowledge-base rail language
+  // left to assert. The rail's DELEGATION contract is still covered by the C16
+  // test above, whose `semantic_search` (file) and `exec` (code_sandbox) label
+  // assertions come from modules that survive.
 
   test('a request for input (elicitation) breaks OUT of the rail as a seeded block too', async ({
     page,

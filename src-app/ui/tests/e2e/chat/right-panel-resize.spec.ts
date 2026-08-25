@@ -1,18 +1,33 @@
 import { test, expect } from '../../fixtures/test-context'
 import { byTestId } from '../testid'
-import { loginAsAdmin } from '../../common/auth-helpers'
+import { loginAsAdmin, getAdminToken } from '../../common/auth-helpers'
 import {
   createProviderViaAPI,
   createModelViaAPI,
   assignProviderToAdministratorsGroup,
 } from '../../common/provider-helpers'
-import { seedLiteratureResult, sampleResult } from '../literature/fixtures/mock-literature-result'
+import {
+  createConversationWithModel,
+  waitForAssistantResponse,
+} from './helpers/chat-helpers'
+import {
+  FILE_ASSETS,
+  attachFileViaUI,
+  openFileInPanel,
+} from './helpers/file-panel-helpers'
 
 /**
  * E2E — chat right-panel resize handle (ChatRightPanel.tsx:197). The panel only
- * exists when a right-panel tab is open, so we open one via a seeded literature
- * result, then drag the left-edge ResizeHandle and assert the panel widens. This
- * exercises the drag→setRightPanelWidth path that no E2E covered.
+ * exists when a right-panel tab is open, so we open one, then drag the left-edge
+ * ResizeHandle and assert the panel widens. This exercises the
+ * drag→setRightPanelWidth path that no other E2E covers.
+ *
+ * The tab used to be opened by seeding a literature_search result and clicking
+ * its card. paws hides the `literature` module, so no `literature` panel
+ * renderer is registered and that route to an open panel no longer exists — the
+ * spec now opens a FILE tab instead (the `file` panel renderer survives). The
+ * feature under test is the resize handle, which is chat core and unaffected;
+ * only the vehicle changed.
  */
 
 test.describe('Chat — right panel resize', () => {
@@ -22,21 +37,25 @@ test.describe('Chat — right panel resize', () => {
   }) => {
     const { baseURL, apiURL } = testInfra
     await loginAsAdmin(page, baseURL)
-    const token = await page.evaluate(() =>
-      JSON.parse(localStorage.getItem('auth-storage')!).state.token,
-    )
+    const token = await getAdminToken(apiURL)
     const providerId = await createProviderViaAPI(apiURL, token, 'OpenAI', 'openai')
     await assignProviderToAdministratorsGroup(apiURL, token, providerId)
     await createModelViaAPI(apiURL, token, providerId, undefined, undefined, 'openai')
 
-    // Seed a literature_search tool_result → its inline card opens the screening
-    // right panel.
-    await seedLiteratureResult(page, baseURL, sampleResult())
-    await byTestId(page, 'lit-tool-result-open-button').click()
-    // The screening panel opened (its summary tags are screening-specific).
-    await expect(byTestId(page, 'lit-screening-tag-identified')).toBeVisible({
-      timeout: 15000,
-    })
+    // A conversation with one attached file → its FileCard opens the right panel.
+    await createConversationWithModel(page, baseURL, 'GPT-4o Mini', 'Hello!')
+    await waitForAssistantResponse(page)
+
+    const sendButton = byTestId(page, 'chat-input-send-btn')
+    await expect(sendButton).toBeEnabled({ timeout: 30000 })
+    await attachFileViaUI(page, FILE_ASSETS.md)
+    const textarea = page.locator('textarea[placeholder*="Type your message"]')
+    await textarea.fill('Here is a file.')
+    await expect(sendButton).toBeEnabled({ timeout: 30000 })
+    await sendButton.click()
+    await waitForAssistantResponse(page)
+
+    await openFileInPanel(page, 'test.md')
 
     const panel = byTestId(page, 'chat-right-panel')
     await expect(panel).toBeVisible({ timeout: 10000 })

@@ -16,7 +16,14 @@ test.describe('Settings — permission visibility', () => {
   }) => {
     const { baseURL, apiURL } = testInfra
     // Only profile perms: General (ungated) shows; Hardware (hardware::read) and
-    // Web Search (admin) must be filtered out of the sidebar.
+    // Users (users::read) must be filtered out of the sidebar.
+    //
+    // `users` replaced `web-search` as the second control here. paws hides the
+    // web-search module outright, so `settings-nav-menu-item-web-search` is now
+    // absent for EVERY user — the assertion would have gone on passing while
+    // proving nothing about permission filtering, which is the only thing this
+    // spec exists to prove. A control has to be a section that a permitted user
+    // WOULD see.
     await loginWithPerms(page, baseURL, apiURL, [
       Permissions.ProfileRead,
       Permissions.ProfileEdit,
@@ -35,7 +42,7 @@ test.describe('Settings — permission visibility', () => {
       byTestId(page, 'settings-nav-menu-item-hardware'),
     ).toHaveCount(0)
     await expect(
-      byTestId(page, 'settings-nav-menu-item-web-search'),
+      byTestId(page, 'settings-nav-menu-item-users'),
     ).toHaveCount(0)
   })
 })

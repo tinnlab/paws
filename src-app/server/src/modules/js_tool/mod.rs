@@ -60,8 +60,11 @@ pub fn run_js_mcp_server_id() -> Uuid {
 }
 
 /// Is the js_tool feature enabled for this deployment (config kill switch)?
+///
+/// paws default: OFF (design item 5). Delegates to the single accessor so the
+/// absent-key default cannot drift from the present-but-empty one.
 pub fn is_enabled(config: &crate::core::config::Config) -> bool {
-    config.js_tool.as_ref().map(|c| c.enabled).unwrap_or(true)
+    config.js_tool_enabled()
 }
 
 #[distributed_slice(MODULE_ENTRIES)]
@@ -76,11 +79,21 @@ static JS_TOOL_MODULE_REGISTRATION: ModuleEntry = ModuleEntry {
 pub struct JsToolModule {
     #[allow(dead_code)]
     pool: Option<Arc<PgPool>>,
+    /// Resolved `js_tool.enabled`, cached at `init()` so `register_routes()` can
+    /// consult it (it has no `ModuleContext`). Mirrors `VoiceModule`.
+    ///
+    /// Defaults to the DISABLED value: `register_routes` must fail CLOSED if
+    /// `init()` never ran or returned early, or the kill switch would be
+    /// bypassable by any path that skips init.
+    enabled: bool,
 }
 
 impl JsToolModule {
     pub fn new() -> Self {
-        Self { pool: None }
+        Self {
+            pool: None,
+            enabled: false,
+        }
     }
 }
 
@@ -102,10 +115,11 @@ impl AppModule for JsToolModule {
     fn init(&mut self, ctx: &ModuleContext) -> Result<(), Box<dyn Error>> {
         self.pool = Some(ctx.db_pool.clone());
 
-        // Deploy-level kill switch (default enabled) — mirrors web_search /
-        // lit_search. When off, the server row is never registered so the chat
-        // extension never attaches run_js.
-        if !is_enabled(&crate::module_api::app_config(ctx)) {
+        // Deploy-level kill switch — DEFAULT OFF on paws (design item 5). When
+        // off, the server row is never registered so the chat extension never
+        // attaches run_js, AND `register_routes` mounts nothing (below).
+        self.enabled = is_enabled(&crate::module_api::app_config(ctx));
+        if !self.enabled {
             tracing::info!("js_tool: disabled by config (js_tool.enabled=false); run_js not registered");
             return Ok(());
         }
@@ -129,6 +143,15 @@ impl AppModule for JsToolModule {
     }
 
     fn register_routes(&self, router: ApiRouter) -> ApiRouter {
+        // The kill switch MUST guard route registration too (CLAUDE.md §16).
+        // Skipping the `mcp_servers` upsert only stops the model being OFFERED
+        // run_js; the JSON-RPC endpoint stayed mounted and is gated solely on
+        // `js_tool::use`, which the Users group holds — so with the switch off,
+        // any ordinary user could still POST /api/run-js/mcp and execute
+        // arbitrary script. That made "disabled" mean "unadvertised", not "off".
+        if !self.enabled {
+            return router;
+        }
         router.merge(routes::js_tool_router())
     }
 }
@@ -155,10 +178,12 @@ mod tests {
         assert_eq!(JsToolModule::new().name(), "js_tool");
     }
 
-    // TEST-26: config defaults to enabled; an explicit false disables.
+    // TEST-9 (paws-feature-surface): config defaults to DISABLED on paws
+    // (design item 5); an explicit true re-enables. Replaces the former
+    // assertion that the default was `true`.
     #[test]
-    fn config_default_enabled() {
-        assert!(crate::core::config::JsToolConfig::default().enabled);
-        assert!(!crate::core::config::JsToolConfig { enabled: false }.enabled);
+    fn config_default_disabled_on_paws() {
+        assert!(!crate::core::config::JsToolConfig::default().enabled);
+        assert!(crate::core::config::JsToolConfig { enabled: true }.enabled);
     }
 }

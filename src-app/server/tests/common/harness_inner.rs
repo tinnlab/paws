@@ -183,12 +183,24 @@ pub struct TestServerOptions {
     /// and exercise accept/reject with KB-to-low-MB bodies instead of allocating
     /// the 128 MiB default. `None` omits the line (server default = 128).
     pub max_file_upload_mb: Option<u64>,
-    /// Deploy-level kill-switch for the `voice` dictation runtime. `None` omits
-    /// the config section (module default = enabled). `Some(false)` disables the
-    /// whole voice surface (no routes mounted, no reaper) — mirrors
-    /// `control_mcp_enabled`.
+    /// Deploy-level kill-switch for the `voice` dictation runtime. `None` writes
+    /// `enabled: true` (see below). `Some(false)` disables the whole voice
+    /// surface (no routes mounted, no reaper) — mirrors `control_mcp_enabled`.
     pub voice_enabled: Option<bool>,
+    /// Deploy-level kill-switch for `web_search`. `None` → `enabled: true`.
+    pub web_search_enabled: Option<bool>,
+    /// Deploy-level kill-switch for `lit_search`. `None` → `enabled: true`.
+    pub lit_search_enabled: Option<bool>,
+    /// Deploy-level kill-switch for `js_tool` (`run_js`). `None` → `enabled: true`.
+    pub js_tool_enabled: Option<bool>,
 }
+
+// NOTE on these four: paws ships them OFF (docs/design/paws-feature-surface.md,
+// items 1/2/4/5), but they are opt-IN features, not deleted ones, and their test
+// suites still cover real supported behaviour. So the TEST deployment enables
+// them by default and a test opts out with `Some(false)`. The paws DEFAULT is
+// asserted separately, in `core::config::paws_kill_switch_tests`, against the
+// real shipped packaged config — not here.
 
 /// Ziee's `HarnessApp` implementation — supplies the app-specific couplings the
 /// generic SDK harness needs: the binary name, the template DB base + migration
@@ -406,12 +418,27 @@ secrets:
             config.push_str(&format!("\ncontrol_mcp:\n  enabled: {control_enabled}\n"));
         }
 
-        // voice defaults ON; only write the section when a test overrides it
-        // (the voice config-gate test sets Some(false) to prove the deploy-level
-        // kill switch unmounts the whole voice surface).
-        if let Some(voice_enabled) = opts.voice_enabled {
-            config.push_str(&format!("\nvoice:\n  enabled: {voice_enabled}\n"));
-        }
+        // web_search / lit_search / voice / js_tool ship OFF on paws (the
+        // feature-surface reduction, docs/design/paws-feature-surface.md). Their
+        // test suites cover features that still EXIST and are still supported —
+        // they are opt-in, not deleted — so the test deployment turns them ON and
+        // a test opts OUT with `Some(false)`.
+        //
+        // Writing the section explicitly (rather than relying on the absent-key
+        // default) is what keeps those ~150 existing test call sites working
+        // unchanged. It does mean the DEFAULT test deployment is not the paws
+        // default: that claim is covered where it belongs, by the config unit
+        // tests in `core/config.rs` (`paws_kill_switch_tests`), which parse the
+        // real shipped `packaging/config.default.yaml` and assert the absent-key
+        // and present-but-empty paths both resolve to disabled.
+        let voice_enabled = opts.voice_enabled.unwrap_or(true);
+        config.push_str(&format!("\nvoice:\n  enabled: {voice_enabled}\n"));
+        let web_search_enabled = opts.web_search_enabled.unwrap_or(true);
+        config.push_str(&format!("\nweb_search:\n  enabled: {web_search_enabled}\n"));
+        let lit_search_enabled = opts.lit_search_enabled.unwrap_or(true);
+        config.push_str(&format!("\nlit_search:\n  enabled: {lit_search_enabled}\n"));
+        let js_tool_enabled = opts.js_tool_enabled.unwrap_or(true);
+        config.push_str(&format!("\njs_tool:\n  enabled: {js_tool_enabled}\n"));
 
         // Pick binary: server-only `ziee` (default) or `ziee-desktop --headless`
         // (tests for routes owned by the desktop crate).

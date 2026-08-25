@@ -1,5 +1,6 @@
 import { Suspense } from 'react'
 import type { PermissionExpr } from '@/core/permissions'
+import { isPawsHiddenModuleName } from '@/modules/pawsHiddenModules'
 import type {
   AdvancedSettingsContribution,
   KnowledgeKindContribution,
@@ -40,6 +41,22 @@ export class ProjectExtensionRegistry {
   private extensions: Map<string, ProjectExtensionRegistration> = new Map()
 
   register(registration: ProjectExtensionRegistration): void {
+    // paws feature-surface reduction: a hidden module contributes nothing to a
+    // project. This is what removes the citations "References" knowledge kind
+    // (design item 13) and knowledge-base's "Knowledge bases".
+    //
+    // It has to happen HERE rather than at the discovery glob: that glob is
+    // `{ eager: true }` and each extension calls `register(...)` as a top-level
+    // import side effect, so by the time anything could inspect the glob's keys
+    // the registration has already happened. Filtering the keys would be a
+    // silent no-op.
+    //
+    // The contribution names match their module directory names, so
+    // PAWS_HIDDEN_MODULE_NAMES is the right key. Source of truth:
+    // `@/modules/pawsHiddenModules`.
+    if (isPawsHiddenModuleName(registration.name)) {
+      return
+    }
     if (this.extensions.has(registration.name)) {
       console.warn(
         `[ProjectExtensions] Re-registering "${registration.name}" — previous registration replaced (likely HMR).`,

@@ -1,7 +1,6 @@
 import type { StoreProxy } from '@ziee/framework/stores'
 import type {
   useUserAssistantsStore,
-  useTemplateAssistantsStore,
   useAssistantPickerStore,
 } from '@/modules/assistant/stores'
 import type { useAssistantDrawerStore } from '@/modules/assistant/components/assistantDrawer'
@@ -11,9 +10,8 @@ declare module '@ziee/framework/stores' {
     UserAssistants: StoreProxy<
       ReturnType<typeof useUserAssistantsStore.getState>
     >
-    TemplateAssistants: StoreProxy<
-      ReturnType<typeof useTemplateAssistantsStore.getState>
-    >
+    // paws: `TemplateAssistants` removed with the templates admin surface
+    // (design item 12).
     AssistantDrawer: StoreProxy<
       ReturnType<typeof useAssistantDrawerStore.getState>
     >

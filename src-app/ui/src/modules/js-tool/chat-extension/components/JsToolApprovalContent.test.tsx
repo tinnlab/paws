@@ -50,9 +50,13 @@
  *
  * jsdom does no layout and applies no stylesheet, so CSS INERTING via a Tailwind
  * class (`pointer-events-none`) is invisible to a dispatched click. That half of
- * FR19-11 belongs to Playwright's actionability check
- * (`tests/e2e/chat/run-js-inner-approval.spec.ts`), which observes it for the two
- * spec-reachable states. `assertReachable()` below covers the DOM-attribute
+ * FR19-11 belonged to Playwright's actionability check in
+ * `tests/e2e/chat/run-js-inner-approval.spec.ts`. **That spec was DELETED by the
+ * paws feature-surface reduction** — js-tool is hidden, and its chat extension is
+ * the sole registrant of every testid the spec waited on, so it could no longer
+ * run. The CSS-inerting channel is therefore UNCOVERED today; restoring js-tool
+ * means restoring that spec from git history alongside it.
+ * `assertReachable()` below covers the DOM-attribute
  * channels (`hidden` / `inert` / `aria-hidden` / `tabindex` / `disabled`) and the
  * inerting class tokens on the control and every ancestor inside the card — a
  * bounded DOM check, deliberately NOT claimed as construction-level closure.

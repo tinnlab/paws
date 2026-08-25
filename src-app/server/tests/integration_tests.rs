@@ -32,6 +32,7 @@ mod memory;
 mod memory_mcp;
 mod onboarding;
 mod notification;
+mod paws_surface;
 mod project;
 mod scheduler;
 mod seed;

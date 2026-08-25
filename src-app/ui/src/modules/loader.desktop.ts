@@ -24,11 +24,23 @@
 
 import type { AppModule } from '@ziee/framework/module-system/types'
 import { useModuleSystemStore } from '@ziee/framework'
+import { PAWS_HIDDEN_MODULE_NAMES } from '@/modules/pawsHiddenModules'
 
 /**
  * Core module names to skip on desktop. Identified by
  * `module.metadata.name` (not by path) so it survives directory
  * renames. Each entry needs a short reason.
+ *
+ * Two groups, with different reasons and different lifetimes:
+ *
+ *  - DESKTOP-SPECIFIC (below) — modules that make no sense in a
+ *    single-user desktop shell. These are permanent.
+ *  - THE PAWS FEATURE-SURFACE REDUCTION — spread in from
+ *    `PAWS_HIDDEN_MODULE_NAMES`. **This is the lever that actually does
+ *    the work on desktop**: `loadModules()` below eager-globs every core
+ *    module and NEVER evaluates `shouldLoad`, so a module's
+ *    `shouldLoad: () => false` has no effect here at all. Edit that list,
+ *    not this one — see `@/modules/pawsHiddenModules`.
  */
 export const CORE_MODULE_BLOCKLIST = new Set<string>([
   // No multi-user concept on desktop — auto_login + single admin.
@@ -41,6 +53,8 @@ export const CORE_MODULE_BLOCKLIST = new Set<string>([
   // /settings/about) would collide with that and surface a second update
   // notice for the embedded server, whose update_check is forced off anyway.
   'server-update',
+  // paws feature-surface reduction (docs/design/paws-feature-surface.md).
+  ...PAWS_HIDDEN_MODULE_NAMES,
 ])
 
 /** True when a core module is blocked from the desktop bundle (by name). */

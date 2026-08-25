@@ -71,11 +71,18 @@ pub struct LitSearchModule {
     // Module handle retained for parity with other modules; not read yet.
     #[allow(dead_code)]
     pool: Option<Arc<PgPool>>,
+    /// Resolved `lit_search.enabled`, cached at `init()` so `register_routes()`
+    /// can consult it. Defaults to the DISABLED value so route registration
+    /// fails CLOSED if `init()` never ran or returned early.
+    enabled: bool,
 }
 
 impl LitSearchModule {
     pub fn new() -> Self {
-        Self { pool: None }
+        Self {
+            pool: None,
+            enabled: false,
+        }
     }
 }
 
@@ -97,16 +104,12 @@ impl AppModule for LitSearchModule {
     fn init(&mut self, ctx: &ModuleContext) -> Result<(), Box<dyn Error>> {
         self.pool = Some(ctx.db_pool.clone());
 
-        // Deploy-level kill switch — ON by default (an absent `lit_search:`
-        // config section means enabled). IP-sensitive operators opt OUT with
-        // `lit_search: { enabled: false }` so query terms never egress; an
-        // admin cannot re-enable it (distinct from the runtime
-        // `lit_search_settings.enabled` toggle).
-        let enabled = crate::module_api::app_config(ctx)
-            .lit_search
-            .as_ref()
-            .map(|c| c.enabled)
-            .unwrap_or(true);
+        // Deploy-level kill switch — OFF by default on paws (design item 2), so
+        // query terms never egress. Operators opt IN with
+        // `lit_search: { enabled: true }`; an admin cannot re-enable it
+        // (distinct from the runtime `lit_search_settings.enabled` toggle).
+        let enabled = crate::module_api::app_config(ctx).lit_search_enabled();
+        self.enabled = enabled;
         if !enabled {
             tracing::info!("lit_search: disabled in config; skipping registration");
             return Ok(());
@@ -136,6 +139,14 @@ impl AppModule for LitSearchModule {
     }
 
     fn register_routes(&self, router: ApiRouter) -> ApiRouter {
-        router.merge(routes::lit_search_router())
+        // Settings/connectors REST always mounts (the admin UI module is NOT
+        // hidden — lit_search is a disable-only row). The MCP JSON-RPC endpoint,
+        // which is what actually runs live scholarly queries, mounts only when
+        // enabled.
+        let router = router.merge(routes::lit_search_router());
+        if !self.enabled {
+            return router;
+        }
+        router.merge(routes::lit_search_mcp_router())
     }
 }
