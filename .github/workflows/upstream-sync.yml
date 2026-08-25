@@ -84,6 +84,37 @@ jobs:
             fi
           fi
 
+      - name: Classify upstream commits against paws' deliberate divergences
+        id: risk
+        if: steps.merge.outputs.clean == 'true'
+        run: |
+          # A clean merge is NOT evidence the change belongs here. Conflicts are
+          # caught by git; the silent case is upstream ADDING surface paws chose
+          # to remove. This step cannot judge — it makes the risk visible so the
+          # human reviewing at 09:00 is not reading a diff blind.
+          RANGE="ORIG_HEAD..upstream/main"
+          touch /tmp/risk.md
+          flag () {   # $1 = label, $2.. = pathspecs
+            local label="$1"; shift
+            local out
+            out=$(git log --no-merges --format='  %h %s' $RANGE -- "$@" 2>/dev/null || true)
+            if [ -n "$out" ]; then printf '**%s**\n```\n%s\n```\n' "$label" "$out" >> /tmp/risk.md; fi
+          }
+          flag "Touches features paws HIDES (may re-expand the surface)" \
+            'src-app/server/src/modules/workflow/**' 'src-app/server/src/modules/scheduler/**' \
+            'src-app/server/src/modules/citations/**' 'src-app/server/src/modules/knowledge_base/**' \
+            'src-app/server/src/modules/web_search/**' 'src-app/server/src/modules/lit_search/**' \
+            'src-app/server/src/modules/hub/**' 'src-app/server/src/modules/voice/**'
+          flag "Adds NEW modules or settings surface (merges cleanly, expands paws)" \
+            'src-app/server/src/modules/*/mod.rs' 'src-app/ui/src/modules/*/index.ts*'
+          flag "Touches store dirs paws RENAMED (case-collision fix)" \
+            'src-app/ui/src/**/stores/**' 'src-app/desktop/ui/src/**/stores/**'
+          flag "Touches the local-model / repository path paws customised" \
+            'src-app/server/src/modules/llm_repository/**' 'src-app/server/src/modules/llm_local_runtime/**'
+          flag "Migrations (ordering + immutability guard apply)" \
+            'src-app/server/src/modules/*/migrations/**'
+          [ -s /tmp/risk.md ] || echo "_No upstream commit touched a known paws divergence._" > /tmp/risk.md
+
       - name: Open PR (clean merge only)
         if: steps.merge.outputs.clean == 'true'
         env:
@@ -99,7 +130,13 @@ jobs:
             echo "### Upstream commits"
             git log --oneline HEAD..upstream/main --reverse | head -50
             echo
-            echo "CI must pass before merging. Nothing here has been reviewed by a human."
+            echo "### ⚠ Risk against paws' deliberate divergences"
+            cat /tmp/risk.md
+            echo
+            echo "A clean merge means only that git found no textual overlap. It is NOT"
+            echo "evidence the change belongs in paws — upstream ADDING surface merges"
+            echo "cleanly and can silently re-expand what was deliberately removed."
+            echo "CI must pass, and a human must read the sections above, before merging."
           } > /tmp/body.md
           gh pr create --base main --head "${{ steps.merge.outputs.branch }}" \
             --title "Upstream sync $(date -u +%Y-%m-%d)" --body-file /tmp/body.md
