@@ -1,0 +1,74 @@
+# Weekly REPORT of paws commits that might belong upstream in ziee-ai/ziee.
+#
+# WHY REPORT-ONLY: deciding "is this fix shared, or paws-specific?" is judgement,
+# and it is the judgement that has actually gone wrong in practice — a commit was
+# once labelled portable when half of it was feature-specific and it also moved
+# the sdk pointer. So this lists CANDIDATES and a human decides. It never opens a
+# PR against ziee-ai/ziee, and it never pushes anything.
+name: Upstream candidates
+
+on:
+  schedule:
+    - cron: '23 11 * * 1'   # 11:23 UTC Monday = 07:23 America/New_York (EDT)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  report:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/ziee-ai/ziee.git 2>/dev/null || true
+          git fetch upstream main --no-tags
+
+      - name: Collect candidates
+        id: collect
+        run: |
+          BASE=$(git merge-base HEAD upstream/main)
+          echo "merge-base: $BASE"
+          # Shared code only. Paws-specific surfaces are excluded by path below;
+          # anything that survives still needs a human read.
+          git log --no-merges --format='%h %s' "$BASE"..HEAD -- \
+              'src-app/server/**' 'sdk/**' 'src-app/desktop/tauri/**' \
+              ':(exclude)**/migrations/*default_model*' \
+              ':(exclude)**/defaultModel*' \
+              ':(exclude).lifecycle/**' \
+              ':(exclude)docs/design/paws-*' \
+            > /tmp/cands.txt || true
+          echo "count=$(wc -l < /tmp/cands.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: Report
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          N=$(cat /tmp/cands.txt | wc -l)
+          if [ "$N" -eq 0 ]; then
+            echo "No candidates this week." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          {
+            echo "$N paws commit(s) touch shared code and MAY belong upstream."
+            echo
+            echo "Each still needs a human read: a commit can touch shared paths and"
+            echo "still be paws-specific, and porting the COMMIT rather than the"
+            echo "BEHAVIOUR is how paws-only refactors leak upstream."
+            echo
+            echo '```'
+            cat /tmp/cands.txt
+            echo '```'
+            echo
+            echo "Never port: the store/ directory renames, hidden-feature changes,"
+            echo "the tinnlab model mirror, the default-model feature, or any sdk"
+            echo "submodule pointer move."
+          } > /tmp/issue.md
+          cat /tmp/issue.md >> "$GITHUB_STEP_SUMMARY"
+          gh issue create --title "Upstream port candidates $(date -u +%Y-%m-%d)" --body-file /tmp/issue.md

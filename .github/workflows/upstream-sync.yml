@@ -1,0 +1,123 @@
+# Daily attempt to bring ziee-ai/ziee's changes into paws.
+#
+# WHY THIS IS CONSERVATIVE: paws has diverged deliberately — 25 store
+# directories were renamed to fix case collisions, whole features are hidden,
+# and the sdk submodule tracks OUR `paws` branch, not upstream's line. Any of
+# those can collide with an upstream edit. A merge resolved by a machine that
+# does not know which side is deliberate produces a plausible-looking PR that
+# quietly drops something. So: clean merges become a PR, conflicted merges
+# become an issue for a human.
+name: Upstream sync
+
+on:
+  schedule:
+    - cron: '7 10 * * *'   # 10:07 UTC = 06:07 America/New_York (EDT)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false          # a superproject merge only needs the gitlink
+
+      - name: Configure identity
+        run: |
+          git config user.name  "khoi"
+          git config user.email "khoi@tinnguyen-lab.com"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/ziee-ai/ziee.git 2>/dev/null || true
+          git fetch upstream main --no-tags
+
+      - name: Skip if a sync PR is already open
+        id: existing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          n=$(gh pr list --state open --search "Upstream sync in:title" --json number --jq 'length')
+          echo "count=$n" >> "$GITHUB_OUTPUT"
+          [ "$n" -gt 0 ] && echo "An upstream-sync PR is already open; doing nothing." || true
+
+      - name: Count new upstream commits
+        id: count
+        if: steps.existing.outputs.count == '0'
+        run: |
+          n=$(git rev-list --count HEAD..upstream/main)
+          echo "new=$n" >> "$GITHUB_OUTPUT"
+          echo "upstream is $n commits ahead"
+
+      - name: Attempt the merge
+        id: merge
+        if: steps.existing.outputs.count == '0' && steps.count.outputs.new != '0'
+        run: |
+          BR="sync/upstream-$(date -u +%Y-%m-%d)"
+          echo "branch=$BR" >> "$GITHUB_OUTPUT"
+          git checkout -b "$BR"
+          if git merge --no-ff --no-commit upstream/main; then
+            echo "clean=true" >> "$GITHUB_OUTPUT"
+          else
+            # The submodule gitlinks are EXPECTED to conflict every time —
+            # upstream's sdk line is not ours. Keeping ours is always correct.
+            CONFLICTS=$(git diff --name-only --diff-filter=U)
+            OTHER=$(echo "$CONFLICTS" | grep -vE '^(sdk|agent-kit)$' || true)
+            if [ -z "$OTHER" ] && [ -n "$CONFLICTS" ]; then
+              for p in $CONFLICTS; do git checkout --ours -- "$p" && git add "$p"; done
+              echo "clean=true" >> "$GITHUB_OUTPUT"
+              echo "note=submodule gitlinks resolved to ours" >> "$GITHUB_OUTPUT"
+            else
+              echo "clean=false" >> "$GITHUB_OUTPUT"
+              { echo "conflicts<<EOF"; echo "$CONFLICTS"; echo "EOF"; } >> "$GITHUB_OUTPUT"
+              git merge --abort || true
+            fi
+          fi
+
+      - name: Open PR (clean merge only)
+        if: steps.merge.outputs.clean == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git commit -m "chore(sync): merge upstream ziee-ai/ziee into paws" --no-edit
+          git push -u origin "${{ steps.merge.outputs.branch }}"
+          {
+            echo "Automated daily sync. **${{ steps.count.outputs.new }}** new upstream commits merged cleanly."
+            echo
+            echo "${{ steps.merge.outputs.note }}"
+            echo
+            echo "### Upstream commits"
+            git log --oneline HEAD..upstream/main --reverse | head -50
+            echo
+            echo "CI must pass before merging. Nothing here has been reviewed by a human."
+          } > /tmp/body.md
+          gh pr create --base main --head "${{ steps.merge.outputs.branch }}" \
+            --title "Upstream sync $(date -u +%Y-%m-%d)" --body-file /tmp/body.md
+
+      - name: Open issue (conflicts — human needed)
+        if: steps.merge.outputs.clean == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "The daily upstream merge hit conflicts and was **aborted**, not resolved."
+            echo "Resolving these needs someone who knows which side is deliberate."
+            echo
+            echo "### Conflicting paths"
+            echo '```'
+            echo "${{ steps.merge.outputs.conflicts }}"
+            echo '```'
+            echo "### Upstream commits not yet in paws"
+            git log --oneline HEAD..upstream/main --reverse | head -50
+          } > /tmp/issue.md
+          gh issue create --title "Upstream sync conflicts $(date -u +%Y-%m-%d)" --body-file /tmp/issue.md
