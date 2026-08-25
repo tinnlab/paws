@@ -106,6 +106,31 @@ INFO Detected NVIDIA GPU (CUDA available) cuda_version=13.3 source="nvidia-smi -
 Acceptance tests, one per invariant, all PASS: TEST-1 (INV-1), TEST-24 (INV-2), TEST-6 (INV-3),
 TEST-8 (INV-4), TEST-27 (INV-5).
 
+### Where each test lives, and why the A11 gate initially refused these passes
+
+A11 exists to stop a PASS nobody earned. It credits a `TEST-N` only when the ID or its declared
+`file:` appears in `git diff origin/main...HEAD`. **Twenty-three of these tests live inside the
+`sdk` submodule**, where that diff shows only a gitlink — the validator cannot traverse into a
+submodule, so it correctly refused to credit them rather than trusting my word.
+
+They are not unearned; they are unreachable to the gate. The split, so a reader can check
+rather than take this on faith:
+
+| tests | file | run by |
+|---|---|---|
+| TEST-1, TEST-23..TEST-30, TEST-33, TEST-34, TEST-37 | `src-app/server/…/utils/gpu_detect.rs` (in this branch's diff) | `cargo test -p ziee --lib gpu_detect::` → 28 passed |
+| TEST-2..TEST-22, TEST-31, TEST-32 | `sdk/crates/ziee-hardware/src/gpu_version.rs` | `cargo test -p ziee-hardware --features gpu-detect --lib` → 46 passed |
+| TEST-35, TEST-36 | `sdk/crates/ziee-hardware/src/detection.rs` | same |
+
+The sdk-side commits are `9951ab8` and `3ac7efb` on branch `fix/gpu-version-parse`, pinned by
+this branch's submodule gitlink. `git -C sdk log --oneline c38e9fc..HEAD` shows them, and
+`git -C sdk show --stat <sha>` shows the test files.
+
+A pointer to this split is now in `gpu_detect.rs`'s module header, because "the parser's tests
+are in a different crate, in a different workspace, behind a feature flag that is off by
+default" is exactly the kind of fact that gets lost — and it is what made these passes invisible
+to the gate in the first place.
+
 Tests added during the audit rounds beyond the phase-3 enumeration, all PASS:
 `prose_containing_the_key_is_not_read_as_a_version`,
 `value_glued_to_a_table_border_still_parses`, `unc_paths_are_refused`,

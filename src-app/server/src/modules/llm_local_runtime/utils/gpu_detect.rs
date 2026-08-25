@@ -1,5 +1,30 @@
 // GPU backend detection for LLM runtime
 // Detects available GPU acceleration: CUDA (NVIDIA), ROCm (AMD), Metal (Apple Silicon)
+//
+// ── Where the parser tests live ────────────────────────────────────────────
+// The version PARSERS this module depends on are not in this crate. They live
+// in `ziee_hardware::gpu_version`, shared with `ziee-hardware`'s own hardware
+// telemetry so the two cannot re-diverge — they previously held two
+// independent copies of the same broken `"CUDA Version:"` scrape.
+//
+// That means the fixture suite proving this module's behaviour sits behind a
+// submodule boundary, in `sdk/crates/ziee-hardware/src/`:
+//
+//   gpu_version.rs  TEST-2..TEST-22  (nvidia-smi banner / --version / -q
+//                                     fixtures, the never-fabricate-a-version
+//                                     negatives, nvcc + libcudart soname)
+//                   TEST-31, TEST-32 (ROCm string shapes, UNVERIFIED vs hardware)
+//   detection.rs    TEST-35, TEST-36 (the telemetry copy + the NVML field)
+//
+// They are NOT run by `cargo test --workspace` from `src-app`: ziee-hardware
+// belongs to the *sdk* workspace and declares no default feature set, so
+// TEST-35/36 are not even compiled without the flag. Run them with:
+//
+//   cargo test -p ziee-hardware --features gpu-detect --lib
+//
+// The tests in THIS file (TEST-1, TEST-23..TEST-30, TEST-33, TEST-34, TEST-37)
+// cover selection, probe ordering, resolution policy and the on-box host-truth
+// check.
 
 use std::process::Command;
 use std::sync::OnceLock;
