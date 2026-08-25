@@ -218,10 +218,15 @@ demands they PASS — they no longer exist) or to re-point them at other tests
 (recycling ids across features, which A11 exists to prevent). Both are false
 certification, so neither was done.
 
-**This branch does not claim 9/9.** Phases 1, 2, 4, 5, 6, 7 and 9 pass; phase 3
-and phase 8 fail on this A5 line alone, and on nothing else. The deviation is
+**This branch does not claim 9/9. It is 8/9.** Phases 1, 2, 4, 5, 6, 7, 8 and 9
+pass; phase 3 fails on this A5 line alone, and on nothing else. The deviation is
 recorded here, in `FIX_ROUND-5.md`, in `realtime-sse.STATUS.md` and in the PR
 body.
+
+Three other gaps this same run raised were **fixed, not argued with**: the A11
+inherited-PASS on TEST-2 (see the note above), and phase 8's demand for the
+literal `npm run check (ui)` / `gate:ui (ui)` canary lines, which were present as
+a table and are now present as the lines the gate reads.
 
 ## What was NOT run, and why
 

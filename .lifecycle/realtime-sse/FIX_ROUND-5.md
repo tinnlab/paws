@@ -85,7 +85,25 @@ the withdrawn IDs full test lines (which phase 8 then requires to PASS — they 
 longer exist) or to re-point them at other tests (recycling IDs across features,
 which A11 exists to prevent). Both are the false certification this branch's whole
 audit history is about, so neither was done. The failure is recorded here, in
-`TEST_RESULTS.md`, in the STATUS file and in the PR body, and **no 9/9 is
-claimed**.
+`TEST_RESULTS.md`, in the STATUS file and in the PR body: the branch is **8/9,
+and does not claim 9/9**.
+
+Every OTHER gap the same run raised was fixed rather than argued with — an A11
+inherited-PASS on TEST-2 (its file is across the sdk submodule boundary, so
+neither of A11's arms could see it), and phase 8's two literal canary lines.
+Phase 8 now passes. A5 is the only line left, and it is the only one that cannot
+be satisfied without lying.
+
+## The one blocking finding from rounds 3-4, now closed
+
+Both of those rounds flagged, independently, that the pinned sdk gitlink was
+reachable only from a LOCAL branch — so `clone --recurse-submodules` would fail
+with "not our ref" and the parent could not compile. It was a publication step,
+not a code defect, and it is now done: `fix/cors-required-headers-v2` is pushed to
+`ziee-ai/sdk`, `ls-remote` returns `eed4419d…` — byte-identical to the committed
+gitlink — and the sdk PR is open against **`paws`** (ziee-ai/sdk#3), never `chat`
+or `main`.
+
+That closes the ledger's last two open findings. 88 confirmed, 88 closed.
 
 **New confirmed findings:** 0
