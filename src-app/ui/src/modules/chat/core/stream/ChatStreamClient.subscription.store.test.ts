@@ -198,6 +198,79 @@ describe('TEST-6: a subscription that cannot be established is reported', () => 
     client.stop()
   })
 
+  it('re-reports when a NEW TURN starts on the same conversation', async () => {
+    // The gap the modulo alone cannot close (audit round 2). `sendMessage` sets
+    // `error: null` at the start of every turn and then calls
+    // `setActiveConversation(sameId)`. That early-returned, so on a
+    // known-broken stream the banner was destroyed by the very turn it was
+    // warning about, and the connect loop's next report was up to
+    // REREPORT_EVERY x 30s away — i.e. minutes of the exact silent spinner
+    // INV-4 exists to remove, on EVERY turn.
+    rig(async () => {
+      throw new TypeError('Load failed')
+    })
+    const errors: string[] = []
+    const client = createChatStreamClient({
+      onSubscriptionError: (m) => errors.push(m),
+    })
+    client.start()
+    await client.setActiveConversation('conv-1')
+    await runCycles(5)
+
+    const afterFirstReport = errors.length
+    expect(afterFirstReport).toBeGreaterThanOrEqual(1)
+
+    // A new turn on the SAME conversation — the early-return path.
+    await client.setActiveConversation('conv-1')
+    expect(errors.length).toBe(afterFirstReport + 1)
+    client.stop()
+  })
+
+  it('a blip SHORTER than the limit stays silent, then recovers quietly', async () => {
+    // The design says "a transient blip shorter than three attempts stays
+    // silent". Nothing tested it (audit round 2), and a limit of 2 would have
+    // passed every other case here.
+    let failuresLeft = 2
+    const errors: string[] = []
+    const recovered: number[] = []
+    rig(async () => {
+      if (failuresLeft-- > 0) throw new TypeError('Load failed')
+      return { ok: true, status: 204 } as Response
+    })
+    const client = createChatStreamClient({
+      onSubscriptionError: (m) => errors.push(m),
+      onSubscriptionRecovered: () => recovered.push(1),
+    })
+    client.start()
+    await runCycles(6)
+
+    expect(errors, 'two failures must not raise a banner').toEqual([])
+    // …and nothing to recover from, so no spurious clear either.
+    expect(recovered).toEqual([])
+    client.stop()
+  })
+
+  it('reports recovery once the subscription succeeds again', async () => {
+    // Without this the banner outlives the outage: nothing else clears `error`.
+    let failuresLeft = 4
+    const errors: string[] = []
+    const recovered: number[] = []
+    rig(async () => {
+      if (failuresLeft-- > 0) throw new TypeError('Load failed')
+      return { ok: true, status: 204 } as Response
+    })
+    const client = createChatStreamClient({
+      onSubscriptionError: (m) => errors.push(m),
+      onSubscriptionRecovered: () => recovered.push(1),
+    })
+    client.start()
+    await runCycles(8)
+
+    expect(errors.length, 'the outage must have been reported').toBeGreaterThanOrEqual(1)
+    expect(recovered.length, 'and the recovery must be reported too').toBe(1)
+    client.stop()
+  })
+
   it('NEGATIVE CONTROL: a healthy subscription reports nothing', async () => {
     // The fix must not be "always report". A 204 must stay silent, or every
     // normal conversation switch would raise an error banner.

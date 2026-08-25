@@ -422,6 +422,8 @@ export interface ChatState {
    *  the turn claiming to generate. See the action for why this used to be
    *  silent. */
   reportStreamSubscriptionError: (message: string) => Promise<void>
+  /** The stream subscribed again — clear the banner the above raised. */
+  clearStreamSubscriptionError: () => Promise<void>
   reset: () => void
 
   // ── Branch actions ────────────────────────────────────────────────────────
@@ -644,6 +646,9 @@ const chatStoreConfig = {
       // delivery channel must not present as "still working".
       onSubscriptionError: (message: string) =>
         get().reportStreamSubscriptionError(message),
+      // …and take it back down when delivery recovers, so the banner cannot
+      // outlive the condition it describes.
+      onSubscriptionRecovered: () => get().clearStreamSubscriptionError(),
     })
     set({ chatStreamClient: streamClient })
 

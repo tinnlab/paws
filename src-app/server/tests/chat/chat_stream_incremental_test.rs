@@ -14,9 +14,12 @@
 //! being fed during generation.
 //!
 //! What this does NOT cover, stated plainly: `reqwest` performs no CORS
-//! preflight, so this file passes with the entire fix deleted — it passed while
-//! the desktop app was completely broken. It is therefore a REGRESSION GUARD on
-//! server-side incrementality, not by itself a proof of INV-2.
+//! preflight, so this file would pass with the entire fix deleted — the defect
+//! it is named for lives in a browser policy no same-origin harness enforces.
+//! (This file is new on this branch, so it did not literally run green against
+//! the broken build; the counterfactual is what matters.) It is therefore a
+//! REGRESSION GUARD on server-side incrementality, not by itself a proof of
+//! INV-2.
 //!
 //! INV-2's acceptance is the CONJUNCTION recorded in TESTS.md: this file (the
 //! server really streams during the turn) AND TEST-1/TEST-3 (the preflight a

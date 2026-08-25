@@ -109,18 +109,23 @@ test.describe('Chat — an undeliverable stream is surfaced, not silent', () => 
     await loginAsAdmin(page, baseURL)
     const conv = await seedConversation(page, apiURL, 'stream-subscription-ok')
 
-    await page.goto(`${baseURL}/chat/${conv.id}`)
-
     // Watch the real subscription PUT go out and come back, in a real browser.
     // This is the one browser-level assertion that the client half of INV-2
     // works end to end: it issues the PUT, carrying the connection-id header,
     // and the server accepts it. (The CORS cause is not reproducible here — this
     // harness is same-origin, so there is no preflight — which is why the
     // preflight itself is asserted where it lives, in TEST-1/TEST-3.)
+    //
+    // Registered BEFORE `goto`: `waitForResponse` only matches responses that
+    // arrive after the call, and `goto` resolves on `load` — by which time the
+    // app's scripts may already have connected, handshaken and PUT. Registering
+    // after would be a false-RED race (audit round 2).
     const subscription = page.waitForResponse(
       (r) => SUBSCRIPTION_ROUTE.test(r.url()) && r.request().method() === 'PUT',
       { timeout: 30000 },
     )
+
+    await page.goto(`${baseURL}/chat/${conv.id}`)
 
     await expect(byTestId(page, 'chat-message-textarea')).toBeVisible({ timeout: 30000 })
 

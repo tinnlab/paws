@@ -34,7 +34,11 @@ export default (set: ChatSet, getRaw: () => ChatInitialState) => {
   const get = getRaw as unknown as () => ChatState
   return async (message: string) => {
     const state = get()
-    const turnInFlight = state.sending || state.isStreaming
+    // `finalizingTurn` counts as in-flight: the turn's `complete` frame has
+    // landed but its persisted tail has not been swapped in yet, so it is still
+    // a live turn and clearing the flag here would unmask the empty-completion
+    // notice mid-handoff (audit round 2).
+    const turnInFlight = state.sending || state.isStreaming || state.finalizingTurn
 
     const text = turnInFlight
       ? `${message} The reply is still being generated and saved — reload to see it.`

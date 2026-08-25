@@ -12,6 +12,7 @@ export type Actions = {
   clearConversationCache: typeof import('./actions/clearConversationCache')['default']
   clearError: typeof import('./actions/clearError')['default']
   clearPendingBranch: typeof import('./actions/clearPendingBranch')['default']
+  clearStreamSubscriptionError: typeof import('./actions/clearStreamSubscriptionError')['default']
   closeAllRightPanelTabs: typeof import('./actions/closeAllRightPanelTabs')['default']
   closeMobileDrawer: typeof import('./actions/closeMobileDrawer')['default']
   closeRightPanelTab: typeof import('./actions/closeRightPanelTab')['default']

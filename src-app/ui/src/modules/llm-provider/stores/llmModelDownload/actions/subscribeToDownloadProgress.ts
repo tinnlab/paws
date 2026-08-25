@@ -51,13 +51,22 @@ import {
  * from its source" defect this file's own comments condemn for the CORS header
  * (audit FIX-6).
  */
-const DOWNLOAD_STATUSES: Record<DownloadStatus, true> = {
+const DOWNLOAD_STATUSES_EXHAUSTIVE: Record<DownloadStatus, true> = {
   pending: true,
   downloading: true,
   completed: true,
   failed: true,
   cancelled: true,
 }
+/**
+ * Membership is tested against a `Set`, NOT with `in`. `wire in obj` walks the
+ * prototype chain, so `'toString'`, `'constructor'`, `'valueOf'` and
+ * `'__proto__'` all answer true and would be written onto the row as a bogus
+ * status — a regression the first version of this rewrite introduced, and one
+ * the "unrecognised status" test did not catch because its input was not a
+ * prototype member (audit round 2).
+ */
+const DOWNLOAD_STATUSES = new Set<string>(Object.keys(DOWNLOAD_STATUSES_EXHAUSTIVE))
 
 /**
  * The wire carries `status` as a bare `string` (the server stringifies its enum),
@@ -67,7 +76,7 @@ const DOWNLOAD_STATUSES: Record<DownloadStatus, true> = {
  * the old `as DownloadInstance` cast is precisely what let this mismatch through.
  */
 function narrowStatus(wire: string, previous: DownloadStatus): DownloadStatus {
-  return wire in DOWNLOAD_STATUSES ? (wire as DownloadStatus) : previous
+  return DOWNLOAD_STATUSES.has(wire) ? (wire as DownloadStatus) : previous
 }
 
 export function applyProgressUpdate(
@@ -87,15 +96,23 @@ export function applyProgressUpdate(
   // A queued download's row has NO progress_data, and `DownloadItem` renders no
   // byte line at all in that case. Materialising a zeroed object here would put
   // the literal "0 Bytes / 0 Bytes" back on screen — the very string this fix
-  // exists to remove — for every download between enqueue and its first tick
-  // (audit FIX-4). So stay absent until something is actually known.
+  // exists to remove — for every download between enqueue and its first tick.
+  //
+  // `phase` is deliberately NOT part of this test. It is the one progress field
+  // the server does NOT send as an `Option`: `DownloadProgressUpdate.phase` is a
+  // plain `DownloadPhase` and `From<&DownloadInstance>` fills it with
+  // `Created` when the row has no `progress_data` at all
+  // (`llm_model/handlers/downloads.rs`). Including it made this predicate
+  // ALWAYS true, so the guard was inert on every frame the server can actually
+  // emit and the zeroed object was materialised anyway — the first version of
+  // this fix recorded a repair it had not made (audit round 2). Only the
+  // genuinely-optional figures signal that progress is known.
   const known =
     current !== undefined ||
     total !== undefined ||
     speed_bps !== undefined ||
     eta_seconds !== undefined ||
-    message !== undefined ||
-    phase !== undefined
+    message !== undefined
 
   const progress_data: DownloadProgressData | undefined = known
     ? {

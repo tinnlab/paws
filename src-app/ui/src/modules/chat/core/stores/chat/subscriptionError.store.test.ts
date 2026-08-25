@@ -18,6 +18,7 @@
 import { describe, expect, it } from 'vitest'
 
 import makeReportStreamSubscriptionError from './actions/reportStreamSubscriptionError'
+import makeClearStreamSubscriptionError from './actions/clearStreamSubscriptionError'
 
 interface State {
   error: string | null
@@ -105,6 +106,21 @@ describe('TEST-7: reportStreamSubscriptionError reaches a terminal state', () =>
     expect((state.error ?? '').trim().length).toBeGreaterThan(0)
   })
 
+  it('a FINALIZING turn still counts as in flight', async () => {
+    // `finalizingTurn` means the `complete` frame landed but the persisted tail
+    // has not been swapped in — still a live turn. The first version treated it
+    // as "at rest", so the banner branch left `finalizingTurn: true` set, which
+    // MessageList renders as the finalizing affordance (audit round 2).
+    const { state, get, set } = harness({
+      sending: false,
+      isStreaming: false,
+      finalizingTurn: true,
+    })
+    await makeReportStreamSubscriptionError(set, get)(MESSAGE)
+    expect(state.finalizingTurn).toBe(false)
+    expect(state.error).toMatch(/still being generated/i)
+  })
+
   it('the live delivery failure REPLACES a stale earlier error', async () => {
     // The first version kept the pre-existing text and dropped this one. With
     // the client reporting only once (the defect above), that meant the user was
@@ -115,5 +131,24 @@ describe('TEST-7: reportStreamSubscriptionError reaches a terminal state', () =>
     expect(state.error).toContain(MESSAGE)
     expect(state.isStreaming).toBe(false)
     expect(state.sending).toBe(false)
+  })
+})
+
+describe('clearStreamSubscriptionError: the banner must not outlive the outage', () => {
+  it('clears the banner this feature raised', async () => {
+    const { state, get, set } = harness({ sending: false, isStreaming: false })
+    await makeReportStreamSubscriptionError(set, get)(MESSAGE)
+    expect(state.error).toBeTruthy()
+
+    await makeClearStreamSubscriptionError(set, get)()
+    expect(state.error).toBeNull()
+  })
+
+  it('does NOT clear an unrelated error', async () => {
+    // A provider failure has nothing to do with the stream coming back; wiping
+    // it would be the same class of bug in the other direction.
+    const { state, get, set } = harness({ error: 'provider unavailable' })
+    await makeClearStreamSubscriptionError(set, get)()
+    expect(state.error).toBe('provider unavailable')
   })
 })

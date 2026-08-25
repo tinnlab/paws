@@ -232,9 +232,15 @@ These are the non-negotiables this fix must deliver. They are lifted verbatim in
 
    The user-visible policy this implies, stated so it is a decision and not an
    accident: the banner appears after **3** consecutive failed subscription
-   attempts (~7 s, given the client's 1s/2s/4s reconnect backoff) and re-appears
-   every 5 further consecutive failures while the condition persists. A transient
-   blip shorter than three attempts stays silent.
+   attempts (~3 s — the delays BETWEEN attempts are 1 s then 2 s), and comes back
+   whenever a new turn starts on a still-broken stream, plus every 5 further
+   consecutive failures. A blip shorter than three attempts stays silent, and the
+   banner is cleared automatically once a subscription succeeds again.
+
+   The per-turn re-arm is load-bearing, not belt-and-braces: `sendMessage` clears
+   `error` at the start of every turn, and once the reconnect backoff saturates
+   at 30 s the failure-count interval alone would leave the next report minutes
+   away — i.e. a full turn of the exact silent spinner this invariant forbids.
 
 ## Scope boundaries (recorded, not silently dropped)
 
@@ -248,6 +254,15 @@ These are the non-negotiables this fix must deliver. They are lifted verbatim in
   data path with its own failure modes, not a one-line fix. Escalated rather than
   attempted here. (Surfaced by the blind design-conformance audit, which was right
   that leaving it unrecorded amounted to silently dropping it.)
+- **Cross-origin cookie mode does not work, and this branch does not make it
+  work.** `CorsConfig` cannot express `Access-Control-Allow-Credentials` and
+  nothing in the tree sets it, so a browser will not store the refresh cookie
+  cross-origin. `X-Refresh-Cookie` is deliberately NOT in the required-header
+  union for exactly this reason: allowing it unconditionally would turn a LOUD
+  failure (login refused at preflight) into a silent one (login succeeds, the
+  body's refresh token is blanked, the cookie is dropped, silent-refresh is
+  dead). Both example configs now say so. Making cookie mode actually work
+  cross-origin is a separate change.
 - **A download row that exists only on another device.** The SSE `update` handler
   merges into rows already in the store; an update for an unknown id is discarded
   and no row is created, so a download started in another tab renders nothing until

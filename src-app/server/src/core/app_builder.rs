@@ -42,10 +42,23 @@ pub use ziee_framework::app_builder::{
 pub const REQUIRED_CUSTOM_REQUEST_HEADERS: &[&'static str] = &[
     // Scopes a chat-token SSE connection to one conversation.
     crate::modules::chat::stream::handler::CHAT_STREAM_CONNECTION_HEADER,
-    // Opts the web client into httpOnly refresh-token cookies. Only meaningful
-    // cross-origin, which is exactly when preflight applies.
-    ziee_auth::auth::cookie::REFRESH_COOKIE_OPTIN_HEADER,
 ];
+
+// DELIBERATELY NOT IN THE LIST ABOVE: `X-Refresh-Cookie`
+// (`ziee_auth::auth::cookie::REFRESH_COOKIE_OPTIN_HEADER`).
+//
+// It was, and unioning it turned out to be the wrong call. The justification for
+// this list is "a header the API needs in order to WORK, whose omission fails
+// silently". That header is neither: it is an opt-in FLAG, and omitting it from
+// an allow-list fails LOUDLY — the login request is refused at preflight, which
+// an operator notices immediately.
+//
+// Allowing it unconditionally made that failure quiet instead: the client would
+// then send it, the server would blank the body's refresh token
+// (`ziee-auth`'s handlers), and — with no `Access-Control-Allow-Credentials`
+// anywhere in the tree — the browser would drop the cookie too, leaving the
+// session with NO refresh token and silent-refresh dead. Trading a loud failure
+// for a silent one is the opposite of this list's purpose (audit round 2).
 
 /// ziee's CORS layer: the framework's, plus [`REQUIRED_CUSTOM_REQUEST_HEADERS`].
 ///

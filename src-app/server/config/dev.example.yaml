@@ -104,11 +104,16 @@ server:
       # different origin than the API): the web client sends this to opt into
       # httpOnly refresh-token cookies on the token-minting endpoints. Same-
       # origin deployments (the default; SPA served by this server, or a
-      # same-origin reverse proxy) don't need it. NOTE: cross-origin COOKIE mode
-      # additionally needs `Access-Control-Allow-Credentials`, which this config
-      # block cannot express and nothing in the server sets — so a cross-origin
-      # deployment cannot use cookie mode today (it fails closed: the browser
-      # simply does not store the cookie).
+      # same-origin reverse proxy) don't need it.
+      #
+      # ⚠ Cross-origin COOKIE mode does NOT work today. It additionally needs
+      # `Access-Control-Allow-Credentials`, which this config block cannot
+      # express and nothing in the server sets. The failure is not benign: the
+      # client sends the opt-in, the server blanks the refresh token in the
+      # response BODY, and the browser then discards the cookie — leaving the
+      # session with no refresh token at all. This header is deliberately NOT in
+      # the server's required-header union, so omitting it here still fails
+      # LOUDLY at preflight rather than quietly at refresh time.
       - "X-Refresh-Cookie"
       # Self-echo suppression for realtime sync: the SPA stamps its SSE
       # connection id on every mutation so the originating tab is skipped in

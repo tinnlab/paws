@@ -106,4 +106,11 @@ evidence in `LEDGER.jsonl` and in the STATUS file:
    diagnosis, now recorded explicitly as a scope boundary rather than left
    implicit.
 
-**New confirmed findings:** 0
+**New confirmed findings:** 19
+
+(That is the count the round's own re-audit returned, not a target. Two blind
+angles over this round's diff — state-management and design-conformance/
+test-reality — found 19 confirmed items including two HIGHs, and both HIGHs were
+defects THIS round introduced or falsely certified. They are worked in
+`FIX_ROUND-2.md`; writing 0 here would have been the same kind of claim the round
+was convened to remove.)

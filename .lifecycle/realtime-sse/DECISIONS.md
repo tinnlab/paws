@@ -53,9 +53,15 @@ silence that produced the reported bug.
 **Amended after the audit:** the re-report interval did not exist in the first
 implementation — reporting fired once, on `failures === LIMIT`, and could never
 fire again. Two independent audit angles showed that reverts to the reported bug
-on the user's SECOND message. The resulting user-visible policy (banner at ~7 s,
-re-raised every 5 further failures — minutes apart once the backoff saturates) is
-now stated in the design doc rather than left as an accident of the code.
+on the user's SECOND message. The resulting user-visible policy is now stated in
+the design doc rather than left as an accident of the code.
+**Amended again (audit round 2):** the interval ALONE was still not enough. Once
+the backoff saturates at 30 s the next report is up to 150 s away, and
+`sendMessage` clears `error` at the start of every turn — so each turn began with
+no banner and could not get one back for minutes. The client now also re-reports
+when the store scopes it to a conversation it is already on, which is exactly the
+per-turn moment. The stated latency was also wrong: the banner lands at ~3 s
+(the delays BETWEEN attempts are 1 s then 2 s), not ~7 s.
 **Basis:** convention. The mandatory configurable-settings rule targets OPERATIONAL
 tunables an admin has a reason to weigh (resource caps, retention, quotas). Neither of
 these is one: the failure limit is a client-side UX threshold in a bundle the operator
@@ -136,6 +142,31 @@ happened before); it belongs in a strip commit of its own, not smuggled into a b
 Consequence for this branch: `lifecycle-check.mjs` must be run with an explicit
 `--dir .lifecycle/realtime-sse`, since auto-discovery refuses a `.lifecycle/` holding two
 features.
+
+### DEC-15: Is `X-Refresh-Cookie` one of the headers the union force-allows?
+**Resolution:** No — removed from the required list after the round-2 audit. Only
+`X-Chat-Stream-Connection-Id` (app) and `X-Sync-Connection-Id` (framework) are
+unioned.
+**Basis:** the list's own justification is "a header the API needs in order to
+WORK, whose omission fails SILENTLY". `X-Refresh-Cookie` is neither: it is an
+opt-in flag, and omitting it from an allow-list fails LOUDLY — the login request
+is refused at preflight, which an operator sees at once. Force-allowing it made
+that failure quiet instead: the client sends the opt-in, the server blanks the
+body's refresh token, and with no `Access-Control-Allow-Credentials` anywhere the
+browser drops the cookie too — a session with no refresh token and silent-refresh
+dead. Trading a loud failure for a silent one inverts the point of the list.
+
+### DEC-16: What clears the delivery-failure banner when the stream recovers?
+**Resolution:** The client reports recovery (`onSubscriptionRecovered`) on the
+first successful subscription after having reported a failure, and the store
+clears ONLY a banner whose text this feature raised (prefix match), never an
+unrelated error.
+**Basis:** the round-2 audit. Nothing else clears `error` except the user
+dismissing it, a new send, or a cache-miss conversation load — so after a
+transient outage the banner outlived the condition, telling the user live updates
+were not arriving on a conversation that was receiving them. A blanket
+`error: null` was rejected: a provider failure has nothing to do with the stream
+coming back, and wiping it would be the same class of bug in the other direction.
 
 ### DEC-13: Should the subscription-failure banner ever fire when no turn is in flight?
 **Resolution:** Yes — the banner, but NOT the turn-failure reset, and with different

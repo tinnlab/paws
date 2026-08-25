@@ -152,7 +152,21 @@ describe('TEST-8: the progress a view renders advances', () => {
     updated_at: '2026-08-24T18:29:00Z',
   } as unknown as DownloadInstance
 
-  /** A flat wire frame, typed — so `tsc` pins the shape this maps from. */
+  /**
+   * A flat wire frame.
+   *
+   * `phase` is REQUIRED on the wire (`DownloadProgressUpdate.phase` is a plain
+   * `DownloadPhase`, not an `Option`, and the server fills it with `Created`
+   * even for a row that has no `progress_data`), so every fixture here carries
+   * it — as do `error_message`/`model_id`, which the server sends as explicit
+   * nulls. Building fixtures the server could not emit is how the first version
+   * of the queued-download test came to pass against a guard that was inert in
+   * production (audit round 2).
+   *
+   * The `as unknown as` cast is needed because the generated type declares
+   * `error_message?: string` while the wire sends `null` — a real codegen gap
+   * (CODING_GUIDELINES §10 wants `| null`), noted rather than papered over.
+   */
   function frame(over: Partial<DownloadProgressUpdate>): DownloadProgressUpdate {
     return {
       id: 'd1',
@@ -218,14 +232,38 @@ describe('TEST-8: the progress a view renders advances', () => {
     // absent, so materialising a zeroed object here would put the literal
     // "0 Bytes / 0 Bytes" back on screen for every queued download between
     // enqueue and its first tick — the exact string this fix removes, in a
-    // different state (audit FIX-4).
+    // different state.
+    //
+    // The frame below is EXACTLY what the server emits for a queued row: every
+    // optional figure null, and `phase: 'created'` — which is required on the
+    // wire and filled in by `From<&DownloadInstance>` even when there is no
+    // progress_data at all. The first version of this test omitted `phase`, so
+    // it passed against a guard that was `true` for every real frame and the
+    // repair it claimed had not happened (audit round 2).
     const queued = { ...BASE, progress_data: undefined } as unknown as DownloadInstance
-    const merged = applyProgressUpdate(queued, {
-      id: 'd1',
-      provider_id: 'p1',
-      status: 'pending',
-    } as unknown as DownloadProgressUpdate)
+    const merged = applyProgressUpdate(
+      queued,
+      frame({
+        status: 'pending',
+        phase: 'created',
+        current: null,
+        total: null,
+        speed_bps: null,
+        eta_seconds: null,
+        message: null,
+      } as unknown as Partial<DownloadProgressUpdate>),
+    )
     expect(merged.progress_data).toBeUndefined()
+  })
+
+  it('a prototype-chain name is NOT accepted as a status', () => {
+    // `wire in obj` answers true for 'toString'/'constructor'/'valueOf', which
+    // would be written onto the row as a bogus status. Membership is tested
+    // against a Set for exactly this reason (audit round 2).
+    for (const bogus of ['toString', 'constructor', 'valueOf', 'hasOwnProperty']) {
+      const merged = applyProgressUpdate(BASE, frame({ status: bogus as never }))
+      expect(merged.status).toBe('downloading')
+    }
   })
 
   it('a server-side CLEAR of error_message is observable', () => {

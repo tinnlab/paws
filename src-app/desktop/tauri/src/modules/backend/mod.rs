@@ -502,7 +502,7 @@ fn capture_server_addr(server: &ziee::HttpServerConfig) {
 
 /// The desktop app's CORS allowlist.
 ///
-/// Desktop runs an embedded server reachable from three origins:
+/// Desktop runs an embedded server reachable from two kinds of origin:
 /// (a) `tauri://localhost` — the Tauri webview's custom protocol,
 /// (b) `http://localhost:<port>` / `http://127.0.0.1:<port>` — the dev Vite
 /// server + same-port self-fetches. An explicit allowlist, not the "permissive

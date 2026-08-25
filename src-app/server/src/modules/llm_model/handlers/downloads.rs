@@ -618,5 +618,32 @@ mod wire_shape_tests {
                  consumer can distinguish 'unknown' from 'zero'; got {json}"
             );
         }
+        // `phase` is the ONE progress field that is NOT optional: it is filled
+        // with `Created` even here. The consumer must therefore not treat its
+        // presence as evidence that progress is known — a guard that did was
+        // inert on every real frame (audit round 2).
+        assert_eq!(
+            json.get("phase").and_then(|v| v.as_str()),
+            Some("created"),
+            "phase is required on the wire and defaults to `created`; got {json}"
+        );
+    }
+
+    /// The two WHOLE-ROW fields carry the row's current value on every frame, so
+    /// an absent one serialises as an explicit `null` rather than being omitted.
+    /// The consumer relies on that to distinguish "cleared" from "unknown" — it
+    /// takes these as-is instead of falling back, which is only correct while
+    /// the key is always present.
+    #[test]
+    fn whole_row_fields_are_present_as_null_when_unset() {
+        let update = DownloadProgressUpdate::from(&instance_with(None));
+        let json = serde_json::to_value(&update).expect("update must serialize");
+        for field in ["error_message", "model_id"] {
+            assert!(
+                json.get(field).is_some_and(|v| v.is_null()),
+                "{field} must be present as null so a server-side CLEAR is \
+                 observable to the consumer; got {json}"
+            );
+        }
     }
 }

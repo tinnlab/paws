@@ -87,6 +87,14 @@ export interface ChatStreamHandlers {
    * spinner that only a page reload resolved.
    */
   onSubscriptionError?: (message: string) => void
+  /**
+   * A subscription succeeded after `onSubscriptionError` had fired, so delivery
+   * is working again. Without this the banner outlives the condition: a
+   * transient outage that reached the limit leaves the user staring at "live
+   * updates are not reaching this conversation" on a conversation that is now
+   * receiving them (audit round 2).
+   */
+  onSubscriptionRecovered?: () => void
 }
 
 /** Create an independent chat-token SSE client (see the per-instance note). */
@@ -106,6 +114,12 @@ export function createChatStreamClient(
   // Consecutive failed subscription PUTs. Reset by a successful PUT and by
   // `stop()`; see `onSubscriptionAttemptFailed`.
   let subscriptionFailures = 0
+  // The failure count at which the owner was last told. `-1` = never told in
+  // this run. Compared as a DELTA rather than with `%`: the counter is not
+  // guaranteed to advance by exactly one (two `putSubscription` calls can be in
+  // flight at once — the handshake fires one while `setActiveConversation` fires
+  // another), and a modulo silently SKIPS a report it steps over (audit round 2).
+  let lastReportedAtFailure = -1
 
   function start(): void {
     if (started) return
@@ -123,12 +137,34 @@ export function createChatStreamClient(
     connectionId = null
     desiredConversationId = null
     subscriptionFailures = 0
+    lastReportedAtFailure = -1
   }
 
   function setActiveConversation(conversationId: string | null): Promise<void> {
-    if (desiredConversationId === conversationId) return Promise.resolve()
+    if (desiredConversationId === conversationId) {
+      // The store calls this at the start of EVERY turn, and `sendMessage`
+      // clears `error` just before it — so on the same conversation this is the
+      // moment a known-broken stream must speak up again, or the user spends the
+      // whole turn watching a spinner with no banner. The connect loop's own
+      // re-report interval cannot cover it: by then the backoff has saturated at
+      // 30s, putting the next report up to `REREPORT_EVERY * 30s` away (audit
+      // round 2). We cannot usefully re-ATTEMPT here — `connectionId` is null
+      // while the loop is mid-backoff — so we re-TELL instead of pretending.
+      if (subscriptionFailures >= SUBSCRIPTION_FAILURE_LIMIT) reportSubscriptionFailure()
+      return Promise.resolve()
+    }
     desiredConversationId = conversationId
     return putSubscription()
+  }
+
+  /** Tell the owner delivery is broken, and remember that we did. */
+  function reportSubscriptionFailure(): void {
+    lastReportedAtFailure = subscriptionFailures
+    console.error(
+      `[chat-stream] subscription failed ${subscriptionFailures}×; ` +
+        'live updates are not reaching this conversation',
+    )
+    handlers?.onSubscriptionError?.(SUBSCRIPTION_ERROR_MESSAGE)
   }
 
   /**
@@ -169,14 +205,11 @@ export function createChatStreamClient(
       console.warn(`[chat-stream] subscription failed (${reason}); forcing reconnect`)
       return
     }
-    const sinceLimit = subscriptionFailures - SUBSCRIPTION_FAILURE_LIMIT
-    if (sinceLimit % SUBSCRIPTION_REREPORT_EVERY !== 0) return
+    const sinceLastReport = subscriptionFailures - lastReportedAtFailure
+    if (lastReportedAtFailure >= 0 && sinceLastReport < SUBSCRIPTION_REREPORT_EVERY) return
 
-    console.error(
-      `[chat-stream] subscription failed ${subscriptionFailures}× (${reason}); ` +
-        'live updates are not reaching this conversation',
-    )
-    handlers?.onSubscriptionError?.(SUBSCRIPTION_ERROR_MESSAGE)
+    console.warn(`[chat-stream] subscription failure reason: ${reason}`)
+    reportSubscriptionFailure()
   }
 
   async function putSubscription(): Promise<void> {
@@ -199,6 +232,12 @@ export function createChatStreamClient(
         // cap.
         onSubscriptionAttemptFailed(`HTTP ${resp.status}`)
         return
+      }
+      // Recovered. Tell the owner if we had told them it was broken, so a
+      // banner cannot outlive the condition it describes.
+      if (lastReportedAtFailure >= 0) {
+        lastReportedAtFailure = -1
+        handlers?.onSubscriptionRecovered?.()
       }
       subscriptionFailures = 0
     } catch (error) {
