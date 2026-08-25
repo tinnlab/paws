@@ -3,9 +3,19 @@
 Every human critique received on this branch, and what was done about it. Written
 as the record phase 9 asks for, not as a summary of the work.
 
+## Index
+
+- **FB-1** [status: resolved] — desktop is the target, not web. Both loaders now first-class; `CORE_MODULE_BLOCKLIST` is the load-bearing lever there (TEST-7).
+- **FB-2** [status: resolved] — four phase-1 rulings: flip the Rust defaults, 404 not 403, delete hidden features' e2e, target desktop. All implemented; the INV-5 tension with deletion was flagged back and the ruling kept.
+- **FB-3** [status: resolved] — migration prefix was wrong. Re-measured; landed on `202607210300` after main moved it again.
+- **FB-4** [status: resolved] — sdk submodule onto `paws` without touching `.gitmodules`. Done and pushed.
+- **FB-5** [status: resolved] — direct question about branch state; answered honestly (only planning artifacts existed at the time).
+- **FB-6** [status: resolved] — a disabled feature must also leave the MENU. web-search + literature are now hidden modules; one further leak (the `knowledge_base` built-in on the System MCP page) found and fixed by the same sweep. **One sub-item is still open for the owner**: whether to filter the User Groups permission picker (see FB-6, last paragraph).
+- **FB-7** [status: open] — two model-facing leaks escalated, NOT fixed: the citations built-in auto-attaches to every tool-capable chat, and `control_mcp` enumerates the live router. Both need a ruling; see the last section.
+
 ---
 
-## HF-1 — "Desktop is the target"
+## FB-1 — "Desktop is the target"
 
 **When**: phase 1, in answer to the plan's open question about which bundle the
 reduction is for.
@@ -27,7 +37,7 @@ test exists, in the test itself.
 
 ---
 
-## HF-2 — four decisions taken by the owner at phase 1
+## FB-2 — four decisions taken by the owner at phase 1
 
 **Critique/direction**, in answer to the plan's open questions:
 
@@ -36,7 +46,7 @@ test exists, in the test itself.
 | how to disable | flip the Rust `default_*_enabled()` to `false` |
 | a hidden route | genuine **404**, not `ForbiddenResult` |
 | hidden features' e2e | **delete** the suites |
-| target | desktop (HF-1) |
+| target | desktop (FB-1) |
 
 **Resolution**: all four implemented. The 404 ruling is `loader.ts`'s
 `isPathModuleForbidden` returning false for a hidden module, so the router falls
@@ -51,7 +61,7 @@ are listed in the PR body so a restore is mechanical.
 
 ---
 
-## HF-3 — migration prefix correction
+## FB-3 — migration prefix correction
 
 **When**: phase 1, via `paws-feature-surface.CORRECTION-1.md`.
 
@@ -64,7 +74,7 @@ is the argument for measuring it at write time every time.
 
 ---
 
-## HF-4 — the sdk submodule moves to the `paws` branch
+## FB-4 — the sdk submodule moves to the `paws` branch
 
 **When**: phase 5, via `NOTE-sdk.md` then `NOTE-sdk2.md` (the second superseding
 the first's conditional).
@@ -84,7 +94,7 @@ decision is an input, not an open question.
 
 ---
 
-## HF-5 — "is your branch working? have you finished the plan?"
+## FB-5 — "is your branch working? have you finished the plan?"
 
 **When**: phase 5.
 
@@ -99,7 +109,7 @@ switched from progress-shaped to state-shaped.
 
 ---
 
-## HF-6 — a disabled feature must also leave the MENU  ← the substantive one
+## FB-6 — a disabled feature must also leave the MENU  ← the substantive one
 
 **When**: after the merge of `origin/main`, with phases 1–6 green.
 
@@ -150,13 +160,13 @@ and assignable. It is admin-only, and an admin can type any token into the
 Advanced JSON editor regardless, so filtering it is cosmetic rather than a
 containment boundary. Not changed without a ruling.
 
-### HF-6a — six pre-existing spec failures the same sweep uncovered
+### FB-6a — six pre-existing spec failures the same sweep uncovered
 
 Not part of the owner's report, found while tracing what hiding these two modules
 would break, and listed here because they were latent on the branch **before**
 this feedback:
 
-Specs that assert a HIDDEN feature's behaviour, deleted per HF-2's ruling:
+Specs that assert a HIDDEN feature's behaviour, deleted per FB-2's ruling:
 `chat/run-js-tool-scripting`, `chat/run-js-real-llm`,
 `chat/workflow-workspace-run-card`, `14-split-chat/workflow-export-per-pane`,
 `projects/bibliography-manage-panel`, plus the `literature/**`,
@@ -186,7 +196,7 @@ single tab.
 
 ---
 
-## Escalated to the owner — NOT fixed on this branch
+## FB-7 — escalated to the owner, NOT fixed on this branch
 
 Both are behavioural leaks where a hidden feature still reaches the **model**,
 which is sharper than the design's stated limitation ("a user who knows the

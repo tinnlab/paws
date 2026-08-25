@@ -174,43 +174,7 @@ impl DesktopModule for BackendModule {
             ],
         });
 
-        // Desktop flips every opt-in feature ON by default. The
-        // single-admin device should NOT have to dig through admin
-        // settings to turn things on that have a clear "use me"
-        // value (Memory, Code Sandbox). On the server, these stay
-        // opt-in for the operator to weigh deployment trade-offs.
-        //
-        // Code Sandbox: force the config flag to `true`. The module
-        // boot probes host deps (bwrap on Linux, libkrun.dylib on
-        // macOS, WSL2 on Windows) and gracefully no-ops the runtime
-        // path on probe failure — so a Mac user without libkrun
-        // installed isn't broken; the sandbox just stays
-        // un-registered. Memory (DB-level) is flipped on inside
-        // the post-migration hook below.
-        let sandbox_cfg = config.code_sandbox.get_or_insert_with(Default::default);
-        sandbox_cfg.enabled = true;
-
-        // BioMCP: force the config flag on. The module self-disables if
-        // the embedded biomcp binary is a build stub, and the managed
-        // sidecar surfaces a clear error when offline — so a desktop user
-        // without connectivity isn't broken; bio tools just stay
-        // unavailable until the network returns. Connected-only by nature.
-        let bio_cfg = config.bio_mcp.get_or_insert_with(Default::default);
-        bio_cfg.enabled = true;
-
-        // Web Search: NOT forced on. paws disables it at the deploy level
-        // (design item 1, docs/design/paws-feature-surface.md), and this
-        // override used to defeat that: `get_or_insert_with(..).enabled = true`
-        // writes unconditionally, so it overwrote an operator's explicit
-        // `web_search: { enabled: false }` as well as the default. The desktop
-        // build is the paws target, so forcing it on here would have made the
-        // kill switch a no-op on the very platform it needs to work.
-        //
-        // Re-enabling for a desktop build is a config change
-        // (`web_search: { enabled: true }`), not a code change.
-        //
-        // NOTE bio_mcp above is deliberately still forced on — it is not one of
-        // the 13 items in the feature-surface reduction.
+        apply_desktop_feature_defaults(&mut config);
 
         tracing::info!("Backend will use port {}", port);
 
@@ -531,6 +495,41 @@ async fn proxy_to_vite(req: Request<Body>) -> Result<Response<Body>, axum::http:
 /// Tauri `AppHandle`, and a capture that could only be exercised by launching
 /// the app is a capture that ships unverified — which is exactly how the missing
 /// call survived (FB-9).
+/// Flip the opt-in features the DESKTOP build turns on by default.
+///
+/// Desktop is a single-admin device: it should not have to dig through admin
+/// settings to enable things with a clear "use me" value. On the server these
+/// stay opt-in so the operator can weigh deployment trade-offs.
+///
+/// Extracted out of `start()` for ONE reason: what this function must NOT do is
+/// as load-bearing as what it does, and inline in a startup function there was
+/// no way to assert it. See `desktop_feature_defaults` in the tests below.
+///
+/// - **Code Sandbox** — forced on. The module boot-probes host deps (bwrap on
+///   Linux, `libkrun.dylib` on macOS, WSL2 on Windows) and gracefully no-ops the
+///   runtime path on probe failure, so a Mac user without libkrun is not broken;
+///   the sandbox just stays un-registered.
+/// - **BioMCP** — forced on. Self-disables when the embedded binary is a build
+///   stub, and the managed sidecar surfaces a clear error offline. Deliberately
+///   still forced on: it is NOT one of the 13 feature-surface items.
+/// - **Web search** — deliberately NOT touched. paws disables it at the deploy
+///   level (design item 1, `docs/design/paws-feature-surface.md`), and this block
+///   used to defeat that: `get_or_insert_with(..).enabled = true` writes
+///   unconditionally, so it overwrote an operator's explicit
+///   `web_search: { enabled: false }` as well as the default. Desktop is the
+///   paws target, so forcing it on here made the kill switch a no-op on the very
+///   platform it has to work on. Re-enabling for a desktop build is a config
+///   change (`web_search: { enabled: true }`), not a code change.
+///
+/// Memory is flipped on at the DB level in the post-migration hook, not here.
+fn apply_desktop_feature_defaults(config: &mut ziee::Config) {
+    config
+        .code_sandbox
+        .get_or_insert_with(Default::default)
+        .enabled = true;
+    config.bio_mcp.get_or_insert_with(Default::default).enabled = true;
+}
+
 fn capture_server_addr(server: &ziee::HttpServerConfig) {
     ziee::set_server_addr(
         server.host.clone(),
@@ -717,6 +716,90 @@ pub fn ensure_persistent_storage_key(data_dir: &std::path::Path) -> Result<Strin
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// TEST-11 (paws-feature-surface, covers ITEM-9).
+    ///
+    /// The desktop feature-defaulting block must leave an operator's explicit
+    /// `web_search: { enabled: false }` intact.
+    ///
+    /// This is a REGRESSION guard, not a formality. The block used to read
+    /// `config.web_search.get_or_insert_with(Default::default).enabled = true`,
+    /// which writes unconditionally — so it clobbered an explicit `false` as
+    /// happily as it filled in a missing default, making the paws kill switch a
+    /// no-op on the one platform the reduction actually targets. Nothing else
+    /// catches that: the config unit tests prove the SERVER default is off, and
+    /// they would keep passing while the desktop build forced it back on.
+    ///
+    /// Both halves are asserted. Dropping the override is only correct if the
+    /// features desktop legitimately owns are still defaulted on, so the
+    /// positive control is what stops this being satisfied by an empty function.
+    /// Parse the REAL shipped default config with `yaml` appended.
+    ///
+    /// Same approach as `core::config::paws_kill_switch_tests::parse`, and for
+    /// the same reason: a hand-rolled stub would only prove the helper's
+    /// arithmetic against itself, whereas this exercises the config an operator
+    /// actually boots from.
+    fn parse_config(yaml: &str) -> ziee::Config {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../packaging/config.default.yaml"
+        );
+        let base = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+        serde_norway::from_str(&format!("{base}\n{yaml}")).expect("config must parse")
+    }
+
+    #[test]
+    fn desktop_feature_defaults_leave_an_explicit_web_search_false_alone() {
+        let mut config = parse_config("web_search:\n  enabled: false\n");
+        assert_eq!(
+            config.web_search.as_ref().map(|c| c.enabled),
+            Some(false),
+            "precondition: the operator's explicit false parsed",
+        );
+
+        apply_desktop_feature_defaults(&mut config);
+
+        assert_eq!(
+            config.web_search.as_ref().map(|c| c.enabled),
+            Some(false),
+            "an operator's explicit web_search.enabled=false must survive the \
+             desktop feature defaults — overwriting it makes the paws deploy-level \
+             kill switch a no-op on the desktop build (design item 1)",
+        );
+
+        // POSITIVE CONTROL: the features desktop DOES own are still turned on,
+        // so this cannot pass by the helper having become a no-op.
+        assert_eq!(
+            config.code_sandbox.as_ref().map(|c| c.enabled),
+            Some(true),
+            "code_sandbox must still be defaulted ON for desktop",
+        );
+        assert_eq!(
+            config.bio_mcp.as_ref().map(|c| c.enabled),
+            Some(true),
+            "bio_mcp must still be defaulted ON — it is NOT one of the 13 items",
+        );
+    }
+
+    /// The other half of the same contract: with NO web_search key at all,
+    /// desktop must not invent one. The server's own default (disabled, per the
+    /// paws reduction) then decides, rather than the desktop build pre-empting it.
+    #[test]
+    fn desktop_feature_defaults_do_not_materialize_a_web_search_block() {
+        let mut config = parse_config("");
+        assert!(
+            config.web_search.is_none(),
+            "precondition: the packaged default config carries no web_search block",
+        );
+
+        apply_desktop_feature_defaults(&mut config);
+
+        assert!(
+            config.web_search.is_none(),
+            "desktop must not synthesize a web_search block — leaving the key \
+             absent is what lets the server-side default govern",
+        );
+    }
 
     #[test]
     fn ensure_persistent_storage_key_creates_64_hex_chars_on_first_call() {

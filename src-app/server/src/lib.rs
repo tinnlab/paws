@@ -27,7 +27,11 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 // Re-export types for desktop/external use
-pub use core::config::{Config, CorsConfig, HttpServerConfig, JwtConfig};
+// `WebSearchConfig` is re-exported for the DESKTOP crate's test of
+// `apply_desktop_feature_defaults` (TEST-11, paws design item 1): asserting the
+// desktop build leaves an operator's explicit `web_search: { enabled: false }`
+// alone means constructing one, and `core` is a private module.
+pub use core::config::{Config, CorsConfig, HttpServerConfig, JwtConfig, WebSearchConfig};
 pub use core::{Repos, EventBus, EventHandler, AppEvent};
 // Chunk BG-3: the desktop-consumer boot path (ziee-desktop's `ServerBoot` impl +
 // `ensure_desktop_admin`) threads the `BootHandle.pool` into repositories rather
