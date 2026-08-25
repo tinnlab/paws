@@ -34,11 +34,11 @@ import {
   RENDERING_SHOWCASE_ID,
   SHOWCASE_CONVERSATION_ID,
   STREAMING_MESSAGE_ID,
-  literaturePanelData,
   liveAskUser,
   liveElicitation,
   liveElicitationNoFields,
   rightPanelFile,
+  rightPanelFileSecondary,
   streamingCassette,
 } from '@/dev/gallery/fixtures/chat-deep'
 
@@ -603,34 +603,31 @@ export const gallery: ModuleGallery = {
       },
     },
     {
-      slug: 'deep-chat-right-panel-literature',
-      title: 'Conversation — right panel open (literature screening)',
-      conversationId: SHOWCASE_CONVERSATION_ID,
-      note: 'a literature screening tab (registerPanelRenderer("literature"))',
-      setup: async () => {
-        await whenLoaded(SHOWCASE_CONVERSATION_ID)
-        chat().displayInRightPanel({
-          id: literaturePanelData.sessionId,
-          title: 'Literature screening',
-          type: 'literature',
-          data: literaturePanelData,
-        })
-      },
-    },
-    {
       // MULTI-tab right panel: opening two tabs surfaces the real tab STRIP (a
       // horizontal tablist with >1 tab) so the strip detectors have a target —
       // A8 (row-child vertical centering) + I5 (wrong-scroll-axis). A single-tab
       // panel renders no strip.
+      //
+      // The second tab was a literature-screening tab, and there was a sibling
+      // single-tab `deep-chat-right-panel-literature` surface beside this one.
+      // paws hides the `literature` module, so its panel renderer is never
+      // registered: the single-tab surface had nothing left to show and was
+      // dropped, and this one would have degraded to ONE tab — quietly taking
+      // the strip away from A8/I5 while still passing. A second FILE restores a
+      // genuine two-tab strip.
       slug: 'deep-chat-right-panel-multi',
       title: 'Conversation — right panel, multiple tabs',
       conversationId: SHOWCASE_CONVERSATION_ID,
-      note: 'two right-panel tabs (file + literature) → the tab strip; drives A8/I5',
+      note: 'two right-panel tabs (two files) → the tab strip; drives A8/I5',
       setup: async () => {
         await whenLoaded(SHOWCASE_CONVERSATION_ID)
         useFileStore.setState(s => ({
-          selectedFiles: new Map(s.selectedFiles).set(rightPanelFile.id, rightPanelFile),
-          messageFilesCache: new Map(s.messageFilesCache).set(rightPanelFile.id, rightPanelFile),
+          selectedFiles: new Map(s.selectedFiles)
+            .set(rightPanelFile.id, rightPanelFile)
+            .set(rightPanelFileSecondary.id, rightPanelFileSecondary),
+          messageFilesCache: new Map(s.messageFilesCache)
+            .set(rightPanelFile.id, rightPanelFile)
+            .set(rightPanelFileSecondary.id, rightPanelFileSecondary),
         }))
         chat().displayInRightPanel({
           id: 'panel-file-1',
@@ -639,10 +636,10 @@ export const gallery: ModuleGallery = {
           data: { fileId: rightPanelFile.id },
         })
         chat().displayInRightPanel({
-          id: literaturePanelData.sessionId,
-          title: 'Literature screening',
-          type: 'literature',
-          data: literaturePanelData,
+          id: 'panel-file-2',
+          title: rightPanelFileSecondary.filename,
+          type: 'file',
+          data: { fileId: rightPanelFileSecondary.id },
         })
       },
     },

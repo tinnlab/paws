@@ -40,8 +40,8 @@ Semantic search is an admin-settings flag, not a config switch:
 
 | # | item | lever | mechanism | server switch exists? |
 |---|---|---|---|---|
-| 1 | web search | disable | config `web_search.enabled = false` | ✅ |
-| 2 | literature | disable | config `lit_search.enabled = false` | ✅ |
+| 1 | web search | hide + disable | `shouldLoad` + config `web_search.enabled = false` | ✅ |
+| 2 | literature | hide + disable | `shouldLoad` + config `lit_search.enabled = false` | ✅ |
 | 3 | semantic search | disable | `file_rag_admin_settings.semantic_enabled = false` | ✅ (settings) |
 | 4 | voice dictation | hide + disable | `shouldLoad` + config `voice.enabled = false` | ✅ |
 | 5 | programmatic tools | hide + disable | `shouldLoad` + config `js_tool` | ✅ |
@@ -56,6 +56,17 @@ Semantic search is an admin-settings flag, not a config switch:
 
 Items 6–11 are **UI-only**: hidden, not disabled. Recorded as a limitation, not
 glossed.
+
+**Amendment (owner, during implementation) — items 1 and 2 gained the `hide`
+lever.** They were originally written as `disable` alone, on the reading that a
+server switch was enough. It is not: with the capability off, the four settings
+pages those modules register ("Web Search", "Web Search Keys", "Literature
+Search", "Literature Keys") stay in the menu and invite a user to configure
+something that cannot run. The owner's ruling is that a disabled feature keeps no
+menu entry, so both modules are now hidden as well — which also drops their chat
+extensions, correct here because the server never mounts either MCP router. This
+is the only lever available: the implementation brief forbids removing a module's
+slot registrations one at a time.
 
 ## Invariants
 

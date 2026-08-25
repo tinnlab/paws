@@ -48,7 +48,7 @@ conversation page.
 | `settingsAdminPages` | `modules/file-rag/module`:38 |
 | `settingsAdminPages` | `modules/hardware/module`:42 |
 | `settingsAdminPages` | `modules/js-tool/module`:41 |
-| `settingsAdminPages` | `modules/literature/module`:57 |
+| `settingsAdminPages` | `modules/literature/module`:65 |
 | `settingsAdminPages` | `modules/llm-local-runtime/module`:54 |
 | `settingsAdminPages` | `modules/llm-provider/module`:122 |
 | `settingsAdminPages` | `modules/llm-repository/module`:55 |
@@ -60,18 +60,18 @@ conversation page.
 | `settingsAdminPages` | `modules/summarization/module`:36 |
 | `settingsAdminPages` | `modules/user/module`:51 |
 | `settingsAdminPages` | `modules/voice/module`:45 |
-| `settingsAdminPages` | `modules/web-search/module`:52 |
+| `settingsAdminPages` | `modules/web-search/module`:59 |
 | `settingsAdminPages` | `modules/workflow/module`:113 |
 | `settingsUserPages` | `modules/assistant/module`:40 |
 | `settingsUserPages` | `modules/citations/module`:44 |
-| `settingsUserPages` | `modules/literature/module`:69 |
+| `settingsUserPages` | `modules/literature/module`:77 |
 | `settingsUserPages` | `modules/mcp/module`:91 |
 | `settingsUserPages` | `modules/memory/module`:53 |
 | `settingsUserPages` | `modules/profile/module`:38 |
 | `settingsUserPages` | `modules/settings-general/module`:27 |
 | `settingsUserPages` | `modules/skill/module`:73 |
 | `settingsUserPages` | `modules/user-llm-providers/module`:36 |
-| `settingsUserPages` | `modules/web-search/module`:62 |
+| `settingsUserPages` | `modules/web-search/module`:69 |
 | `settingsUserPages` | `modules/workflow/module`:103 |
 | `sidebarContent` | `modules/chat/module`:109 |
 

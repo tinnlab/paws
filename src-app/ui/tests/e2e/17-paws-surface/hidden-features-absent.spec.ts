@@ -40,6 +40,8 @@ function trackModuleRequests(page: Page): { has: (name: string) => boolean } {
 
 /** Directory names of every module the paws reduction hides. */
 const HIDDEN_MODULE_DIRS = [
+  'web-search',
+  'literature',
   'workflow',
   'scheduler',
   'citations',
@@ -67,6 +69,15 @@ const HIDDEN_ROUTES: [string, string][] = [
   ['/settings/workflows-admin', 'System Workflows'],
   ['/settings/scheduler', 'Scheduler'],
   ['/settings/assistant-templates', 'Assistant Templates'],
+  // Items 1 and 2. These four are the entries the owner actually SAW in the
+  // running app after the first pass — the design's item table called both rows
+  // `disable`, which was read as "server switch only", so the modules stayed
+  // loaded and kept their settings pages. Two of them are USER-facing (the key
+  // pages), which is why an ordinary user could reach them.
+  ['/settings/web-search', 'Web Search'],
+  ['/settings/web-search-keys', 'Web Search Keys'],
+  ['/settings/literature', 'Literature Search'],
+  ['/settings/literature-keys', 'Literature Keys'],
 ]
 
 /**
@@ -95,6 +106,13 @@ const HIDDEN_LABELS = [
   'Scheduler',
   'Citations',
   'Hub',
+  // Items 1 and 2. 'Web Search Keys' / 'Literature Keys' are USER settings
+  // slots, so unlike most of this list they were visible to an ordinary user,
+  // not just an admin — which is how the owner found them.
+  'Web Search',
+  'Web Search Keys',
+  'Literature Search',
+  'Literature Keys',
 ]
 
 /**
@@ -359,6 +377,12 @@ test.describe('paws feature surface — hidden features are absent (INV-1)', () 
       '../../workflow/chat-extension',
       '../../scheduler/chat-extension',
       '../../js-tool/chat-extension',
+      // Items 1 and 2. The design first listed these as disable-only and their
+      // extensions were expected to survive; the owner ruled that a disabled
+      // capability keeps no UI, so both modules are hidden and their composer
+      // halves must go with them.
+      '../../web-search/chat-extension',
+      '../../literature/chat-extension',
       './schedule/extension.tsx', // chat-OWNED: the scheduler's composer affordance
       './voice/extension.tsx', // chat-OWNED: the dictation mic
     ]) {
@@ -375,11 +399,11 @@ test.describe('paws feature surface — hidden features are absent (INV-1)', () 
     for (const owner of [
       './text/extension.tsx',
       '../../file/chat-extension',
-      // literature is a DISABLE-ONLY row in the design's item table (item 2):
-      // the capability is off server-side but its UI is not hidden, so its chat
-      // extension must still register. If this fails, the reduction has quietly
-      // exceeded the design.
-      '../../literature/chat-extension',
+      // `mcp` owns the GENERIC rail contribution (order 1000) that describes any
+      // tool step no other extension claims. It is the survivor whose loss would
+      // be quietest — steps would stop being described rather than error — so it
+      // is the one worth pinning here.
+      '../../mcp/chat-extension',
     ]) {
       expect(
         discovered.some(l => l.includes(owner)),

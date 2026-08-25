@@ -19,9 +19,12 @@
  *
  * Two honest caveats, so this header does not overstate the claim:
  *
- *  - **Server-side capabilities are a separate lever**: web search, literature,
- *    voice and programmatic tools are config keys in `server/src/core/config.rs`,
- *    not entries here. Re-enable with e.g. `web_search: { enabled: true }`.
+ *  - **Server-side capabilities need a SECOND lever**: web search, literature,
+ *    voice and programmatic tools are each ALSO a config key in
+ *    `server/src/core/config.rs`. Deleting such a module's entry here restores
+ *    its UI but not its capability — the settings page comes back and still
+ *    cannot work until the deployment also sets e.g.
+ *    `web_search: { enabled: true }`. Both levers, or neither.
  *  - **Semantic search (design item 3) is a DB default**, not a predicate.
  *    Restoring it is an admin settings write (`PUT /api/file-rag/admin-settings`
  *    with `semantic_enabled: true`) — and since the file-rag admin UI is itself
@@ -86,6 +89,20 @@
  * `CORE_MODULE_BLOCKLIST` match on.
  */
 export const PAWS_HIDDEN_MODULE_NAMES: ReadonlySet<string> = new Set([
+  // Design items 1 and 2 — web search and literature search.
+  //
+  // The design table lists these as `disable` (a server config key) rather than
+  // `hide`, and they were initially left visible on that reading. The owner
+  // corrected it: a disabled capability must not keep a menu entry, because the
+  // settings pages it leaves behind ("Web Search", "Web Search Keys",
+  // "Literature Search", "Literature Keys") invite a user to configure a feature
+  // that cannot run. Hiding the whole module is the ONLY available lever — the
+  // brief forbids deleting a module's slot registrations one by one — and it
+  // also drops each module's chat-extension, which is right: with
+  // `web_search.enabled=false` / `lit_search.enabled=false` the server never
+  // mounts the MCP router, so those composer surfaces could only ever fail.
+  'web-search',
+  'literature',
   // Design item 6 — workflow.
   'workflow',
   // Design item 7 — scheduler.
@@ -125,6 +142,8 @@ export const PAWS_HIDDEN_MODULE_NAMES: ReadonlySet<string> = new Set([
  * alone.
  */
 export const PAWS_HIDDEN_MODULE_DIRS: ReadonlySet<string> = new Set([
+  'web-search',
+  'literature',
   'workflow',
   'scheduler',
   'citations',

@@ -402,17 +402,26 @@ bio_mcp:
 
 # web_search / lit_search / voice / js_tool ship OFF on paws (the feature-surface
 # reduction, docs/design/paws-feature-surface.md items 1/2/4/5). They are opt-IN
-# features, not deleted ones, and suites that cover them — literature/**,
-# sync/lit-search-sync, sync/web-search-*-sync, settings/** — still exercise real
-# supported behaviour, so the E2E deployment turns them ON.
+# features, not deleted ones — the backend capability and its integration suite
+# both stay — so the E2E deployment turns all four ON.
+#
+# All four modules are HIDDEN in the UI, so nothing here can reach them by
+# clicking. That is deliberate rather than incidental: booting the capability ON
+# while the UI is hidden makes 17-paws-surface prove the hide against the
+# HARDEST case — a fully live backend — instead of a deployment where the feature
+# was absent anyway and absence proved nothing. voice and js_tool have been set
+# this way since the reduction landed; web_search and lit_search now match.
+#
+# What changed for those two: they were ON because suites COVERED them
+# (literature/**, sync/lit-search-sync, sync/web-search-*-sync,
+# settings/web-search-*). The owner ruled that a disabled capability must not keep
+# a menu entry, both modules became hidden, and every one of those suites is
+# deleted. They stay ON for the reason above, not the original one.
 #
 # This mirrors what the Rust integration harness does
-# (server/tests/common/harness_inner.rs). The two harnesses MUST agree: when only
-# the Rust one was updated, every e2e run silently booted with all four off and
-# those suites lost their subject.
-#
-# The paws SHIPPING default is asserted where it belongs — the config unit tests
-# in core/config.rs, against the real packaged config — not here.
+# (server/tests/common/harness_inner.rs), which defaults the same four to ON. The
+# two harnesses MUST agree: when only the Rust one was updated, every e2e run
+# silently booted with all four off and the suites of the day lost their subject.
 web_search:
   enabled: true
 lit_search:

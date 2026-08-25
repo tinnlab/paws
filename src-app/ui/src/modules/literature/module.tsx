@@ -33,7 +33,15 @@ export default createModule({
     description: 'Live literature search & screening (admin settings + screening panel)',
   },
   // smart-loading gate (build-lifted into the manifest)
-  shouldLoad: (ctx) => ctx.isAuthenticated,
+  //
+  // paws hides this module (design item 2 — see `modules/pawsHiddenModules.ts`).
+  // The capability is already off server-side (`lit_search.enabled = false`), so
+  // the settings pages below could only ever configure something that cannot run,
+  // and the screening panel could never be reached; the owner's ruling is that a
+  // disabled feature keeps no menu entry.
+  // Original predicate — restore it together with the pawsHiddenModules entry:
+  //   shouldLoad: (ctx) => ctx.isAuthenticated,
+  shouldLoad: () => false,
   dependencies: ['router'],
   routes: [
     {

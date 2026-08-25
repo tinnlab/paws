@@ -17,7 +17,6 @@ import type {
   MessageWithContent,
   SSEChatStreamMcpElicitationRequiredData,
 } from '@/api-client/types'
-import type { LiteratureScreeningData } from '@/modules/literature/types'
 
 const NOW = '2026-07-05T20:16:49.884839Z'
 const SANDBOX_SERVER = 'b4d4e17b-55eb-56ce-9bc5-cbc03fd597fd'
@@ -703,37 +702,32 @@ export const rightPanelFile: FileEntity = {
   updated_at: NOW,
 }
 
-/** Right-panel literature screening payload (a couple of records, undecided). */
-export const literaturePanelData: LiteratureScreeningData = {
-  sessionId: 'lit-gallery-0001',
-  query: 'CRISPR base editing off-target',
-  records: [
-    {
-      doi: '10.1000/demo.1',
-      title: 'Base editing minimizes off-target effects in primary cells',
-      authors: ['A. Researcher', 'B. Scientist'],
-      year: 2025,
-      venue: 'Nature Methods',
-      source: 'europepmc',
-      source_ids: ['PMC1000001'],
-      is_preprint: false,
-      relevance: 0.92,
-    },
-    {
-      doi: '10.1000/demo.2',
-      title: 'A survey of prime editing delivery vectors',
-      authors: ['C. Author'],
-      year: 2024,
-      venue: 'Cell',
-      source: 'crossref',
-      source_ids: [],
-      is_preprint: false,
-      relevance: 0.71,
-    },
-  ],
-  identified: { europepmc: 1, crossref: 1 },
-  afterDedup: 2,
-  degradedSources: [],
-  decisions: {},
-  reasons: {},
+/**
+ * A SECOND file, so a gallery surface can open two right-panel tabs and expose
+ * the real tab STRIP (a horizontal tablist with >1 tab).
+ *
+ * That surface used to take a literature-screening tab as its second tab. paws
+ * hides the `literature` module, so no `literature` panel renderer is registered
+ * and such a tab would resolve to nothing (`resolvePanelRenderer` returns null
+ * and warns) — the strip would render one tab, and the A8/I5 detectors that need
+ * a multi-tab strip would silently lose their target. A second FILE keeps the
+ * strip real: two tabs, differing title widths, each dispatching to a viewer
+ * that still exists here.
+ */
+export const rightPanelFileSecondary: FileEntity = {
+  id: 'f1000000-0000-0000-0000-000000000006',
+  filename: 'methods-notes.md',
+  mime_type: 'text/markdown',
+  file_size: 412,
+  blob_version_id: 'fv100000-0000-0000-0000-000000000006',
+  current_version_id: 'fv100000-0000-0000-0000-000000000006',
+  version: 1,
+  has_thumbnail: false,
+  preview_page_count: 1,
+  text_page_count: 1,
+  processing_metadata: {},
+  created_by: 'user',
+  user_id: 'aaaa0000-0000-0000-0000-000000000001',
+  created_at: NOW,
+  updated_at: NOW,
 }

@@ -164,71 +164,11 @@ test.describe('Activity rail — detail reachability (INV-2)', () => {
     ).toHaveCount(1)
   })
 
-  test('TEST-39: a knowledge-base step renders the KNOWLEDGE-BASE card body (delegation, not re-implementation)', async ({
-    page,
-    testInfra,
-  }) => {
-    const { baseURL, apiURL } = testInfra
-    await loginAsAdmin(page, baseURL)
-    const token = await getAdminToken(apiURL)
-
-    // Shapes verbatim from showcase.sql C19 / `knowledge_base/handlers.rs`.
-    const seeded = await seedRailConversation(page, testInfra, token, 'rail-kb', [
-      {
-        role: 'user',
-        blocks: [textBlock('What does our knowledge base say about build time?')],
-      },
-      {
-        role: 'assistant',
-        blocks: [
-          ...toolPair({
-            id: 'toolu_rail_kb_search',
-            name: 'search_knowledge',
-            serverId: BUILTIN_SERVER.knowledgeBase,
-            input: { query: 'index build time vs query latency', top_k: 3 },
-            result: 'report.pdf:p2: HNSW build is O(N log N).',
-            structuredContent: {
-              hits: [
-                {
-                  file_id: 'f1000000-0000-0000-0000-000000000005',
-                  filename: 'report.pdf',
-                  page: 2,
-                  char_start: 1024,
-                  char_end: 1146,
-                  score: 0.912,
-                  content: 'HNSW build is O(N log N) and dominated by ef_construction.',
-                },
-              ],
-              query: 'index build time vs query latency',
-              mode: 'Hybrid',
-              truncated: false,
-              indexing_incomplete: { searchable: 7, total: 9 },
-            },
-          }),
-          textBlock('Build cost and query latency are separate knobs.'),
-        ],
-      },
-    ])
-    const assistantId = seeded.messageIds[1]
-    await openSeededConversation(page, baseURL, seeded.conversationId)
-
-    const rail = railIn(page, assistantId)
-    await expect(rail).toBeVisible({ timeout: 15000 })
-    // The label is knowledge-base DOMAIN language, not the raw tool id — proof
-    // the knowledge-base contribution (not mcp's generic fallback) described it.
-    await expect(
-      stepByKey(rail, 'toolu_rail_kb_search').getByTestId('rail-step-label'),
-    ).toHaveText('Searching your knowledge base')
-
-    const body = await expandStep(rail, 'toolu_rail_kb_search')
-    // The knowledge-base module's OWN already-registered card renders inside the
-    // rail's body — the rail contributed no markup of its own.
-    const card = body.getByTestId('kb-tool-result-card')
-    await expect(card).toBeVisible()
-    // …including the half-indexed warning, which only that card knows how to
-    // render (a rail that re-implemented the body would have dropped it).
-    await expect(card.getByTestId('kb-tool-result-incomplete')).toBeVisible()
-  })
+  // NOTE: a sibling TEST-39 case — "a knowledge-base step renders the
+  // KNOWLEDGE-BASE card body" — stood here. paws hides the `knowledge-base`
+  // module, so its chat-extension never registers and there is no kb card left
+  // to delegate to. The delegation contract TEST-39 exists to prove is unchanged
+  // and still asserted by the FILE case below, whose module survives.
 
   test('TEST-39: a file step renders the FILE PREVIEW body', async ({
     page,

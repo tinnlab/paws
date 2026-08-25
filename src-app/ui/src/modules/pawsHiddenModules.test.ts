@@ -37,6 +37,8 @@ const MODULES_DIR = fileURLToPath(new URL('.', import.meta.url))
 
 /** Every `module.tsx` a hidden name maps to, by its real path on disk. */
 const HIDDEN_MODULE_FILES: Record<string, string> = {
+  'web-search': 'web-search/module.tsx',
+  literature: 'literature/module.tsx',
   workflow: 'workflow/module.tsx',
   scheduler: 'scheduler/module.tsx',
   citations: 'citations/module.tsx',
@@ -146,18 +148,31 @@ test('TEST-5: emptying the one list re-admits a hidden module everywhere', () =>
 })
 
 test('TEST-5: surviving extensions are never dropped', () => {
-  // web-search and literature are DISABLE-ONLY rows in the design's item table
-  // (1 and 2) — their UI modules and chat extensions stay. If this ever flips,
-  // the reduction has quietly exceeded the design.
+  // These belong to modules the reduction must NOT touch. The list deliberately
+  // no longer includes web-search and literature: the design's item table calls
+  // rows 1 and 2 `disable`, which was first read as "server switch only, UI
+  // stays", and the owner corrected it — a disabled capability must not leave a
+  // configurable menu entry behind. Both are hidden modules now, and are covered
+  // by the drop assertions above instead.
   for (const key of [
-    '../../web-search/chat-extension/extension.tsx',
-    '../../literature/chat-extension/extension.tsx',
     '../../file/chat-extension/extension.tsx',
     '../../mcp/chat-extension/extension.tsx',
     './text/extension.tsx',
     './export/extension.tsx',
   ]) {
     assert.equal(shouldRegisterDiscoveredExtension(key), true, `${key} must survive`)
+  }
+
+  // …and the two newly-hidden ones are genuinely dropped, by the LIST: passing
+  // an empty hidden set must admit them again (INV-5), so this cannot pass by
+  // something hard-coded at the call site.
+  const EMPTY: ReadonlySet<string> = new Set()
+  for (const key of [
+    '../../web-search/chat-extension/extension.tsx',
+    '../../literature/chat-extension/extension.tsx',
+  ]) {
+    assert.equal(shouldRegisterDiscoveredExtension(key), false, `${key} must drop`)
+    assert.equal(shouldRegisterDiscoveredExtension(key, EMPTY, EMPTY), true)
   }
 })
 

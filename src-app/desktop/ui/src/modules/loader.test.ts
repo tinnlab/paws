@@ -72,8 +72,13 @@ describe('desktop CORE_MODULE_BLOCKLIST', () => {
   it('keeps the modules the reduction must NOT touch', () => {
     // The design hides features; it must not take out the app around them.
     // `assistants` is explicitly called out as core (design item 12 removes the
-    // template surface only), and web-search/literature are disable-only rows in
-    // the item table — their UI modules stay.
+    // template surface only).
+    //
+    // web-search and literature are deliberately NOT in this list any more. The
+    // design table calls them `disable`, and they were first read as "server
+    // switch only, UI stays"; the owner corrected that — a disabled capability
+    // must not leave a configurable menu entry behind — so both are now hidden
+    // modules and are asserted by the loop above instead.
     const survivors = [
       'chat',
       'projects',
@@ -83,8 +88,6 @@ describe('desktop CORE_MODULE_BLOCKLIST', () => {
       'mcp',
       'file',
       'notification',
-      'web-search',
-      'literature',
     ]
     for (const name of survivors) {
       expect(isBlocklisted(name), `${name} must survive the reduction`).toBe(false)
