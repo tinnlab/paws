@@ -502,12 +502,12 @@ fn capture_server_addr(server: &ziee::HttpServerConfig) {
 
 /// The desktop app's CORS allowlist.
 ///
-/// Desktop runs an embedded server reachable from two kinds of origin:
-/// (a) `tauri://localhost` — the Tauri webview's custom protocol,
-/// (b) `http://localhost:<port>` / `http://127.0.0.1:<port>` — the dev Vite
-/// server + same-port self-fetches. An explicit allowlist, not the "permissive
-/// default" branch — that one gives Any origin Any method Any header, readable
-/// by any tab the user has open.
+/// Desktop runs an embedded server reachable from the Tauri webview's own custom
+/// protocol (`tauri://localhost`, and `http://tauri.localhost` on the platforms
+/// that spell it that way) and from ordinary loopback origins — the app's own
+/// port, plus the dev Vite server on 1420. An explicit allowlist, not the
+/// "permissive default" branch: that one gives Any origin Any method Any header,
+/// readable by any tab the user has open.
 ///
 /// (This comment previously also claimed the ngrok tunnel domain is "added at
 /// tunnel-start time". It is not: `allow_origins` has exactly one producer in
@@ -563,6 +563,13 @@ fn desktop_cors_config(port: u16) -> ziee::CorsConfig {
             // live assistant tokens were dropped at the registry while the reply
             // persisted normally — a spinner only a reload resolved.
             "X-Chat-Stream-Connection-Id".to_string(),
+            // Sent by the web client on the token-minting endpoints whenever it
+            // is NOT running inside Tauri — which includes a plain browser
+            // pointed at the dev origin above. It is deliberately NOT in the
+            // server's force-allowed union (DEC-15), so it has to be listed
+            // somewhere, and this is the allowlist that owns those origins.
+            // Without it that browser's login is refused at preflight.
+            "X-Refresh-Cookie".to_string(),
         ],
     }
 }

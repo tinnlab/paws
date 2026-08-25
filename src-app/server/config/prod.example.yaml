@@ -64,12 +64,13 @@ server:
     # NOT in the server's required-header union, so omitting it here still fails
     # LOUDLY at preflight rather than quietly at refresh time.
     #
-    # The three "X-" headers are ones the API itself reads, and the server
-    # UNIONS them into whatever you list here (see
+    # The two CONNECTION-ID headers are ones the API itself reads, and the
+    # server UNIONS them into whatever you list here (see
     # core::app_builder::REQUIRED_CUSTOM_REQUEST_HEADERS): a deployment that
     # omits one is broken, not configured — and broken silently, because the
     # browser refuses the request before sending it and nothing is logged
     # server-side. Listed explicitly so this example documents the real surface.
+    # "X-Refresh-Cookie" is NOT unioned — see its note above.
     allow_headers:
       [
         "Content-Type",

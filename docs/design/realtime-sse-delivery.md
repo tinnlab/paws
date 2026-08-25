@@ -230,17 +230,26 @@ These are the non-negotiables this fix must deliver. They are lifted verbatim in
    must also stay surfaceable: reporting once per page load is not enough, because
    the next turn clears the banner and re-enters the spinning state.
 
-   The user-visible policy this implies, stated so it is a decision and not an
-   accident: the banner appears after **3** consecutive failed subscription
-   attempts (~3 s — the delays BETWEEN attempts are 1 s then 2 s), and comes back
-   whenever a new turn starts on a still-broken stream, plus every 5 further
-   consecutive failures. A blip shorter than three attempts stays silent, and the
-   banner is cleared automatically once a subscription succeeds again.
+   **What this delivers, stated exactly.** The failure is SURFACED — a banner
+   naming it and the remedy ("reload to see it"). It does not terminate the
+   turn's UI state: the spinner may still be running behind the banner. That is
+   deliberate, and it is the third scoping of this item rather than the first:
+   three audit rounds each found a defect in coupling the report to the turn's
+   state, every one of them the same mistake — inferring "the turn is over" from
+   a stream that had merely stopped delivering. A reply that completed days ago
+   got an "interrupted" badge; then one that had just completed and was on
+   screen; then a turn was reset inside `sendMessage`'s own setup, before its
+   POST. Terminating a stalled turn is a DEADLINE, which is the product decision
+   the owner explicitly descoped (DEC-9); re-deriving a private version of it
+   from stream health is what generated the churn.
 
-   The per-turn re-arm is load-bearing, not belt-and-braces: `sendMessage` clears
-   `error` at the start of every turn, and once the reconnect backoff saturates
-   at 30 s the failure-count interval alone would leave the next report minutes
-   away — i.e. a full turn of the exact silent spinner this invariant forbids.
+   The user-visible policy: the banner appears after **3** consecutive failed
+   subscription attempts (~3 s — the delays BETWEEN attempts are 1 s then 2 s),
+   again whenever the store scopes the stream to a conversation while it is still
+   broken (which the store does at the start of every turn and on every
+   conversation open), and every 5 further consecutive failures. A blip shorter
+   than three attempts stays silent, and the banner clears itself once a
+   subscription to a real conversation succeeds again.
 
 ## Scope boundaries (recorded, not silently dropped)
 

@@ -253,25 +253,30 @@ mod required_request_header_tests {
         assert!(allowed.contains("content-type"), "got {allowed:?}");
     }
 
-    /// Both custom headers are present in the required list.
+    /// The chat-stream header is present in the required list, and it comes
+    /// from the handler's own constant rather than a re-spelled literal.
     ///
-    /// HONEST LIMIT (audit FIX-7): this compares `&str` VALUES, so a maintainer
+    /// HONEST LIMIT (audit round 1): this compares `&str` VALUES, so a maintainer
     /// who replaced the constant reference with an equal literal would leave it
     /// green. It detects a drift in SPELLING, not in sourcing — and spelling is
-    /// already covered by the preflight test above. It is kept because it names
-    /// the two headers explicitly, which is what makes a future reader look for
-    /// the constants; it is NOT evidence that the sourcing survived.
+    /// already covered by the preflight test above.
+    ///
+    /// It asserted `X-Refresh-Cookie` too until round 2 removed that header from
+    /// the union (DEC-15) and left this behind — a RED test shipped in the same
+    /// commit that removed the thing it asserted. Caught by the round-3 audit.
     #[test]
-    fn the_required_list_contains_both_custom_headers() {
+    fn the_required_list_contains_the_chat_stream_header() {
         assert!(
             REQUIRED_CUSTOM_REQUEST_HEADERS
                 .contains(&crate::modules::chat::stream::handler::CHAT_STREAM_CONNECTION_HEADER),
             "the chat-stream subscription header must come from the handler's constant"
         );
         assert!(
-            REQUIRED_CUSTOM_REQUEST_HEADERS
+            !REQUIRED_CUSTOM_REQUEST_HEADERS
                 .contains(&ziee_auth::auth::cookie::REFRESH_COOKIE_OPTIN_HEADER),
-            "the refresh-cookie opt-in header must come from ziee-auth's constant"
+            "X-Refresh-Cookie must NOT be force-allowed: it is an opt-in flag whose \
+             omission fails LOUDLY at preflight, and unioning it converts that into a \
+             silent loss of the refresh token (DEC-15)"
         );
     }
 

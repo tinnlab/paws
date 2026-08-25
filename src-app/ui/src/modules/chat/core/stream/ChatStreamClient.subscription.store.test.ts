@@ -34,7 +34,7 @@ vi.mock('@ziee/framework/events/store', () => ({
   useEventBusStore: { getState: () => ({ emit: async () => undefined }) },
 }))
 
-import { createChatStreamClient } from './ChatStreamClient'
+import { createChatStreamClient, SUBSCRIPTION_ERROR_MESSAGE } from './ChatStreamClient'
 
 const SUBSCRIPTION_URL = 'http://127.0.0.1:8082/api/chat/stream/subscription'
 const STREAM_URL = 'http://127.0.0.1:8082/api/chat/stream'
@@ -193,8 +193,32 @@ describe('TEST-6: a subscription that cannot be established is reported', () => 
     client.start()
     await runCycles(5)
 
-    expect(errors[0]).toBe('Live updates are not reaching this conversation.')
+    // Compared against the exported constant, not a re-spelled copy — a second
+    // literal here is what would let a reword pass while the clear path silently
+    // stopped matching (audit round 3).
+    expect(errors[0]).toBe(SUBSCRIPTION_ERROR_MESSAGE)
     expect(errors[0]).not.toMatch(/still being generated/i)
+    client.stop()
+  })
+
+  it('re-reports when a turn starts on a DIFFERENT conversation too', async () => {
+    // The per-turn re-arm first covered only the same-conversation early return,
+    // so the FIRST turn after New-chat or a conversation switch — on a stream
+    // already known to be broken — was still silent for minutes (audit round 3).
+    rig(async () => {
+      throw new TypeError('Load failed')
+    })
+    const errors: string[] = []
+    const client = createChatStreamClient({
+      onSubscriptionError: (m) => errors.push(m),
+    })
+    client.start()
+    await runCycles(5)
+    const before = errors.length
+    expect(before).toBeGreaterThanOrEqual(1)
+
+    await client.setActiveConversation('a-different-conversation')
+    expect(errors.length).toBe(before + 1)
     client.stop()
   })
 
@@ -223,6 +247,29 @@ describe('TEST-6: a subscription that cannot be established is reported', () => 
     // A new turn on the SAME conversation — the early-return path.
     await client.setActiveConversation('conv-1')
     expect(errors.length).toBe(afterFirstReport + 1)
+    client.stop()
+  })
+
+  it('recovery is NOT reported for a bare unsubscribe', async () => {
+    // A 204 for `conversation_id: null` is the fresh-handshake unsubscribe. It
+    // says nothing about whether the stream can be SCOPED, so clearing the
+    // banner on it would be a false all-clear (audit round 3).
+    let failuresLeft = 4
+    const errors: string[] = []
+    const recovered: number[] = []
+    rig(async () => {
+      if (failuresLeft-- > 0) throw new TypeError('Load failed')
+      return { ok: true, status: 204 } as Response
+    })
+    const client = createChatStreamClient({
+      onSubscriptionError: (m) => errors.push(m),
+      onSubscriptionRecovered: () => recovered.push(1),
+    })
+    client.start()
+    await runCycles(8)
+
+    expect(errors.length).toBeGreaterThanOrEqual(1)
+    expect(recovered, 'no conversation was ever scoped').toEqual([])
     client.stop()
   })
 
@@ -264,6 +311,10 @@ describe('TEST-6: a subscription that cannot be established is reported', () => 
       onSubscriptionRecovered: () => recovered.push(1),
     })
     client.start()
+    // Scoped to a real conversation: recovery is deliberately NOT reported for a
+    // bare `conversation_id: null` unsubscribe, which proves nothing about
+    // delivery (audit round 3).
+    await client.setActiveConversation('conv-1')
     await runCycles(8)
 
     expect(errors.length, 'the outage must have been reported').toBeGreaterThanOrEqual(1)

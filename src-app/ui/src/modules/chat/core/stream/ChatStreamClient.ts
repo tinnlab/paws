@@ -26,10 +26,10 @@ const MAX_BACKOFF_MS = 30_000
 const STABLE_AFTER_MS = 3_000
 // Consecutive failed subscription PUTs before the owner is told the stream is
 // undeliverable. The connect loop keeps retrying underneath with the backoff
-// above, so this only decides WHEN the user is told — hence a small number: at
-// 1s/2s/4s the report lands within ~7s of a hard failure, while a single
-// transient blip stays silent. Fixed constant, alongside its three neighbours
-// (DEC-4).
+// above, so this only decides WHEN the user is told — hence a small number: the
+// delays BETWEEN attempts are 1s then 2s, so the third failure (and the banner)
+// lands ~3s after the first, while a single transient blip stays silent. Fixed
+// constant, alongside its three neighbours (DEC-4).
 const SUBSCRIPTION_FAILURE_LIMIT = 3
 // After the first report, re-report every N FURTHER consecutive failures, so a
 // permanently-undeliverable stream can say so again on the next turn instead of
@@ -38,14 +38,21 @@ const SUBSCRIPTION_FAILURE_LIMIT = 3
 // apart — loud enough to be seen, far too slow to be a banner storm.
 const SUBSCRIPTION_REREPORT_EVERY = 5
 /**
- * What the client knows and can always truthfully say. Deliberately NOT
- * "the reply is still being generated": whether a turn is in flight is the
- * STORE's knowledge, not this client's, and the most common trigger is a
- * conversation being opened with nothing generating at all. The store appends
- * the situational advice.
+ * The one banner text, EXPORTED so the clear path and the tests import it rather
+ * than re-spelling it. Three independent copies matched by `startsWith` is the
+ * same "a literal that can drift from its source" defect this branch condemns
+ * elsewhere: a reword here would have silently stopped the banner ever being
+ * cleared, with every test still green (audit round 3).
+ *
+ * Phrased to be true in every state it can be shown in. It deliberately does NOT
+ * say "still being generated": the most common trigger is a conversation being
+ * opened with nothing generating at all. "Still being saved" holds for a turn in
+ * flight and is vacuously true otherwise, and "reload to see it" is the remedy in
+ * both cases.
  */
-const SUBSCRIPTION_ERROR_MESSAGE =
-  'Live updates are not reaching this conversation.'
+export const SUBSCRIPTION_ERROR_MESSAGE =
+  'Live updates are not reaching this conversation. The reply is still being ' +
+  'saved — reload to see it.'
 
 /** An independent chat-token SSE client bound to one conversation at a time. */
 export interface ChatStreamClient {
@@ -141,16 +148,15 @@ export function createChatStreamClient(
   }
 
   function setActiveConversation(conversationId: string | null): Promise<void> {
+    // A stream we already KNOW is unscoped must speak up whenever the store
+    // scopes it — same conversation or not. The store does this at the start of
+    // every turn and on every conversation open, right after `sendMessage`
+    // clears `error`; the connect loop's own interval cannot cover it, because
+    // by then the backoff has saturated at 30s. Covering only the
+    // same-conversation branch left the FIRST turn on a new or switched
+    // conversation silent for minutes (audit round 3).
+    if (subscriptionFailures >= SUBSCRIPTION_FAILURE_LIMIT) reportSubscriptionFailure()
     if (desiredConversationId === conversationId) {
-      // The store calls this at the start of EVERY turn, and `sendMessage`
-      // clears `error` just before it — so on the same conversation this is the
-      // moment a known-broken stream must speak up again, or the user spends the
-      // whole turn watching a spinner with no banner. The connect loop's own
-      // re-report interval cannot cover it: by then the backoff has saturated at
-      // 30s, putting the next report up to `REREPORT_EVERY * 30s` away (audit
-      // round 2). We cannot usefully re-ATTEMPT here — `connectionId` is null
-      // while the loop is mid-backoff — so we re-TELL instead of pretending.
-      if (subscriptionFailures >= SUBSCRIPTION_FAILURE_LIMIT) reportSubscriptionFailure()
       return Promise.resolve()
     }
     desiredConversationId = conversationId
@@ -234,8 +240,11 @@ export function createChatStreamClient(
         return
       }
       // Recovered. Tell the owner if we had told them it was broken, so a
-      // banner cannot outlive the condition it describes.
-      if (lastReportedAtFailure >= 0) {
+      // banner cannot outlive the condition it describes. Gated on actually
+      // having scoped to a CONVERSATION: a 204 for `conversation_id: null` (the
+      // fresh-handshake unsubscribe) proves nothing about delivery, and clearing
+      // the banner on it would be a false all-clear (audit round 3).
+      if (lastReportedAtFailure >= 0 && desiredConversationId !== null) {
         lastReportedAtFailure = -1
         handlers?.onSubscriptionRecovered?.()
       }

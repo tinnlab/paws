@@ -19,6 +19,7 @@ import { describe, expect, it } from 'vitest'
 
 import makeReportStreamSubscriptionError from './actions/reportStreamSubscriptionError'
 import makeClearStreamSubscriptionError from './actions/clearStreamSubscriptionError'
+import { SUBSCRIPTION_ERROR_MESSAGE } from '@/modules/chat/core/stream/ChatStreamClient'
 
 interface State {
   error: string | null
@@ -52,35 +53,34 @@ function harness(over: Partial<State> = {}) {
   return { state, get, set }
 }
 
-const MESSAGE = 'Live updates are not reaching this conversation.'
+// Imported, never re-spelled — a second copy is what let a reword silently
+// break the clear path (audit round 3).
+const MESSAGE = SUBSCRIPTION_ERROR_MESSAGE
 
-describe('TEST-7: reportStreamSubscriptionError reaches a terminal state', () => {
-  it('mid-turn: clears every flag that would wedge the turn, and says so', async () => {
+describe('TEST-7: an undeliverable stream is surfaced, and only surfaced', () => {
+  it('raises the banner the ConversationPane renders', () => {
     const { state, get, set } = harness()
-
-    await makeReportStreamSubscriptionError(set, get)(MESSAGE)
-
-    // Rendered by ConversationPane as `chat-conversation-error-alert`.
-    expect(state.error).toContain(MESSAGE)
-    // The spinner stops…
-    expect(state.isStreaming).toBe(false)
-    // …the composer re-enables…
-    expect(state.sending).toBe(false)
-    // …and nothing is left claiming to be mid-turn.
-    expect(state.streamingMessage).toBeNull()
-    expect(state.streamingMessageId).toBeNull()
-    expect(state.streamingAbortController).toBeNull()
-    expect(state.finalizingTurn).toBe(false)
-    // A turn WAS in flight, so this advice is true.
-    expect(state.error).toMatch(/still being generated/i)
+    makeReportStreamSubscriptionError(set, get)(MESSAGE)
+    expect(state.error).toBe(MESSAGE)
   })
 
-  it('at rest: does NOT mark a completed reply as interrupted', async () => {
-    // The primary trigger is a subscription failing when a conversation is
-    // OPENED, with nothing generating. Applying the turn-failure reset there set
-    // `lastTurnInterrupted: true`, which MessageList renders as an "interrupted"
-    // badge on the last assistant message — decorating a reply that completed
-    // normally, possibly days ago (audit FIX-2).
+  it('does NOT touch the turn state', async () => {
+    // Three audit rounds found three defects in coupling this to the turn — each
+    // a variant of inferring "the turn is over" from a stream that has merely
+    // stopped delivering: a reply that completed days ago badged `interrupted`;
+    // a reply badged mid-`finalizingTurn` handoff; and a turn reset from inside
+    // `sendMessage`'s own setup, before its POST. The invariant asks for the
+    // failure to be SURFACED, and that is all this does now.
+    const { state, get, set } = harness()
+    await makeReportStreamSubscriptionError(set, get)(MESSAGE)
+
+    expect(state.sending).toBe(true)
+    expect(state.isStreaming).toBe(true)
+    expect(state.lastTurnInterrupted).toBe(false)
+    expect(state.streamingMessageId).toBe('m1')
+  })
+
+  it('does not mark a completed reply as interrupted at rest either', async () => {
     const { state, get, set } = harness({
       sending: false,
       isStreaming: false,
@@ -88,49 +88,23 @@ describe('TEST-7: reportStreamSubscriptionError reaches a terminal state', () =>
       streamingMessageId: null,
       streamingAbortController: null,
     })
-
     await makeReportStreamSubscriptionError(set, get)(MESSAGE)
-
-    expect(state.error).toContain(MESSAGE)
+    expect(state.error).toBe(MESSAGE)
     expect(state.lastTurnInterrupted).toBe(false)
-    // …and the advice does not claim a reply is being generated, because none is.
-    expect(state.error).not.toMatch(/still being generated/i)
-    expect(state.error).toMatch(/reload to reconnect/i)
   })
 
-  it('never renders a blank alert', async () => {
-    // Not about the message text: the property is that this action cannot put an
-    // empty string on `error`, which would render a visible, useless banner.
-    const { state, get, set } = harness()
-    await makeReportStreamSubscriptionError(set, get)('')
-    expect((state.error ?? '').trim().length).toBeGreaterThan(0)
-  })
-
-  it('a FINALIZING turn still counts as in flight', async () => {
-    // `finalizingTurn` means the `complete` frame landed but the persisted tail
-    // has not been swapped in — still a live turn. The first version treated it
-    // as "at rest", so the banner branch left `finalizingTurn: true` set, which
-    // MessageList renders as the finalizing affordance (audit round 2).
-    const { state, get, set } = harness({
-      sending: false,
-      isStreaming: false,
-      finalizingTurn: true,
-    })
-    await makeReportStreamSubscriptionError(set, get)(MESSAGE)
-    expect(state.finalizingTurn).toBe(false)
-    expect(state.error).toMatch(/still being generated/i)
+  it('the message is never blank, and names the remedy', () => {
+    // The one banner text is the client's exported constant, so this pins the
+    // property that matters about it rather than re-asserting its words.
+    expect(MESSAGE.trim().length).toBeGreaterThan(0)
+    expect(MESSAGE).toMatch(/reload/i)
   })
 
   it('the live delivery failure REPLACES a stale earlier error', async () => {
-    // The first version kept the pre-existing text and dropped this one. With
-    // the client reporting only once (the defect above), that meant the user was
-    // never told the real, ongoing problem (audit FIX-3). The delivery failure is
-    // the live and actionable one, so it wins.
+    // The delivery failure is the live and actionable one, so it wins.
     const { state, get, set } = harness({ error: 'provider unavailable' })
     await makeReportStreamSubscriptionError(set, get)(MESSAGE)
-    expect(state.error).toContain(MESSAGE)
-    expect(state.isStreaming).toBe(false)
-    expect(state.sending).toBe(false)
+    expect(state.error).toBe(MESSAGE)
   })
 })
 

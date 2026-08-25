@@ -155,17 +155,22 @@ describe('TEST-8: the progress a view renders advances', () => {
   /**
    * A flat wire frame.
    *
-   * `phase` is REQUIRED on the wire (`DownloadProgressUpdate.phase` is a plain
-   * `DownloadPhase`, not an `Option`, and the server fills it with `Created`
-   * even for a row that has no `progress_data`), so every fixture here carries
-   * it — as do `error_message`/`model_id`, which the server sends as explicit
-   * nulls. Building fixtures the server could not emit is how the first version
-   * of the queued-download test came to pass against a guard that was inert in
-   * production (audit round 2).
+   * `phase` is REQUIRED on the wire and `error_message`/`model_id` are always
+   * present (as explicit nulls when unset) — both pinned server-side by TEST-9 —
+   * so every fixture here carries them.
+   *
+   * HONEST LIMIT (audit round 3): the all-null FIGURE fixture used below for the
+   * progress-less case is NOT something the current server emits. Its INSERT
+   * seeds a fully-zeroed `progress_data`, so a real queued row arrives with
+   * `current: 0`, not null. That case therefore exercises the schema's
+   * `progress_data: null` shape rather than an observed one, and the guard it
+   * covers is defensive — it is not the reason a queued download renders
+   * "0 Bytes / 0 Bytes", which comes from those seeded zeros.
    *
    * The `as unknown as` cast is needed because the generated type declares
    * `error_message?: string` while the wire sends `null` — a real codegen gap
-   * (CODING_GUIDELINES §10 wants `| null`), noted rather than papered over.
+   * (CODING_GUIDELINES §10 wants `| null`), noted rather than papered over, so
+   * `tsc` does NOT pin this fixture's shape.
    */
   function frame(over: Partial<DownloadProgressUpdate>): DownloadProgressUpdate {
     return {
@@ -234,12 +239,11 @@ describe('TEST-8: the progress a view renders advances', () => {
     // enqueue and its first tick — the exact string this fix removes, in a
     // different state.
     //
-    // The frame below is EXACTLY what the server emits for a queued row: every
-    // optional figure null, and `phase: 'created'` — which is required on the
-    // wire and filled in by `From<&DownloadInstance>` even when there is no
-    // progress_data at all. The first version of this test omitted `phase`, so
-    // it passed against a guard that was `true` for every real frame and the
-    // repair it claimed had not happened (audit round 2).
+    // The frame below carries `phase: 'created'` (required on the wire, filled
+    // in by `From<&DownloadInstance>` even with no progress_data) and every
+    // optional figure null — the shape a row with `progress_data: NULL` would
+    // produce. See the fixture note above for why the CURRENT server does not
+    // actually emit it, and what that means for this test's scope.
     const queued = { ...BASE, progress_data: undefined } as unknown as DownloadInstance
     const merged = applyProgressUpdate(
       queued,

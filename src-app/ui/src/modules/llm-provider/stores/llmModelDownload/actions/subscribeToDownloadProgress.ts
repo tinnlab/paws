@@ -93,20 +93,21 @@ export function applyProgressUpdate(
   const speed_bps = update.speed_bps ?? previous?.speed_bps
   const eta_seconds = update.eta_seconds ?? previous?.eta_seconds
 
-  // A queued download's row has NO progress_data, and `DownloadItem` renders no
-  // byte line at all in that case. Materialising a zeroed object here would put
-  // the literal "0 Bytes / 0 Bytes" back on screen — the very string this fix
-  // exists to remove — for every download between enqueue and its first tick.
+  // Materialise `progress_data` only when something about progress is actually
+  // known. `phase` is excluded because it is the one progress field the server
+  // does NOT send as an `Option` — `From<&DownloadInstance>` fills it with
+  // `Created` even for a row that has none — so including it made this
+  // predicate unconditionally true.
   //
-  // `phase` is deliberately NOT part of this test. It is the one progress field
-  // the server does NOT send as an `Option`: `DownloadProgressUpdate.phase` is a
-  // plain `DownloadPhase` and `From<&DownloadInstance>` fills it with
-  // `Created` when the row has no `progress_data` at all
-  // (`llm_model/handlers/downloads.rs`). Including it made this predicate
-  // ALWAYS true, so the guard was inert on every frame the server can actually
-  // emit and the zeroed object was materialised anyway — the first version of
-  // this fix recorded a repair it had not made (audit round 2). Only the
-  // genuinely-optional figures signal that progress is known.
+  // HONEST SCOPE (audit round 3): this guard is DEFENSIVE, not a fix for the
+  // queued-download "0 Bytes / 0 Bytes" render. That render has a different
+  // cause entirely: the row's INSERT (`llm_model/repository.rs`) seeds a
+  // fully-zeroed `progress_data`, so both the REST snapshot and every SSE frame
+  // carry `current: 0` rather than null, and a queued row therefore HAS progress
+  // data as far as any consumer can tell. An earlier round claimed this guard
+  // removed that symptom; it does not, and the claim is withdrawn rather than
+  // restated. What the guard does do is keep a genuinely progress-less row
+  // (`progress_data: null`, which the schema permits) from acquiring zeros here.
   const known =
     current !== undefined ||
     total !== undefined ||
