@@ -50,6 +50,10 @@ mod assistant_injection_test;
 // New fire-and-forget send + per-user chat-token stream (stub-backed,
 // deterministic) and the `sync:conversation` emit coverage.
 mod chat_stream_test;
+// INV-2: tokens must reach the viewing client DURING generation, not only on a
+// reload. Asserts timing + frame count, and pins the unsubscribed connection as
+// the broken case (what the desktop app was stuck in).
+mod chat_stream_incremental_test;
 // Per-user chat-stream connection-slot reclamation on client disconnect
 // (sse-slot-leak): a reconnect storm must never permanently 429 the account.
 mod stream_slot_reclaim_test;

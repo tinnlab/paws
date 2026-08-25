@@ -28,7 +28,16 @@ use super::registry::{CHAT_STREAM_CHANNEL_CAPACITY, ChatConn, registry};
 
 /// Header the client echoes (from the `connected` handshake) so a subscription
 /// PUT targets the right stream connection.
-const CHAT_STREAM_CONNECTION_HEADER: &str = "X-Chat-Stream-Connection-Id";
+///
+/// `pub` because the CORS layer must allow it. The browser sends this on a
+/// CROSS-ORIGIN `PUT` — the desktop webview is served from the Tauri protocol
+/// while the API listens on `127.0.0.1:<port>` — so a preflight that does not
+/// list it makes the subscription endpoint unreachable, every chat-stream
+/// connection stays scoped to no conversation, and live tokens are dropped at the
+/// registry while the reply persists normally.
+/// `core::app_builder::REQUIRED_CUSTOM_REQUEST_HEADERS` assembles that allowlist
+/// from THIS constant rather than a re-spelled literal, so the two cannot drift.
+pub const CHAT_STREAM_CONNECTION_HEADER: &str = "X-Chat-Stream-Connection-Id";
 
 /// Re-resolve `is_active` this often while a stream is open, tearing it down on
 /// deactivation / loss of the baseline permission within the window.
