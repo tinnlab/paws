@@ -11,7 +11,7 @@ as the record phase 9 asks for, not as a summary of the work.
 - **FB-4** [status: resolved] — sdk submodule onto `paws` without touching `.gitmodules`. Done and pushed.
 - **FB-5** [status: resolved] — direct question about branch state; answered honestly (only planning artifacts existed at the time).
 - **FB-6** [status: resolved] — a disabled feature must also leave the MENU. web-search + literature are now hidden modules; one further leak (the `knowledge_base` built-in on the System MCP page) found and fixed by the same sweep. **One sub-item is still open for the owner**: whether to filter the User Groups permission picker (see FB-6, last paragraph).
-- **FB-7** [status: open] — two model-facing leaks escalated, NOT fixed: the citations built-in auto-attaches to every tool-capable chat, and `control_mcp` enumerates the live router. Both need a ruling; see the last section.
+- **FB-7** [status: wontfix] — two model-facing leaks, deliberately NOT fixed on this branch: the citations built-in auto-attaches to every tool-capable chat, and `control_mcp` enumerates the live router. **Rationale**: each needs either a server-side kill switch for a feature the design explicitly scopes as UI-only (items 6–11, "hidden, not disabled"), or the permission revokes withdrawn in round 1 because they broke chat for every non-admin (DEC-4, reversed). Both are scope decisions belonging to the owner, not defects this branch can close. Carried into the PR body so the merge decision is made with them in view, not after. See the FB-7 section below.
 
 ---
 
