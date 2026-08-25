@@ -24,37 +24,6 @@ import './types'
 const INITIAL_BACKOFF_MS = 1_000
 const MAX_BACKOFF_MS = 30_000
 const STABLE_AFTER_MS = 3_000
-// Consecutive failed subscription PUTs before the owner is told the stream is
-// undeliverable. The connect loop keeps retrying underneath with the backoff
-// above, so this only decides WHEN the user is told — hence a small number: the
-// delays BETWEEN attempts are 1s then 2s, so the third failure (and the banner)
-// lands ~3s after the first, while a single transient blip stays silent. Fixed
-// constant, alongside its three neighbours (DEC-4).
-const SUBSCRIPTION_FAILURE_LIMIT = 3
-// After the first report, re-report every N FURTHER consecutive failures, so a
-// permanently-undeliverable stream can say so again on the next turn instead of
-// going quiet forever (audit FIX-1). By the time this matters the connect loop's
-// backoff has saturated at MAX_BACKOFF_MS, so 5 further failures is minutes
-// apart — loud enough to be seen, far too slow to be a banner storm.
-const SUBSCRIPTION_REREPORT_EVERY = 5
-/**
- * The one banner text, EXPORTED so the clear path and the tests import it rather
- * than re-spelling it. Three independent copies matched by `startsWith` is the
- * same "a literal that can drift from its source" defect this branch condemns
- * elsewhere: a reword here would have silently stopped the banner ever being
- * cleared, with every test still green (audit round 3).
- *
- * Phrased to be true in EVERY state it can be shown in — which rules out naming
- * a reply at all. The most common trigger is a conversation being opened with
- * nothing generating, where "the reply is still being generated" and "still being
- * saved" are both simply false. (The second of those was the first attempt, and
- * it slipped past a guard asserting the message must not claim a turn is in
- * flight, because that guard matched on the word "generated" — one word changed
- * and the guard went green while the property it protected regressed. Audit
- * round 4.) "Reload to see the latest" is the remedy in every case.
- */
-export const SUBSCRIPTION_ERROR_MESSAGE =
-  'Live updates are not reaching this conversation. Reload to see the latest.'
 
 /** An independent chat-token SSE client bound to one conversation at a time. */
 export interface ChatStreamClient {
@@ -77,33 +46,6 @@ export interface ChatStreamClient {
 export interface ChatStreamHandlers {
   onFrame?: (conversationId: string, event: unknown) => void
   onReconnect?: () => void
-  /**
-   * The stream could not be SCOPED to a conversation after
-   * `SUBSCRIPTION_FAILURE_LIMIT` consecutive attempts, so no live token can ever
-   * arrive on it. Reported at the limit and then every
-   * `SUBSCRIPTION_REREPORT_EVERY` further consecutive failures; a success resets
-   * the count. It re-arms rather than firing once because the next turn clears
-   * the banner and re-enters the spinning state (see
-   * `onSubscriptionAttemptFailed`).
-   *
-   * This exists because the failure it reports was previously SILENT. A CORS
-   * preflight refusal makes `fetch` REJECT — a network error, not a status — so
-   * it missed the `!resp.ok` branch below and landed in a `catch` that only
-   * logged a warning. The connection then sat open and healthy, scoped to
-   * nothing, forever: `publish_frame` matched no connection, `applyStreamFrame`
-   * never saw `complete`, `isStreaming` never cleared, and `reloadOpen` bails
-   * while it is true — so the pane could not even self-heal. The user saw a
-   * spinner that only a page reload resolved.
-   */
-  onSubscriptionError?: (message: string) => void
-  /**
-   * A subscription succeeded after `onSubscriptionError` had fired, so delivery
-   * is working again. Without this the banner outlives the condition: a
-   * transient outage that reached the limit leaves the user staring at "live
-   * updates are not reaching this conversation" on a conversation that is now
-   * receiving them (audit round 2).
-   */
-  onSubscriptionRecovered?: () => void
 }
 
 /** Create an independent chat-token SSE client (see the per-instance note). */
@@ -120,15 +62,6 @@ export function createChatStreamClient(
   // survive reconnects: a new connection re-PUTs the desired subscription.
   let connectionId: string | null = null
   let desiredConversationId: string | null = null
-  // Consecutive failed subscription PUTs. Reset by a successful PUT and by
-  // `stop()`; see `onSubscriptionAttemptFailed`.
-  let subscriptionFailures = 0
-  // The failure count at which the owner was last told. `-1` = never told in
-  // this run. Compared as a DELTA rather than with `%`: the counter is not
-  // guaranteed to advance by exactly one (two `putSubscription` calls can be in
-  // flight at once — the handshake fires one while `setActiveConversation` fires
-  // another), and a modulo silently SKIPS a report it steps over (audit round 2).
-  let lastReportedAtFailure = -1
 
   function start(): void {
     if (started) return
@@ -145,88 +78,12 @@ export function createChatStreamClient(
     activeAbort = null
     connectionId = null
     desiredConversationId = null
-    subscriptionFailures = 0
-    lastReportedAtFailure = -1
   }
 
   function setActiveConversation(conversationId: string | null): Promise<void> {
-    // A stream we already KNOW is unscoped must speak up whenever the store
-    // scopes it to a CONVERSATION — same one or not. The store does this at the
-    // start of every turn and on every conversation open, right after
-    // `sendMessage` clears `error`; the connect loop's own interval cannot cover
-    // it, because by then the backoff has saturated at 30s. Covering only the
-    // same-conversation branch left the FIRST turn on a new or switched
-    // conversation silent for minutes (audit round 3).
-    //
-    // `null` is excluded: that is an UNSUBSCRIBE (`reset`, and the fresh
-    // handshake), whose banner would be wiped microseconds later by the same
-    // action's own `error: null` — and reporting still advances
-    // `lastReportedAtFailure`, so each invisible report pushed the next VISIBLE
-    // one out by another `REREPORT_EVERY` failures. It made the flow it was
-    // added for measurably worse (audit round 4).
-    if (conversationId !== null && subscriptionFailures >= SUBSCRIPTION_FAILURE_LIMIT) {
-      reportSubscriptionFailure()
-    }
-    if (desiredConversationId === conversationId) {
-      return Promise.resolve()
-    }
+    if (desiredConversationId === conversationId) return Promise.resolve()
     desiredConversationId = conversationId
     return putSubscription()
-  }
-
-  /** Tell the owner delivery is broken, and remember that we did. */
-  function reportSubscriptionFailure(): void {
-    lastReportedAtFailure = subscriptionFailures
-    console.error(
-      `[chat-stream] subscription failed ${subscriptionFailures}×; ` +
-        'live updates are not reaching this conversation',
-    )
-    handlers?.onSubscriptionError?.(SUBSCRIPTION_ERROR_MESSAGE)
-  }
-
-  /**
-   * A subscription attempt failed. Every failure means this connection is NOT
-   * scoped to a conversation, so it can never deliver a token — treat them all
-   * the same way regardless of whether the transport gave us a status:
-   *
-   *   - drop the connection id and abort the live stream, so the connect loop
-   *     reconnects with a fresh handshake and re-PUTs (the pre-existing non-2xx
-   *     behaviour);
-   *   - once the failures stop being plausibly transient, TELL SOMEONE — and
-   *     keep being able to tell them again.
-   *
-   * The `catch` half used to only `console.warn`, which is how a permanent,
-   * total delivery failure presented as an ordinary spinner.
-   *
-   * ## Why re-arming matters (audit FIX-1, found by two independent angles)
-   *
-   * The first version of this reported on `subscriptionFailures === LIMIT`, i.e.
-   * exactly once, and the counter only reset on a SUCCESSFUL PUT. For the case
-   * this whole invariant exists for — a subscription that can never succeed —
-   * the counter climbed past the limit and `=== LIMIT` was never true again. So:
-   * the banner appeared once, `sendMessage` then cleared `error` and set
-   * `isStreaming: true` at the start of the very next turn, nothing could report
-   * again, and the second message reverted to the exact infinite spinner this
-   * branch exists to remove. INV-4 held for one occurrence per page load.
-   *
-   * Re-arming on an interval fixes that without turning the banner into a
-   * per-retry storm: the report fires at the limit and then every
-   * `SUBSCRIPTION_REREPORT_EVERY` further failures, which — because the connect
-   * loop's backoff has saturated at 30s by then — is minutes apart, not seconds.
-   */
-  function onSubscriptionAttemptFailed(reason: string): void {
-    connectionId = null
-    activeAbort?.abort()
-    subscriptionFailures += 1
-    if (subscriptionFailures < SUBSCRIPTION_FAILURE_LIMIT) {
-      console.warn(`[chat-stream] subscription failed (${reason}); forcing reconnect`)
-      return
-    }
-    const sinceLastReport = subscriptionFailures - lastReportedAtFailure
-    if (lastReportedAtFailure >= 0 && sinceLastReport < SUBSCRIPTION_REREPORT_EVERY) return
-
-    console.warn(`[chat-stream] subscription failure reason: ${reason}`)
-    reportSubscriptionFailure()
   }
 
   async function putSubscription(): Promise<void> {
@@ -245,33 +102,19 @@ export function createChatStreamClient(
         body: JSON.stringify({ conversation_id: desiredConversationId }),
       })
       if (!resp.ok) {
-        // A non-2xx PUT: a stale connection id, 401, or 429 under the per-user
-        // cap.
-        onSubscriptionAttemptFailed(`HTTP ${resp.status}`)
-        return
-      }
-      // Recovered. Both counters reset TOGETHER — resetting `subscriptionFailures`
-      // while leaving `lastReportedAtFailure` set meant the next outage's first
-      // banner needed `lastReported + 5` failures instead of 3, i.e. several extra
-      // minutes of the silent spinner (audit round 4).
-      const hadReported = lastReportedAtFailure >= 0
-      subscriptionFailures = 0
-      lastReportedAtFailure = -1
-      // But only ANNOUNCE recovery when we actually scoped to a CONVERSATION: a
-      // 204 for `conversation_id: null` (the fresh-handshake unsubscribe) proves
-      // nothing about delivery, and clearing the banner on it is a false
-      // all-clear (audit round 3).
-      if (hadReported && desiredConversationId !== null) {
-        handlers?.onSubscriptionRecovered?.()
+        // A non-2xx PUT (stale connection id, 401, or 429 under the per-user
+        // cap) means this connection is not subscribed. Don't swallow it: drop
+        // the connection id and abort the live stream so the connect loop
+        // reconnects with a fresh handshake and re-PUTs the desired
+        // subscription — otherwise the pane would sit token-less silently.
+        console.warn(
+          `[chat-stream] subscription PUT failed: ${resp.status}; forcing reconnect`,
+        )
+        connectionId = null
+        activeAbort?.abort()
       }
     } catch (error) {
-      // A REJECTION, not a status — the transport never got a response. A CORS
-      // preflight refusal lands here (measured: WebKitGTK reports
-      // `TypeError: Load failed`), and so does a genuine network drop. The
-      // former is permanent and total; the latter clears on reconnect. Both are
-      // "this connection is not subscribed", so both take the same path, and the
-      // failure COUNT is what distinguishes them.
-      onSubscriptionAttemptFailed(String(error))
+      console.warn('[chat-stream] subscription update failed', error)
     }
   }
 

@@ -204,3 +204,23 @@ comment frame arrives, with a timeout comfortably above axum's 15 s default inte
 called would not prove a byte reaches the client; the observable contract is that an idle
 stream is not silent. One ~16 s test is an acceptable cost for the only assertion that
 actually exercises the behaviour.
+
+### DEC-17: After five audit rounds, does the "loud-fail the subscription" work ship in this branch?
+**Resolution:** No — ITEM-5 and ITEM-6 are DESCOPED and removed; the chat module
+returns to `origin/main`. INV-4 is not delivered here and its acceptance test is
+withdrawn. The delivery fixes (INV-1, INV-2, INV-3) ship.
+**Basis:** user — the owner chose "Drop it to a follow-up" from an explicit option
+picker, presented with the round-5 evidence. Supporting: across five rounds and ten
+blind angles, every HIGH finding was in these two items and none was in the CORS
+chain; and round 5 showed the design is wrong at the root, not in its details — it
+watches subscription-PUT outcomes rather than delivery, so it misses a dropped
+stream losing its `complete` frame (the likeliest real failure), and it keeps its
+banner in the shared `error` slot that six other actions overwrite, so opening a
+conversation raises the banner and then wipes it. The auditor's recommended
+primitive — a dedicated store flag plus a time-based deadline — is precisely what
+DEC-9 records the owner descoping, so continuing here would have meant either
+shipping a fourth patch of the wrong mechanism or reversing their decision
+unilaterally.
+
+- DESCOPED: ITEM-5 — the loud-fail's client half; the mechanism is mis-designed (watches PUT outcomes, not delivery) and its correct form needs the deadline DEC-9 descoped [approved: owner, 2026-08-24, explicit option picker "Drop it to a follow-up"]
+- DESCOPED: ITEM-6 — the loud-fail's store half; same reason, and its banner lived in a shared `error` slot other actions overwrite [approved: owner, 2026-08-24, explicit option picker "Drop it to a follow-up"]

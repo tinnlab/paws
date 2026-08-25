@@ -19,7 +19,16 @@ contract in `CLAUDE.md` § *Realtime Sync* and the module doc-comments on
 - **INV-1**: A custom request header the API reads must be accepted by the API's own CORS preflight, in every deployment shape, without a config file having to remember it.
 - **INV-2**: A chat turn's tokens must reach the client that is viewing the conversation, while the turn is generating — not only on reload.
 - **INV-3**: A download's progress, as RENDERED by the UI, must advance while the transfer runs.
-- **INV-4**: A realtime delivery failure must not present to the user as "still working".
+
+**INV-4 was withdrawn** (owner-approved, DEC-17). It said: *"A realtime delivery
+failure must not present to the user as 'still working'."* It remains a true
+requirement of the system and is retained in the design doc under **Deferred —
+required, but NOT delivered by this branch**; it is not an invariant of THIS
+branch because the branch no longer attempts it. This is the skill's sanctioned
+route for an invariant a plan cannot uphold — renegotiate with the owner, then
+amend BOTH the design doc and this section — and not a quiet deletion: the
+requirement is still written down, with five rounds of evidence for why the
+mechanism built for it was wrong at the root.
 
 ## Items
 
@@ -27,8 +36,8 @@ contract in `CLAUDE.md` § *Realtime Sync* and the module doc-comments on
 - **ITEM-2**: [server] Introduce ONE canonical list of the custom request headers ziee's API reads — sourced from the real constants, not re-spelled string literals — and make `ziee::create_cors_layer` a thin wrapper that feeds it to `create_cors_layer_with`. `chat::stream::handler::CHAT_STREAM_CONNECTION_HEADER` becomes `pub` for this. All four existing call sites (`main.rs`, `lib.rs`, `desktop/tauri/src/lib.rs`, `server_boot.rs`) are unchanged.
 - **ITEM-3**: [desktop] Extract the desktop `CorsConfig` construction out of `BackendModule::init(&mut self, app: &mut App)` into a pure `desktop_cors_config(port) -> ziee::CorsConfig`, and add `X-Chat-Stream-Connection-Id` to its explicit list. Today that config can only be exercised by launching Tauri, which is why the missing header survived; a pure function is testable.
 - **ITEM-4**: [config] `src-app/server/config/dev.example.yaml`'s `server.cors.allow_headers` gains both custom headers, so an operator copying the example does not inherit the same silent break.
-- **ITEM-5**: [ui/chat] `ChatStreamClient.putSubscription` treats a REJECTED fetch (network / CORS-preflight refusal) exactly like the already-handled non-2xx: drop the connection id and abort the live stream so the connect loop reconnects and re-PUTs. After `SUBSCRIPTION_FAILURE_LIMIT` consecutive failures it reports once through a new optional `onSubscriptionError(message)` handler and logs at `error`, instead of swallowing every failure in a `console.warn`.
-- **ITEM-6**: [ui/chat] The pane's chat store wires `onSubscriptionError` to the EXISTING error banner (`ConversationPane`'s `chat-conversation-error-alert`, which already has a gallery cell) and clears the flags that otherwise wedge the turn (`sending`, `isStreaming`, `finalizingTurn`), so an undeliverable turn reaches a terminal, actionable state instead of a permanent spinner.
+- **ITEM-5**: [DESCOPED] [ui/chat] `ChatStreamClient.putSubscription` treats a REJECTED fetch (network / CORS-preflight refusal) exactly like the already-handled non-2xx: drop the connection id and abort the live stream so the connect loop reconnects and re-PUTs. After `SUBSCRIPTION_FAILURE_LIMIT` consecutive failures it reports once through a new optional `onSubscriptionError(message)` handler and logs at `error`, instead of swallowing every failure in a `console.warn`.
+- **ITEM-6**: [DESCOPED] [ui/chat] The pane's chat store wires `onSubscriptionError` to the EXISTING error banner (`ConversationPane`'s `chat-conversation-error-alert`, which already has a gallery cell) and clears the flags that otherwise wedge the turn (`sending`, `isStreaming`, `finalizingTurn`), so an undeliverable turn reaches a terminal, actionable state instead of a permanent spinner.
 - **ITEM-7**: [ui/llm-provider] The download SSE `update` handler rebuilds `progress_data` from the delivered FLAT fields, falling back per field to the previous value (the server sends them as `Option`, so a null must not blank a figure already on screen), and the `as DownloadInstance` cast that hid the mismatch from `tsc` is removed. The wire format is unchanged — it is shared, and the mismatch is the client's to absorb.
 - **ITEM-8**: [server] `GET /api/llm-models/downloads/subscribe` gets `KeepAlive::default()`, matching every other SSE route in the tree (it is the only one without it) and keeping the stream alive over the ngrok tunnel path this app supports.
 - **ITEM-9**: [repo] Move the `sdk` submodule pointer to the `paws`-line commit carrying ITEM-1, per the owner's standing sdk policy (branch from `origin/paws`, PR into `paws`; never `chat`/`main`).
@@ -89,6 +98,23 @@ alongside the code they cover, per DRIFT-1.1):
   ("0 Bytes / 0 Bytes" and 0%).
 - **Naming/logging** — `tracing::` not `println!`; no `ziee-chat` strings; no Claude
   trailers in commits.
+
+## ITEM-5 / ITEM-6 descoped after five audit rounds
+
+Both are the "loud-fail the subscription" work. They are removed from this branch
+with the owner's approval (DECISIONS DEC-17) and the chat module is byte-identical
+to `origin/main` again. The reasoning is in `FIX_ROUND-5.md`; in short, five rounds
+and ten blind angles put **every single HIGH finding** in these two items and
+**none** on the CORS chain that is the branch's subject, and the round-5 audit
+showed the design is wrong at the root rather than in its details: it watches
+subscription-PUT outcomes rather than delivery (so it misses the likeliest real
+failure — a dropped stream losing its `complete` frame), and it stores its banner
+in the shared `error` slot that six other actions overwrite. The correct primitive
+is a dedicated store flag plus a TIME-BASED deadline — and the deadline is the
+product decision the owner explicitly descoped in DEC-9.
+
+INV-4 is therefore **not delivered by this branch** and its acceptance test is
+withdrawn with it; see `docs/design/realtime-sse-delivery.md`.
 
 ## Non-goals (recorded, not silently cut)
 

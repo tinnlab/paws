@@ -65,6 +65,14 @@ pub const REQUIRED_CUSTOM_REQUEST_HEADERS: &[&'static str] = &[
 /// Same signature as the framework's `create_cors_layer`, so every call site
 /// (`main.rs`, `lib.rs`, the desktop `lib.rs` and `server_boot.rs`) is unchanged
 /// — they just stop being able to lose a header the app depends on.
+///
+/// The union semantics this wrapper relies on — that an EXPLICIT configured list
+/// gains the required headers, that a differently-cased duplicate is not added
+/// twice, and that the `*`/empty branches still mean `Any` — are pinned by
+/// **TEST-2**, `cors_required_headers_tests` in
+/// `sdk/crates/ziee-framework/src/app_builder.rs`. That file is across the
+/// submodule boundary, so it cannot appear in this repository's diff; the pointer
+/// lives here so the test is findable from the code that depends on it.
 pub fn create_cors_layer(
     config: &ziee_core::ServerConfig,
 ) -> tower_http::cors::CorsLayer {

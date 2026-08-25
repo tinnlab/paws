@@ -210,8 +210,9 @@ so it cannot truncate an SSE stream), security headers, extensions and CORS.
 
 ## Required behaviour
 
-These are the non-negotiables this fix must deliver. They are lifted verbatim into
-`PLAN.md`'s `## Invariants` and each is pinned to an executable acceptance test.
+Requirements 1-3 are the non-negotiables this fix delivers; each is lifted verbatim
+into `PLAN.md`'s `## Invariants` and pinned to an executable acceptance test.
+Requirement 4 is stated below it, as deferred.
 
 1. **A custom request header the API reads must be accepted by the API's own CORS
    preflight, in every deployment shape, without a config file having to remember
@@ -236,32 +237,31 @@ These are the non-negotiables this fix must deliver. They are lifted verbatim in
    runs.** Asserting that the server wrote the record is not evidence; the previous
    round asserted exactly that and the write was never the broken half.
 
+## Deferred — required, but NOT delivered by this branch
+
 4. **A realtime delivery failure must not present to the user as "still working".**
    A subscription that cannot be established is a hard failure and must be
-   surfaced, not swallowed into a `console.warn` behind a permanent spinner. It
-   must also stay surfaceable: reporting once per page load is not enough, because
-   the next turn clears the banner and re-enters the spinning state.
+   surfaced, not swallowed into a `console.warn` behind a permanent spinner.
 
-   **What this delivers, stated exactly.** The failure is SURFACED — a banner
-   naming it and the remedy ("reload to see it"). It does not terminate the
-   turn's UI state: the spinner may still be running behind the banner. That is
-   deliberate, and it is the third scoping of this item rather than the first:
-   three audit rounds each found a defect in coupling the report to the turn's
-   state, every one of them the same mistake — inferring "the turn is over" from
-   a stream that had merely stopped delivering. A reply that completed days ago
-   got an "interrupted" badge; then one that had just completed and was on
-   screen; then a turn was reset inside `sendMessage`'s own setup, before its
-   POST. Terminating a stalled turn is a DEADLINE, which is the product decision
-   the owner explicitly descoped (DEC-9); re-deriving a private version of it
-   from stream health is what generated the churn.
+   This remains a real requirement of the system. It is **not delivered here**,
+   and it is deliberately not listed among the branch's invariants, because five
+   audit rounds established that the mechanism built for it was wrong at the root
+   rather than in its details:
 
-   The user-visible policy: the banner appears after **3** consecutive failed
-   subscription attempts (~3 s — the delays BETWEEN attempts are 1 s then 2 s),
-   again whenever the store scopes the stream to a conversation while it is still
-   broken (which the store does at the start of every turn and on every
-   conversation open), and every 5 further consecutive failures. A blip shorter
-   than three attempts stays silent, and the banner clears itself once a
-   subscription to a real conversation succeeds again.
+   - it watched subscription-PUT outcomes rather than DELIVERY, so the likeliest
+     real failure — a dropped stream losing its `complete` frame — produced a
+     spinner with no banner at all;
+   - its banner lived in the shared `error` slot that six other chat actions
+     overwrite, so opening a conversation raised it and then wiped it;
+   - and every attempt to couple it to the turn's state badged a completed reply
+     as interrupted, in three consecutive rounds.
+
+   The primitive it actually needs is a dedicated store flag plus a **time-based
+   deadline** — and the deadline is the product decision the owner descoped in
+   DEC-9. Building a fourth patch of the wrong mechanism, or reversing that
+   decision unilaterally, were the only two ways to continue; the owner chose to
+   defer (DEC-17). A follow-up should start from the flag-plus-deadline design,
+   not from this branch's code.
 
 ## Scope boundaries (recorded, not silently dropped)
 
