@@ -227,6 +227,102 @@ async fn resolve_model(
     }
 }
 
+/// Why `resolve_engine_endpoint` could not produce a usable endpoint.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum EndpointError {
+    /// No `llm_runtime_instances` row in `running` state.
+    NoRunningRow,
+    /// The row lookup itself failed (DB error).
+    LookupFailed(String),
+    /// A restart was attempted and the engine never became healthy.
+    StartTimeout,
+    /// A restart was attempted and failed for some other reason.
+    StartFailed(String),
+    /// Even after a restart there is no per-instance bearer.
+    BearerMissingAfterRestart,
+}
+
+/// Resolve the live engine's base URL together with its per-instance bearer.
+///
+/// ## The race this closes (reproduced on a live instance, not theorised)
+///
+/// These two facts live in DIFFERENT places and are torn down in the OPPOSITE
+/// order to the one they are read in. `LocalDeployment::stop` removes the model
+/// from the process-global `INSTANCE_API_KEYS` map FIRST, then kills the
+/// process, and only then does the `llm_runtime_instances` row leave
+/// `status='running'`. So a naive base-url-then-bearer read has a window where
+/// the row still says `running` while the token is already gone.
+///
+/// Measured: a model whose download had just finished, with Tier-2 validation
+/// spawning the engine and then stopping it, answered a chat send with
+/// `502 engine_start_failed: missing per-instance bearer token` — while
+/// `POST /messages` returned 200 and the assistant message stayed empty. That is
+/// the user-visible "the model is selected but sending does nothing"; it cleared
+/// by itself once validation finished, which is why it looked as though
+/// reloading the page fixed it.
+///
+/// ## Why a restart rather than reordering `stop`
+///
+/// Reordering `stop` to drop the bearer LAST would only MOVE the window: a
+/// request would then resolve a valid token for a process that is already dying
+/// and fail at the socket instead. The absence of the bearer is positive
+/// evidence that the instance is GONE, so the honest response is to treat it as
+/// such and bring one back — exactly what would have happened had the request
+/// arrived a moment later.
+///
+/// Bounded to ONE restart. `ensure_running` is single-flighted and carries its
+/// own timeout and flap cap, so this cannot spin.
+///
+/// ## Why it takes closures
+///
+/// The two lookups and the restart are injected so the POLICY is testable
+/// without a live engine: `INSTANCE_API_KEYS` is a process-global inside the
+/// SERVER process, and the integration harness spawns the server as a
+/// subprocess, so no out-of-process test can put the system into
+/// "row says running, bearer already dropped". The end-to-end behaviour is
+/// evidenced by the live reproduction recorded in the feature's
+/// `INFRA_INTEGRATION.md`; this seam is what makes the decision itself provable.
+pub(crate) async fn resolve_engine_endpoint<BaseFut, StartFut>(
+    model_id: Uuid,
+    mut lookup_base: impl FnMut() -> BaseFut,
+    mut lookup_bearer: impl FnMut() -> Option<String>,
+    mut restart: impl FnMut() -> StartFut,
+) -> Result<(String, String), EndpointError>
+where
+    BaseFut: std::future::Future<Output = Result<Option<String>, AppError>>,
+    StartFut: std::future::Future<Output = Result<(), AppError>>,
+{
+    let mut restarted = false;
+    loop {
+        let base = match lookup_base().await {
+            Ok(Some(u)) => u,
+            Ok(None) => return Err(EndpointError::NoRunningRow),
+            Err(e) => return Err(EndpointError::LookupFailed(format!("{e}"))),
+        };
+
+        match lookup_bearer() {
+            Some(token) => return Ok((base, token)),
+            None if !restarted => {
+                restarted = true;
+                tracing::info!(
+                    %model_id,
+                    "proxy: instance bearer missing while the instance row still read \
+                     running (engine torn down mid-request); restarting once"
+                );
+                if let Err(e) = restart().await {
+                    let msg = format!("{e}");
+                    return Err(if msg.contains("did not become Healthy") {
+                        EndpointError::StartTimeout
+                    } else {
+                        EndpointError::StartFailed(msg)
+                    });
+                }
+            }
+            None => return Err(EndpointError::BearerMissingAfterRestart),
+        }
+    }
+}
+
 /// Read the live engine port + base_url for a started model.
 async fn get_running_instance_base_url(
     pool: &PgPool,
@@ -346,46 +442,32 @@ async fn forward_post_with_body(
     // its own timeout + flap cap, so this cannot spin: either the second attempt
     // has both facts, or the engine genuinely will not start and the existing
     // start-failure paths report that.
-    let mut attempt = 0;
-    let (engine_base, engine_bearer) = loop {
-        let base = match get_running_instance_base_url(pool, model_id).await {
-            Ok(Some(u)) => u,
-            Ok(None) => {
-                return err_engine_start_failed(
-                    "engine reported started but no running instance row".into(),
-                );
-            }
-            Err(e) => return err_engine_start_failed(format!("{e}")),
-        };
-
-        match crate::modules::llm_local_runtime::deployment::local::get_instance_api_key(model_id) {
-            Some(t) => break (base, t),
-            None if attempt == 0 => {
-                // The instance is being (or has been) torn down under us —
-                // typically by a validation pass that spawned the engine, probed
-                // it and stopped it. Re-establish one and read both facts again.
-                attempt += 1;
-                tracing::info!(
-                    %model_id,
-                    "proxy: instance bearer missing while the instance row still \
-                     read running (engine torn down mid-request); restarting once"
-                );
-                if let Err(e) = auto_start::ensure_running(pool, model_id).await {
-                    let msg = format!("{e}");
-                    if msg.contains("did not become Healthy") {
-                        return err_engine_start_timeout(
-                            &model_name,
-                            started_at.elapsed().as_millis() as u64,
-                        );
-                    }
-                    return err_engine_start_failed(msg);
-                }
-            }
-            None => {
-                return err_engine_start_failed(
-                    "missing per-instance bearer token after restart".into(),
-                );
-            }
+    let (engine_base, engine_bearer) = match resolve_engine_endpoint(
+        model_id,
+        || get_running_instance_base_url(pool, model_id),
+        || crate::modules::llm_local_runtime::deployment::local::get_instance_api_key(model_id),
+        || auto_start::ensure_running(pool, model_id),
+    )
+    .await
+    {
+        Ok(pair) => pair,
+        Err(EndpointError::NoRunningRow) => {
+            return err_engine_start_failed(
+                "engine reported started but no running instance row".into(),
+            );
+        }
+        Err(EndpointError::LookupFailed(e)) => return err_engine_start_failed(e),
+        Err(EndpointError::StartTimeout) => {
+            return err_engine_start_timeout(
+                &model_name,
+                started_at.elapsed().as_millis() as u64,
+            );
+        }
+        Err(EndpointError::StartFailed(e)) => return err_engine_start_failed(e),
+        Err(EndpointError::BearerMissingAfterRestart) => {
+            return err_engine_start_failed(
+                "missing per-instance bearer token after restart".into(),
+            );
         }
     };
 
@@ -606,4 +688,150 @@ pub fn proxy_models_docs(op: TransformOperation) -> TransformOperation {
     op.id("LocalLlmProxy.listModels")
         .tag("Local LLM Proxy")
         .summary("OpenAI-compatible /v1/models — list models in this provider.")
+}
+
+// =====================================================================
+// TEST-17 [acceptance] [invariant: INV-5]
+// =====================================================================
+
+#[cfg(test)]
+mod endpoint_resolve_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    /// The exact state the live reproduction produced: the
+    /// `llm_runtime_instances` row still reads `running` while
+    /// `LocalDeployment::stop` has already removed the model from
+    /// `INSTANCE_API_KEYS`.
+    ///
+    /// Pre-fix this returned `502 engine_start_failed: "missing per-instance
+    /// bearer token"` and the user's message silently produced nothing. The
+    /// promise INV-5 makes is that a send after a completed download WORKS, so
+    /// the resolve must recover rather than fail.
+    ///
+    /// The state is SET here, not raced for — which is the whole point. A spec
+    /// that had to land a send inside the real validation window would be green
+    /// on one machine and red in CI, and would only ever sample one instant of
+    /// that window instead of proving the property.
+    #[tokio::test]
+    async fn bearer_missing_while_row_says_running_restarts_instead_of_failing() {
+        let restarts = Cell::new(0);
+        // The bearer is absent on the first read and present after the restart —
+        // exactly what `ensure_running` re-establishes.
+        let bearer_reads = Cell::new(0);
+
+        let got = resolve_engine_endpoint(
+            Uuid::nil(),
+            || async { Ok(Some("http://127.0.0.1:9999".to_string())) },
+            || {
+                let n = bearer_reads.get();
+                bearer_reads.set(n + 1);
+                if n == 0 { None } else { Some("tok-after-restart".to_string()) }
+            },
+            || {
+                restarts.set(restarts.get() + 1);
+                async { Ok(()) }
+            },
+        )
+        .await;
+
+        assert_eq!(
+            got,
+            Ok(("http://127.0.0.1:9999".to_string(), "tok-after-restart".to_string())),
+            "a torn-down instance must be re-established, not reported as a failure"
+        );
+        assert_eq!(restarts.get(), 1, "exactly one restart");
+        assert_eq!(bearer_reads.get(), 2, "the bearer is re-read after the restart");
+    }
+
+    /// The happy path must not pay for the fix: when both facts are present the
+    /// resolve does NOT restart anything. Without this, "always restart once"
+    /// would satisfy the test above while spawning an engine on every request.
+    #[tokio::test]
+    async fn a_healthy_instance_is_used_directly_with_no_restart() {
+        let restarts = Cell::new(0);
+
+        let got = resolve_engine_endpoint(
+            Uuid::nil(),
+            || async { Ok(Some("http://127.0.0.1:8080".to_string())) },
+            || Some("tok".to_string()),
+            || {
+                restarts.set(restarts.get() + 1);
+                async { Ok(()) }
+            },
+        )
+        .await;
+
+        assert_eq!(got, Ok(("http://127.0.0.1:8080".to_string(), "tok".to_string())));
+        assert_eq!(restarts.get(), 0, "a healthy instance must not be restarted");
+    }
+
+    /// The retry is BOUNDED. If the bearer is still missing after a restart the
+    /// resolve gives up rather than looping — `ensure_running` has its own
+    /// single-flight, timeout and flap cap, and spinning here would defeat them.
+    #[tokio::test]
+    async fn a_bearer_still_missing_after_restart_gives_up_once() {
+        let restarts = Cell::new(0);
+
+        let got = resolve_engine_endpoint(
+            Uuid::nil(),
+            || async { Ok(Some("http://127.0.0.1:8080".to_string())) },
+            || None,
+            || {
+                restarts.set(restarts.get() + 1);
+                async { Ok(()) }
+            },
+        )
+        .await;
+
+        assert_eq!(got, Err(EndpointError::BearerMissingAfterRestart));
+        assert_eq!(restarts.get(), 1, "bounded to a single restart — no spin");
+    }
+
+    /// A genuinely absent instance row is still an honest failure: the fix must
+    /// not turn "there is no engine" into a restart loop.
+    #[tokio::test]
+    async fn no_running_row_is_reported_not_restarted() {
+        let restarts = Cell::new(0);
+
+        let got = resolve_engine_endpoint(
+            Uuid::nil(),
+            || async { Ok(None) },
+            || None,
+            || {
+                restarts.set(restarts.get() + 1);
+                async { Ok(()) }
+            },
+        )
+        .await;
+
+        assert_eq!(got, Err(EndpointError::NoRunningRow));
+        assert_eq!(restarts.get(), 0);
+    }
+
+    /// A restart that times out keeps its own error identity, so the caller can
+    /// still answer 504 rather than collapsing every failure into 502.
+    #[tokio::test]
+    async fn a_restart_timeout_is_distinguished_from_a_start_failure() {
+        let timed_out = resolve_engine_endpoint(
+            Uuid::nil(),
+            || async { Ok(Some("http://127.0.0.1:8080".to_string())) },
+            || None,
+            || async { Err(AppError::internal_error("engine did not become Healthy in 90s")) },
+        )
+        .await;
+        assert_eq!(timed_out, Err(EndpointError::StartTimeout));
+
+        let failed = resolve_engine_endpoint(
+            Uuid::nil(),
+            || async { Ok(Some("http://127.0.0.1:8080".to_string())) },
+            || None,
+            || async { Err(AppError::internal_error("binary not found")) },
+        )
+        .await;
+        assert!(
+            matches!(failed, Err(EndpointError::StartFailed(ref m)) if m.contains("binary not found")),
+            "a non-timeout start failure keeps its message: {failed:?}"
+        );
+    }
 }

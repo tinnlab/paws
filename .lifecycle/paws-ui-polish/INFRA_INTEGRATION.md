@@ -45,6 +45,19 @@ A send issued after validation settled started an engine with no error, and the
 model's row read `validation_status = valid`, `enabled = true`,
 `capabilities = {"chat": true}`.
 
+**Both halves, side by side in ONE conversation** — same model, same request
+body, same branch; the only difference is WHEN:
+
+```
+user      | ["Say hi in three words."]
+assistant | []                                ← sent inside the window: empty
+user      | ["Say hi in three words."]
+assistant | [null,"hi in three words."]       ← sent after it closed: a real reply
+```
+
+That is the reproduction closed. It also settles the "reloading makes it work"
+observation: no reload happened between those two sends.
+
 ### Root cause — a THIRD transited state, not either of the two I predicted
 
 PLAN.md predicted the window would be the draining flag or a `running` instance
