@@ -43,6 +43,7 @@ Lifted verbatim from `docs/design/paws-ui-polish.md` § Invariants.
 - **ITEM-14**: Make the chat serving path tolerate a **validation-owned** engine: a send must not fail from a state a validation pass transits (the draining flag; a `running` instance row pointing at a dead port).
 - **ITEM-15**: Publish the paired `SyncEntity::UserLlmProvider` alongside `LlmModel` on the validator's terminal transition, matching every other model mutation.
 - **ITEM-16**: Make `loadLlmProviders(force = true)` actually force — today an in-flight load short-circuits it, so a `sync:*` frame landing during another load is dropped with no retry.
+- **ITEM-17**: Close the teardown-ordering window the ITEM-12 reproduction actually surfaced: `LocalDeployment::stop` drops the model's entry from `INSTANCE_API_KEYS` BEFORE the `llm_runtime_instances` row leaves `status='running'`, while the chat proxy reads those two in the opposite order — so a send in between resolves a live `base_url` and a missing bearer and returns `502 engine_start_failed: "missing per-instance bearer token"`. Added after phase 5 began (see `DRIFT-1.md`): PLAN predicted the draining flag and a running-row-on-a-dead-port, and said a third transited state becomes its own item rather than being folded into ITEM-14 silently.
 
 ## Files to touch
 
@@ -123,5 +124,6 @@ and the regen is recorded as a drift entry.
 - **ITEM-14** — verdict: CONCERN — this is the invariant-level fix and its shape is decided by ITEM-12's reproduction. The enumerated states are the two the code names today; if the repro surfaces a third it becomes a new item rather than being folded in silently.
 - **ITEM-15** — verdict: PASS — one added `sync_publish` matching `models.rs:175-176`; `UserLlmProvider` is already a `SyncEntity` variant, so no regen.
 - **ITEM-16** — verdict: CONCERN — must preserve in-flight dedupe while honouring `force`; the naive fix (delete the `loading` clause) trades a dropped refresh for a request storm. Needs a coalescing shape, and a test that proves BOTH halves.
+- **ITEM-17** — verdict: PASS — the ordering is confirmed in the source (`deployment/local.rs:1103-1112` removes the bearer first; `proxy_handlers.rs:316-335` reads base_url then bearer) AND observed live, so this is not a hypothesis. Reordering `stop` would only MOVE the window (a request would resolve a valid token for a dying process and fail at the socket instead), so the fix treats a missing bearer as positive evidence the instance is gone and re-establishes one — bounded to a single retry, riding `ensure_running`'s existing single-flight + timeout + flap cap.
 
 No `BLOCKED` verdicts.

@@ -1356,18 +1356,33 @@ pub async fn initiate_repository_download_internal(
                             )
                             .await;
 
-                        // P1.k: background Tier-2 validation for local
-                        // engine models freshly downloaded from HF.
-                        if matches!(
-                            model.engine_type,
-                            EngineType::Llamacpp | EngineType::Mistralrs
-                        ) {
-                            crate::modules::llm_local_runtime::validator::enqueue(
-                                model.id,
-                                crate::modules::llm_local_runtime::validator::ValidationTier::Tier2,
-                            )
-                            .await;
-                        }
+                        // NOTE: Tier-2 validation is NOT enqueued here.
+                        //
+                        // `create_model_with_files` (above) already enqueues it,
+                        // and it is on BOTH the upload-commit and the
+                        // repository-download paths — so this second call made
+                        // every download run validation TWICE. Measured on a
+                        // live instance: two `validator: enqueued model … tier
+                        // Tier2` lines 4 ms apart, then two full spawn →
+                        // health-probe → teardown cycles across ~55 s.
+                        //
+                        // That is not merely wasteful. Validation is serialized
+                        // server-wide and each pass ends by STOPPING the engine
+                        // it started, and `LocalDeployment::stop` drops the
+                        // model's per-instance bearer BEFORE the
+                        // `llm_runtime_instances` row leaves `status='running'`
+                        // — so a chat send landing in between resolves a live
+                        // base_url and a missing token and fails with
+                        // `missing per-instance bearer token`. Doubling the
+                        // passes doubled how long that window stayed open, which
+                        // is why "I downloaded a model and couldn't chat with it
+                        // until later" was reproducible at all.
+                        //
+                        // The window itself is closed in `proxy_handlers.rs`
+                        // (a missing bearer now means "the instance is gone",
+                        // not "fail the request"); removing the duplicate is the
+                        // other half — it halves the exposure and stops burning
+                        // a second engine spawn per download.
 
                         crate::utils::cancellation::remove_download_tracking(download_id).await;
 

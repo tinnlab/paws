@@ -2368,8 +2368,8 @@ Required states: _(branch-only — proven via dynamic coverage)_
 | branch | `!isIconOnly` | 233 |
 | branch | `isIconOnly` | 246 |
 | branch | `toolsItems.length > 0` | 249 |
-| branch | `!isIconOnly && bottomWidgets.length > 0` | 266 |
-| branch | `footerWidgets.length > 0` | 281 |
+| branch | `!isIconOnly && bottomWidgets.length > 0` | 283 |
+| branch | `footerWidgets.length > 0` | 299 |
 
 ### `modules/layouts/app-layout/components/SidebarToggleButton`
 
@@ -2812,15 +2812,15 @@ Required states: `empty`, `open`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `!d.provider_id \|\| !d.repository_id \|\| !r.model_name \|\| !r.repository_path \|\| !r.file_format \|\| !r.main_filename \|\| !r.display_name` | 35 |
-| branch | `!KNOWN_FILE_FORMATS.includes(r.file_format as FileFormat)` | 50 |
-| empty | `activeDownloads.length === 0 && failedDownloads.length === 0` | 89 |
-| branch | `hubModel` | 155 |
-| branch | `!gateResult.ok` | 157 |
-| branch | `!req` | 190 |
-| branch | `activeDownloads.length > 0` | 225 |
-| branch | `failedDownloads.length > 0` | 239 |
-| overlay | `<Popover open>` | 281 |
+| branch | `!d.provider_id \|\| !d.repository_id \|\| !r.model_name \|\| !r.repository_path \|\| !r.file_format \|\| !r.main_filename \|\| !r.display_name` | 43 |
+| branch | `!KNOWN_FILE_FORMATS.includes(r.file_format as FileFormat)` | 58 |
+| empty | `activeDownloads.length === 0 && failedDownloads.length === 0` | 97 |
+| branch | `hubModel` | 163 |
+| branch | `!gateResult.ok` | 165 |
+| branch | `!req` | 198 |
+| branch | `activeDownloads.length > 0` | 258 |
+| branch | `failedDownloads.length > 0` | 272 |
+| overlay | `<Popover open>` | 314 |
 
 ### `modules/llm-provider/widgets/LLMProviderGroupWidget`
 

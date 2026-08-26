@@ -145,16 +145,39 @@ both the admin and the user-facing sync entities with **no origin**, so even the
 tab that started the download receives them — and the equivalent no-reload
 delivery is already proven end-to-end by an existing spec.
 
-**Leading hypothesis: a server-side race, not a client one.** Tier-2 validation
-is enqueued **twice** for every repository download. Each pass spawns the real
-engine, waits up to 90 seconds for health, then tears it down. A message sent in
-that window is answered by the local proxy with a 502/503/504 — and the validator
-already carries a hand-written warning about precisely this ("a later chat would
-see already_running=true and forward to a dead port"). The repo even ships a
-debug seam to take the validator out of E2E's way *because this race was already
-hit once*. If that is the cause, then "reloading makes it work" means "it started
-working two or three minutes later, and the reload was incidental" — and no
-amount of sync plumbing fixes it.
+**Confirmed by reproduction: a server-side teardown race, not a client one.**
+Driven on a live instance — enable the local provider, install a runtime,
+download a real 296 MB GGUF, send the moment it completed — the send returned
+200 with an empty assistant message and the server logged:
+
+```
+ERROR chat: provider stream failed to start …:
+      Provider error: missing per-instance bearer token
+```
+
+`LocalDeployment::stop` removes the model's entry from the process-global
+per-instance-bearer map **first**, then kills the process, and only then does
+the `llm_runtime_instances` row leave `status='running'`. The chat proxy reads
+those two in the **opposite** order — the DB row, then the bearer — so there is
+a window in which it resolves a live engine URL and a missing token, and
+returns `502 engine_start_failed`.
+
+Tier-2 validation is also enqueued **twice** per repository download, and each
+pass is a full spawn → 90-second health probe → teardown. That does **not create**
+the window; it doubles how long it stays open (two passes ran across ~55 s in the
+reproduction). Both are fixed: the duplicate is removed, and the proxy now treats
+a missing bearer as positive evidence that the instance is gone and
+re-establishes one rather than failing the request.
+
+The validator already carried a hand-written warning about this hazard ("a later
+chat would see already_running=true and forward to a dead port"), and the repo
+ships a debug seam to keep the validator out of E2E's way *because the race was
+hit once before* — the failure simply lands one step earlier than the comment
+predicted, on the token rather than on the socket.
+
+So "reloading makes it work" means **"it started working a couple of minutes
+later, and the reload was incidental"**. No amount of sync plumbing fixes it, and
+this document does not pretend otherwise.
 
 **Two real defects found on the way, worth fixing on their own terms**: the
 validator publishes only the admin entity and never its paired user-facing one,

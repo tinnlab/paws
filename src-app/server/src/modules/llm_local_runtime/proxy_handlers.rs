@@ -313,24 +313,79 @@ async fn forward_post_with_body(
         return err_engine_start_failed(msg);
     }
 
-    // Resolve the live engine base_url.
-    let engine_base = match get_running_instance_base_url(pool, model_id).await {
-        Ok(Some(u)) => u,
-        Ok(None) => {
-            return err_engine_start_failed(
-                "engine reported started but no running instance row".into(),
-            );
-        }
-        Err(e) => return err_engine_start_failed(format!("{e}")),
-    };
+    // Resolve the live engine base_url + its per-instance bearer.
+    //
+    // ## The race this loop closes (reproduced, not theorised)
+    //
+    // These two facts live in DIFFERENT places and are torn down in the
+    // OPPOSITE order to the one they are read in. `LocalDeployment::stop`
+    // removes the model from the process-global `INSTANCE_API_KEYS` map FIRST,
+    // then kills the process, and only then does the `llm_runtime_instances`
+    // row leave `status='running'`. Reading base_url-then-bearer therefore has
+    // a window in which the row still says `running` while the token is already
+    // gone.
+    //
+    // Measured on a live instance: a model whose download had just finished,
+    // with Tier-2 validation spawning the engine and then stopping it, answered
+    // a chat send with `502 engine_start_failed: missing per-instance bearer
+    // token` — while `POST /messages` returned 200 and the assistant message
+    // stayed empty. That is the user-visible "the model is selected but sending
+    // does nothing", and it cleared by itself once validation finished, which is
+    // why it looked like a page reload fixed it.
+    //
+    // ## Why a retry rather than a reordering
+    //
+    // Reordering `stop` to drop the bearer LAST would just move the window: a
+    // request would then resolve a valid token for a process that is already
+    // dying and fail at the socket instead. The absence of the bearer is
+    // positive evidence that the instance is GONE, so the honest response is to
+    // treat it as such and let `ensure_running` bring one back — the same thing
+    // that would have happened had the request arrived a moment later.
+    //
+    // Bounded to ONE re-resolve. `ensure_running` is single-flighted and carries
+    // its own timeout + flap cap, so this cannot spin: either the second attempt
+    // has both facts, or the engine genuinely will not start and the existing
+    // start-failure paths report that.
+    let mut attempt = 0;
+    let (engine_base, engine_bearer) = loop {
+        let base = match get_running_instance_base_url(pool, model_id).await {
+            Ok(Some(u)) => u,
+            Ok(None) => {
+                return err_engine_start_failed(
+                    "engine reported started but no running instance row".into(),
+                );
+            }
+            Err(e) => return err_engine_start_failed(format!("{e}")),
+        };
 
-    // Look up per-instance bearer.
-    let engine_bearer = match crate::modules::llm_local_runtime::deployment::local::get_instance_api_key(
-        model_id,
-    ) {
-        Some(t) => t,
-        None => {
-            return err_engine_start_failed("missing per-instance bearer token".into());
+        match crate::modules::llm_local_runtime::deployment::local::get_instance_api_key(model_id) {
+            Some(t) => break (base, t),
+            None if attempt == 0 => {
+                // The instance is being (or has been) torn down under us —
+                // typically by a validation pass that spawned the engine, probed
+                // it and stopped it. Re-establish one and read both facts again.
+                attempt += 1;
+                tracing::info!(
+                    %model_id,
+                    "proxy: instance bearer missing while the instance row still \
+                     read running (engine torn down mid-request); restarting once"
+                );
+                if let Err(e) = auto_start::ensure_running(pool, model_id).await {
+                    let msg = format!("{e}");
+                    if msg.contains("did not become Healthy") {
+                        return err_engine_start_timeout(
+                            &model_name,
+                            started_at.elapsed().as_millis() as u64,
+                        );
+                    }
+                    return err_engine_start_failed(msg);
+                }
+            }
+            None => {
+                return err_engine_start_failed(
+                    "missing per-instance bearer token after restart".into(),
+                );
+            }
         }
     };
 

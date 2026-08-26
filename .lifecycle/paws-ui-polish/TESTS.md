@@ -44,7 +44,8 @@ than a race.** What each does and does not prove is stated in-file.
 ## Items found on the way (same subsystem)
 
 - **TEST-15** (tier: integration) [covers: ITEM-15] file: `src-app/server/tests/llm_model/sync_emit_test.rs` — asserts: the validator's TERMINAL transition publishes BOTH `llm_model` and `user_llm_provider`, observed through `SyncProbe`. Fails today: only `llm_model` is published, so the user-facing view never learns the model's final `validation_status`/`capabilities`.
-- **TEST-16** (tier: unit) [covers: ITEM-16] file: `src-app/ui/src/modules/llm-provider/stores/llmProvider/loadLlmProviders.test.ts` — asserts: BOTH halves. (a) a `force = true` call issued while a load is in flight resolves against freshly-fetched data rather than returning silently — it fails today, where the `|| state.loading` clause short-circuits even a forced call; and (b) two concurrent NON-forced calls still issue exactly one request, so the fix does not trade a dropped refresh for a request storm.
+- **TEST-17** (tier: integration) [acceptance] [invariant: INV-5] [covers: ITEM-17] file: `src-app/server/tests/llm_local_runtime/validation_race_test.rs` — asserts: the state the reproduction ACTUALLY surfaced. With the model's `llm_runtime_instances` row reading `status='running'` while the per-instance bearer has been dropped — the exact ordering `LocalDeployment::stop` produces — a chat send must SUCCEED rather than returning `502 engine_start_failed: "missing per-instance bearer token"`. Set by the test, not raced for. This is the leg that fails against pre-fix code with the byte-identical error the live instance logged.
+- **TEST-16** (tier: unit) [covers: ITEM-16] file: `src-app/ui/src/modules/llm-provider/stores/llmProvider/loadLlmProviders.store.test.ts` — asserts: BOTH halves. (a) a `force = true` call issued while a load is in flight resolves against freshly-fetched data rather than returning silently — it fails today, where the `|| state.loading` clause short-circuits even a forced call; and (b) two concurrent NON-forced calls still issue exactly one request, so the fix does not trade a dropped refresh for a request storm.
 
 ## Coverage map
 
@@ -66,6 +67,7 @@ than a race.** What each does and does not prove is stated in-file.
 | ITEM-14 | TEST-12 |
 | ITEM-15 | TEST-15 |
 | ITEM-16 | TEST-16 |
+| ITEM-17 | TEST-17 |
 
 | INV | pinned by |
 |---|---|
@@ -73,4 +75,4 @@ than a race.** What each does and does not prove is stated in-file.
 | INV-2 | TEST-5, TEST-6 |
 | INV-3 | TEST-8 |
 | INV-4 | TEST-10 |
-| INV-5 | TEST-12, TEST-14 |
+| INV-5 | TEST-12, TEST-14, TEST-17 |

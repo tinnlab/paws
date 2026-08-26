@@ -25,6 +25,7 @@ mod cross_subsystem_test;
 mod hide_in_conversation;
 mod install_from_hub;
 mod listing_in_chat;
+mod paws_hidden_skills_test;
 mod skill_mcp_load;
 mod sync_emit_test;
 mod toctou_race_test;

@@ -27,21 +27,13 @@ Chat composer -> assistant dropdown. Picking an assistant:
 - **Default model** + parameters
 - **Capabilities required** -- declarative hint about what tools this assistant expects (tools, vision, etc.). Documentation only in Phase 1.
 
-## Install from hub
-
-**Hub -> Assistants** browses curated assistants. Same install flow as MCP servers / skills / workflows -- per-user or admin-system.
-
 ## Assistant vs raw chat
 
 - **Raw chat**: no system prompt; user is the entire context.
-- **Assistant**: system prompt + defaults applied. Useful for repeated workflows (e.g., "code reviewer", "tutor", "translator").
+- **Assistant**: system prompt + defaults applied. Useful for repeated tasks (e.g., "code reviewer", "tutor", "translator").
 
 ## Assistant vs skill
 
 - **Assistant** = preset chat configuration (what the chat IS).
 - **Skill** = procedural knowledge the model loads when relevant (what the chat KNOWS).
 - Use both: an assistant defines the persona; skills add domain procedures the LLM uses inside that persona.
-
-## Template assistants
-
-Admin can create template assistants that get auto-cloned to new users on signup. Useful for onboarding ("Getting Started" assistant, "Code Review" assistant, etc.).

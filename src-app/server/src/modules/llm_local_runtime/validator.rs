@@ -21,7 +21,42 @@ use tokio::sync::Mutex;
 
 use crate::common::AppError;
 use crate::modules::llm_model::permissions::LlmModelsRead;
+use crate::modules::llm_provider::permissions::UserLlmProvidersRead;
 use crate::modules::sync::{Audience, SyncAction, SyncEntity, publish as sync_publish};
+
+/// Announce a model change to BOTH the admin view and the user-facing one.
+///
+/// Every other model mutation publishes this pair — see
+/// `llm_model/handlers/models.rs` (create / update / enable / disable / delete)
+/// and the download path's `create_model_with_files`. The validator published
+/// only `LlmModel`, whose audience is `llm_models::read` (admins), so the
+/// TERMINAL transition — the one that writes the final `validation_status` AND
+/// the extracted `capabilities` — never reached the user-facing
+/// `user_llm_provider` view that backs the chat model picker.
+///
+/// On desktop the single user is an admin, so the omission was invisible there;
+/// on a server deployment an ordinary user's picker kept the capabilities the
+/// row had at CREATE time until something else happened to refetch.
+///
+/// Notify-and-refetch, so the payload carries nothing sensitive either way, and
+/// `origin = None` because this runs on a detached worker with no request
+/// context — the tab that started the download should hear about it too.
+fn publish_model_change(model_id: Uuid) {
+    sync_publish(
+        SyncEntity::LlmModel,
+        SyncAction::Update,
+        model_id,
+        Audience::perm::<LlmModelsRead>(),
+        None,
+    );
+    sync_publish(
+        SyncEntity::UserLlmProvider,
+        SyncAction::Update,
+        model_id,
+        Audience::perm::<UserLlmProvidersRead>(),
+        None,
+    );
+}
 
 const TIER2_HEALTH_DEADLINE_SECS: u64 = 90;
 
@@ -198,7 +233,7 @@ pub async fn validate_remote_model(
 
     // Detached validation path: notify admin devices that the model's
     // validation_status changed (LlmModel is permission-scoped → owner None).
-    sync_publish(SyncEntity::LlmModel, SyncAction::Update, model_id, Audience::perm::<LlmModelsRead>(), None);
+    publish_model_change(model_id);
 
     Ok(result)
 }
@@ -220,7 +255,7 @@ async fn run_validation(
     .await;
     // Surface the "Validating…" transition to other admin devices (this runs
     // seconds-to-90s after the trigger handler already returned 202).
-    sync_publish(SyncEntity::LlmModel, SyncAction::Update, model_id, Audience::perm::<LlmModelsRead>(), None);
+    publish_model_change(model_id);
 
     let outcome = run_tier_internal(pool, model_id, tier, started_at).await;
     let elapsed_ms = started_at.elapsed().as_millis() as u64;
@@ -263,7 +298,7 @@ async fn run_validation(
 
     // Terminal transition (validation_status + capabilities now written) —
     // notify admin devices to refresh the model row.
-    sync_publish(SyncEntity::LlmModel, SyncAction::Update, model_id, Audience::perm::<LlmModelsRead>(), None);
+    publish_model_change(model_id);
 
     outcome
 }
