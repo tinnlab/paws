@@ -13,25 +13,55 @@ use crate::modules::auth::jwt::Claims;
 use crate::modules::mcp::models::McpServer;
 use crate::modules::mcp::tool_calls::models::{McpCallContext, McpToolCallSource};
 
-/// Process-wide handle to the session manager constructed in
-/// `main.rs`. The event-handler path (`McpSessionCleanupHandler`)
-/// needs to call `close(server_id)` when a server row is deleted —
-/// but event handlers are registered via the `AppModule` trait which
-/// runs BEFORE `main.rs` instantiates the session manager. The
-/// Axum-Extension injection used by HTTP handlers can't reach them.
+/// Process-wide handle to the session manager constructed at boot.
+/// The event-handler path (`McpSessionCleanupHandler`) needs to call
+/// `close(server_id)` when a server row is deleted — but event handlers
+/// are registered via the `AppModule` trait which runs BEFORE the
+/// session manager exists. The Axum-Extension injection used by HTTP
+/// handlers can't reach them.
 ///
-/// `main.rs` calls `set_global(...)` once at boot. Read via
+/// [`install`] calls `set_global(...)` once at boot. Read via
 /// `global()`; returns `None` in pre-init test scaffolding (unit
-/// tests that don't go through `main.rs`).
+/// tests that don't boot a server).
 static MCP_SESSION_MANAGER: OnceLock<Arc<McpSessionManager>> = OnceLock::new();
 
 /// Install the process-wide session-manager handle. Idempotent on the
 /// second call (subsequent `set` attempts are silently dropped — boot
 /// only calls this once, but unit-test harnesses might call it from a
 /// shared setup function).
-#[allow(dead_code)]
 pub fn set_global(manager: Arc<McpSessionManager>) {
     let _ = MCP_SESSION_MANAGER.set(manager);
+}
+
+/// Install the MCP session manager onto a server assembly: construct it,
+/// publish the process-wide handle, start the idle reaper, and layer it
+/// onto the router as a request `Extension`. Returns the layered router
+/// plus the handle (boot keeps it for `close_all()` at shutdown).
+///
+/// **Called from BOTH `lib.rs::setup_server` and `main.rs`** so the two
+/// server assemblies cannot drift apart. That drift is not hypothetical:
+/// this function exists because only `main.rs` used to install the
+/// manager, so every MCP runtime route — the whole `runtime.rs` family
+/// plus both Test Connection routes — answered
+/// `500 Missing request extension: Arc<McpSessionManager>` on the desktop
+/// build, which boots through `setup_server` instead. The `global()`
+/// half was missing there too, which additionally hard-failed workflow
+/// `kind: tool`/`kind: agent` steps and the agent-core chat host with
+/// "MCP session manager not initialized".
+///
+/// Keep this as the ONE installation site. A second copy is how the
+/// original defect happened.
+pub fn install(
+    router: axum::Router,
+    config: Arc<Config>,
+) -> (axum::Router, Arc<McpSessionManager>) {
+    let manager = Arc::new(McpSessionManager::new(config));
+    set_global(manager.clone());
+    // Reap idle pooled sessions so a server the user has stopped chatting
+    // with releases its subprocess / HTTP keep-alive; re-created lazily.
+    let _ = manager.spawn_idle_reaper();
+    let router = router.layer(axum::Extension(manager.clone()));
+    (router, manager)
 }
 
 /// Read the process-wide session-manager handle. None when called
@@ -41,7 +71,6 @@ pub fn global() -> Option<Arc<McpSessionManager>> {
 }
 
 /// Idle reaper cadence: how often the background task scans the pool.
-#[allow(dead_code)] // reached only from `spawn_idle_reaper`, wired in the bin (main.rs)
 const REAPER_TICK: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// A pooled session untouched for longer than this is closed by the
@@ -51,7 +80,6 @@ const REAPER_TICK: std::time::Duration = std::time::Duration::from_secs(60);
 /// user has stopped chatting with. Mirrors `llm_local_runtime`'s
 /// idle-unload, but MCP has no per-server admin setting so the
 /// threshold is a compile-time constant.
-#[allow(dead_code)] // reached only from `spawn_idle_reaper`, wired in the bin (main.rs)
 const REAPER_MAX_IDLE_SECONDS: u64 = 30 * 60;
 
 pub struct McpSessionManager {
@@ -360,7 +388,6 @@ impl McpSessionManager {
     /// manager is installed as the process-wide handle. Returns the
     /// `JoinHandle` (mirrors `llm_local_runtime::reaper::spawn`); boot
     /// drops it — the task lives for the process lifetime.
-    #[allow(dead_code)] // called from the bin (main.rs); the lib compiles standalone
     pub fn spawn_idle_reaper(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
         let manager = self.clone();
         tokio::spawn(async move {

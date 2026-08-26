@@ -664,8 +664,20 @@ async fn setup_server(
         // extensions to authenticate + authorize, so enforcement stays generic.
         .layer(axum::Extension(Arc::new(
             crate::modules::permissions::extractors::ZieeIdentityResolver,
-        )))
-        .layer(cors);
+        )));
+
+    // The MCP session manager, installed through the ONE shared site that
+    // `main.rs` also calls. Every MCP runtime handler pulls it from the request
+    // extensions, and the agent-host / workflow dispatch paths read the
+    // process-wide handle it publishes. Omitting it here is what made every MCP
+    // route 500 on the desktop build, which boots through this function rather
+    // than through `main.rs`.
+    let (app, _mcp_session_manager) = crate::modules::mcp::client::manager::install(
+        app,
+        module_api::app_config(&module_context),
+    );
+
+    let app = app.layer(cors);
 
     let addr = config.server_address();
 
