@@ -33,35 +33,42 @@ pub fn set_global(manager: Arc<McpSessionManager>) {
     let _ = MCP_SESSION_MANAGER.set(manager);
 }
 
-/// Install the MCP session manager onto a server assembly: construct it,
-/// publish the process-wide handle, start the idle reaper, and layer it
-/// onto the router as a request `Extension`. Returns the layered router
-/// plus the handle (boot keeps it for `close_all()` at shutdown).
+/// Build the MCP session manager and publish the process-wide handle.
 ///
-/// **Called from BOTH `lib.rs::setup_server` and `main.rs`** so the two
-/// server assemblies cannot drift apart. That drift is not hypothetical:
-/// this function exists because only `main.rs` used to install the
-/// manager, so every MCP runtime route — the whole `runtime.rs` family
-/// plus both Test Connection routes — answered
-/// `500 Missing request extension: Arc<McpSessionManager>` on the desktop
-/// build, which boots through `setup_server` instead. The `global()`
-/// half was missing there too, which additionally hard-failed workflow
-/// `kind: tool`/`kind: agent` steps and the agent-core chat host with
-/// "MCP session manager not initialized".
+/// The returned `Arc` is ALWAYS the same one `global()` will hand out, so a
+/// caller that layers it as a request `Extension` cannot end up serving a
+/// different manager than the `global()`-reading paths use. That property is
+/// why `set_global` lives in here rather than at the call site.
 ///
-/// Keep this as the ONE installation site. A second copy is how the
-/// original defect happened.
-pub fn install(
-    router: axum::Router,
-    config: Arc<Config>,
-) -> (axum::Router, Arc<McpSessionManager>) {
+/// **Idempotent.** A second call returns the already-installed manager instead
+/// of constructing a rival one. Before this was explicit, a second call would
+/// have built a new manager, had its `OnceLock::set` silently dropped, and
+/// handed the caller a manager that `global()` does not know about — the exact
+/// Extension-vs-`global()` divergence this module exists to prevent, arrived at
+/// from the opposite direction and with no diagnostic.
+///
+/// Router layering is deliberately NOT done here: see
+/// `core::app_builder::install_mcp_session_manager`, which owns it alongside
+/// the other shared layer helpers.
+pub fn build_session_manager(config: Arc<Config>) -> Arc<McpSessionManager> {
+    if let Some(existing) = global() {
+        // Not an error — but never silent. The FIRST config wins permanently, so
+        // a second boot after a `jwt.secret` rotation would keep minting under
+        // the stale secret. That fails closed (the validator rejects the token)
+        // rather than escalating, but it is worth being able to see in a log.
+        tracing::warn!(
+            "mcp::session manager already installed — returning the existing \
+             handle. The config passed to this call is IGNORED."
+        );
+        return existing;
+    }
     let manager = Arc::new(McpSessionManager::new(config));
     set_global(manager.clone());
-    // Reap idle pooled sessions so a server the user has stopped chatting
-    // with releases its subprocess / HTTP keep-alive; re-created lazily.
-    let _ = manager.spawn_idle_reaper();
-    let router = router.layer(axum::Extension(manager.clone()));
-    (router, manager)
+    // Re-read rather than returning `manager`: on a race, `OnceLock::set`
+    // silently drops the loser, and the winner is what every `global()` reader
+    // will see. Returning the winner keeps the Extension and `global()` on the
+    // same instance by construction.
+    global().unwrap_or(manager)
 }
 
 /// Read the process-wide session-manager handle. None when called
@@ -71,6 +78,7 @@ pub fn global() -> Option<Arc<McpSessionManager>> {
 }
 
 /// Idle reaper cadence: how often the background task scans the pool.
+#[allow(dead_code)] // reached only from `spawn_idle_reaper`, wired in the bin (main.rs)
 const REAPER_TICK: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// A pooled session untouched for longer than this is closed by the
@@ -80,6 +88,7 @@ const REAPER_TICK: std::time::Duration = std::time::Duration::from_secs(60);
 /// user has stopped chatting with. Mirrors `llm_local_runtime`'s
 /// idle-unload, but MCP has no per-server admin setting so the
 /// threshold is a compile-time constant.
+#[allow(dead_code)] // reached only from `spawn_idle_reaper`, wired in the bin (main.rs)
 const REAPER_MAX_IDLE_SECONDS: u64 = 30 * 60;
 
 pub struct McpSessionManager {
@@ -388,6 +397,15 @@ impl McpSessionManager {
     /// manager is installed as the process-wide handle. Returns the
     /// `JoinHandle` (mirrors `llm_local_runtime::reaper::spawn`); boot
     /// drops it — the task lives for the process lifetime.
+    ///
+    /// NOTE: it scans `self.sessions`, which is only ever populated by
+    /// [`Self::get_or_create`] — a method with zero callers today, since every
+    /// live path uses `get_or_create_with_context` (documented ephemeral,
+    /// non-pooled). So this currently reaps nothing. It is deliberately NOT
+    /// started from the shared `build_session_manager`: doing so would add an
+    /// always-on 60s timer to the desktop process for no behaviour. Wire it on
+    /// the embedded path when pooling is rewired, not before.
+    #[allow(dead_code)] // called from the bin (main.rs); the lib compiles standalone
     pub fn spawn_idle_reaper(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
         let manager = self.clone();
         tokio::spawn(async move {
@@ -435,5 +453,73 @@ impl McpSessionManager {
         }
 
         Ok(to_remove.len())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A `Config` is normally loaded from YAML, but it derives `Deserialize` and
+    /// every field outside the flattened `ServerConfig` is `#[serde(default)]`,
+    /// so a minimal JSON document is enough to build one in-process. Mirrors the
+    /// fixture style of `core::app_builder`'s own tests.
+    fn minimal_config() -> Arc<Config> {
+        Arc::new(
+            serde_json::from_value(serde_json::json!({
+                "postgresql": { "use_embedded": false },
+                "server": {
+                    "host": "127.0.0.1",
+                    "port": 8080,
+                    "api_prefix": "/api",
+                },
+                "jwt": {
+                    "secret": "test-secret-not-used-by-this-test",
+                    "issuer": "ziee",
+                    "audience": "ziee-api",
+                    "access_token_expiry_hours": 1,
+                },
+            }))
+            .expect("minimal Config fixture must deserialize"),
+        )
+    }
+
+    /// TEST-4 [acceptance] [invariant: INV-1] — the `set_global` half.
+    ///
+    /// The HTTP tests can only observe the `Extension`. This pins the other half
+    /// of INV-1 executably, and it pins the mutation those tests cannot see: a
+    /// future `lib.rs` that layers `Arc::new(McpSessionManager::new(cfg))`
+    /// directly would satisfy every route test while leaving `global()` unset —
+    /// re-breaking workflow `kind: tool`/`kind: agent` steps and the agent-core
+    /// chat host on desktop, which is the original defect from the other side.
+    ///
+    /// Asserting POINTER identity (not merely `is_some`) is what makes that
+    /// mutation visible: it is the guarantee that whatever gets layered as the
+    /// `Extension` is the same instance every `global()` reader sees.
+    #[test]
+    fn build_session_manager_publishes_the_global_handle_and_is_idempotent() {
+        let first = build_session_manager(minimal_config());
+
+        let published = global().expect(
+            "build_session_manager must publish the process-wide handle — \
+             without it `global()` readers (agent-host resolver, workflow \
+             agent_dispatch, agent_tool_call) fail with \
+             'MCP session manager not initialized'",
+        );
+        assert!(
+            Arc::ptr_eq(&first, &published),
+            "the returned manager must BE the published one, so a caller that \
+             layers it as an Extension cannot serve a different instance than \
+             `global()` hands out",
+        );
+
+        // Idempotent: a second call returns the installed manager rather than
+        // constructing a rival whose `OnceLock::set` would be silently dropped.
+        let second = build_session_manager(minimal_config());
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "a second call must return the already-installed manager; \
+             constructing a rival is how the Extension and `global()` diverge",
+        );
     }
 }

@@ -403,11 +403,16 @@ async fn main() {
             crate::modules::permissions::extractors::ZieeIdentityResolver,
         )));
 
-    // Shared with `lib.rs::setup_server` — see `manager::install`.
-    let (app, mcp_session_manager) = modules::mcp::client::manager::install(
+    // Shared with `lib.rs::setup_server` — see `install_mcp_session_manager`.
+    let (app, mcp_session_manager) = core::app_builder::install_mcp_session_manager(
         app,
         module_api::app_config(&module_context),
     );
+    // Reap idle pooled MCP sessions. Deliberately started HERE and not in the
+    // shared helper: the embedded/desktop path would gain an always-on 60s
+    // timer for a pool nothing populates. Pre-existing binary-only behaviour,
+    // kept exactly as it was.
+    let _ = mcp_session_manager.spawn_idle_reaper();
     tracing::info!("MCP session manager initialized");
 
     let app = app.layer(cors);
