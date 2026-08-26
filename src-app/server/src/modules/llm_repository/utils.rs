@@ -1132,21 +1132,31 @@ mod tests {
             capability_probe_url(RepositoryKind::HuggingFace, "https://huggingface.co").as_deref(),
             Some("https://huggingface.co/api/models?limit=1"),
         );
-        // NOTE the probe URL is the same for `https://huggingface.co/custom`,
-        // because it is derived from the KIND, not the row. That is exactly why
-        // the usable-base guard exists and is asserted separately below — on its
-        // own this derivation would attribute huggingface.co's catalogue to any
-        // row sharing the host, which is how the reported `/custom` row passed.
+        // A row WITH a path segment is filtered by that segment as the org, so
+        // it no longer inherits huggingface.co's whole catalogue. This is the
+        // property that stops a row for a nonexistent org reading `healthy`
+        // against a listing the download path never uses.
+        assert_eq!(
+            capability_probe_url(RepositoryKind::HuggingFace, "https://huggingface.co/custom")
+                .as_deref(),
+            Some("https://huggingface.co/api/models?limit=1&author=custom"),
+        );
         assert_eq!(
             capability_probe_url(RepositoryKind::Github, "https://github.com").as_deref(),
             Some("https://api.github.com/"),
         );
-        // Unknown hosts are probed on their OWN origin, so a self-hosted
-        // mirror can confirm itself — and the reported Vite case resolves
-        // to that dev server's `/api/models`, which is not a listing.
+        // An Unknown row is probed on its OWN path, not its origin: the path is
+        // the base the download path actually uses, so collapsing to the origin
+        // graded a URL that path never touches — a mirror serving only at its
+        // root read `healthy` for a row pointing at a subpath.
         assert_eq!(
             capability_probe_url(RepositoryKind::Unknown, "http://127.0.0.1:1520/models")
                 .as_deref(),
+            Some("http://127.0.0.1:1520/models/api/models?limit=1"),
+        );
+        // A row with no path keeps the bare-origin probe.
+        assert_eq!(
+            capability_probe_url(RepositoryKind::Unknown, "http://127.0.0.1:1520").as_deref(),
             Some("http://127.0.0.1:1520/api/models?limit=1"),
         );
         assert_eq!(
