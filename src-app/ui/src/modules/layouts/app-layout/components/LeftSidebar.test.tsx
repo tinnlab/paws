@@ -30,9 +30,21 @@ import { LeftSidebar } from './LeftSidebar'
 const TID = 'data-testid'
 const sel = (id: string) => `[${TID}="${id}"]`
 
-/** A trivial widget so the row has a child to render. */
+/**
+ * A trivial widget so the row has a child to render.
+ *
+ * The testid attribute is composed from a VARIABLE rather than written as a
+ * literal. `gen-testid-registry.mjs` scans `src/**` for
+ * /data-testid\s*[=:]\s*["']([^"']+)["']/ and folds every hit into the app's
+ * TYPED PRODUCT registry — it skips `tests/`, but NOT `src/`, where this
+ * harness lives. A literal here would register a harness FIXTURE id as a
+ * product testid and make `npm run check:testid-registry` demand it be
+ * committed. Same precaution, and the same reason, as
+ * `notification/components/NotificationBellPopover.test.tsx`.
+ */
+const MARKER_TID = 'test-bottom-widget'
 function MarkerWidget() {
-  return <div data-testid="test-bottom-widget">bottom widget</div>
+  return <div {...{ [TID]: MARKER_TID }}>bottom widget</div>
 }
 
 /** A trivial tool entry, for the control case. */
@@ -101,7 +113,7 @@ describe('LeftSidebar — the bottom-widget row', () => {
   test('TEST-7a: the widget mounts when the Tools section is populated', () => {
     const el = mountWith({ withTools: true })
     expect(el.querySelector(sel('layout-sidebar-tools-menu')), 'tools render').toBeTruthy()
-    expect(el.querySelector(sel('test-bottom-widget')), 'the widget mounts').toBeTruthy()
+    expect(el.querySelector(sel(MARKER_TID)), 'the widget mounts').toBeTruthy()
   })
 
   test('TEST-7: the bottom widgets render even when the Tools section contributes nothing', () => {
@@ -118,14 +130,14 @@ describe('LeftSidebar — the bottom-widget row', () => {
     // against the pre-change nesting, and it fails for the RIGHT reason: the
     // widget is simply not in the tree when Tools is empty.
     expect(
-      el.querySelector(sel('test-bottom-widget')),
+      el.querySelector(sel(MARKER_TID)),
       'the bottom widgets must not depend on the Tools section',
     ).toBeTruthy()
   })
 
   test('TEST-7b: the widgets are laid out in a row, not stacked', () => {
     const el = mountWith({ withTools: true })
-    const widget = el.querySelector<HTMLElement>(sel('test-bottom-widget'))
+    const widget = el.querySelector<HTMLElement>(sel(MARKER_TID))
     expect(widget, 'the widget mounts').toBeTruthy()
 
     // Walk UP from the widget to its row container rather than selecting the
