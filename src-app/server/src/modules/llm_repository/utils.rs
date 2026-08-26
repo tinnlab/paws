@@ -378,15 +378,17 @@ fn has_no_path(url: &str) -> bool {
 
 /// Is this URL a usable BASE for the kind's clone/download convention?
 ///
-/// The capability probe for a hosted kind necessarily queries that kind's fixed
-/// API host (`huggingface.co/api/models`, `api.github.com`), NOT the row's own
-/// URL — so on its own it would confirm the HOST's capability and attribute it
-/// to any row sharing that host. That is how `https://huggingface.co/custom`
-/// and `https://api.github.com` — two of the three reported rows — could still
-/// read `healthy` while being unable to serve a single model.
+/// This guard constrains the row's URL SHAPE. It is no longer the only thing
+/// standing between a bogus row and `healthy`: `capability_probe_url` now grades
+/// the row rather than the host — HuggingFace filters the listing by the row's own
+/// org (`?author=<org>`) and `Unknown` probes the row's own PATH — so a row for a
+/// nonexistent org yields an empty listing and reads `unverified`. Before that, the
+/// probe queried each kind's fixed API host and attributed the HOST's capability to
+/// any row sharing it, which is how `https://huggingface.co/custom` and
+/// `https://api.github.com` could read `healthy` while unable to serve a model.
 ///
-/// `Unknown` is deliberately unconstrained: a self-hosted mirror may legitimately
-/// live under a path, its probe already targets its own origin, and reporting it
+/// `Unknown` stays unconstrained here: a self-hosted mirror may legitimately live
+/// under a path, that path is what its probe now targets, and reporting it
 /// unverified would risk auto-disabling a working deployment (INV-4).
 fn is_usable_repository_base(kind: RepositoryKind, url: &str) -> bool {
     match kind {
@@ -396,15 +398,12 @@ fn is_usable_repository_base(kind: RepositoryKind, url: &str) -> bool {
         // repository_path of `<model>` builds `huggingface.co/<org>/<model>`,
         // which is a real model URL — and two pre-existing tests rely on it.
         //
-        // KNOWN GAP (recorded, not silently accepted): because the HF
-        // capability probe necessarily queries the FIXED `huggingface.co/api/models`
-        // rather than the row's own URL, a row naming a NON-EXISTENT org — the
-        // reported `https://huggingface.co/custom` — is still confirmed on the
-        // strength of the hub's catalogue. Closing it needs a per-row existence
-        // probe (e.g. `…/api/models?author=<org>`), which is a real behavioural
-        // change to a live third-party call and is out of scope here. An
-        // origin-only guard was tried and rejected: it would report every
-        // legitimate org-scoped row unverified.
+        // The gap this used to record — a row naming a NON-EXISTENT org still
+        // confirmed on the strength of the hub's whole catalogue — is CLOSED, by
+        // the per-row existence probe `…/api/models?limit=1&author=<org>` that
+        // `capability_probe_url` now builds. It is closed there rather than here
+        // on purpose: an origin-only guard at this layer was tried and rejected,
+        // because it reports every legitimate org-scoped row unverified.
         RepositoryKind::HuggingFace => true,
         RepositoryKind::Unknown => true,
     }
@@ -442,15 +441,19 @@ fn github_api_base() -> String {
 
 /// The URL whose response proves this repository can serve models.
 ///
-/// * Hugging Face — `/api/models?limit=1`, the model listing itself.
+/// * Hugging Face — `/api/models?limit=1`, the model listing itself, FILTERED by
+///   the org the row names in its own path (`&author=<org>`) when it names one.
+///   A row with no path segment (the built-in HF Hub) keeps the unfiltered probe
+///   and so confirms the host itself.
 /// * GitHub — the REST API root, whose catalog carries the
 ///   `repository_url` template the download path (`fetch_github_files`)
 ///   uses to read repo trees. A repository row carries no `owner/repo`
 ///   (that arrives per-download), so the host-level capability is the most
 ///   that can honestly be asserted here.
-/// * Unknown — the Hugging-Face-compatible `/api/models` convention on the
-///   repository's OWN origin, so a self-hosted mirror can still confirm
-///   itself.
+/// * Unknown — the Hugging-Face-compatible `/api/models` convention appended to
+///   the repository's OWN PATH (not merely its origin), because that path is the
+///   base the download path actually uses; a mirror serving only at its root
+///   would otherwise read `healthy` for a row pointing at a subpath.
 ///
 /// `None` when the URL does not parse well enough to build an origin.
 pub fn capability_probe_url(kind: RepositoryKind, repo_url: &str) -> Option<String> {
