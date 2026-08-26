@@ -21,7 +21,13 @@ is required. The new migration deletes data and grants nothing.
 ## Item 2 — one row, both layouts
 
 - **TEST-5** (tier: e2e) [acceptance] [invariant: INV-2] [covers: ITEM-4, ITEM-5] file: `src-app/ui/tests/e2e/llm/sidebar-icon-row.spec.ts` — asserts: with a download in flight, the notification bell and the download indicator share a horizontal band (their rects overlap vertically) and do NOT stack (neither rect's top is below the other's bottom) — one row, side by side; and with no download in flight the bell alone still renders inside that row at the same vertical position, which is the COMMON case since the download widget self-hides.
-- **TEST-6** (tier: e2e) [acceptance] [invariant: INV-2] [covers: ITEM-4] file: `src-app/desktop/ui/tests/e2e/desktop-sidebar-icon-row.spec.ts` — asserts: the same one-row geometry in the DESKTOP app shell, which runs a different module graph (`loader.desktop.ts` blocklists `user-profile`, so the footer below the row is empty). This is the half a web-only spec cannot speak to.
+- **TEST-6** (tier: e2e) [covers: ITEM-4] file: `src-app/desktop/ui/tests/e2e/desktop-sidebar-icon-row.spec.ts` — asserts: the same one-row geometry in the DESKTOP app shell, which runs a different module graph (`loader.desktop.ts` blocklists `user-profile`, so the footer below the row is empty).
+
+  ⚠ **BLOCKED by a pre-existing harness defect — recorded as NOT VERIFIED, not passed.** The desktop e2e config never brings its Vite dev server up on the port it then navigates to: `playwright.config.ts` and `desktop/ui/vite.config.ts` each call `pickBindablePort` independently, they disagree, and `page.goto` gets `ERR_CONNECTION_REFUSED`. **Control: the untouched `desktop-real-backend-smoke.spec.ts` fails identically**, so this is not caused by this branch. Pinning `VITE_DEV_PORT` to a port verified free immediately beforehand did not help (playwright still resolved one higher). Per B3 the shared harness is not edited to route around it; escalated instead.
+
+  The `[acceptance]` tag moved off this test — an invariant may not rest on a test that does not run. INV-2 is pinned by TEST-5 (web, geometric, real browser) and TEST-6b below.
+
+- **TEST-6b** (tier: unit) [acceptance] [invariant: INV-2] [covers: ITEM-4] file: `src-app/ui/src/modules/desktopSidebarWidgets.test.ts` — asserts: the DESKTOP-specific half that is provable without the blocked harness — **the module graph**. Neither `notification` nor `llm-provider` is dropped by `CORE_MODULE_BLOCKLIST` (so the row genuinely has two children on desktop, not one), `user-profile` IS dropped (so the footer below the row is empty there — the layout the web build never renders), and the blocklist is non-empty so none of it passes vacuously. Deliberately NOT presented as a substitute for the rendered geometry: it covers the module graph, TEST-5 and TEST-7 cover the row's behaviour.
 - **TEST-7** (tier: unit) [covers: ITEM-4] file: `src-app/ui/src/modules/layouts/app-layout/components/LeftSidebar.test.tsx` — asserts: the `sidebarBottom` row still renders when the `sidebarTools` slot contributes NOTHING — the de-nesting. Today the row is nested inside the Tools block and would disappear with it; this test fails against the current code.
 
 ## Item 3 — skills for hidden features
@@ -58,7 +64,7 @@ than a race.** What each does and does not prove is stated in-file.
 | ITEM-1 | TEST-1, TEST-2 |
 | ITEM-2 | TEST-1, TEST-3 |
 | ITEM-3 | TEST-4 |
-| ITEM-4 | TEST-5, TEST-6, TEST-7 |
+| ITEM-4 | TEST-5, TEST-6, TEST-6b, TEST-7 |
 | ITEM-5 | TEST-5 |
 | ITEM-6 | TEST-8, TEST-9 |
 | ITEM-7 | TEST-8 |
@@ -76,7 +82,7 @@ than a race.** What each does and does not prove is stated in-file.
 | INV | pinned by |
 |---|---|
 | INV-1 | TEST-1 |
-| INV-2 | TEST-5, TEST-6 |
+| INV-2 | TEST-5, TEST-6b |
 | INV-3 | TEST-8 |
 | INV-4 | TEST-10 |
 | INV-5 | TEST-12, TEST-14, TEST-17 |

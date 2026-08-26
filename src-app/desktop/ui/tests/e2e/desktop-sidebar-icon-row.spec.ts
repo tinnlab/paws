@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { Client } from 'pg'
 
 import { test, expect } from '../fixtures/test-context'
@@ -40,7 +41,11 @@ const LONG_NAME = 'Qwen3.5 9B Instruct — Q4_K_M (tinnlab mirror)'
 async function connectToTestDb(databaseName: string): Promise<Client> {
   const runId = process.env.TEST_RUN_ID
   if (!runId) throw new Error('TEST_RUN_ID not set — global-setup may have failed')
-  const configDir = resolve(__dirname, '../.test-configs')
+  // These specs run as ESM, so `__dirname` does not exist — derive it from
+  // `import.meta.url` (the fixture itself is loaded differently and can use the
+  // CJS name, which is why copying its line verbatim fails here).
+  const here = dirname(fileURLToPath(import.meta.url))
+  const configDir = resolve(here, '../.test-configs')
   const postgresConfig = JSON.parse(
     readFileSync(resolve(configDir, `postgres-${runId}.json`), 'utf-8'),
   )
