@@ -6,7 +6,8 @@ pub mod auth;
 pub mod session;
 pub mod manager;
 
-// Re-export main types for convenience (used via full module path in main.rs and handlers)
+// Re-export main types for convenience (used via full module path in
+// `core::app_builder`, `main.rs` and the handlers)
 #[allow(unused_imports)]
 pub use manager::McpSessionManager;
 #[allow(unused_imports)]

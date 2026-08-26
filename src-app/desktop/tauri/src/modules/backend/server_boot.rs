@@ -88,6 +88,14 @@ impl ServerBoot for ZieeServerBoot {
                 //   - Browser preflight OPTIONS → 405 (no CORS layer).
                 //   - Authenticated requests → 500 "JWT service not configured"
                 //     (RequirePermissions can't find the Arc<JwtService> ext).
+                //
+                // The SAME trap applies to every other extension `setup_server`
+                // installs, and only the two below are re-applied here. In
+                // particular a desktop route that ever declares
+                // `Extension<Arc<McpSessionManager>>` will 500 with
+                // "Missing request extension" — the exact defect that made every
+                // server-side MCP route fail on this build. No desktop route uses
+                // it today; if one does, re-apply it here too.
                 let desktop_cors = ziee::create_cors_layer(&cors_config);
                 let router = router.merge(
                     desktop_routes

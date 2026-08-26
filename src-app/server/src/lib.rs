@@ -664,8 +664,26 @@ async fn setup_server(
         // extensions to authenticate + authorize, so enforcement stays generic.
         .layer(axum::Extension(Arc::new(
             crate::modules::permissions::extractors::ZieeIdentityResolver,
-        )))
-        .layer(cors);
+        )));
+
+    // The MCP session manager, installed through the shared helper `main.rs`
+    // also calls. Every MCP runtime handler pulls it from the request
+    // extensions, and the agent-host / workflow dispatch paths read the
+    // process-wide handle it publishes. Omitting it here is what made every MCP
+    // route 500 on the desktop build, which boots through this function rather
+    // than through `main.rs`.
+    //
+    // The handle is dropped rather than kept: unlike `main.rs`, `run_server`
+    // serves detached with no graceful-shutdown hook, so there is nowhere to
+    // call `close_all()` from. That is currently harmless — `close_all` drains
+    // `sessions`, which nothing populates — but it is a real asymmetry, and if
+    // pooling is ever rewired this path will orphan stdio children on quit.
+    let (app, _mcp_session_manager) = crate::core::app_builder::install_mcp_session_manager(
+        app,
+        module_api::app_config(&module_context),
+    );
+
+    let app = app.layer(cors);
 
     let addr = config.server_address();
 

@@ -281,19 +281,11 @@ async fn main() {
     };
     tracing::info!("JWT service initialized");
 
-    // Set up MCP session manager
-    let mcp_session_manager = std::sync::Arc::new(modules::mcp::client::McpSessionManager::new(
-        module_api::app_config(&module_context),
-    ));
-    // Make it reachable from the event-bus path (`McpSessionCleanupHandler`)
-    // — module event handlers are registered before this point and can't
-    // receive Axum Extensions, so they read the process-wide handle.
-    modules::mcp::client::manager::set_global(mcp_session_manager.clone());
-    // Reap idle pooled MCP sessions in the background so a server the
-    // user has stopped chatting with releases its subprocess / HTTP
-    // keep-alive; re-created lazily on next use.
-    let _ = mcp_session_manager.spawn_idle_reaper();
-    tracing::info!("MCP session manager initialized");
+    // The MCP session manager is installed further down, where the router is
+    // assembled, through `manager::install` — the ONE site `lib.rs::setup_server`
+    // also calls. Do not re-add a construction here: two installation sites is
+    // exactly how the desktop build ended up serving MCP routes with no
+    // `Arc<McpSessionManager>` in the request extensions.
 
     // Build API router with all module routes (including auth)
     let (api_router, mut api_doc) = core::app_builder::build_api_router(
@@ -409,9 +401,21 @@ async fn main() {
         // extensions to authenticate + authorize, so enforcement stays generic.
         .layer(axum::Extension(std::sync::Arc::new(
             crate::modules::permissions::extractors::ZieeIdentityResolver,
-        )))
-        .layer(axum::Extension(mcp_session_manager.clone()))
-        .layer(cors);
+        )));
+
+    // Shared with `lib.rs::setup_server` — see `install_mcp_session_manager`.
+    let (app, mcp_session_manager) = core::app_builder::install_mcp_session_manager(
+        app,
+        module_api::app_config(&module_context),
+    );
+    // Reap idle pooled MCP sessions. Deliberately started HERE and not in the
+    // shared helper: the embedded/desktop path would gain an always-on 60s
+    // timer for a pool nothing populates. Pre-existing binary-only behaviour,
+    // kept exactly as it was.
+    let _ = mcp_session_manager.spawn_idle_reaper();
+    tracing::info!("MCP session manager initialized");
+
+    let app = app.layer(cors);
 
     // Get server address
     let addr = config.server_address();
