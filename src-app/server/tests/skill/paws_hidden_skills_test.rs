@@ -85,6 +85,12 @@ async fn removed_builtin_skills_do_not_reach_the_model_after_upgrade() {
     let (server, _mock) = server_with_skill_catalog().await;
     let admin = admin_and_refresh(&server).await;
 
+    // Wait for the boot-time `sync_builtin_skills` task before touching the
+    // table. It is a spawned background task, so without this the surviving-
+    // built-in assertion at the end races it and fails spuriously on a loaded
+    // box — blaming the migration for a scheduling artefact.
+    let _ = super::builtin::wait_for_builtins(&server, &admin.token).await;
+
     let (_stub, model) = crate::chat::helpers::create_stub_model(&server, &admin.user_id).await;
     let conv = crate::chat::helpers::create_conversation(
         &server,
@@ -106,11 +112,19 @@ async fn removed_builtin_skills_do_not_reach_the_model_after_upgrade() {
     // columns are filled minimally; the gating query only cares about `scope`,
     // `enabled` and `name`.
     for name in REMOVED {
+        // `ON CONFLICT (name)` alone raises 42P10 here: `skills` has NO plain
+        // unique index on `name` — only the PARTIAL
+        // `uniq_skills_builtin_name … WHERE scope = 'built_in'`
+        // (202607140210_skill_schema.sql:72). Postgres cannot infer a partial
+        // index without a matching predicate, so the arbiter has to name it.
         sqlx::query(
             "INSERT INTO skills (id, name, display_name, description, version, scope,
-                                 owner_user_id, extracted_path, entry_point, enabled, is_dev)
-             VALUES ($1, $2, $3, $4, '1.0.0', 'built_in', NULL, $5, 'SKILL.md', TRUE, FALSE)
-             ON CONFLICT (name) DO NOTHING",
+                                 owner_user_id, extracted_path, entry_point,
+                                 bundle_sha256, bundle_size_bytes, file_count,
+                                 enabled, is_dev)
+             VALUES ($1, $2, $3, $4, '1.0.0', 'built_in', NULL, $5, 'SKILL.md',
+                     'seeded-by-test', 0, 1, TRUE, FALSE)
+             ON CONFLICT (name) WHERE scope = 'built_in' DO NOTHING",
         )
         .bind(Uuid::new_v4())
         .bind(name)
@@ -177,13 +191,25 @@ async fn the_prune_does_not_touch_user_scope_skills() {
     let victim = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO skills (id, name, display_name, description, version, scope,
-                             owner_user_id, extracted_path, entry_point, enabled, is_dev)
-         VALUES ($1, $2, 'Mine', 'user-authored', '1.0.0', 'user', $3, '/tmp/x', 'SKILL.md', TRUE, FALSE)",
+                             owner_user_id, extracted_path, entry_point,
+                             bundle_sha256, bundle_size_bytes, file_count,
+                             enabled, is_dev)
+         VALUES ($1, $2, 'Mine', 'user-authored', '1.0.0', 'user', $3, '/tmp/x', 'SKILL.md',
+                 'seeded-by-test', 0, 1, TRUE, FALSE)",
     )
     .bind(victim)
-    // A user-scope skill deliberately colliding with a pruned built-in name.
-    .bind("io.github.ziee/create-workflow-user-copy")
-    .bind(admin.user_id)
+    // A user-scope skill carrying the EXACT name of a pruned built-in.
+    //
+    // This has to be the exact string, not a `…-user-copy` variant: the
+    // migration matches with `name IN (…)`, i.e. exact equality, so a variant
+    // name is unmatched whether or not the `scope = 'built_in'` predicate is
+    // there — the test would pass against a migration broadened to
+    // `WHERE name IN (…)` and would protect nothing. The exact name is legal
+    // for a user-scope row because the built-in uniqueness index is PARTIAL
+    // (`WHERE scope = 'built_in'`), so the two rows coexist.
+    .bind("io.github.ziee/create-workflow")
+    // `owner_user_id` is uuid; `admin.user_id` is a String, so bind it parsed.
+    .bind(Uuid::parse_str(&admin.user_id).expect("admin user id is a uuid"))
     .execute(&pool)
     .await
     .expect("seed user-scope skill");
@@ -226,17 +252,62 @@ async fn shipping_skills_never_route_the_user_to_a_hidden_feature() {
     let builtins: Vec<&Json> = skills.iter().filter(|s| s["scope"] == "built_in").collect();
     assert!(!builtins.is_empty(), "no built-in skills synced");
 
-    // Navigation phrases that name a hidden surface. Substring matching on
-    // NAVIGATION, not on the bare feature word: "team workflows" and "testing
-    // workflows" are ordinary English and must not trip this, whereas
-    // "Hub -> MCP Servers" is an instruction to visit a page paws does not have.
-    const FORBIDDEN: [&str; 6] = [
+    // Navigation phrases that route the reader at a hidden surface.
+    //
+    // Matching on NAVIGATION, not on the bare feature word: "team workflows"
+    // and "testing workflows" are ordinary English and must not trip this,
+    // whereas "Hub -> MCP Servers" is an instruction to visit a page paws does
+    // not have.
+    //
+    // The list deliberately spans ALL THIRTEEN hidden features, not just the
+    // ones this change happened to edit. An earlier version covered only hub +
+    // assistant templates — which meant the workflow and web-search content
+    // removed by this very change could be re-added and the acceptance test
+    // would stay green, i.e. INV-4 narrowed to what was built. Each entry is
+    // one row of `docs/design/paws-feature-surface.md`'s item table.
+    const FORBIDDEN: &[&str] = &[
+        // item 11 — hub
         "hub ->",
         "hub →",
         "publish to hub",
         "install from hub",
         "from the hub",
+        // item 12 — assistant templates
         "template assistants",
+        // item 6 — workflow
+        "workflow_mcp",
+        "kind: workflow",
+        "-> workflows",
+        "→ workflows",
+        "/workflows",
+        "workflow run",
+        "workflow yaml",
+        // item 7 — scheduler
+        "-> scheduled",
+        "→ scheduled",
+        "scheduled tasks",
+        // item 1 — web search
+        "web search",
+        "web_search",
+        // item 2 — literature
+        "lit_search",
+        "literature search",
+        // item 8 — citations
+        "-> citations",
+        "→ citations",
+        // item 9 — knowledge base
+        "knowledge base",
+        "knowledge_base",
+        // item 10 — document RAG
+        "file_rag",
+        "document rag",
+        // item 4 — voice
+        "voice dictation",
+        // item 5 — programmatic tools
+        "run_js",
+        "js_tool",
+        // item 3 — semantic search
+        "semantic search",
     ];
 
     for skill in builtins {

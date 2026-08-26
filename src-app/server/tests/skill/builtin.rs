@@ -83,6 +83,22 @@ async fn builtin_skills_are_synced_listed_and_not_deletable() {
         .collect();
     synced.sort_unstable();
 
+    // Assert the REMOVALS first, so a regression that re-ships one of them
+    // fails with its name rather than with an opaque whole-set mismatch. This
+    // ordering is deliberate: placed AFTER the set equality below, the loop
+    // could never fire — the equality already covers it — and it would read as
+    // coverage it does not provide.
+    for removed in [
+        "io.github.ziee/create-workflow",
+        "io.github.ziee/troubleshoot-workflow-run",
+        "io.github.ziee/hub-installation",
+    ] {
+        assert!(
+            !synced.contains(&removed),
+            "{removed} documents a paws-hidden feature and must not ship; got {synced:?}"
+        );
+    }
+
     let expected = [
         "io.github.ziee/configure-code-sandbox",
         "io.github.ziee/configure-llm-providers",
@@ -100,16 +116,7 @@ async fn builtin_skills_are_synced_listed_and_not_deletable() {
         "the synced built-in set must be exactly the shipped one"
     );
 
-    for removed in [
-        "io.github.ziee/create-workflow",
-        "io.github.ziee/troubleshoot-workflow-run",
-        "io.github.ziee/hub-installation",
-    ] {
-        assert!(
-            !synced.contains(&removed),
-            "{removed} documents a paws-hidden feature and must not ship"
-        );
-    }
+
 
     // Not uninstallable: DELETE /skills/{id} is rejected (not user-scope / owner).
     let id = builtin["id"].as_str().expect("id");

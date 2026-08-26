@@ -8,16 +8,21 @@ use crate::common::test_helpers::create_user_with_permissions;
 /// Hub-version constant of the embedded seed (mirrors
 /// `resources/hub-seed/index.json::hub_version`). Hard-coded rather
 /// than loaded dynamically so a bumped seed forces test review.
-const SEED_VERSION: &str = "2.0.0";
+const SEED_VERSION: &str = "2.1.0";
 
 // The seed mirrors ziee-ai/hub's published `dist/` — 8 models +
-// 5 assistants + 6 mcp-servers + 1 skill + 10 workflows = 30 entries.
+// 5 assistants + 6 mcp-servers + 0 skills + 10 workflows = 29 entries.
 // (The 8th model is bge-reranker-v2-m3-gguf, added with the hub `rerank`
-// capability. ziee's 10 capability skills are now built-in, embedded in the
-// binary, NOT hub-distributed; the hub ships one generic example skill,
-// io.github.ziee/effective-prompting.)
+// capability. ziee's capability skills are built-in, embedded in the binary,
+// NOT hub-distributed.)
+//
+// The hub previously shipped ONE generic example skill,
+// `io.github.ziee/effective-prompting`. paws removed it: the hub UI is hidden
+// on this instance (`docs/design/paws-feature-surface.md` item 11), so a
+// hub-only skill ships as dead weight — nothing can browse or install it.
+// Hence 0 skills and 29 items.
 // Bump when the seed snapshot is refreshed.
-const SEED_ITEM_COUNT: usize = 30;
+const SEED_ITEM_COUNT: usize = 29;
 
 // =====================================================================
 // /hub/version + /hub/index — anyone with read can call
@@ -48,9 +53,10 @@ async fn version_endpoint_returns_seed_catalog_metadata() {
     assert_eq!(counts["models"], 8); // +bge-reranker-v2-m3-gguf (hub reranker capability)
     assert_eq!(counts["assistants"], 5);
     assert_eq!(counts["mcp_servers"], 6);
-    // ziee's 10 capability skills are now built-in (not hub); the hub ships
-    // one generic example skill (io.github.ziee/effective-prompting).
-    assert_eq!(counts["skills"], 1);
+    // ziee's capability skills are built-in (not hub), and paws removed the
+    // hub's one generic example skill because the hub UI is hidden here — so
+    // the seed ships no skills at all.
+    assert_eq!(counts["skills"], 0);
     assert_eq!(counts["workflows"], 10);
 }
 

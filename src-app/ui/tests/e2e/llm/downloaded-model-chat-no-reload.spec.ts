@@ -145,6 +145,15 @@ test.describe('a freshly delivered model is chattable without a reload', () => {
       const selector = byTestId(page, 'model-selector')
       await expect(selector).toBeVisible({ timeout: 30000 })
 
+      // Plant a sentinel on `window`. A reload (or any full navigation) wipes
+      // it, so its survival at the end of the test is real evidence that none
+      // happened. See the assertion at the bottom for why the obvious
+      // `page.url()` check does NOT work.
+      await page.evaluate(() => {
+        ;(window as unknown as Record<string, unknown>).__noReloadSentinel =
+          'alive'
+      })
+
       // Control: the model does not exist yet, so the later assertion cannot
       // pass vacuously against a picker that already contained it.
       const { displayName } = await (async () => {
@@ -175,12 +184,20 @@ test.describe('a freshly delivered model is chattable without a reload', () => {
         byTestId(page, 'chat-messages').getByText(REPLY, { exact: false }),
       ).toBeVisible({ timeout: 60000 })
 
-      // The spec never reloads — asserted explicitly so a future edit that
-      // "fixes" a flake by adding a reload has to delete this line and say so.
+      // The spec never reloaded — and this is the assertion that can actually
+      // tell. An earlier version checked `page.url().startsWith(baseURL)`,
+      // which is ALWAYS TRUE: `page.reload()` preserves the URL, so the guard
+      // was satisfied by precisely the edit it claimed to block. The sentinel
+      // lives on `window` and does not survive a reload, so if a future author
+      // "stabilises" this spec with one, this fails and they have to say so.
+      const sentinel = await page.evaluate(
+        () => (window as unknown as Record<string, unknown>).__noReloadSentinel,
+      )
       expect(
-        page.url().startsWith(baseURL),
-        'the spec must not have navigated away or reloaded',
-      ).toBe(true)
+        sentinel,
+        'the page was reloaded or renavigated — this spec proves the NO-RELOAD ' +
+          'half of INV-5 and is worthless if it reloads',
+      ).toBe('alive')
     } finally {
       await stub.dispose()
     }
