@@ -8,6 +8,7 @@ import { Permissions } from '@/api-client/permissions'
 import { SystemMcpServer } from '@/modules/mcp/stores/systemMcpServer'
 import { McpServer as McpServerStore } from '@/modules/mcp/stores/mcpServer'
 import { McpServerDrawer } from '@/modules/mcp/stores/mcpServerDrawer'
+import { showConnectionTestResult } from './connectionTestToast'
 
 // System and user MCP servers gate on different permission namespaces.
 // `server.is_system` selects which set applies at render time. `test` maps to
@@ -106,18 +107,12 @@ export function McpServerCard({
       const result = server.is_system
         ? await SystemMcpServer.testSystemServerConnection(payload)
         : await McpServerStore.testMcpServerConnection(payload)
-      if (result.success) {
-        message.success(result.message || 'Connection successful')
-      } else if (server.run_in_sandbox) {
-        // NOT a failure. Test Connection probes on the host and cannot reach a
-        // sandboxed server at all, so the backend answers `success: false` with
-        // an explanation and records the row `untested` rather than `unhealthy`.
-        // A red error toast would contradict the message it is carrying, whose
-        // own text says the server is fine.
-        message.info(result.message || 'Connection could not be tested')
-      } else {
-        message.error(result.message || 'Connection failed')
-      }
+      // Third arg is `notTestable`: Test Connection probes on the host and
+      // cannot reach a sandboxed server at all, so the backend answers
+      // `success: false` with an explanation and records the row `untested`
+      // rather than `unhealthy`. Routed through the shared helper rather than
+      // inlined — three copies of this branch is how they drift apart.
+      showConnectionTestResult(message, result, server.run_in_sandbox)
       // Backend recorded the probe outcome into the row's
       // `last_health_check_*` columns. Refresh the parent list so
       // this card's `server` prop re-renders with the updated
@@ -154,7 +149,15 @@ export function McpServerCard({
       message.success(`Server ${enabled ? 'enabled' : 'disabled'} successfully`)
     } catch (error) {
       console.error('Failed to toggle server enable state:', error)
-      message.error(`Failed to ${enabled ? 'enable' : 'disable'} server`)
+      // Surface the backend's own text when there is one. It is frequently the
+      // only actionable part — e.g. a stdio row on a deployment with the code
+      // sandbox off is refused with a specific "ask your administrator to
+      // enable code_sandbox", which the generic string threw away.
+      message.error(
+        error instanceof Error && error.message
+          ? error.message
+          : `Failed to ${enabled ? 'enable' : 'disable'} server`,
+      )
     } finally {
       setEnableLoading(false)
     }
@@ -273,7 +276,16 @@ export function McpServerCard({
                     <Tooltip
                       title={
                         server.last_health_check_reason ??
-                        'Connection has not been tested yet. Click Test Connection or toggle Enabled to run a probe.'
+                        (server.run_in_sandbox
+                          ? // Fall back on the ROW'S OWN FLAG, not just on a
+                            // recorded reason. Several paths create a sandboxed
+                            // row without writing one — a Hub install is the
+                            // clearest — and for such a row the generic advice
+                            // names two actions that both do nothing: Test
+                            // Connection probes on the host and cannot validate
+                            // it, and toggling Enabled runs the same skip.
+                            'Not connection-tested: this server runs in the code sandbox, which is fetched and mounted on the first real tool call.'
+                          : 'Connection has not been tested yet. Click Test Connection or toggle Enabled to run a probe.')
                       }
                     >
                       <Tag variant="outline" data-testid="mcp-health-untested">Untested</Tag>

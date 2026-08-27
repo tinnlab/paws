@@ -34,6 +34,12 @@
 //! there is deliberately no readiness wait here: one would be pure boot latency
 //! that cannot change a single verdict.
 //!
+//! That claim is about the SKIP, and only about the skip. The wording recorded
+//! alongside it does still depend on init order — at boot, `code_sandbox` has
+//! usually not published a status yet — so `sandbox_skip_reason` is written to
+//! be honest in that case rather than to guess, and points the operator at Test
+//! Connection, which runs in request context and can reach a real answer.
+//!
 //! **`run_in_sandbox` servers are skipped by ALL THREE.** Their
 //! connectivity requires the code_sandbox runtime, which initialises
 //! lazily on first use; probing them anyway either routes through an
@@ -227,7 +233,16 @@ pub async fn enforce_on_update_transition(
     if !transitioned_to_enabled || persisted.is_built_in || persisted.run_in_sandbox {
         // See enforce_on_create: a skipped sandboxed row records why, so the
         // badge stops showing a stale verdict the operator cannot clear.
-        if transitioned_to_enabled && persisted.run_in_sandbox && !persisted.is_built_in {
+        //
+        // NOT gated on `transitioned_to_enabled`. `run_in_sandbox` is mutable on
+        // a system row, so an admin can flip an already-enabled server between
+        // runtimes — and the health columns then describe the runtime it USED to
+        // use. That is worse now than before, because the untested branch
+        // deliberately surfaces the recorded reason: the product would state
+        // that a row runs in the sandbox when it no longer does. Re-recording on
+        // every update of a sandboxed row keeps the explanation and the runtime
+        // in agreement.
+        if persisted.run_in_sandbox && !persisted.is_built_in {
             if let Err(e) = record_health_check_on(
                 pool,
                 persisted.id,
@@ -348,22 +363,39 @@ pub async fn probe(pool: &PgPool, server: &McpServer) -> Result<(), ProbeFailure
 /// is disabled is a reassuring falsehood about a permanently broken row, and the
 /// operator has no other surface that would tell them.
 pub(super) fn sandbox_skip_reason() -> String {
-    use crate::modules::code_sandbox::config::SandboxAvailability::*;
+    use crate::modules::code_sandbox::config::SandboxAvailability as A;
     match crate::modules::code_sandbox::config::init_status() {
-        Ready => "Not connection-tested: this server runs in the code_sandbox, whose \
-                  runtime is fetched and mounted lazily. Its connection is established \
-                  on the first real tool call."
+        A::Ready => "Not connection-tested: this server runs in the code sandbox, whose \
+                     runtime is fetched and mounted lazily. Its connection is established \
+                     on the first real tool call."
             .to_string(),
-        NotInitialized => "Not connection-tested: this server runs in the code_sandbox, \
-                           which has not reported its status yet. If the sandbox is \
-                           available, the connection is established on the first real \
-                           tool call."
+        // NOT a hedge that reads as reassurance. The boot sweep is spawned from
+        // `mcp::init` (module order 65) and `code_sandbox::init` (order 70) has
+        // not published a status yet, so at boot this arm is the COMMON one —
+        // which means it must not say "if the sandbox is available, it will
+        // connect". It points at the one action that produces a current answer
+        // instead: Test Connection runs in request context, long after init, so
+        // it reaches a real verdict here.
+        A::NotInitialized => "Not connection-tested: this server runs in the code sandbox. \
+                              Whether the sandbox is available on this deployment was not \
+                              known when this was recorded — use Test Connection on the \
+                              server for a current answer."
             .to_string(),
+        // Operator-facing text, so describe the situation rather than printing
+        // the internal variant name.
         other => format!(
-            "Not connection-tested, and it cannot connect on this deployment: this \
-             server runs in the code_sandbox, but the sandbox is unavailable here \
-             ({other:?}). Enable and repair the code sandbox, or switch this server \
-             to a host-runnable command."
+            "Not connection-tested, and it cannot connect on this deployment: this server \
+             runs in the code sandbox, but the sandbox is unavailable here ({}). Enable and \
+             repair the code sandbox, or switch this server to a command that can run on \
+             the host.",
+            match other {
+                A::DisabledInConfig => "it is disabled in the server configuration",
+                A::HostUnsupported => "this host does not support it",
+                A::CloudImdsRefused => "startup checks refused to enable it on this cloud host",
+                A::WorkspaceInitFailed => "its workspace could not be initialised",
+                A::PoolMissing => "its runtime pool is missing",
+                A::Ready | A::NotInitialized => unreachable!("handled above"),
+            }
         ),
     }
 }

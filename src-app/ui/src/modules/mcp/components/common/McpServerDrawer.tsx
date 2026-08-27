@@ -30,6 +30,7 @@ import { McpUserPolicy } from '@/modules/mcp/stores/mcpUserPolicy'
 import { McpServer as McpServerStore } from '@/modules/mcp/stores/mcpServer'
 import { McpServerDrawer as McpServerDrawerStore } from '@/modules/mcp/stores/mcpServerDrawer'
 import { SandboxFlavors as SandboxFlavorsStore } from '@/modules/code-sandbox/stores/sandboxFlavors'
+import { showConnectionTestResult } from './connectionTestToast'
 
 /// Form-state row shape for env vars and HTTP headers in this drawer.
 /// `_was_saved_secret` is a hidden field set by the form initializer
@@ -668,18 +669,12 @@ export function McpServerDrawer() {
       const result = saved.is_system
         ? await SystemMcpServer.testSystemServerConnection(payload)
         : await McpServerStore.testMcpServerConnection(payload)
-      if (result.success) {
-        message.success(result.message || 'Connection successful')
-      } else if (saved.run_in_sandbox) {
-        // NOT a failure. Test Connection probes on the host and cannot reach a
-        // sandboxed server at all, so the backend answers `success: false` with
-        // an explanation and records the row `untested` rather than `unhealthy`.
-        // A red error toast would contradict the message it is carrying, whose
-        // own text says the server is fine.
-        message.info(result.message || 'Connection could not be tested')
-      } else {
-        message.error(result.message || 'Connection failed')
-      }
+      // Third arg is `notTestable`: Test Connection probes on the host and
+      // cannot reach a sandboxed server at all, so the backend answers
+      // `success: false` with an explanation and records the row `untested`
+      // rather than `unhealthy`. Routed through the shared helper rather than
+      // inlined — three copies of this branch is how they drift apart.
+      showConnectionTestResult(message, result, saved.run_in_sandbox)
 
       // The probe (sent with `id`) is recorded onto the persisted row's
       // `last_health_check_*` by the backend. Re-fetch + re-bind the drawer to
@@ -938,7 +933,19 @@ export function McpServerDrawer() {
         // Skipping is not a workaround, it is agreement with the server:
         // `enforce_on_create` skips the probe for a run_in_sandbox row too, so
         // a verdict gathered here would be discarded on save regardless.
-        if (vals.run_in_sandbox) {
+        //
+        // The predicate is NOT the raw `run_in_sandbox` field. That field is
+        // only rendered for the system modes, so in USER mode it is always
+        // false — while user policy force-sandboxes every user stdio server.
+        // Keying on the raw field left the worse half of the bug in place: a
+        // non-admin creating `Rscript` got the host-allowlist message telling
+        // them to enable a toggle their screen does not even show. This is the
+        // same predicate the command validator already uses (see `isSandboxed`
+        // above); the two must agree, which is why it is spelled the same way.
+        const sandboxed =
+          vals.transport_type === 'stdio' &&
+          (!isSystemMode || vals.run_in_sandbox === true)
+        if (sandboxed) {
           setEnabledValue(true)
           form.setValue('enabled' as any, true)
           message.info(
@@ -1087,10 +1094,17 @@ export function McpServerDrawer() {
     // no probe path has established — which would then be followed, in the
     // same hover, by a recorded reason saying reachability was never checked.
     const sandboxed = editingServer?.run_in_sandbox === true
+    // "reachable" is a claim about the last verdict, not about the row's kind.
+    // Assert it only when a probe actually established it: a sandboxed row has
+    // no verdict, and an `unhealthy` row has the opposite one — and since the
+    // boot sweep no longer disables, an unreachable row now STAYS enabled and
+    // would otherwise take the "reachable" baseline while the same tooltip goes
+    // on to print the failure underneath it.
+    const claimReachable = !sandboxed && healthStatus !== 'unhealthy'
     const baseline = enabledValue
-      ? sandboxed
-        ? 'Enabled — the server is offered to the LLM. Click to disable.'
-        : 'Enabled — the server is reachable and queried by the LLM. Click to disable.'
+      ? claimReachable
+        ? 'Enabled — the server is reachable and queried by the LLM. Click to disable.'
+        : 'Enabled — the server is offered to the LLM. Click to disable.'
       : sandboxed
         ? 'Disabled — the server is not started or queried. Click to enable.'
         : 'Disabled — the server is not started or queried. Click to enable (a connection test will run first).'
