@@ -42,6 +42,8 @@ mod list_tools_for_builder_test;
 // ============================================================================
 
 mod runtime;
+// The boot sweep must not host-probe or disable a sandboxed server.
+mod boot_probe_sandboxed_test;
 // Stdio transport tests (18 tests)
 mod http_transport_test;
 // HTTP transport tests (12 tests)

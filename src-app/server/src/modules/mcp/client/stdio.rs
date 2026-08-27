@@ -336,6 +336,31 @@ impl StdioMcpClient {
 
         // Security: Validate command against the host allowlist.
         if !HOST_ALLOWED_COMMANDS.contains(&cmd.as_str()) {
+            // Two very different situations reach this line, and telling them
+            // apart is the difference between an actionable message and a
+            // misleading one.
+            //
+            // If the row already has `run_in_sandbox`, the operator did NOT
+            // misconfigure anything — `should_sandbox()` returned false, which
+            // for a stdio row means `code_sandbox::config::get_state()` was
+            // None: the sandbox runtime is disabled or had not initialised yet.
+            // Telling that operator to "enable run-in-sandbox" points them at a
+            // flag their row already sets, and is what sent the investigation of
+            // an auto-disabled `Rscript` server down the wrong path.
+            if self.server_config.run_in_sandbox {
+                return Err(AppError::bad_request(
+                    "SANDBOX_UNAVAILABLE",
+                    format!(
+                        "Command '{}' requires the code_sandbox, and this server is \
+                         already configured to run in it — but the sandbox runtime is \
+                         not available in this process, so the launch fell back to the \
+                         host. Check that `code_sandbox.enabled: true` is set in the \
+                         server config and that the sandbox initialised at boot; the \
+                         host allowlist ({:?}) is not the constraint here.",
+                        cmd, HOST_ALLOWED_COMMANDS
+                    ),
+                ));
+            }
             return Err(AppError::bad_request(
                 "INVALID_COMMAND",
                 format!("Command '{}' is not allowed on the host. Allowed commands: {:?}. Enable run-in-sandbox to use any command.", cmd, HOST_ALLOWED_COMMANDS)
@@ -656,6 +681,57 @@ mod tests {
         assert!(client.server_config.run_in_sandbox);
         assert_eq!(client.server_config.transport_type, TransportType::Stdio);
         assert!(!client.server_config.is_system);
+    }
+
+    /// TEST-3 — the host-path rejection must name the REAL cause.
+    ///
+    /// A row with `run_in_sandbox: true` that reaches `create_command` did not
+    /// misconfigure anything: `should_sandbox()` was false, which for a stdio
+    /// row means the code_sandbox state was absent. Telling that operator to
+    /// "Enable run-in-sandbox" points at a flag their row already sets — the
+    /// message that sent the investigation of an auto-disabled `Rscript` server
+    /// down the wrong path.
+    #[test]
+    fn sandboxed_row_rejected_on_host_blames_the_sandbox_not_the_flag() {
+        let mut s = server_template();
+        s.command = Some("Rscript".into());
+        s.run_in_sandbox = true; // already set — the operator has nothing to fix
+        let client = StdioMcpClient::new(s).unwrap();
+
+        let err = client.create_command().expect_err("Rscript is not host-allowed");
+        let msg = format!("{err:?}");
+
+        assert!(
+            !msg.contains("Enable run-in-sandbox"),
+            "must not tell an operator to enable a flag their row already sets; got {msg}",
+        );
+        assert!(
+            msg.contains("code_sandbox") || msg.contains("sandbox runtime"),
+            "must name the sandbox runtime as the cause; got {msg}",
+        );
+    }
+
+    /// The other branch: a genuine HOST server with a disallowed command still
+    /// gets the allowlist message. Asserted so the fix cannot degrade into one
+    /// message for every case.
+    #[test]
+    fn host_row_with_disallowed_command_still_gets_the_allowlist_message() {
+        let mut s = server_template();
+        s.command = Some("Rscript".into());
+        s.run_in_sandbox = false; // a real host server
+        let client = StdioMcpClient::new(s).unwrap();
+
+        let err = client.create_command().expect_err("Rscript is not host-allowed");
+        let msg = format!("{err:?}");
+
+        assert!(
+            msg.contains("is not allowed on the host"),
+            "a genuine host server must still get the allowlist message; got {msg}",
+        );
+        assert!(
+            msg.contains("Enable run-in-sandbox"),
+            "and for THAT row the advice is correct and should remain; got {msg}",
+        );
     }
 
     #[test]

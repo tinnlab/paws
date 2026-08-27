@@ -324,6 +324,8 @@ pub async fn test_user_connection(
     // not user-supplied headers/OAuth — probe it through the shared helper.
     let response = if let Some(builtin) = existing.as_ref().filter(|s| s.is_built_in) {
         probe_builtin_server(&session_manager, builtin, auth.user.id).await
+    } else if let Some(sandboxed) = existing.as_ref().filter(|s| s.run_in_sandbox) {
+        sandboxed_server_not_testable(sandboxed)
     } else {
         let server =
             build_ephemeral_server(&request, Some(auth.user.id), false, existing.as_ref());
@@ -359,6 +361,33 @@ pub fn test_user_connection_docs(op: TransformOperation) -> TransformOperation {
         .response_with::<401, (), _>(|res| res.description("Unauthorized"))
 }
 
+/// Test Connection ALWAYS probes on the host: `TestMcpConnectionRequest` carries
+/// no `run_in_sandbox`, and [`build_ephemeral_server`] hardcodes it `false`
+/// ("Connectivity probe only — never routed through the code_sandbox"). For a
+/// stored row that DOES run in the sandbox, that means the probe cannot say
+/// anything true about the server — it would launch a guest-only command on the
+/// host and report the host allowlist as the reason, which is what sent the
+/// investigation of an auto-disabled `Rscript` server down the wrong path.
+///
+/// So say that, rather than returning a confident wrong answer. Making the route
+/// genuinely sandbox-capable is a larger change (a new public request field, an
+/// OpenAPI regen for both UI workspaces, and routing an ephemeral server through
+/// rootfs fetch/mount) and is recorded as a follow-up.
+fn sandboxed_server_not_testable(server: &McpServer) -> TestMcpConnectionResponse {
+    TestMcpConnectionResponse {
+        success: false,
+        message: format!(
+            "'{}' runs in the code_sandbox (sandbox_flavor: {}), and Test Connection \
+             probes on the host, so it cannot validate this server. This is a limit of \
+             the test, NOT a problem with the server: its connection is established \
+             lazily on the first real tool call, which is also when the sandbox rootfs \
+             is fetched and mounted.",
+            server.name, server.sandbox_flavor,
+        ),
+        tool_count: None,
+    }
+}
+
 /// Test a system MCP server configuration (admin). Stored OAuth secret reuse is
 /// gated on a matching URL, same as the user variant.
 #[debug_handler]
@@ -380,6 +409,8 @@ pub async fn test_system_connection(
     // the loopback route's RequirePermissions gate is satisfied.
     let response = if let Some(builtin) = existing.as_ref().filter(|s| s.is_built_in) {
         probe_builtin_server(&session_manager, builtin, auth.user.id).await
+    } else if let Some(sandboxed) = existing.as_ref().filter(|s| s.run_in_sandbox) {
+        sandboxed_server_not_testable(sandboxed)
     } else {
         let server = build_ephemeral_server(&request, None, true, existing.as_ref());
         run_connection_test(server, oauth).await

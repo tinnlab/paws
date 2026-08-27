@@ -11,13 +11,25 @@
 //!    `enabled: true` and the probe fails, downgrade to
 //!    `enabled: false` and return a warning so the row is preserved
 //!    for the user to edit + retry.
-//! 3. Boot — every enabled non-built-in MCP server is probed on
-//!    server startup; failures flip to `enabled: false` automatically
-//!    so users don't see broken servers in their tool lists.
+//! 3. Boot — every enabled non-built-in, non-sandboxed MCP server is
+//!    probed on server startup and its verdict RECORDED. Unlike (1) and
+//!    (2), the boot sweep never changes `enabled`: it runs with no human
+//!    present, against whatever transient state the machine booted into,
+//!    so flipping the flag there silently undoes an admin's
+//!    configuration. The health badge carries the failure instead.
 //!
 //! Built-in servers (files, memory, code_sandbox, memory_mcp)
 //! are SKIPPED — they're owned by the platform, not by user config,
 //! and their reachability is the platform's responsibility.
+//!
+//! **`run_in_sandbox` servers are skipped by ALL THREE.** Their
+//! connectivity requires the code_sandbox runtime, which initialises
+//! lazily on first use; probing them anyway either routes through an
+//! un-mounted sandbox or — if the sandbox state is not yet installed —
+//! falls back to the HOST path and false-fails any guest-only command
+//! against the host allowlist. That is not hypothetical: it is what
+//! auto-disabled a working `Rscript` server and told its admin to enable
+//! a `run_in_sandbox` flag the row already had.
 
 use crate::common::AppError;
 use crate::core::Repos;
@@ -287,9 +299,82 @@ pub async fn probe(pool: &PgPool, server: &McpServer) -> Result<(), ProbeFailure
     }
 }
 
+/// How long the boot sweep waits for `code_sandbox::init` to reach a verdict
+/// before probing anyway. Generous: `init` does host probes and rootfs version
+/// pinning, and a slow boot must not turn into a wrong health verdict.
+const SANDBOX_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Poll interval while waiting for that verdict.
+const SANDBOX_READY_POLL: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// Block until `code_sandbox::init` has reached a terminal
+/// [`SandboxAvailability`], or the bound expires. Returns the status observed.
+///
+/// **Why this exists.** `mcp` is module `order: 65` and `code_sandbox` is
+/// `order: 70`, and `mcp::init` spawns the boot sweep fire-and-forget — so on a
+/// multi-threaded runtime the sweep can run *before* `code_sandbox::init` calls
+/// `config::init_state`. `should_sandbox()` then sees `get_state() == None`,
+/// routes a sandboxed stdio server down the HOST path, and false-fails it
+/// against the host command allowlist. That is a race decided by luck; waiting
+/// on the dependency's own published status makes it a guarantee.
+///
+/// `set_init_status` is called on every exit path of `code_sandbox::init`
+/// (including the `enabled: false` early return), so this terminates for
+/// disabled deployments too. It is bounded regardless: a boot that never
+/// initialises code_sandbox at all must not hang the sweep forever.
+async fn await_sandbox_verdict() -> crate::modules::code_sandbox::config::SandboxAvailability {
+    await_verdict_with(
+        SANDBOX_READY_TIMEOUT,
+        crate::modules::code_sandbox::config::init_status,
+    )
+    .await
+}
+
+/// The bounded poll, with the status source injected.
+///
+/// Split out so the timeout branch is unit-testable without touching the
+/// process-wide `OnceCell` that backs `init_status()` — a test that set it
+/// would leak into every other test in the same binary and make the result
+/// order-dependent.
+async fn await_verdict_with<F>(
+    timeout: std::time::Duration,
+    read_status: F,
+) -> crate::modules::code_sandbox::config::SandboxAvailability
+where
+    F: Fn() -> crate::modules::code_sandbox::config::SandboxAvailability,
+{
+    use crate::modules::code_sandbox::config::SandboxAvailability;
+
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let status = read_status();
+        if status != SandboxAvailability::NotInitialized {
+            return status;
+        }
+        if std::time::Instant::now() >= deadline {
+            tracing::warn!(
+                timeout_secs = timeout.as_secs(),
+                "mcp::health: code_sandbox did not report an init verdict in time; \
+                 probing anyway. Sandboxed servers are skipped regardless, so this \
+                 affects only host-path servers.",
+            );
+            return status;
+        }
+        tokio::time::sleep(SANDBOX_READY_POLL).await;
+    }
+}
+
 /// Boot-time health check. Iterates every `enabled = true` MCP server
-/// that's not built-in, probes it, and flips `enabled = false` on
-/// any failure. Logs each transition.
+/// that's not built-in and records a health verdict for each.
+///
+/// It does **not** change `enabled`. A background sweep runs with no human
+/// present, against whatever transient state the machine booted into, and
+/// flipping `enabled = false` there silently undoes an admin's configuration —
+/// which is exactly what happened to a sandboxed `Rscript` server that was
+/// never broken in the first place. Recording `unhealthy` + the reason keeps the
+/// signal (the badge still shows it) without the destructive side effect.
+/// `enforce_on_create` / `enforce_on_update` still auto-disable, because there a
+/// human just acted and sees the result immediately.
 ///
 /// Runs as a fire-and-forget background task spawned from `mcp::init`
 /// — should NOT block boot. Built-in servers are owned by their
@@ -341,14 +426,55 @@ pub async fn run_startup_health_check(pool: PgPool) {
         return;
     }
 
+    // Wait for code_sandbox to reach a verdict before probing anything, so a
+    // sandboxed row is never mis-routed onto the host path by a boot race.
+    let sandbox_status = await_sandbox_verdict().await;
+
     tracing::info!(
         count = servers.len(),
+        sandbox_status = ?sandbox_status,
         "mcp::health: probing enabled MCP servers at startup",
     );
 
     for server in servers {
         let server_id = server.id;
         let server_name = server.name.clone();
+
+        // Skip `run_in_sandbox` servers — the SAME guard `enforce_on_create`
+        // (see its rationale above) and `enforce_on_update` already apply, and
+        // the reason it gives is precisely this bug: "if we probed the raw
+        // command on the host, false-fail any guest-only command". `Rscript` is
+        // a guest-only command; this sweep was the one call site missing the
+        // guard, so it probed on the host, false-failed, and disabled the row.
+        //
+        // Their connectivity genuinely requires the code_sandbox runtime (lazy
+        // rootfs fetch/mount + bwrap spawn), which is not ready at boot by
+        // design — it is fetched on first use. Record the skip rather than
+        // leaving a stale badge from a previous run.
+        if server.run_in_sandbox {
+            tracing::debug!(
+                server_id = %server_id,
+                server_name = %server_name,
+                "mcp::health: skipping sandboxed server (connectivity requires the \
+                 code_sandbox runtime, which initialises lazily on first use)",
+            );
+            if let Err(e) = record_health_check_on(
+                &pool,
+                server_id,
+                "untested",
+                Some(
+                    "Not probed at startup: this server runs in the code_sandbox, \
+                     whose runtime initialises lazily on first use. Its connectivity \
+                     is established on the first real tool call.",
+                ),
+            )
+            .await
+            {
+                tracing::warn!(error = ?e, server_id = %server_id, "mcp::health: failed to record skipped status (non-fatal)");
+            }
+            continue;
+        }
+
         match probe(&pool, &server).await {
             Ok(()) => {
                 tracing::debug!(
@@ -361,21 +487,16 @@ pub async fn run_startup_health_check(pool: PgPool) {
                 }
             }
             Err(failure) => {
+                // Recorded, NOT disabled — see this function's doc comment.
+                // The row stays as the admin configured it; the badge carries
+                // the failure.
                 tracing::warn!(
                     server_id = %server_id,
                     server_name = %server_name,
                     reason = %failure.reason,
-                    "mcp::health: auto-disabling unreachable MCP server",
+                    "mcp::health: MCP server unreachable at startup (recorded; \
+                     the server is left enabled)",
                 );
-                // Best-effort flip; if the UPDATE itself fails, log
-                // and keep going — next boot will retry.
-                if let Err(e) = disable_for_health_failure(&pool, server_id).await {
-                    tracing::error!(
-                        server_id = %server_id,
-                        error = ?e,
-                        "mcp::health: failed to auto-disable server",
-                    );
-                }
                 if let Err(e) = record_health_check_on(&pool, server_id, "unhealthy", Some(&failure.reason)).await {
                     tracing::warn!(error = ?e, server_id = %server_id, "mcp::health: failed to record unhealthy status (non-fatal)");
                 }
@@ -430,6 +551,73 @@ async fn record_health_check_on(
 
 #[cfg(test)]
 mod tests {
+    use crate::modules::code_sandbox::config::SandboxAvailability;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// TEST-5 — the readiness wait returns as soon as code_sandbox reports a
+    /// verdict, instead of racing it.
+    ///
+    /// The status source is injected rather than read from the process-wide
+    /// `OnceCell`: a test that set that cell would leak into every other test in
+    /// the same binary and make the result order-dependent.
+    #[tokio::test]
+    async fn await_verdict_returns_once_the_status_is_terminal() {
+        // NotInitialized on the first read, then Ready — the boot ordering this
+        // wait exists to make deterministic.
+        let reads = AtomicUsize::new(0);
+        let status = await_verdict_with(std::time::Duration::from_secs(5), || {
+            if reads.fetch_add(1, Ordering::SeqCst) == 0 {
+                SandboxAvailability::NotInitialized
+            } else {
+                SandboxAvailability::Ready
+            }
+        })
+        .await;
+
+        assert_eq!(status, SandboxAvailability::Ready);
+        assert!(
+            reads.load(Ordering::SeqCst) >= 2,
+            "must have polled again after the first NotInitialized read",
+        );
+    }
+
+    /// A deployment where code_sandbox never initialises at all must not hang
+    /// the sweep forever — the wait is bounded and returns what it saw.
+    #[tokio::test]
+    async fn await_verdict_is_bounded_when_the_status_never_settles() {
+        let started = std::time::Instant::now();
+        let status = await_verdict_with(std::time::Duration::from_millis(150), || {
+            SandboxAvailability::NotInitialized
+        })
+        .await;
+
+        assert_eq!(status, SandboxAvailability::NotInitialized);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "the wait must be bounded, not indefinite; took {:?}",
+            started.elapsed(),
+        );
+    }
+
+    /// A DISABLED code_sandbox is a terminal verdict too, so the wait returns
+    /// immediately rather than burning its whole budget on every boot of a
+    /// deployment that will never have a sandbox.
+    #[tokio::test]
+    async fn await_verdict_treats_disabled_in_config_as_settled() {
+        let started = std::time::Instant::now();
+        let status = await_verdict_with(std::time::Duration::from_secs(30), || {
+            SandboxAvailability::DisabledInConfig
+        })
+        .await;
+
+        assert_eq!(status, SandboxAvailability::DisabledInConfig);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "a disabled deployment must not wait out the timeout; took {:?}",
+            started.elapsed(),
+        );
+    }
+
     use super::*;
     use sqlx::postgres::PgPoolOptions;
 
@@ -449,15 +637,23 @@ mod tests {
     ///
     /// The test seeds an enabled HTTP server pointing at a closed loopback
     /// port (instant connection-refused, no network egress), simulates a boot
-    /// by calling `run_startup_health_check`, and asserts the unreachable
-    /// server was flipped to `enabled = false` with a persisted `unhealthy`
-    /// health record — exactly the recovery a real restart performs.
+    /// by calling `run_startup_health_check`, and asserts the failure was
+    /// RECORDED as `unhealthy`.
+    ///
+    /// It used to additionally assert the row was flipped to `enabled = false`.
+    /// That assertion was REMOVED, not weakened, because the behaviour it
+    /// pinned was itself the defect: a background sweep with no human present
+    /// silently undid an admin's configuration, and did so for servers it
+    /// should never have probed. The recovery this seam is responsible for is
+    /// the persisted HEALTH state — which is still asserted, and is what the
+    /// badge renders. Disabling remains the create/enable paths' job, where a
+    /// human just acted and sees the result. See DEC-2.
     ///
     /// DB-gated soft-skip (mirrors the suite's env-gated real-stack tests) so
     /// `cargo test --lib` without Postgres stays green; runs for real wherever
     /// `DATABASE_URL` points at a migrated DB.
     #[tokio::test]
-    async fn startup_health_check_auto_disables_unreachable_server_on_boot() {
+    async fn startup_health_check_records_unhealthy_without_disabling_on_boot() {
         let url = match std::env::var("DATABASE_URL") {
             Ok(u) => u,
             Err(_) => {
@@ -504,9 +700,8 @@ mod tests {
         // Simulate the boot recovery pass.
         run_startup_health_check(pool.clone()).await;
 
-        // Recovery outcome: the unreachable server was auto-disabled and its
-        // failure was recorded — the persisted health state the next-boot
-        // recovery is responsible for.
+        // Recovery outcome: the failure was recorded, and the row was left as
+        // the admin configured it.
         let (enabled_after, status): (bool, Option<String>) = sqlx::query_as(
             "SELECT enabled, last_health_check_status FROM mcp_servers WHERE id = $1",
         )
@@ -515,14 +710,16 @@ mod tests {
         .await
         .expect("re-read server after startup health check");
 
-        assert!(
-            !enabled_after,
-            "run_startup_health_check must auto-disable an unreachable server on boot"
-        );
         assert_eq!(
             status.as_deref(),
             Some("unhealthy"),
             "the boot probe failure must be recorded as an unhealthy health-check"
+        );
+        assert!(
+            enabled_after,
+            "run_startup_health_check must NOT disable a server: a background \
+             sweep runs with no human present and must not undo an admin's \
+             configuration. It records; create/enable disable. See DEC-2."
         );
 
         // Cleanup so repeated runs + sibling lib tests stay isolated.
