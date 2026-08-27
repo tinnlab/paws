@@ -22,6 +22,18 @@
 //! are SKIPPED — they're owned by the platform, not by user config,
 //! and their reachability is the platform's responsibility.
 //!
+//! **Boot ordering is settled by the skip, not by a wait.** `mcp` is module
+//! `order: 65` and `code_sandbox` is `order: 70`, and `mcp::init` spawns the
+//! boot sweep fire-and-forget, so the sweep can run before `code_sandbox::init`
+//! publishes its state. That race USED to decide the outcome: `should_sandbox()`
+//! saw no state, routed a sandboxed row down the host path, and false-failed it
+//! against the host allowlist. It no longer can, because the sweep never probes
+//! a `run_in_sandbox` row at all — and `should_sandbox()` requires
+//! `run_in_sandbox`, so no row the sweep still probes ever consults sandbox
+//! state. The guarantee is structural rather than timing-dependent, which is why
+//! there is deliberately no readiness wait here: one would be pure boot latency
+//! that cannot change a single verdict.
+//!
 //! **`run_in_sandbox` servers are skipped by ALL THREE.** Their
 //! connectivity requires the code_sandbox runtime, which initialises
 //! lazily on first use; probing them anyway either routes through an
@@ -299,71 +311,6 @@ pub async fn probe(pool: &PgPool, server: &McpServer) -> Result<(), ProbeFailure
     }
 }
 
-/// How long the boot sweep waits for `code_sandbox::init` to reach a verdict
-/// before probing anyway. Generous: `init` does host probes and rootfs version
-/// pinning, and a slow boot must not turn into a wrong health verdict.
-const SANDBOX_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-
-/// Poll interval while waiting for that verdict.
-const SANDBOX_READY_POLL: std::time::Duration = std::time::Duration::from_millis(50);
-
-/// Block until `code_sandbox::init` has reached a terminal
-/// [`SandboxAvailability`], or the bound expires. Returns the status observed.
-///
-/// **Why this exists.** `mcp` is module `order: 65` and `code_sandbox` is
-/// `order: 70`, and `mcp::init` spawns the boot sweep fire-and-forget — so on a
-/// multi-threaded runtime the sweep can run *before* `code_sandbox::init` calls
-/// `config::init_state`. `should_sandbox()` then sees `get_state() == None`,
-/// routes a sandboxed stdio server down the HOST path, and false-fails it
-/// against the host command allowlist. That is a race decided by luck; waiting
-/// on the dependency's own published status makes it a guarantee.
-///
-/// `set_init_status` is called on every exit path of `code_sandbox::init`
-/// (including the `enabled: false` early return), so this terminates for
-/// disabled deployments too. It is bounded regardless: a boot that never
-/// initialises code_sandbox at all must not hang the sweep forever.
-async fn await_sandbox_verdict() -> crate::modules::code_sandbox::config::SandboxAvailability {
-    await_verdict_with(
-        SANDBOX_READY_TIMEOUT,
-        crate::modules::code_sandbox::config::init_status,
-    )
-    .await
-}
-
-/// The bounded poll, with the status source injected.
-///
-/// Split out so the timeout branch is unit-testable without touching the
-/// process-wide `OnceCell` that backs `init_status()` — a test that set it
-/// would leak into every other test in the same binary and make the result
-/// order-dependent.
-async fn await_verdict_with<F>(
-    timeout: std::time::Duration,
-    read_status: F,
-) -> crate::modules::code_sandbox::config::SandboxAvailability
-where
-    F: Fn() -> crate::modules::code_sandbox::config::SandboxAvailability,
-{
-    use crate::modules::code_sandbox::config::SandboxAvailability;
-
-    let deadline = std::time::Instant::now() + timeout;
-    loop {
-        let status = read_status();
-        if status != SandboxAvailability::NotInitialized {
-            return status;
-        }
-        if std::time::Instant::now() >= deadline {
-            tracing::warn!(
-                timeout_secs = timeout.as_secs(),
-                "mcp::health: code_sandbox did not report an init verdict in time; \
-                 probing anyway. Sandboxed servers are skipped regardless, so this \
-                 affects only host-path servers.",
-            );
-            return status;
-        }
-        tokio::time::sleep(SANDBOX_READY_POLL).await;
-    }
-}
-
 /// Boot-time health check. Iterates every `enabled = true` MCP server
 /// that's not built-in and records a health verdict for each.
 ///
@@ -426,13 +373,8 @@ pub async fn run_startup_health_check(pool: PgPool) {
         return;
     }
 
-    // Wait for code_sandbox to reach a verdict before probing anything, so a
-    // sandboxed row is never mis-routed onto the host path by a boot race.
-    let sandbox_status = await_sandbox_verdict().await;
-
     tracing::info!(
         count = servers.len(),
-        sandbox_status = ?sandbox_status,
         "mcp::health: probing enabled MCP servers at startup",
     );
 
@@ -525,8 +467,8 @@ async fn disable_for_health_failure(
 
 /// Record a boot-probe health result against an explicit `pool` — the
 /// pool-taking twin of `McpRepository::record_health_check` (which writes via
-/// the global `Repos` pool). `run_startup_health_check` uses this so its list /
-/// record / disable all go through the one pool it was handed.
+/// the global `Repos` pool). `run_startup_health_check` uses this so its list
+/// and record both go through the one pool it was handed.
 async fn record_health_check_on(
     pool: &PgPool,
     server_id: Uuid,
@@ -551,73 +493,6 @@ async fn record_health_check_on(
 
 #[cfg(test)]
 mod tests {
-    use crate::modules::code_sandbox::config::SandboxAvailability;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    /// TEST-5 — the readiness wait returns as soon as code_sandbox reports a
-    /// verdict, instead of racing it.
-    ///
-    /// The status source is injected rather than read from the process-wide
-    /// `OnceCell`: a test that set that cell would leak into every other test in
-    /// the same binary and make the result order-dependent.
-    #[tokio::test]
-    async fn await_verdict_returns_once_the_status_is_terminal() {
-        // NotInitialized on the first read, then Ready — the boot ordering this
-        // wait exists to make deterministic.
-        let reads = AtomicUsize::new(0);
-        let status = await_verdict_with(std::time::Duration::from_secs(5), || {
-            if reads.fetch_add(1, Ordering::SeqCst) == 0 {
-                SandboxAvailability::NotInitialized
-            } else {
-                SandboxAvailability::Ready
-            }
-        })
-        .await;
-
-        assert_eq!(status, SandboxAvailability::Ready);
-        assert!(
-            reads.load(Ordering::SeqCst) >= 2,
-            "must have polled again after the first NotInitialized read",
-        );
-    }
-
-    /// A deployment where code_sandbox never initialises at all must not hang
-    /// the sweep forever — the wait is bounded and returns what it saw.
-    #[tokio::test]
-    async fn await_verdict_is_bounded_when_the_status_never_settles() {
-        let started = std::time::Instant::now();
-        let status = await_verdict_with(std::time::Duration::from_millis(150), || {
-            SandboxAvailability::NotInitialized
-        })
-        .await;
-
-        assert_eq!(status, SandboxAvailability::NotInitialized);
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(5),
-            "the wait must be bounded, not indefinite; took {:?}",
-            started.elapsed(),
-        );
-    }
-
-    /// A DISABLED code_sandbox is a terminal verdict too, so the wait returns
-    /// immediately rather than burning its whole budget on every boot of a
-    /// deployment that will never have a sandbox.
-    #[tokio::test]
-    async fn await_verdict_treats_disabled_in_config_as_settled() {
-        let started = std::time::Instant::now();
-        let status = await_verdict_with(std::time::Duration::from_secs(30), || {
-            SandboxAvailability::DisabledInConfig
-        })
-        .await;
-
-        assert_eq!(status, SandboxAvailability::DisabledInConfig);
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(1),
-            "a disabled deployment must not wait out the timeout; took {:?}",
-            started.elapsed(),
-        );
-    }
-
     use super::*;
     use sqlx::postgres::PgPoolOptions;
 

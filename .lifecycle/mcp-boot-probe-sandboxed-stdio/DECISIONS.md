@@ -73,3 +73,35 @@ rather than leaving whatever the previous run wrote.
 badge is stale, not retested". Silently skipping would preserve exactly that. Writing an
 explicit skipped/untested status makes the UI state match reality — the server was not
 probed, and cannot be from this path.
+
+### DEC-6: "could not test" is recorded as `untested`, not `unhealthy`
+
+**Resolution:** Both Test Connection routes map their outcome through
+`health_record_for(&response, not_testable)`. A sandboxed row — which the route cannot
+probe at all — records `untested` + the explanatory reason. `success` alone no longer
+decides the persisted status.
+
+**Basis:** Found in the DRIFT-1 pass, in DEC-4's own implementation. The helper answers
+`success: false` because no handshake happened, and the record block keyed off exactly
+that field, so the persisted verdict became `unhealthy` — a red badge carrying a message
+whose own text reads "This is a limit of the test, NOT a problem with the server", and the
+immediate re-creation of the red badge ITEM-1 exists to clear. Absence of evidence is not
+evidence of failure. `untested` is the vocabulary the card already falls back to
+(`McpServerCard.tsx:217`) and the one ITEM-1's skip writes, so both no-verdict paths now
+agree. Proven RED before fixing.
+
+### DEC-7: the frontend carries the skip reason; the generic advice stays as the fallback
+
+**Resolution:** `McpServerCard`'s `untested` badge and `McpServerDrawer`'s health tooltip
+prefer `last_health_check_reason` when present and fall back to the existing generic text
+when absent. Two files in `src-app/ui/`, no type or API change.
+
+**Basis:** Writing an explanation the UI throws away is not an explanation. Worse, the
+hardcoded fallback tells the admin to "Click Test Connection or toggle Enabled to run a
+probe" — and for a sandboxed row Test Connection cannot validate it (DEC-4) and toggling
+Enabled hits `enforce_on_update`'s identical skip. Both remedies are no-ops, which is this
+branch's own defect (an admin directed at a useless action) relocated into the frontend.
+The alternative — leave the UI alone and treat it as a follow-up — ships a state whose
+only visible artifact actively misdirects, so it was rejected. Scope is contained: the
+`untested` branch is the single such render site in the tree (`McpServerCard.tsx` is not
+mirrored in `desktop/ui`), and the change is additive with the prior text preserved.

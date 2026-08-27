@@ -111,6 +111,23 @@ async fn boot_sweep_does_not_host_probe_or_disable_a_sandboxed_stdio_server() {
     let (enabled_before, _, _) = row(&pool, id).await;
     assert!(enabled_before, "create must leave a sandboxed row enabled");
 
+    // Seed a STALE bad verdict first. Without this the `untested` assertion
+    // below is satisfied by the column default (`202607140180_mcp_schema.sql:42`
+    // defaults the column to 'untested', and the create path writes no health
+    // record for a sandboxed row) — so deleting the skip's `record_health_check_on`
+    // outright would still pass. Seeding makes the assertion prove a WRITE, which
+    // is the behaviour that matters here: the owner's row was left showing a red
+    // badge from a probe that should never have run, and the sweep is what clears
+    // it.
+    sqlx::query(
+        "UPDATE mcp_servers SET last_health_check_status = 'unhealthy', \
+         last_health_check_reason = 'stale verdict from a previous boot' WHERE id = $1",
+    )
+    .bind(id)
+    .execute(&pool)
+    .await
+    .expect("seed a stale unhealthy verdict");
+
     ziee::mcp_connection_health::run_startup_health_check(pool.clone()).await;
 
     let (enabled, status, reason) = row(&pool, id).await;
@@ -132,6 +149,16 @@ async fn boot_sweep_does_not_host_probe_or_disable_a_sandboxed_stdio_server() {
         Some("untested"),
         "a skipped sandboxed row should be recorded as untested rather than left \
          with a stale badge from a previous run; reason={reason_text}",
+    );
+    assert!(
+        !reason_text.contains("stale verdict"),
+        "the seeded stale reason must be overwritten, not left in place — that is \
+         what 'recorded' means here; reason={reason_text}",
+    );
+    assert!(
+        !reason_text.is_empty(),
+        "the skip must explain itself: an unexplained Untested badge is what the \
+         admin was already looking at",
     );
 
     pool.close().await;
@@ -229,6 +256,18 @@ async fn test_connection_reports_that_it_cannot_validate_a_sandboxed_server() {
     )
     .await;
 
+    // Same seeding rationale as TEST-1: `untested` is the column default, so
+    // without a stale value first, "recorded untested" and "wrote nothing" are
+    // indistinguishable.
+    sqlx::query(
+        "UPDATE mcp_servers SET last_health_check_status = 'unhealthy', \
+         last_health_check_reason = 'stale verdict from a previous boot' WHERE id = $1",
+    )
+    .bind(id)
+    .execute(&pool)
+    .await
+    .expect("seed a stale unhealthy verdict");
+
     let res = reqwest::Client::new()
         .post(server.api_url("/mcp/system-servers/test-connection"))
         .header("Authorization", format!("Bearer {}", admin.token))
@@ -267,6 +306,11 @@ async fn test_connection_reports_that_it_cannot_validate_a_sandboxed_server() {
     assert!(
         enabled,
         "Test Connection must not disable a server it could not even probe",
+    );
+    assert!(
+        reason.as_deref().is_some_and(|r| !r.contains("stale verdict")),
+        "the stale reason must be replaced by the not-testable explanation; \
+         reason={reason:?}",
     );
 
     pool.close().await;

@@ -348,8 +348,14 @@ impl StdioMcpClient {
             // flag their row already sets, and is what sent the investigation of
             // an auto-disabled `Rscript` server down the wrong path.
             if self.server_config.run_in_sandbox {
-                return Err(AppError::bad_request(
-                    "SANDBOX_UNAVAILABLE",
+                // Same code + status the module's other answer to this exact
+                // predicate uses (`user_policy::enforce::require_sandbox_state`,
+                // which also answers `get_state().is_none()`). One condition,
+                // one code: a second spelling would make the two indistinguish-
+                // able to a caller. 422 rather than 400 because nothing about
+                // the request is malformed — the deployment lacks a runtime.
+                return Err(AppError::unprocessable_entity(
+                    "MCP_SANDBOX_DISABLED",
                     format!(
                         "Command '{}' requires the code_sandbox, and this server is \
                          already configured to run in it — but the sandbox runtime is \

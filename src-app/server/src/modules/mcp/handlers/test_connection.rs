@@ -322,23 +322,31 @@ pub async fn test_user_connection(
 
     // A built-in loopback server authenticates with an internally-minted JWT,
     // not user-supplied headers/OAuth — probe it through the shared helper.
-    // A sandboxed row cannot be probed here at all (see
-    // `sandboxed_server_not_testable`), so its outcome is NOT a verdict about
-    // the server and must not be recorded as one.
-    let not_testable = existing.as_ref().is_some_and(|s| s.run_in_sandbox);
+    // `not_testable` is set BY the branch that runs, never computed in parallel
+    // with it: the built-in arm is evaluated first, so a row that were both
+    // built-in and sandboxed would be genuinely probed and must keep its real
+    // verdict. Deriving the flag independently would silently file that verdict
+    // as "untested".
+    let mut not_testable = false;
     let response = if let Some(builtin) = existing.as_ref().filter(|s| s.is_built_in) {
         probe_builtin_server(&session_manager, builtin, auth.user.id).await
     } else if let Some(sandboxed) = existing.as_ref().filter(|s| s.run_in_sandbox) {
+        not_testable = true;
         sandboxed_server_not_testable(sandboxed)
     } else {
         let server =
             build_ephemeral_server(&request, Some(auth.user.id), false, existing.as_ref());
         run_connection_test(server, oauth).await
     };
-    // Record the outcome on the persisted server (if `request.id`
-    // pointed at one). Lets the UI surface "last tested: …" outside
-    // the enable flow too. Non-fatal — log on failure.
-    if let Some(server_id) = request.id {
+    // Record the outcome on the persisted server. Gated on `existing`, NOT on
+    // `request.id` alone: `existing` comes from the ownership- and
+    // `is_system=false`-scoped lookup, so an id that did not resolve there is a
+    // row this caller may not act on. Writing health for it anyway let a
+    // *system* sandboxed row be stamped `unhealthy` with the host-allowlist
+    // message by anyone holding `mcp_servers::create` — re-creating on the
+    // system row the exact badge and wording this change exists to remove.
+    // Non-fatal — log on failure.
+    if let Some(server_id) = existing.as_ref().map(|s| s.id) {
         let (status, reason) = health_record_for(&response, not_testable);
         if let Err(e) = Repos.mcp.record_health_check(server_id, status, reason).await {
             tracing::warn!(error = ?e, server_id = %server_id, "mcp::health: failed to record test-connection result");
@@ -361,18 +369,6 @@ pub fn test_user_connection_docs(op: TransformOperation) -> TransformOperation {
         .response_with::<401, (), _>(|res| res.description("Unauthorized"))
 }
 
-/// Test Connection ALWAYS probes on the host: `TestMcpConnectionRequest` carries
-/// no `run_in_sandbox`, and [`build_ephemeral_server`] hardcodes it `false`
-/// ("Connectivity probe only — never routed through the code_sandbox"). For a
-/// stored row that DOES run in the sandbox, that means the probe cannot say
-/// anything true about the server — it would launch a guest-only command on the
-/// host and report the host allowlist as the reason, which is what sent the
-/// investigation of an auto-disabled `Rscript` server down the wrong path.
-///
-/// So say that, rather than returning a confident wrong answer. Making the route
-/// genuinely sandbox-capable is a larger change (a new public request field, an
-/// OpenAPI regen for both UI workspaces, and routing an ephemeral server through
-/// rootfs fetch/mount) and is recorded as a follow-up.
 /// Map a Test Connection outcome onto the persisted health record.
 ///
 /// `not_testable` is NOT a failure. `sandboxed_server_not_testable` answers with
@@ -395,6 +391,18 @@ fn health_record_for(
     }
 }
 
+/// Test Connection ALWAYS probes on the host: `TestMcpConnectionRequest` carries
+/// no `run_in_sandbox`, and [`build_ephemeral_server`] hardcodes it `false`
+/// ("Connectivity probe only — never routed through the code_sandbox"). For a
+/// stored row that DOES run in the sandbox, that means the probe cannot say
+/// anything true about the server — it would launch a guest-only command on the
+/// host and report the host allowlist as the reason, which is what sent the
+/// investigation of an auto-disabled `Rscript` server down the wrong path.
+///
+/// So say that, rather than returning a confident wrong answer. Making the route
+/// genuinely sandbox-capable is a larger change (a new public request field, an
+/// OpenAPI regen for both UI workspaces, and routing an ephemeral server through
+/// rootfs fetch/mount) and is recorded as a follow-up.
 fn sandboxed_server_not_testable(server: &McpServer) -> TestMcpConnectionResponse {
     TestMcpConnectionResponse {
         success: false,
@@ -429,17 +437,20 @@ pub async fn test_system_connection(
     // Built-in system servers (Skills/Workflows/…) authenticate via an
     // internally-minted JWT — probe the stored row through the shared helper so
     // the loopback route's RequirePermissions gate is satisfied.
-    // See the user route: a sandboxed row's outcome is not a verdict.
-    let not_testable = existing.as_ref().is_some_and(|s| s.run_in_sandbox);
+    // See the user route for both rules: the flag is set by the branch taken,
+    // and the health write is gated on the SCOPED lookup rather than on
+    // `request.id`.
+    let mut not_testable = false;
     let response = if let Some(builtin) = existing.as_ref().filter(|s| s.is_built_in) {
         probe_builtin_server(&session_manager, builtin, auth.user.id).await
     } else if let Some(sandboxed) = existing.as_ref().filter(|s| s.run_in_sandbox) {
+        not_testable = true;
         sandboxed_server_not_testable(sandboxed)
     } else {
         let server = build_ephemeral_server(&request, None, true, existing.as_ref());
         run_connection_test(server, oauth).await
     };
-    if let Some(server_id) = request.id {
+    if let Some(server_id) = existing.as_ref().map(|s| s.id) {
         let (status, reason) = health_record_for(&response, not_testable);
         if let Err(e) = Repos.mcp.record_health_check(server_id, status, reason).await {
             tracing::warn!(error = ?e, server_id = %server_id, "mcp::health: failed to record test-connection result");

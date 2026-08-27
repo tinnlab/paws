@@ -108,6 +108,13 @@ export function McpServerCard({
         : await McpServerStore.testMcpServerConnection(payload)
       if (result.success) {
         message.success(result.message || 'Connection successful')
+      } else if (server.run_in_sandbox) {
+        // NOT a failure. Test Connection probes on the host and cannot reach a
+        // sandboxed server at all, so the backend answers `success: false` with
+        // an explanation and records the row `untested` rather than `unhealthy`.
+        // A red error toast would contradict the message it is carrying, whose
+        // own text says the server is fine.
+        message.info(result.message || 'Connection could not be tested')
       } else {
         message.error(result.message || 'Connection failed')
       }

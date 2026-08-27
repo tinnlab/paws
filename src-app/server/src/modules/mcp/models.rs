@@ -245,11 +245,16 @@ pub struct McpServer {
     /// See migration 82.
     #[serde(default)]
     pub last_health_check_at: Option<DateTime<Utc>>,
-    /// "untested" | "healthy" | "unhealthy". Defaults to "untested"
-    /// for freshly-created rows that have never been probed.
+    /// "untested" | "healthy" | "unhealthy". "untested" means NO VERDICT:
+    /// either the row was never probed (the column default), or a probe path
+    /// declined to judge it. A sandboxed server is always the second case: no
+    /// probe path can validate one, because every path probes on the host
+    /// while its connectivity requires the code_sandbox runtime.
     #[serde(default = "default_health_status")]
     pub last_health_check_status: String,
-    /// Human reason on unhealthy. `None` on healthy / untested.
+    /// Human reason for the current status. Set on "unhealthy", and on the
+    /// declined-probe form of "untested". `None` on "healthy" and on a
+    /// never-probed row.
     #[serde(default)]
     pub last_health_check_reason: Option<String>,
 
