@@ -408,11 +408,14 @@ fn sandboxed_server_not_testable(server: &McpServer) -> TestMcpConnectionRespons
         success: false,
         message: format!(
             "'{}' runs in the code_sandbox (sandbox_flavor: {}), and Test Connection \
-             probes on the host, so it cannot validate this server. This is a limit of \
-             the test, NOT a problem with the server: its connection is established \
-             lazily on the first real tool call, which is also when the sandbox rootfs \
-             is fetched and mounted.",
-            server.name, server.sandbox_flavor,
+             probes on the host, so it cannot validate this server. {}",
+            server.name,
+            server.sandbox_flavor,
+            // Shared with the create / enable / boot skips so one row is never
+            // described two different ways depending on which path wrote last —
+            // and so this does not claim the server will connect on a deployment
+            // where the sandbox is unavailable.
+            crate::modules::mcp::connection_health::sandbox_skip_reason(),
         ),
         tool_count: None,
     }

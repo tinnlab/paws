@@ -360,10 +360,10 @@ impl StdioMcpClient {
                         "Command '{}' requires the code_sandbox, and this server is \
                          already configured to run in it — but the sandbox runtime is \
                          not available in this process, so the launch fell back to the \
-                         host. Check that `code_sandbox.enabled: true` is set in the \
-                         server config and that the sandbox initialised at boot; the \
-                         host allowlist ({:?}) is not the constraint here.",
-                        cmd, HOST_ALLOWED_COMMANDS
+                         host. Ask an administrator to check that the code sandbox is \
+                         enabled and initialised; the host allowlist is not the \
+                         constraint here.",
+                        cmd
                     ),
                 ));
             }

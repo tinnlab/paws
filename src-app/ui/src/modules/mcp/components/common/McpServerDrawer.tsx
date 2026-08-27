@@ -925,6 +925,29 @@ export function McpServerDrawer() {
 
       setTogglingEnable(true)
       try {
+        // A sandboxed row is not probed here at all, and must not be.
+        //
+        // Test Connection always probes on the HOST (the request type carries
+        // no run-in-sandbox flag and the ephemeral server hardcodes it false),
+        // so for a guest-only command it fails with the host allowlist as the
+        // reason and the advice "Enable run-in-sandbox" — which the operator
+        // has just ticked. That is the exact misdirection this whole area was
+        // fixed for, and on the create screen it is the first thing an admin
+        // meets.
+        //
+        // Skipping is not a workaround, it is agreement with the server:
+        // `enforce_on_create` skips the probe for a run_in_sandbox row too, so
+        // a verdict gathered here would be discarded on save regardless.
+        if (vals.run_in_sandbox) {
+          setEnabledValue(true)
+          form.setValue('enabled' as any, true)
+          message.info(
+            'Enabled in form. A sandboxed server cannot be connection-tested ' +
+              'from here — it connects on the first real tool call, when the ' +
+              'sandbox is fetched and mounted.',
+          )
+          return
+        }
         // Build a no-id TestMcpConnectionRequest from form values.
         // No `id` field → backend treats it as a one-shot ephemeral probe.
         const oauth = vals.oauth_enabled
@@ -1010,7 +1033,15 @@ export function McpServerDrawer() {
           return
         }
         McpServerDrawerStore.openMcpServerDrawer(saved, mode)
-        message.success('Server enabled — connection test passed')
+        // Only claim a test passed when one actually ran. The enable path
+        // skips the probe for a sandboxed row, so the unconditional wording
+        // asserted a passing test while the drawer could still be rendering a
+        // failure Alert for the same row from an older verdict.
+        message.success(
+          saved.run_in_sandbox
+            ? 'Server enabled. It is not connection-tested from here — a sandboxed server connects on the first real tool call.'
+            : 'Server enabled — connection test passed',
+        )
       } catch (error) {
         // Most likely cause: MCP_ENABLE_FAILED_HEALTH_CHECK from
         // the probe. Surface the reason verbatim, then refresh from
@@ -1050,9 +1081,19 @@ export function McpServerDrawer() {
   const healthStatus = editingServer?.last_health_check_status
   const healthReason = editingServer?.last_health_check_reason
   const formatHealthTooltip = () => {
+    // A sandboxed row gets its own baseline in BOTH directions. The generic
+    // "a connection test will run first" is false for it (enable skips the
+    // probe), and the generic "the server is reachable" asserts exactly what
+    // no probe path has established — which would then be followed, in the
+    // same hover, by a recorded reason saying reachability was never checked.
+    const sandboxed = editingServer?.run_in_sandbox === true
     const baseline = enabledValue
-      ? 'Enabled — the server is reachable and queried by the LLM. Click to disable.'
-      : 'Disabled — the server is not started or queried. Click to enable (a connection test will run first).'
+      ? sandboxed
+        ? 'Enabled — the server is offered to the LLM. Click to disable.'
+        : 'Enabled — the server is reachable and queried by the LLM. Click to disable.'
+      : sandboxed
+        ? 'Disabled — the server is not started or queried. Click to enable.'
+        : 'Disabled — the server is not started or queried. Click to enable (a connection test will run first).'
     // `untested` WITH a recorded reason means the probe was deliberately
     // skipped and the backend said why (a `run_in_sandbox` server, whose
     // connection is established lazily on the first real tool call). Surface

@@ -107,6 +107,21 @@ pub async fn enforce_on_create(
     // "Connectivity probe only — never routed through the code_sandbox"
     // rule the explicit Test Connection path already follows.
     if !server.enabled || server.is_built_in || server.run_in_sandbox {
+        // A skipped SANDBOXED row explains itself. Without this it lands on the
+        // column default `untested` with a NULL reason, and the card falls back
+        // to "Click Test Connection or toggle Enabled to run a probe" — two
+        // actions that are both no-ops for this row. It also gives an operator
+        // whose row carries a stale `unhealthy` badge a way to clear it:
+        // toggling Enabled now records a true verdict instead of silently
+        // leaving the old one on screen.
+        if server.run_in_sandbox && !server.is_built_in {
+            if let Err(e) =
+                record_health_check_on(pool, server.id, "untested", Some(&sandbox_skip_reason()))
+                    .await
+            {
+                tracing::warn!(error = ?e, server_id = %server.id, "mcp::health: failed to record sandbox skip (non-fatal)");
+            }
+        }
         return Ok(McpServerWithHealthWarning {
             server,
             connection_warning: None,
@@ -210,6 +225,20 @@ pub async fn enforce_on_update_transition(
     // (their connectivity needs the lazy code_sandbox runtime; the real
     // sandboxed connect surfaces genuine errors at use time).
     if !transitioned_to_enabled || persisted.is_built_in || persisted.run_in_sandbox {
+        // See enforce_on_create: a skipped sandboxed row records why, so the
+        // badge stops showing a stale verdict the operator cannot clear.
+        if transitioned_to_enabled && persisted.run_in_sandbox && !persisted.is_built_in {
+            if let Err(e) = record_health_check_on(
+                pool,
+                persisted.id,
+                "untested",
+                Some(&sandbox_skip_reason()),
+            )
+            .await
+            {
+                tracing::warn!(error = ?e, server_id = %persisted.id, "mcp::health: failed to record sandbox skip (non-fatal)");
+            }
+        }
         return Ok(persisted);
     }
 
@@ -311,6 +340,34 @@ pub async fn probe(pool: &PgPool, server: &McpServer) -> Result<(), ProbeFailure
     }
 }
 
+/// The single explanation every sandboxed-skip site gives, so one row cannot be
+/// described two different ways depending on which path wrote last.
+///
+/// It consults the sandbox's own published status rather than asserting. Saying
+/// "it connects on the first real tool call" on a deployment where code_sandbox
+/// is disabled is a reassuring falsehood about a permanently broken row, and the
+/// operator has no other surface that would tell them.
+pub(super) fn sandbox_skip_reason() -> String {
+    use crate::modules::code_sandbox::config::SandboxAvailability::*;
+    match crate::modules::code_sandbox::config::init_status() {
+        Ready => "Not connection-tested: this server runs in the code_sandbox, whose \
+                  runtime is fetched and mounted lazily. Its connection is established \
+                  on the first real tool call."
+            .to_string(),
+        NotInitialized => "Not connection-tested: this server runs in the code_sandbox, \
+                           which has not reported its status yet. If the sandbox is \
+                           available, the connection is established on the first real \
+                           tool call."
+            .to_string(),
+        other => format!(
+            "Not connection-tested, and it cannot connect on this deployment: this \
+             server runs in the code_sandbox, but the sandbox is unavailable here \
+             ({other:?}). Enable and repair the code sandbox, or switch this server \
+             to a host-runnable command."
+        ),
+    }
+}
+
 /// Boot-time health check. Iterates every `enabled = true` MCP server
 /// that's not built-in and records a health verdict for each.
 ///
@@ -331,10 +388,10 @@ pub async fn probe(pool: &PgPool, server: &McpServer) -> Result<(), ProbeFailure
 /// No event emission here: the `EventBus` is built AFTER module
 /// init, so it's not in scope at this stage. The on-save handlers
 /// (which DO have access via Axum Extension) emit the AutoDisabled
-/// event when they downgrade a server. UI pages re-fetch on mount,
-/// so a boot-time auto-disable is visible the next time the user
-/// opens the MCP servers list — no event channel needed for the
-/// boot path specifically.
+/// event when they downgrade a server. The boot sweep never downgrades,
+/// so it has nothing to announce; UI pages re-fetch on mount, which is
+/// how a boot-recorded health verdict reaches the badge — no event
+/// channel is needed for the boot path specifically.
 pub async fn run_startup_health_check(pool: PgPool) {
     // Test-only escape hatch (debug builds) — the SAME seam `enforce_on_create` /
     // `enforce_on_update` already honor. A test that seeds a fake-URL MCP server
@@ -351,11 +408,11 @@ pub async fn run_startup_health_check(pool: PgPool) {
         return;
     }
 
-    // Use the passed `pool` for every DB op (list / record / disable) rather
+    // Use the passed `pool` for every DB op (list / record) rather
     // than the process-global `Repos`. In production the two are the same pool
     // (`init_repositories` runs once at boot), but `run_startup_health_check`
     // takes a `pool` param and must be self-consistent: reading the server list
-    // via a different pool than the one it writes disables through is a latent
+    // via a different pool than the one it writes verdicts through is a latent
     // bug. It also makes the boot path independent of `Repos` init ordering
     // (e.g. the in-process test harness, where sibling tests re-`init_repositories`
     // the global factory concurrently — this is what let the boot-recovery unit
@@ -400,17 +457,9 @@ pub async fn run_startup_health_check(pool: PgPool) {
                 "mcp::health: skipping sandboxed server (connectivity requires the \
                  code_sandbox runtime, which initialises lazily on first use)",
             );
-            if let Err(e) = record_health_check_on(
-                &pool,
-                server_id,
-                "untested",
-                Some(
-                    "Not probed at startup: this server runs in the code_sandbox, \
-                     whose runtime initialises lazily on first use. Its connectivity \
-                     is established on the first real tool call.",
-                ),
-            )
-            .await
+            if let Err(e) =
+                record_health_check_on(&pool, server_id, "untested", Some(&sandbox_skip_reason()))
+                    .await
             {
                 tracing::warn!(error = ?e, server_id = %server_id, "mcp::health: failed to record skipped status (non-fatal)");
             }
@@ -498,11 +547,11 @@ mod tests {
 
     /// Drives the REAL boot-time `run_startup_health_check` — the
     /// restart/resume-after-crash recovery path (audit all-19618bab49c1):
-    /// on every server (re)start it re-probes each enabled, non-built-in
-    /// MCP server and auto-disables the ones that no longer connect, so a
-    /// process that crashed (or whose upstream MCP servers died while it was
-    /// down) recovers a coherent health state at the next boot instead of
-    /// leaving dead servers `enabled` in users' tool lists.
+    /// on every server (re)start it re-probes each enabled, non-built-in,
+    /// non-sandboxed MCP server and RECORDS the verdict, so a process that
+    /// crashed (or whose upstream MCP servers died while it was down)
+    /// recovers a coherent health state at the next boot rather than
+    /// rendering a badge left over from before the crash.
     ///
     /// This is the genuinely durable recovery seam: the in-memory pieces
     /// (`elicitation::registry` oneshot channels, live connection handles in

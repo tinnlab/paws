@@ -3770,9 +3770,10 @@ export interface McpServer {
   /**
    * "untested" | "healthy" | "unhealthy". "untested" means NO VERDICT:
    *  either the row was never probed (the column default), or a probe path
-   *  declined to judge it. A sandboxed server is always the second case: no
-   *  probe path can validate one, because every path probes on the host
-   *  while its connectivity requires the code_sandbox runtime.
+   *  declined to judge it. Sandboxed rows are always the second case today:
+   *  Test Connection is structurally host-only, and the create, enable and
+   *  boot paths deliberately skip them because the sandbox runtime is
+   *  fetched and mounted lazily on the first real tool call.
    */
   last_health_check_status?: string
   max_concurrent_sessions?: number
@@ -3908,9 +3909,10 @@ export interface McpServerWithHealthWarning {
   /**
    * "untested" | "healthy" | "unhealthy". "untested" means NO VERDICT:
    *  either the row was never probed (the column default), or a probe path
-   *  declined to judge it. A sandboxed server is always the second case: no
-   *  probe path can validate one, because every path probes on the host
-   *  while its connectivity requires the code_sandbox runtime.
+   *  declined to judge it. Sandboxed rows are always the second case today:
+   *  Test Connection is structurally host-only, and the create, enable and
+   *  boot paths deliberately skip them because the sandbox runtime is
+   *  fetched and mounted lazily on the first real tool call.
    */
   last_health_check_status?: string
   max_concurrent_sessions?: number

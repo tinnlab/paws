@@ -247,9 +247,10 @@ pub struct McpServer {
     pub last_health_check_at: Option<DateTime<Utc>>,
     /// "untested" | "healthy" | "unhealthy". "untested" means NO VERDICT:
     /// either the row was never probed (the column default), or a probe path
-    /// declined to judge it. A sandboxed server is always the second case: no
-    /// probe path can validate one, because every path probes on the host
-    /// while its connectivity requires the code_sandbox runtime.
+    /// declined to judge it. Sandboxed rows are always the second case today:
+    /// Test Connection is structurally host-only, and the create, enable and
+    /// boot paths deliberately skip them because the sandbox runtime is
+    /// fetched and mounted lazily on the first real tool call.
     #[serde(default = "default_health_status")]
     pub last_health_check_status: String,
     /// Human reason for the current status. Set on "unhealthy", and on the

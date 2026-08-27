@@ -108,8 +108,23 @@ async fn boot_sweep_does_not_host_probe_or_disable_a_sandboxed_stdio_server() {
     )
     .await;
 
-    let (enabled_before, _, _) = row(&pool, id).await;
+    // TEST-7 [covers: DRIFT-2.1] — create must not only leave the row enabled,
+    // it must say WHY it declined to probe. Without a reason the row sits at the
+    // column default `untested` with NULL, and the card falls back to "Click
+    // Test Connection or toggle Enabled to run a probe" — two actions that are
+    // both no-ops for a sandboxed row. That is the reported defect (an admin
+    // directed at a useless remedy) reappearing on the very first screen.
+    let (enabled_before, status_before, reason_before) = row(&pool, id).await;
     assert!(enabled_before, "create must leave a sandboxed row enabled");
+    assert_eq!(
+        status_before.as_deref(),
+        Some("untested"),
+        "a sandboxed row is not probed at create; it must read as untested",
+    );
+    assert!(
+        reason_before.as_deref().is_some_and(|r| !r.trim().is_empty()),
+        "the create-time skip must record its reason; got {reason_before:?}",
+    );
 
     // Seed a STALE bad verdict first. Without this the `untested` assertion
     // below is satisfied by the column default (`202607140180_mcp_schema.sql:42`
