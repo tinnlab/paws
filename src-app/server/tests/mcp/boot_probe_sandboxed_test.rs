@@ -29,6 +29,12 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 use uuid::Uuid;
 
 const ADMIN_PERMS: &[&str] = &["mcp_servers_admin::create"];
+/// The enable-toggle path is a PUT, so it needs `edit` as well. Kept separate
+/// from ADMIN_PERMS rather than widening it: the other tests must stay on the
+/// narrowest set that reaches their route, so an over-privileged user cannot
+/// mask a gating change.
+const ADMIN_EDIT_PERMS: &[&str] =
+    &["mcp_servers_admin::create", "mcp_servers_admin::edit"];
 
 /// The host-allowlist rejection. Its presence on a SANDBOXED row is the bug.
 const HOST_ALLOWLIST_MSG: &str = "is not allowed on the host";
@@ -174,6 +180,92 @@ async fn boot_sweep_does_not_host_probe_or_disable_a_sandboxed_stdio_server() {
         !reason_text.is_empty(),
         "the skip must explain itself: an unexplained Untested badge is what the \
          admin was already looking at",
+    );
+
+    pool.close().await;
+}
+
+/// TEST-8 [covers: DRIFT-3] — the remedy path. An operator whose sandboxed row
+/// carries a stale `unhealthy` badge fixes it by toggling Enabled, so that PUT
+/// must (a) record a true verdict and (b) return it, or the drawer rebinds to
+/// the row it just replaced and renders the old red Alert beside the success
+/// toast.
+///
+/// This is the path the originally-reported row takes after the fix ships, and
+/// it had no coverage at all.
+#[tokio::test]
+async fn enabling_a_sandboxed_server_records_and_returns_a_true_verdict() {
+    let server = crate::common::TestServer::start().await;
+    let admin = crate::common::test_helpers::create_user_with_permissions(
+        &server,
+        "boot_probe_admin_enable",
+        ADMIN_EDIT_PERMS,
+    )
+    .await;
+    let pool = test_pool(&server.database_url).await;
+
+    // Created DISABLED, exactly like a row the old boot sweep auto-disabled.
+    let id = create_system_server(
+        &server,
+        &admin.token,
+        json!({
+            "name": "boot-probe-enable",
+            "display_name": "Boot Probe Enable",
+            "transport_type": "stdio",
+            "command": "Rscript",
+            "args": ["-e", "rcpa.mcpserver::start_stdio_server()"],
+            "enabled": false,
+            "run_in_sandbox": true,
+            "sandbox_flavor": "full",
+        }),
+    )
+    .await;
+
+    // Stamp the reported row's exact damage onto it.
+    sqlx::query(
+        "UPDATE mcp_servers SET last_health_check_status = 'unhealthy', \
+         last_health_check_reason = $2 WHERE id = $1",
+    )
+    .bind(id)
+    .bind(HOST_ALLOWLIST_MSG)
+    .execute(&pool)
+    .await
+    .expect("seed the reported damage");
+
+    let res = reqwest::Client::new()
+        .put(server.api_url(&format!("/mcp/system-servers/{id}")))
+        .header("Authorization", format!("Bearer {}", admin.token))
+        .json(&json!({ "enabled": true }))
+        .send()
+        .await
+        .expect("PUT enabled=true failed to send");
+    let status = res.status();
+    let body = res.text().await.expect("body");
+    assert!(status.is_success(), "{status} — {body}");
+
+    // (b) the RESPONSE must carry the new verdict, not the pre-write row.
+    let returned: serde_json::Value = serde_json::from_str(&body).expect("PUT response JSON");
+    assert_eq!(
+        returned["last_health_check_status"].as_str(),
+        Some("untested"),
+        "the PUT response must reflect the write; returning the pre-write row is \
+         what leaves the old red Alert on screen next to the success toast. body={body}",
+    );
+    assert!(
+        !returned["last_health_check_reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains(HOST_ALLOWLIST_MSG),
+        "the response must not still carry the host-allowlist reason; body={body}",
+    );
+
+    // (a) and it must be persisted, not merely reported.
+    let (enabled, st, reason) = row(&pool, id).await;
+    assert!(enabled, "the row must actually be enabled");
+    assert_eq!(st.as_deref(), Some("untested"));
+    assert!(
+        reason.as_deref().is_some_and(|r| !r.contains(HOST_ALLOWLIST_MSG)),
+        "the stale reason must be replaced; reason={reason:?}",
     );
 
     pool.close().await;

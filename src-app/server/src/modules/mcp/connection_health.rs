@@ -120,12 +120,29 @@ pub async fn enforce_on_create(
         // whose row carries a stale `unhealthy` badge a way to clear it:
         // toggling Enabled now records a true verdict instead of silently
         // leaving the old one on screen.
-        if server.run_in_sandbox && !server.is_built_in {
+        //
+        // `server.enabled` is part of the guard because this arm is also entered
+        // for a DISABLED row, where the probe was skipped for that reason and
+        // not because the row is sandboxed. Writing "its connection is
+        // established on the first real tool call" plus a fresh
+        // `last_health_check_at` onto a disabled server would imply a probe ran
+        // and promise a connection nothing will attempt.
+        let mut server = server;
+        if server.enabled && server.run_in_sandbox && !server.is_built_in {
             if let Err(e) =
                 record_health_check_on(pool, server.id, "untested", Some(&sandbox_skip_reason()))
                     .await
             {
                 tracing::warn!(error = ?e, server_id = %server.id, "mcp::health: failed to record sandbox skip (non-fatal)");
+            } else if let Ok(Some(refetched)) = Repos.mcp.get_any_server(server.id).await {
+                // Re-fetch so the RESPONSE carries what was just written, the
+                // same as every other arm of this function. Returning the
+                // pre-write struct hands the client the row's previous health
+                // columns — on the enable path that is precisely the stale
+                // `unhealthy` + host-allowlist reason this write exists to
+                // replace, and the drawer would render its red Alert from it
+                // next to the success toast.
+                server = refetched;
             }
         }
         return Ok(McpServerWithHealthWarning {
@@ -252,6 +269,10 @@ pub async fn enforce_on_update_transition(
             .await
             {
                 tracing::warn!(error = ?e, server_id = %persisted.id, "mcp::health: failed to record sandbox skip (non-fatal)");
+            } else if let Ok(Some(refetched)) = Repos.mcp.get_any_server(persisted.id).await {
+                // See enforce_on_create: the response must carry the write, or
+                // the drawer rebinds to the stale verdict it just replaced.
+                return Ok(refetched);
             }
         }
         return Ok(persisted);

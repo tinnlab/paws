@@ -6,6 +6,8 @@
 - **TEST-4** (tier: integration) [covers: ITEM-5] file: `src-app/server/tests/mcp/boot_probe_sandboxed_test.rs` — asserts: `POST /mcp/system-servers/test-connection` for a STORED server whose row has `run_in_sandbox: true` reports that Test Connection cannot validate a sandboxed server, instead of the host-allowlist message. Pins the honesty fix.
 - **TEST-5** (tier: unit) [covers: ITEM-3] file: `src-app/server/src/modules/mcp/connection_health.rs` — asserts: the readiness wait returns promptly once `code_sandbox::config::init_status()` is terminal, and returns (rather than hanging) when it stays `NotInitialized` past the bound. Pins the ordering guarantee without needing a full boot.
 - **TEST-6** (tier: integration) [invariant: INV-2] [covers: DRIFT-1.2] file: `src-app/server/tests/mcp/boot_probe_sandboxed_test.rs` — asserts: Test Connection against a STORED sandboxed row records `last_health_check_status = "untested"`, not `"unhealthy"`, and leaves `enabled` alone. A test that could not run is not a failed test; recording it as one paints the badge red with a message that says the server is fine, and re-creates the badge TEST-1's skip clears. Proven RED by neutering `health_record_for`: `left: Some("unhealthy") right: Some("untested")`.
+- **TEST-7** (tier: integration) [covers: F-19] file: `src-app/server/tests/mcp/boot_probe_sandboxed_test.rs` — asserts: creating a sandboxed row records `untested` WITH a non-empty reason. Without it the row sits at the column default with a NULL reason and the card draws "Click Test Connection or toggle Enabled to run a probe" — the two actions that are no-ops for it. Proven RED: `the create-time skip must record its reason; got None`.
+- **TEST-8** (tier: integration) [covers: F-44, F-46] file: `src-app/server/tests/mcp/boot_probe_sandboxed_test.rs` — asserts: the remedy path. A disabled sandboxed row seeded with the reported damage verbatim is PUT `enabled: true`, and BOTH the persisted row AND the response carry a true verdict. Proven RED: the response came back `"last_health_check_status":"unhealthy","last_health_check_reason":"is not allowed on the host"` immediately after a successful enable — the stale red Alert the drawer renders next to the success toast.
 
 ## Note on ITEM-3 and what a test can honestly claim
 
@@ -15,3 +17,23 @@ of two module inits inside one process — the harness spawns whole binaries and
 schedule that. Stated here rather than implied: after ITEM-1 the race no longer produces
 the reported symptom at all, so ITEM-3 is defence-in-depth for any future
 `get_state()`-dependent boot work, and is tested at that level.
+
+## Known coverage gaps, stated rather than implied
+
+- **The frontend changes have no automated coverage.** The create-mode skip, the
+  toast tones, both tooltip branches and the card's sandbox-aware fallback are
+  covered only by `tsc`, the lints, the regenerated state matrix, and two blind
+  auditors reading them. Proper coverage is an E2E against a
+  `code_sandbox`-enabled deployment with a rootfs staged — disproportionate here,
+  and the repo has no MCP component-test harness to borrow. Named as a follow-up
+  rather than faked.
+- **The backfill migration is not exercised by a test.** It is verified to APPLY
+  (the harness rebuilds its template from migrations and all four integration
+  tests pass on it), but no test seeds a pre-migration damaged row and asserts it
+  was cleared. The statement is a single unconditional UPDATE with an explicit
+  WHERE; a test would restate it rather than check it.
+- **`sandbox_skip_reason`'s `Ready` branch is not reached by any test**, because
+  nothing in a test process sets the sandbox status. The two other branches are
+  reached (the test process yields `NotInitialized`, the server subprocess
+  `DisabledInConfig`).
+- **No macOS or Windows build.**
