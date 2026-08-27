@@ -3,7 +3,7 @@
 Each critique received, and what changed because of it. Recorded whether or not
 it required a code change.
 
-## HF-1 — the lead, on ITEM-5's test strategy (phase 4, before implementation)
+## FB-1 — the lead, on ITEM-5's test strategy (phase 4, before implementation)
 
 > "Prefer a DETERMINISTIC gate… treat any racing end-to-end spec as
 > corroboration rather than the gate itself. If you conclude a deterministic
@@ -22,7 +22,7 @@ as gaps in the test file and the PR body rather than shipped as timing-dependent
 specs. The first was written three times and removed after every version passed
 WITH the defect present.
 
-## HF-2 — the owner, on the hub skill and the desktop spec (phase 7)
+## FB-2 — the owner, on the hub skill and the desktop spec (phase 7)
 
 > "KEEP the seeded-hub-skill removal. DROP the desktop e2e spec — do not ship it…
 > remove the spec rather than leaving it skipped or ignored, and say in TESTS.md
@@ -36,7 +36,7 @@ one-row geometry under the desktop module set) is stated in TESTS.md, in
 TEST_RESULTS.md and in the PR body. Its TEST-ID was retired rather than carried,
 so the phase-8 gate is not asked to excuse an ID for a test that does not exist.
 
-## HF-3 — the owner, on the ITEM-5 redesign (phase 7)
+## FB-3 — the owner, on the ITEM-5 redesign (phase 7)
 
 > "option (b) — make ensure_running aware a validation is in flight for that
 > model, wait for it, and reuse the engine." Plus two constraints: "'loading' and
@@ -60,7 +60,7 @@ so the phase-8 gate is not asked to excuse an ID for a test that does not exist.
 The owner's instruction to "verify empirically against the live reproduction" is
 what found four of the five defects; reasoning had found one.
 
-## HF-4 — the lead, on idle time and stopping to report (phase 8)
+## FB-4 — the lead, on idle time and stopping to report (phase 8)
 
 > "83 percent idle… when you finish a phase and nothing genuinely requires the
 > owner's judgement, append your findings to STATUS.md and CONTINUE into the next
@@ -78,7 +78,7 @@ processes and two app instances from this worktree were still running. They have
 since been terminated, and the final review instance is the only process this
 branch leaves behind (its port and data dir are in STATUS.md).
 
-## HF-5 — the owner, on scope (phase 8)
+## FB-5 — the owner, on scope (phase 8)
 
 > "drop the separate PR for defects A and B… make sure both defects are written
 > up somewhere durable he can hand to a new worker… Those become briefs, not
@@ -101,4 +101,4 @@ Three of my own gates passed while their defect was present and were rewritten
 rather than kept (`FIX_ROUND-2..4.md`). Two fixture defects were caught by
 running negative controls, not by the tests going green. This is noted here
 because the discipline that caught them — reverting each fix and requiring the
-gate to fail — came directly from HF-1's framing.
+gate to fail — came directly from FB-1's framing.

@@ -188,3 +188,20 @@ Shipping 180s without fail-fast would have made the worst case three times worse
 **Verified at the shipped value, not a hand-set one:** a fresh first-boot instance
 reported `row=180 / coldefault=180` before any manual edit; that is the instance
 the passing run was performed on.
+
+## DEC-15 — orphaned extracted skill directories stay, and that is a choice
+
+**Decision:** migration `202607220100` deletes the three hidden-feature built-in
+skill ROWS but nothing removes the files they extracted to
+`<data_dir>/skills/builtin/<leaf>/`. Recorded as `wontfix` in the ledger
+(finding 18), not silently left.
+
+**Basis:** consistency with the migration's own stated scope, which names its
+three targets explicitly rather than reconciling. A general "delete anything no
+longer embedded" sweep would delete a built-in the moment a build shipped
+without it, including a broken build — a strictly worse failure than leaving
+dead files.
+
+**Impact assessed, not assumed:** with the row gone the skill is neither listed
+by `list_available_for_conversation` nor injected by the chat extension, so
+neither the model nor the UI can reach it. The residue is disk, not behaviour.
