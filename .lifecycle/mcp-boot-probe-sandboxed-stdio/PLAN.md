@@ -60,6 +60,22 @@ not be a silent side effect) and §6 (never silently swallow; preserve error con
   `TestMcpConnectionRequest` has no such field), so for a stored sandboxed row it must say
   so rather than emit the same misleading message.
 
+- **ITEM-6**: Every path that declines to probe a sandboxed row RECORDS why, in one
+  shared wording that consults the sandbox's actual status rather than asserting the
+  server will connect. Added after the blind audit: writing an explanation the UI throws
+  away, or one that promises a connection on a deployment that can never make it, is the
+  reported defect wearing a different hat.
+- **ITEM-7**: The create screens must not host-probe a row that will run sandboxed —
+  using the same predicate the drawer's command validator already uses, so USER stdio
+  (which policy force-sandboxes, and whose screen has no toggle) is covered too.
+- **ITEM-8**: Clear the verdicts the bug already produced. Affected rows were left
+  `enabled = false` by the bug itself and the sweep lists only enabled rows, so the code
+  fix alone never reaches them. Data-only; `enabled` is deliberately NOT restored.
+- **ITEM-9**: The operator-facing surfaces carry the truth: the badge and tooltips show
+  the recorded reason instead of advice that is a no-op for the row, the toasts do not
+  render "could not test" as a failure, and no message asserts reachability that no probe
+  established.
+
 ## Files to touch
 
 - `src-app/server/src/modules/mcp/connection_health.rs` — ITEM-1, ITEM-2, ITEM-3.
