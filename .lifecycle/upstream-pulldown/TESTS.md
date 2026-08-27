@@ -82,3 +82,19 @@ this feature's coverage:
   must be EMPTY — the mechanical check that no gitlink moved, no stray OpenAPI tree
   landed, and the diff really is backend-only (which is also what makes the phase-3
   frontend e2e rule inapplicable).
+
+## Withdrawn from the enumerated set (kept here so the withdrawal is visible)
+
+These three were originally enumerated as **TEST-29**, **TEST-30** and **TEST-31**.
+They are withdrawn — not deleted, and not silently dropped — because they are NOT this
+feature's tests. Two are pre-existing paws guards and one is a shell assertion; this
+branch runs all three and all three pass, but the A11 rule refuses to let a branch
+record an earned PASS for a test it did not author, and it is right to.
+
+They live on as **Controls** in TEST_RESULTS.md, with their commands and observed
+results, and as hygiene rules H1/H2 in PLAN.md. Nothing was lost; it was reclassified.
+Recorded as DEC-14.
+
+Withdrawn ID TEST-29 → Control: `src-app/server/tests/llm_repository/default_model_seed_test.rs`, a paws-only pre-existing test. Ran, PASSED.
+Withdrawn ID TEST-30 → Control: `src-app/server/tests/migration_immutability.rs`, the pre-existing guard this branch deliberately does not touch. Ran, PASSED.
+Withdrawn ID TEST-31 → Control: a shell hygiene assertion, never a code test; recording it as a `TEST-N` was the original error.
