@@ -161,3 +161,101 @@ what happens when one goes away?
   from the ziee-ai/hub GitHub release on every cargo build". That is stale —
   the helper's own header documents the Pages-migration rewrite to a tracked
   in-repo snapshot. Not corrected here; recorded as a follow-up.)
+
+---
+
+## ITEM-5 — final empirical verification (2026-08-26, redesign per owner option (b))
+
+Instance: `/tmp/paws-uipolish-2`, port 8126, own `XDG_DATA_HOME`, embedded PG :50001.
+Fresh first-run setup, so `auto_start_timeout_secs` came from the SHIPPED default —
+verified `row=180 / coldefault=180` straight after boot, NOT hand-set. The owner's
+requirement ("either ship the changed default or demonstrate the fix at the value
+that actually ships") is therefore met by the fresh-install path itself.
+
+### What the repro sequence was
+
+Real repository download (unsloth `Qwen3-0.6B-GGUF`, `Qwen3-0.6B-Q2_K.gguf`,
+296,238,784 bytes — size asserted each run), then a chat send issued while
+`llm_models.validation_status` still read `processing`. That state was read from
+the DB at send time and is quoted in each run below, so "inside the window" is
+evidence, not assumption.
+
+### Run log — four runs, three of which FAILED, and why that matters
+
+| run | build | validation at send | result |
+|---|---|---|---|
+| 1 | de-dup + drain only | processing | `Model instance already running already exists`, empty message |
+| 2 | + `Liveness::Starting`, 180s default | processing | `did not become healthy in time` — **invalid run**, see below |
+| 3 | + fail-fast + honest `status()` | processing | engine ran, chat processed, **0 content blocks** |
+| 4 | + validation hand-off | processing | **ANSWER RETURNED, no reload** |
+
+**Run 2 proved nothing and is not counted as evidence.** Its model file was a
+134-byte git-LFS POINTER, not a GGUF — a defect in MY repro setup (re-downloading
+the same repo reused the git cache, whose working tree held the pointer). The
+engine died in 27ms with `invalid magic characters: 'vers', expected 'GGUF'`.
+Subsequent runs wipe `cache/git` first and assert the 296 MB size before sending.
+Recording this rather than quietly re-running it: a green-after-N-tries claim with
+the failures elided is not a verification.
+
+Run 2 was still USEFUL — it surfaced two real defects (below) that a clean run
+would have hidden.
+
+### The four defects this sequence found, in the order they were exposed
+
+1. **Double Tier-2 enqueue** (`uploads.rs:347` + `:1365`). Fixed earlier; run 4's
+   log shows `validator: enqueued` exactly ONCE.
+
+2. **The single-flight was not cancellation-safe.** `tokio::sync::OnceCell`'s init
+   future ran inline in whichever caller arrived first. The validator wraps its
+   `ensure_running` in an OUTER `timeout`; when that fired it DROPPED the future,
+   cancelling init mid-spawn while the child kept running. `OnceCell` handed init
+   to the next waiter — the chat — which re-entered `do_start` and collided with
+   the live child. Run 1's collision landed **90s after the spawn, to the second**,
+   exactly the old flat `TIER2_HEALTH_DEADLINE_SECS = 90`. Fixed by running the
+   leader in a detached `tokio::spawn` with waiters observing a `watch` channel,
+   and by deriving the validator's outer deadline from `auto_start_timeout_secs`
+   so it can never again be shorter than the bound it wraps.
+
+3. **`status()` reported a zombie as running.** `Child::id()` keeps returning
+   `Some` for a child that exited but was never waited on. Observed directly: the
+   engine sat as `Z (defunct)` while the server polled `/health` for the full
+   180s. This ALSO defeated the new `Liveness::Starting` arm, which would have
+   read a dead engine as "still loading" — strictly worse than the old behaviour.
+   Fixed by making `status()` use `try_wait()` under a write lock, which reaps the
+   zombie as a side effect.
+
+4. **Validation tore down the engine its own waiter was waiting for.** Draining
+   closed the window where a send was already forwarding, but not the one before
+   it: a chat inside `ensure_running` holds an in-flight guard and has not issued
+   its request, so the drain waits on a counter its own waiter holds, times out,
+   and kills the engine at the instant the waiter is told it is ready. Run 3
+   measured `stopped gracefully` at `19:27:16.946319` and `Finalize called` at
+   `19:27:16.946730` — **0.4ms apart**, assistant message empty, and no error
+   logged anywhere. Fixed by making validation HAND OFF: if `inflight > 0` it
+   leaves the healthy engine running and lets the idle reaper own eviction.
+
+### Run 4 — the passing run, in full
+
+```
+19:36:45  validator: enqueued model 9c1d7017… tier Tier2        <- ONCE
+19:36:47  Using runtime version: llamacpp v0.0.3-alpha          <- ONE spawn
+19:37:09  validator: model 9c1d7017… validated and has 1 in-flight
+          request(s) — leaving the engine running for them;
+          the idle reaper will evict it                          <- hand-off
+19:39:32  Finalize called for message_id=e5693c33…               <- answered
+```
+
+Assistant message content: `"</think>\n</think>"`. That is garbage TEXT, and it is
+supposed to be — a 0.6B model at Q2_K produces nonsense. The claim being verified is
+that a response streams back at all without a reload, which is what failed before.
+Absent from run 4's log: `already exists`, `stream failed to start`,
+`did not become healthy`, and any `stopped gracefully` during the chat.
+
+### Follow-up NOT fixed here (deliberately out of scope)
+
+A model created from a 134-byte LFS pointer is accepted as a valid model
+(`Model created successfully: 2 files, 886 total size`). Tier-2 validation does
+flag it (`validation_warning`), and chat does not consult validation status before
+attempting a send — arguably correct, since a warning is not a block. Recording it
+because it was observed, not asserting it is a bug. This branch is already HEAVY;
+it is not growing further for it.

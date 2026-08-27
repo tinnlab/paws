@@ -135,3 +135,56 @@ and the owner's running process is not killed. The desktop binary is
 produced by the server crate and will not open a window.
 **Basis:** user — standing instruction in the task brief, plus the binary-name
 trap the brief calls out explicitly.
+
+---
+
+## DEC-13 — ITEM-5's fix is FOUR changes, not one, because the repro found four defects
+
+**Decision:** ship, as one coherent change to the local-runtime start path:
+(a) a cancellation-safe single-flight (detached leader + `watch`), (b) a
+`Liveness::Starting` state distinct from `Crashed`, (c) an honest
+`LocalDeployment::status()` that reaps via `try_wait()` instead of trusting
+`Child::id()`, and (d) validation HANDING OFF a healthy engine to a waiting
+request instead of draining-and-killing it. Plus the shipped-default change
+(DEC-14).
+
+**Basis:** owner — "option (b): make ensure_running aware a validation is in
+flight for that model, wait for it, and reuse the engine", and "'loading' and
+'crashed' must become distinguishable states — a fix that only widens the timing
+window would leave a user able to brick a model by sending a few messages too
+early."
+
+**Why not fewer changes.** Each was found by the live reproduction failing, not by
+reasoning, and each one alone leaves the symptom intact:
+- without (a) the chat collides with the validation's engine (`already exists`);
+- without (c) the `Starting` state of (b) reads a zombie as "still loading" and
+  waits forever — (b) is actively WORSE without (c);
+- without (d) the engine is killed 0.4ms before the chat is told it is ready.
+The evidence for each is in INFRA_INTEGRATION.md with timestamps.
+
+**Note on (b) and the flap cap.** The owner's correctness point is honoured: the
+`Starting` arm records NO `HealthEvent` on any outcome. A slow load can no longer
+feed the 5-crashes-in-60s cap, so a user cannot brick a model by sending a few
+messages while it loads.
+
+## DEC-14 — ship a 180s `auto_start_timeout_secs` default (was 30s)
+
+**Decision:** new migration `202607220200` sets the column default to 180 and
+updates existing rows **only where the value is still exactly 30**, leaving any
+operator's deliberate choice alone. The Rust-side fallbacks
+(`runtime_settings/models.rs`, `auto_start.rs`) move to 180 to match.
+
+**Basis:** owner — "the SHIPPED default of 30s is shorter than a real model load…
+either ship the changed default or demonstrate the fix at the value that actually
+ships, because a green run under a config no user has is not evidence."
+
+**Why 180 and not more.** The setting also bounds how long a user waits on an
+engine that will never come up. The column CHECK allows 1..600, so a slower host
+can raise it. Crucially, raising the default is only safe BECAUSE of the
+fail-fast in DEC-13(c): a genuinely broken model now fails in milliseconds
+(measured: 27ms for a corrupt GGUF) instead of costing the user the full timeout.
+Shipping 180s without fail-fast would have made the worst case three times worse.
+
+**Verified at the shipped value, not a hand-set one:** a fresh first-boot instance
+reported `row=180 / coldefault=180` before any manual edit; that is the instance
+the passing run was performed on.

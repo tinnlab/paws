@@ -109,17 +109,36 @@ export default (set: LlmProviderSet, get: LlmProviderGet) =>
 
     if (inFlight) {
       // A load is already outstanding.
-      if (!force) return inFlight
+      //
+      // A NON-forced caller joins it — one HTTP round-trip, and `await` means
+      // what callers assume. It is deliberately made non-rejecting: before this
+      // rewrite the `|| state.loading` guard returned an already-resolved
+      // promise, so a joiner could never throw. `createLlmModel` awaits exactly
+      // this call after a successful POST, so letting an unrelated concurrent
+      // refresh's failure propagate would surface "Failed to create model" for
+      // a model that WAS created. The load's own error is still recorded on
+      // `state.error` by `fetchAll`.
+      if (!force) return inFlight.catch(() => undefined)
       if (queuedForced) return queuedForced
-      // Re-run once the current load settles. `.catch(() => {})` on the WAIT is
-      // deliberate: a failed predecessor must not cancel the refresh the caller
-      // asked for — the re-run has its own error handling.
-      const queued = inFlight
-        .catch(() => undefined)
-        .then(() => start())
-        .finally(() => {
-          if (queuedForced === queued) queuedForced = null
-        })
+
+      // Forced + in flight → re-run AFTER the current load settles, because the
+      // in-flight request may predate the change this call is reacting to.
+      //
+      // `queuedForced` is cleared when the re-run STARTS, not when it finishes.
+      // Clearing it in `.finally()` left a window with both handles non-null:
+      // a forced call arriving while the queued re-run's HTTP request was
+      // already outstanding took the `if (queuedForced)` branch and was
+      // coalesced into a request issued BEFORE its own change — the precise
+      // failure this branch exists to avoid, just one layer further in. Now
+      // such a call sees `queuedForced === null`, falls through to schedule its
+      // own re-run behind the current one, and is not lost.
+      //
+      // `.catch(() => undefined)` on the WAIT is deliberate: a failed
+      // predecessor must not cancel the refresh the caller asked for.
+      const queued = inFlight.catch(() => undefined).then(() => {
+        queuedForced = null
+        return start()
+      })
       queuedForced = queued
       return queued
     }

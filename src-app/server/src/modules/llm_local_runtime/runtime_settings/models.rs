@@ -28,7 +28,9 @@ impl Default for RuntimeSettings {
     fn default() -> Self {
         Self {
             idle_unload_secs: 1800,
-            auto_start_timeout_secs: 30,
+            // Matches migration 202607220200 — 30s was shorter than a real
+            // model load, so the first chat after selecting a model timed out.
+            auto_start_timeout_secs: 180,
             drain_timeout_secs: 30,
             engine_release_cache_ttl_secs: 3600,
             created_at: Utc::now(),

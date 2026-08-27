@@ -188,4 +188,72 @@ describe('loadLlmProviders — forced refresh vs in-flight load', () => {
     await load(true) // forced → fetches
     expect(listCalls, 'force still forces when nothing is in flight').toBe(2)
   })
+
+  // ── Findings from the blind audit round 1 ──────────────────────────────
+
+  test('TEST-16e: a forced call arriving DURING the queued re-run is not coalesced into it', async () => {
+    const { load, snapshot } = makeAction()
+
+    // call 0 = the original load; call 1 = the queued re-run; call 2 = the
+    // re-run this test's second forced call must earn for itself.
+    gate[0] = deferred<void>()
+    gate[1] = deferred<void>()
+
+    const first = load()
+    await Promise.resolve()
+
+    const forcedA = load(true) // queues re-run (call 1)
+    gate[0].resolve()
+    await first
+
+    // Let the queued re-run actually ISSUE its request, so we are inside the
+    // window where `inFlight` and `queuedForced` were both non-null before.
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(listCalls, 'the queued re-run has started').toBe(2)
+
+    // A second sync frame lands NOW. Pre-fix this returned the queued promise
+    // and scheduled nothing, so the refresh was silently dropped.
+    const forcedB = load(true)
+
+    gate[1].resolve()
+    await forcedA
+    await forcedB
+
+    expect(
+      listCalls,
+      'a forced call during the queued re-run must earn its own fetch',
+    ).toBe(3)
+    const providers = snapshot().providers as { name: string }[]
+    expect(providers.map(p => p.name), 'the store holds the LAST fetch').toEqual([
+      'call2',
+    ])
+  })
+
+  test('TEST-16f: a non-forced joiner does not reject when the load it joined fails', async () => {
+    const { load } = makeAction()
+    gate[0] = deferred<void>()
+
+    // Make call 0 fail.
+    ;(ApiClient.LlmProvider.list as unknown as { mockImplementationOnce: Function })
+      .mockImplementationOnce(async () => {
+        await gate[0].promise
+        throw new Error('boom')
+      })
+
+    const first = load()
+    await Promise.resolve()
+    const joiner = load() // non-forced → joins
+
+    gate[0].resolve()
+
+    // The ORIGINATING call still rejects — its caller asked for the load and is
+    // entitled to the error.
+    await expect(first).rejects.toThrow('boom')
+
+    // The JOINER must not. `createLlmModel` awaits this after a successful
+    // POST; letting an unrelated refresh's failure through would tell the user
+    // the model failed to create when it did not.
+    await expect(joiner).resolves.toBeUndefined()
+  })
 })

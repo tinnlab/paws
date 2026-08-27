@@ -23,7 +23,10 @@ async fn get_returns_defaults() {
     let admin = create_user_with_permissions(&server, "admin", LOCAL_RUNTIME_ADMIN_PERMS).await;
     let s = get_settings(&server, &admin.token).await;
     assert_eq!(s["idle_unload_secs"].as_i64(), Some(1800));
-    assert_eq!(s["auto_start_timeout_secs"].as_i64(), Some(30));
+    // 180, not 30: migration 202607220200 raised the shipped default because
+    // 30s was shorter than a real model load (measured 70-90s for a 296MB Q2_K
+    // GGUF), so the first chat after selecting a local model timed out.
+    assert_eq!(s["auto_start_timeout_secs"].as_i64(), Some(180));
     assert_eq!(s["drain_timeout_secs"].as_i64(), Some(30));
 }
 
@@ -59,8 +62,9 @@ async fn partial_patch_preserves_other_fields() {
 
     let s = get_settings(&server, &admin.token).await;
     assert_eq!(s["idle_unload_secs"].as_i64(), Some(60));
-    // Defaults preserved.
-    assert_eq!(s["auto_start_timeout_secs"].as_i64(), Some(30));
+    // Defaults preserved (auto-start default is 180 as of migration
+    // 202607220200 — see `get_returns_defaults`).
+    assert_eq!(s["auto_start_timeout_secs"].as_i64(), Some(180));
     assert_eq!(s["drain_timeout_secs"].as_i64(), Some(30));
 }
 
