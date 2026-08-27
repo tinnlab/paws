@@ -253,8 +253,22 @@ export function McpServerCard({
                       </Tooltip>
                     )
                   }
+                  // A recorded reason on an `untested` row means the probe
+                  // was deliberately SKIPPED and the backend explained why —
+                  // today, a `run_in_sandbox` server, whose connection is
+                  // established lazily on the first real tool call. Show that
+                  // instead of the generic advice: for such a server both
+                  // suggested actions are no-ops (Test Connection probes on
+                  // the host and cannot validate it; toggling Enabled runs
+                  // the same skip), so the generic text would send the admin
+                  // after remedies that do nothing.
                   return (
-                    <Tooltip title="Connection has not been tested yet. Click Test Connection or toggle Enabled to run a probe.">
+                    <Tooltip
+                      title={
+                        server.last_health_check_reason ??
+                        'Connection has not been tested yet. Click Test Connection or toggle Enabled to run a probe.'
+                      }
+                    >
                       <Tag variant="outline" data-testid="mcp-health-untested">Untested</Tag>
                     </Tooltip>
                   )

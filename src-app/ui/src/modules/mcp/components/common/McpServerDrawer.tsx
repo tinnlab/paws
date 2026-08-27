@@ -1046,6 +1046,14 @@ export function McpServerDrawer() {
     const baseline = enabledValue
       ? 'Enabled — the server is reachable and queried by the LLM. Click to disable.'
       : 'Disabled — the server is not started or queried. Click to enable (a connection test will run first).'
+    // `untested` WITH a recorded reason means the probe was deliberately
+    // skipped and the backend said why (a `run_in_sandbox` server, whose
+    // connection is established lazily on the first real tool call). Surface
+    // that — dropping it leaves the admin with no explanation for a server
+    // that never gets a verdict.
+    if (healthStatus === 'untested' && healthReason) {
+      return `${baseline}\n\n${healthReason}`
+    }
     if (!healthAt || healthStatus === 'untested') {
       return baseline
     }

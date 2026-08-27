@@ -322,6 +322,10 @@ pub async fn test_user_connection(
 
     // A built-in loopback server authenticates with an internally-minted JWT,
     // not user-supplied headers/OAuth — probe it through the shared helper.
+    // A sandboxed row cannot be probed here at all (see
+    // `sandboxed_server_not_testable`), so its outcome is NOT a verdict about
+    // the server and must not be recorded as one.
+    let not_testable = existing.as_ref().is_some_and(|s| s.run_in_sandbox);
     let response = if let Some(builtin) = existing.as_ref().filter(|s| s.is_built_in) {
         probe_builtin_server(&session_manager, builtin, auth.user.id).await
     } else if let Some(sandboxed) = existing.as_ref().filter(|s| s.run_in_sandbox) {
@@ -335,11 +339,7 @@ pub async fn test_user_connection(
     // pointed at one). Lets the UI surface "last tested: …" outside
     // the enable flow too. Non-fatal — log on failure.
     if let Some(server_id) = request.id {
-        let (status, reason) = if response.success {
-            ("healthy", None)
-        } else {
-            ("unhealthy", Some(response.message.as_str()))
-        };
+        let (status, reason) = health_record_for(&response, not_testable);
         if let Err(e) = Repos.mcp.record_health_check(server_id, status, reason).await {
             tracing::warn!(error = ?e, server_id = %server_id, "mcp::health: failed to record test-connection result");
         }
@@ -373,6 +373,28 @@ pub fn test_user_connection_docs(op: TransformOperation) -> TransformOperation {
 /// genuinely sandbox-capable is a larger change (a new public request field, an
 /// OpenAPI regen for both UI workspaces, and routing an ephemeral server through
 /// rootfs fetch/mount) and is recorded as a follow-up.
+/// Map a Test Connection outcome onto the persisted health record.
+///
+/// `not_testable` is NOT a failure. `sandboxed_server_not_testable` answers with
+/// `success: false` because the handshake did not happen — but recording that as
+/// `unhealthy` would paint the badge red with a message whose own text says the
+/// server is fine, and would immediately re-create the very red badge the boot
+/// sweep's sandbox skip exists to clear. It records `untested` + the reason
+/// instead, which is the same vocabulary the boot skip writes and the same one
+/// the card falls back to for a never-probed server.
+fn health_record_for(
+    response: &TestMcpConnectionResponse,
+    not_testable: bool,
+) -> (&'static str, Option<&str>) {
+    if not_testable {
+        ("untested", Some(response.message.as_str()))
+    } else if response.success {
+        ("healthy", None)
+    } else {
+        ("unhealthy", Some(response.message.as_str()))
+    }
+}
+
 fn sandboxed_server_not_testable(server: &McpServer) -> TestMcpConnectionResponse {
     TestMcpConnectionResponse {
         success: false,
@@ -407,6 +429,8 @@ pub async fn test_system_connection(
     // Built-in system servers (Skills/Workflows/…) authenticate via an
     // internally-minted JWT — probe the stored row through the shared helper so
     // the loopback route's RequirePermissions gate is satisfied.
+    // See the user route: a sandboxed row's outcome is not a verdict.
+    let not_testable = existing.as_ref().is_some_and(|s| s.run_in_sandbox);
     let response = if let Some(builtin) = existing.as_ref().filter(|s| s.is_built_in) {
         probe_builtin_server(&session_manager, builtin, auth.user.id).await
     } else if let Some(sandboxed) = existing.as_ref().filter(|s| s.run_in_sandbox) {
@@ -416,11 +440,7 @@ pub async fn test_system_connection(
         run_connection_test(server, oauth).await
     };
     if let Some(server_id) = request.id {
-        let (status, reason) = if response.success {
-            ("healthy", None)
-        } else {
-            ("unhealthy", Some(response.message.as_str()))
-        };
+        let (status, reason) = health_record_for(&response, not_testable);
         if let Err(e) = Repos.mcp.record_health_check(server_id, status, reason).await {
             tracing::warn!(error = ?e, server_id = %server_id, "mcp::health: failed to record test-connection result");
         }

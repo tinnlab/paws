@@ -211,6 +211,7 @@ async fn test_connection_reports_that_it_cannot_validate_a_sandboxed_server() {
         ADMIN_PERMS,
     )
     .await;
+    let pool = test_pool(&server.database_url).await;
 
     let id = create_system_server(
         &server,
@@ -249,4 +250,24 @@ async fn test_connection_reports_that_it_cannot_validate_a_sandboxed_server() {
         text.contains("cannot validate"),
         "the response should state the limitation explicitly; body={text}",
     );
+
+    // TEST-6 [invariant: INV-2] — and it must not be RECORDED as a verdict.
+    //
+    // The response carries `success: false` because no handshake happened, and
+    // the record block keys off exactly that field. Left alone it writes
+    // `unhealthy`, painting the badge red with a message whose own text says
+    // the server is fine — and re-creating the red badge the boot skip exists
+    // to clear. "Could not test" is not "failed".
+    let (enabled, status, reason) = row(&pool, id).await;
+    assert_eq!(
+        status.as_deref(),
+        Some("untested"),
+        "a test that could not run is not a failed test; reason={reason:?}",
+    );
+    assert!(
+        enabled,
+        "Test Connection must not disable a server it could not even probe",
+    );
+
+    pool.close().await;
 }
