@@ -295,13 +295,21 @@ export const gallery: ModuleGallery = {
       // with ZERO models. ModelPicker is held empty (providers=[]) while the
       // conversation still carries a stale model id → the Select has a value it
       // can't resolve against 0 options + no placeholder (suppressed once a value is
-      // set) → the trigger renders LITERALLY BLANK (no value, no "No models" hint,
-      // no configure affordance). This state only exists after a store seed — the
-      // enumerated composer always has models.
+      // set) → the trigger used to render LITERALLY BLANK: no value, no hint, no
+      // configure affordance, and an OPEN dropdown containing nothing at all.
+      //
+      // That was H7 (empty-control-renders-nothing), and it is now FIXED — this
+      // entry is kept as the regression view rather than deleted, because the
+      // state itself is still real (a first-run or misconfigured deployment) and
+      // is the one a reviewer needs to look at. The trigger now reads "No models"
+      // and the open list carries a sentence saying what to do about it.
+      //
+      // This state only exists after a store seed — the enumerated composer
+      // always has models.
       slug: 'deep-chat-no-models',
       title: 'Conversation — composer with no models configured',
       conversationId: SHOWCASE_CONVERSATION_ID,
-      note: 'ModelPicker held empty (providers=[]) + stale selectedModelId → the composer model-select renders blank (H7 empty-control-renders-nothing)',
+      note: 'ModelPicker held empty (providers=[]) + stale selectedModelId → the composer model-select reads "No models" and its open list explains what to do (was H7 empty-control-renders-nothing: blank trigger, empty dropdown)',
       setup: async () => {
         await whenLoaded(SHOWCASE_CONVERSATION_ID)
         // holdForever re-asserts every 150ms so the composer's own loadProviders()
@@ -318,10 +326,11 @@ export const gallery: ModuleGallery = {
       interactions: [
         {
           // Open the model picker so H7 can see the OPEN dropdown: with 0 models it
-          // renders a listbox with ZERO options and NO "No models" empty-hint — it
-          // shows literally nothing to select.
+          // rendered a listbox with ZERO options and no empty-hint — literally
+          // nothing to read. It now shows the empty-state sentence instead, which
+          // is the half of the fix a closed trigger cannot show.
           name: 'open-model-select',
-          note: 'click the composer model select → the (empty) listbox: 0 options, no "No models" hint (H7)',
+          note: 'click the composer model select with nothing configured → the open list shows the empty-state sentence (previously: 0 options and no hint at all)',
           steps: async d => {
             await d.click('ullm-model-select')
             await d.wait(400)

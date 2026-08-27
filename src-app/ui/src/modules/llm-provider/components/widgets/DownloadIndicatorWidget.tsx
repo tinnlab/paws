@@ -1,6 +1,14 @@
 import { useState } from 'react'
 import { X, Download, RotateCw } from 'lucide-react'
-import { Badge, Button, Flex, Popover, Tooltip, message } from '@ziee/kit'
+import {
+  Badge,
+  Button,
+  Flex,
+  Popover,
+  ScrollArea,
+  Tooltip,
+  message,
+} from '@ziee/kit'
 import { DownloadItem } from '@/modules/llm-provider/components/downloads/DownloadItem'
 import { useHubModelDownloadGate } from '@/modules/hub/modules/llm-models/hooks/useHubModelDownloadGate'
 import type {
@@ -220,8 +228,33 @@ export function DownloadIndicatorWidget() {
     }
   }
 
+  // The panel — NOT a child of it — owns the size, and that size is bounded by
+  // the viewport. This wrapper previously carried a fixed
+  // `width: 320, maxHeight: 440` inline while the kit popup box is `w-72`
+  // (288px) with `p-2.5`, leaving 268px of usable width — so 52px of every row
+  // (the `w-full` progress bar, and the right-aligned percentage sitting at
+  // x≈320) painted OUTSIDE the popover's background, and the height bound was
+  // not viewport-relative at all.
+  //
+  // This is the same defect the notification bell already fixed, and the fix is
+  // the same one: the popup carries BOTH bounds via the `className` on
+  // `<Popover>` below. The kit `Popover` forwards `className` onto the popup,
+  // where tailwind-merge resolves `w-[…]` over the primitive's `w-72`, so the
+  // shared kit popover primitive needs no edit.
+  //
+  // `min-h-0` here and on the scroller is what makes the height bound reach the
+  // list: the popup is `flex flex-col`, so with a bounded popup the list takes
+  // the leftover space via `flex-1` and scrolls the rest. Deliberately NOT a
+  // hardcoded "reserve N rem for the headings" subtraction — such a constant
+  // breaks silently the moment a heading wraps to two lines, which the
+  // viewport-relative width above makes MORE likely, not less.
   const popoverContent = (
-    <div style={{ width: 320, maxHeight: 440, overflowY: 'auto' }}>
+    <ScrollArea
+      axis="y"
+      autoHide="leave"
+      className="w-full min-h-0 min-w-0 flex-1"
+      data-testid="llm-download-list"
+    >
       {activeDownloads.length > 0 && (
         <>
           <strong className="block mb-3">
@@ -244,7 +277,7 @@ export function DownloadIndicatorWidget() {
             Failed Downloads ({failedDownloads.length})
           </strong>
           {failedDownloads.map(download => (
-            <div key={download.id} className="mb-2">
+            <div key={download.id} className="mb-2 w-full min-w-0">
               <DownloadItem download={download} mode="minimal" />
               <Flex justify="end" gap="sm" className="mt-1">
                 <Tooltip title="Dismiss this failed download">
@@ -274,7 +307,7 @@ export function DownloadIndicatorWidget() {
           ))}
         </>
       )}
-    </div>
+    </ScrollArea>
   )
 
   return (
@@ -286,16 +319,29 @@ export function DownloadIndicatorWidget() {
       align="end"
       open={popoverOpen}
       onOpenChange={setPopoverOpen}
+      // WIDTH: `100vw` is the layout viewport INCLUDING a classic vertical
+      // scrollbar, while the "no sideways body scroll" invariant is measured
+      // against `documentElement.clientWidth`, which excludes it. The 2rem
+      // gutter covers that difference with room to spare — do not shrink it
+      // below ~1.25rem or the invariant breaks on a vertically-scrolling page
+      // with classic scrollbars.
+      // HEIGHT: caps the WHOLE panel at the space base-ui measured between the
+      // anchor and the viewport edge, so the "Downloads" title plus the list
+      // can never exceed it.
+      // These two values are deliberately identical to the notification bell's
+      // (`sdk/packages/notification-ui/src/NotificationBellWidget.tsx`): the two
+      // popovers open from adjacent icons in the same sidebar row, so a
+      // different width would read as a rendering bug.
+      className="w-[min(21.25rem,calc(100vw-2rem))] max-h-(--available-height)"
     >
-      <div
-        style={{
-          padding: '12px 16px',
-          cursor: 'pointer',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
+      {/* Trigger — deliberately byte-identical in shape to the notification
+          bell's (`px-4 py-3`, flex-centred, a `size={20}` lucide glyph inside
+          the Badge). The two now sit SIDE BY SIDE in one sidebar row, so any
+          difference in padding or glyph size reads as a misalignment bug rather
+          than as styling. This was previously an inline `style` object with the
+          same 12/16px values expressed a different way — same result, but
+          nothing kept the two in step. */}
+      <div className="flex cursor-pointer items-center justify-center px-4 py-3">
         <Badge
           count={badgeCount}
           tone={badgeTone}
@@ -303,7 +349,7 @@ export function DownloadIndicatorWidget() {
           aria-label={`${badgeCount} active download${badgeCount !== 1 ? 's' : ''}`}
           data-testid="llm-download-indicator-badge"
         >
-          <Download style={{ fontSize: 20 }} aria-label="Downloads" />
+          <Download size={20} aria-label="Downloads" />
         </Badge>
       </div>
     </Popover>

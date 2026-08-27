@@ -258,7 +258,19 @@ async fn flush_last_used(pool: &PgPool) {
 /// The proxy front door respects the Draining flag — new requests
 /// get 503 + `retry_after_ms` — so the in-flight counter is bounded
 /// by the time it takes existing streams to finish or hit timeout.
-async fn drain_and_stop(
+///
+/// `pub(crate)` because the VALIDATOR needs the identical sequence. Tier-2
+/// validation spawns an engine, probes it and stops it — and it used to call
+/// `dep.stop()` DIRECTLY, with no drain and no Draining flag. That is what made
+/// "I downloaded a model and couldn't chat with it" reproducible: a chat send
+/// that had already resolved a live engine had the engine killed underneath it,
+/// and `LocalDeployment::stop` drops the per-instance bearer BEFORE the
+/// instance row leaves `status='running'`, so the send failed with
+/// `missing per-instance bearer token`.
+///
+/// Sharing ONE implementation is the point — a second copy in the validator
+/// would drift, and this sequence is exactly the kind that gets subtly wrong.
+pub(crate) async fn drain_and_stop(
     model_id: Uuid,
     drain_timeout_secs: i32,
     dep: &Arc<dyn Deployment>,

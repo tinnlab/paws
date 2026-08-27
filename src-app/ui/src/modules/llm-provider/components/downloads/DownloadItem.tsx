@@ -191,24 +191,37 @@ export function DownloadItem({
 
   // MINIMAL MODE (for DownloadIndicator widget)
   if (mode === 'minimal') {
+    // Truncation is CSS, not a character count. `substring(0, 30)` used to cut
+    // the name here, which is wrong twice over: it cannot respond to the
+    // panel's actual width (so it over-truncates a wide panel and still
+    // overflows a narrow one), and it destroyed the full name, leaving nothing
+    // for a title/tooltip to reveal. `min-w-0` on the row AND on the name is
+    // what makes the CSS truncation actually engage — a flex child's default
+    // `min-width: auto` refuses to shrink below its content, which is how the
+    // name pushed the percentage out of the row.
     const fullName = download.request_data.display_name || 'Unnamed Model'
-    const displayName =
-      fullName.length > 30 ? fullName.substring(0, 30) + '...' : fullName
 
     return (
       <Tooltip content={renderProgressInfo()}>
         <div
-          className="mb-2 cursor-pointer"
+          className="mb-2 w-full min-w-0 cursor-pointer"
           onClick={handleNavigateToProvider}
           data-testid="llm-download-item-card"
         >
-          <div
-            className="flex justify-between mb-0.5"
-          >
-            <Text ellipsis className="text-xs">
-              {displayName}
+          <div className="flex w-full min-w-0 items-baseline justify-between gap-2 mb-0.5">
+            <Text
+              ellipsis
+              title={fullName}
+              className="min-w-0 flex-1 text-xs"
+              data-testid="llm-download-item-name"
+            >
+              {fullName}
             </Text>
-            <Text type="secondary" className="text-xs">
+            <Text
+              type="secondary"
+              className="shrink-0 text-xs"
+              data-testid="llm-download-item-percent"
+            >
               {Math.round(
                 ((download.progress_data?.current || 0) /
                   (download.progress_data?.total || 1)) *

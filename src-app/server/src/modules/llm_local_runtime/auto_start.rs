@@ -1,30 +1,60 @@
 //! Single-flight auto-start coordinator.
 //!
-//! Concurrent proxy requests for the same uncached model share one
-//! `OnceCell<Result>` so we never fire two `LocalDeployment::start`
-//! invocations for the same model_id. The first caller drives the
-//! spawn; the rest await the OnceCell.
+//! Concurrent requests for the same uncached model share ONE start, so we
+//! never fire two `LocalDeployment::start` invocations for the same
+//! model_id. The first caller becomes the LEADER; the rest await its
+//! result. On completion the slot is dropped so a later failure can be
+//! retried (e.g. an operator fixes a `file_path` and starts again).
 //!
-//! On success the cell is removed from the map so a later failure
-//! can be retried (e.g. operator manually starts after fixing a
-//! file_path).
+//! ## The leader runs DETACHED — and that is the whole point
+//!
+//! This used to be a `tokio::sync::OnceCell` whose init future ran inline
+//! in whichever caller arrived first. That is **not cancellation-safe**,
+//! and the consequence was user-visible:
+//!
+//!   1. A model finishes downloading; Tier-2 validation calls
+//!      `ensure_running` and becomes the leader, spawning the engine.
+//!   2. The user sends a chat a moment later. It attaches and waits —
+//!      correct so far.
+//!   3. The validator wraps its call in an OUTER `timeout`. When that
+//!      fires it DROPS the future, which cancels `get_or_init` mid-init.
+//!      The engine child is already spawned and keeps running.
+//!   4. `OnceCell` hands initialization to the next waiter, so the chat
+//!      re-enters `do_start` and calls `start()` on a model that already
+//!      has a live child → `Model instance already running already
+//!      exists`, and the user's message never gets an answer.
+//!
+//! Measured on a live instance: the collision landed 90s after the spawn,
+//! to the second — exactly the validator's outer deadline.
+//!
+//! Running the leader in `tokio::spawn` fixes the class, not the instance:
+//! no waiter's cancellation (a validator deadline, a client disconnect, a
+//! dropped SSE stream) can abort a start that other waiters depend on, and
+//! a cancelled *waiter* can no longer strand a live child for the next
+//! caller to collide with. Waiters observe the outcome through a `watch`
+//! channel instead of by driving the work themselves.
 
 use std::collections::HashMap;
-use std::sync::{Arc, LazyLock};
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use sqlx::PgPool;
 use sqlx::types::Uuid;
-use tokio::sync::{Mutex, OnceCell};
+use tokio::sync::{Mutex, watch};
 
 use crate::common::AppError;
 use crate::modules::llm_local_runtime::engine::{HealthEvent, HealthStateMachine, InstanceState, Transition};
 use crate::modules::llm_local_runtime::get_deployment_manager;
 
-/// Per-model single-flight start cell. The result string carries the
-/// failure reason when an error is shared with concurrent waiters
-/// (we can't share `AppError` across them — it's not Clone).
-static IN_FLIGHT: LazyLock<Mutex<HashMap<Uuid, Arc<OnceCell<Result<(), String>>>>>> =
+/// Outcome of one start attempt, as seen by every waiter. The failure
+/// reason is a `String` because `AppError` is not `Clone` and must be
+/// shared across concurrent waiters.
+type StartOutcome = Result<(), String>;
+
+/// Per-model single-flight slot: a `watch` receiver that yields `None`
+/// while the detached leader is still working and `Some(outcome)` once it
+/// finishes.
+static IN_FLIGHT: LazyLock<Mutex<HashMap<Uuid, watch::Receiver<Option<StartOutcome>>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Per-model health state machine (exponential backoff + flap
@@ -39,10 +69,27 @@ static HEALTH: LazyLock<Mutex<HashMap<Uuid, HealthStateMachine>>> =
 /// the explicit restart-attempt counter as a backstop.
 const MAX_RESTART_ATTEMPTS: u32 = 5;
 
-/// Liveness of a model's instance, distinguishing a genuine crash (a
-/// row that was `running` but the engine is dead) from "never started".
+/// Liveness of a model's instance.
+///
+/// `Starting` exists because conflating it with `Crashed` is a correctness bug,
+/// not merely a timing one. An engine that is still LOADING answers `/health`
+/// with a failure, and treating that as a crash has two consequences: the caller
+/// tries to spawn a second engine (which collides with the live process —
+/// "Model instance already running already exists"), and it feeds
+/// `HealthEvent::Crashed` into the flap state machine, which gives up
+/// permanently after 5 crashes in 60s (`engine/health.rs`). A user who sent a
+/// few messages while a model was still loading could therefore mark it
+/// `Failed` until an admin cleared it — bricking a model that was never broken.
+///
+/// The distinguishing signal is whether a live PROCESS exists: the deployment's
+/// `status()` reports that from its in-process table, independently of the DB
+/// row and of health.
 enum Liveness {
+    /// Row says running and `/health` answers OK.
     Running,
+    /// A live process exists but `/health` is not OK yet — still loading.
+    Starting,
+    /// The row said running, `/health` is not OK, and no live process exists.
     Crashed,
     NotRunning,
 }
@@ -118,13 +165,13 @@ async fn persist_failed(pool: &PgPool, model_id: Uuid, reason: &str) {
 
 /// Look up the singleton runtime_settings.auto_start_timeout_secs via
 /// the shared `Repos.local_runtime` repository.
-async fn get_auto_start_timeout() -> Duration {
+pub(crate) async fn get_auto_start_timeout() -> Duration {
     let secs = crate::core::repository::Repos
         .local_runtime
         .get_runtime_settings()
         .await
         .map(|s| s.auto_start_timeout_secs)
-        .unwrap_or(30);
+        .unwrap_or(180);
     Duration::from_secs(secs.max(1) as u64)
 }
 
@@ -308,6 +355,16 @@ async fn probe_liveness(pool: &PgPool, model_id: Uuid) -> Result<Liveness, AppEr
         return Ok(Liveness::Running);
     }
 
+    // Not healthy — but is it DEAD, or still loading?
+    //
+    // `status()` reads the deployment's in-process table, so a live child says
+    // "this engine exists and is still coming up". Reporting `Crashed` here
+    // would make the caller spawn a second engine on top of a live one AND feed
+    // a crash into the flap cap — see the `Liveness` doc comment.
+    if dep.status(model_id).await.map(|s| s.running).unwrap_or(false) {
+        return Ok(Liveness::Starting);
+    }
+
     // Stale row — engine crashed or was killed out-of-band. Mark it
     // stopped so the reaper/UI reflect reality and the caller restarts.
     tracing::warn!(
@@ -386,6 +443,111 @@ pub async fn ensure_running(pool: &PgPool, model_id: Uuid) -> Result<(), AppErro
             note_event(model_id, HealthEvent::StartedOk).await;
             return Ok(());
         }
+        Liveness::Starting => {
+            // Someone else's engine is still loading — typically the post-
+            // download Tier-2 validation pass, which spawns the engine, probes
+            // it and stops it. WAIT for it and then REUSE it, rather than
+            // spawning a competing one.
+            //
+            // This is what makes a chat sent right after a download work: the
+            // send joins the engine validation is already bringing up instead
+            // of colliding with it. Teardown can't cut the request short — the
+            // validator drains in-flight requests before stopping (see
+            // `reaper::drain_and_stop`).
+            //
+            // No `note_event` WHILE WAITING. A slow load is not a crash, and
+            // recording one would re-open the flap-cap bricking this variant
+            // exists to prevent.
+            //
+            // But the wait is BOUNDED, and what happens at the bound matters as
+            // much as the wait itself. "Loading" is a claim with a deadline: an
+            // engine that is alive and still not healthy after the whole
+            // auto-start budget is WEDGED, not loading, and must be recovered.
+            //
+            // Getting that wrong would be a regression this very change
+            // introduced. Before `Starting` existed, an alive-but-unhealthy
+            // engine was reported `Crashed`, which marked the row stopped and
+            // let the caller restart it — that WAS the recovery path. Nothing
+            // else provides one: the reaper's health monitor only records the
+            // state transition (`reaper.rs::monitor_health` → `report_health`),
+            // it never stops or respawns. So simply erroring out here would
+            // leave a wedged engine hanging every request for the full timeout,
+            // forever, where it used to self-heal.
+            //
+            // Hence: on timeout, stop treating it as loading and fall into the
+            // crash path below — which stops the engine, records the crash and
+            // restarts, exactly as it did before.
+            let deadline = tokio::time::Instant::now() + get_auto_start_timeout().await;
+            let mut wedged = false;
+            loop {
+                match probe_liveness(pool, model_id).await? {
+                    Liveness::Running => {
+                        note_event(model_id, HealthEvent::StartedOk).await;
+                        return Ok(());
+                    }
+                    // The process died while we waited — fall through to the
+                    // normal restart path, which WILL record the crash because
+                    // by then it is one.
+                    Liveness::Crashed | Liveness::NotRunning => break,
+                    Liveness::Starting => {
+                        if tokio::time::Instant::now() >= deadline {
+                            wedged = true;
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                    }
+                }
+            }
+
+            if wedged {
+                tracing::warn!(
+                    "auto_start: model {model_id} engine is alive but never became \
+                     healthy within the auto-start budget; treating it as crashed \
+                     and restarting"
+                );
+                // Stop the wedged process so the restart below is not refused,
+                // and so we do not leak it.
+                if let Ok(dep) = get_deployment_manager()
+                    .get_deployment(
+                        &crate::modules::llm_local_runtime::models::DeploymentConfig::Local {
+                            binary_path: None,
+                        },
+                    )
+                    .await
+                {
+                    let _ = dep.stop(model_id).await;
+                }
+                let _ = sqlx::query!(
+                    "UPDATE llm_runtime_instances
+                     SET status = 'stopped', state = 'crashed', state_changed_at = NOW(),
+                         stopped_at = NOW()
+                     WHERE model_id = $1",
+                    model_id,
+                )
+                .execute(pool)
+                .await;
+                // NOW record the crash — at the bound, not before it — so the
+                // flap cap still protects against a genuinely broken engine
+                // without a merely-slow one ever counting against it.
+                match note_event(model_id, HealthEvent::Crashed(None)).await {
+                    Transition::GiveUp { reason } => {
+                        persist_failed(pool, model_id, &reason).await;
+                        forget(model_id).await;
+                        return Err(AppError::internal_error(format!(
+                            "engine for model {model_id} marked failed (flap protection): {reason}"
+                        )));
+                    }
+                    Transition::Restart { next_at, .. }
+                        if std::time::Instant::now() < next_at =>
+                    {
+                        return Err(AppError::internal_error(
+                            "engine is in restart backoff after a crash; retry shortly",
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+        }
         Liveness::Crashed => {
             // A previously-running engine is dead → advance the machine.
             match note_event(model_id, HealthEvent::Crashed(None)).await {
@@ -417,49 +579,71 @@ pub async fn ensure_running(pool: &PgPool, model_id: Uuid) -> Result<(), AppErro
         }
     }
 
-    // Claim or attach the OnceCell.
-    let cell = {
+    // Claim the slot, or attach to the leader that already holds it.
+    let mut rx = {
         let mut map = IN_FLIGHT.lock().await;
-        map.entry(model_id)
-            .or_insert_with(|| Arc::new(OnceCell::new()))
-            .clone()
-    };
+        if let Some(rx) = map.get(&model_id) {
+            // Someone else is already starting this model — just wait.
+            rx.clone()
+        } else {
+            let (tx, rx) = watch::channel(None);
+            map.insert(model_id, rx.clone());
 
-    let timeout = get_auto_start_timeout().await;
-    let pool_for_init = pool.clone();
-    let model_id_for_init = model_id;
+            let timeout = get_auto_start_timeout().await;
+            let pool_for_start = pool.clone();
 
-    // The init closure runs ONCE (the single-flight holder), so the
-    // start outcome is recorded in the state machine exactly once even
-    // when many waiters share the cell.
-    let result = cell
-        .get_or_init(|| async move {
-            let r = do_start(&pool_for_init, model_id_for_init, timeout).await;
-            match &r {
-                Ok(()) => {
-                    note_event(model_id_for_init, HealthEvent::StartedOk).await;
-                }
-                Err(_) => {
-                    // A failed start counts as a crash for flap/backoff.
-                    if let Transition::GiveUp { reason } =
-                        note_event(model_id_for_init, HealthEvent::Crashed(None)).await
-                    {
-                        persist_failed(&pool_for_init, model_id_for_init, &reason).await;
+            // DETACHED: see this module's header. The start must outlive
+            // whichever caller happened to arrive first, because that
+            // caller may be cancelled (a validator deadline, a client
+            // disconnect) while other waiters still need the engine.
+            tokio::spawn(async move {
+                let r = do_start(&pool_for_start, model_id, timeout).await;
+                match &r {
+                    Ok(()) => {
+                        note_event(model_id, HealthEvent::StartedOk).await;
+                    }
+                    Err(_) => {
+                        // A failed start counts as a crash for flap/backoff.
+                        // Recorded here exactly once, by the leader — never
+                        // per-waiter, which would inflate the flap count and
+                        // brick the model.
+                        if let Transition::GiveUp { reason } =
+                            note_event(model_id, HealthEvent::Crashed(None)).await
+                        {
+                            persist_failed(&pool_for_start, model_id, &reason).await;
+                        }
                     }
                 }
-            }
-            r.map_err(|e| format!("{e}"))
-        })
-        .await
-        .clone();
 
-    // Drop the cell so a future failure can retry.
-    {
-        let mut map = IN_FLIGHT.lock().await;
-        map.remove(&model_id);
+                // Release the slot BEFORE publishing, so a caller arriving
+                // in this instant opens a fresh attempt rather than being
+                // handed a just-finished failure it never asked to share.
+                IN_FLIGHT.lock().await.remove(&model_id);
+                let _ = tx.send(Some(r.map_err(|e| format!("{e}"))));
+            });
+
+            rx
+        }
+    };
+
+    // Wait for the leader's outcome. `borrow()`-then-`changed()` (rather
+    // than `changed()` first) is deliberate: the leader may already have
+    // published before we get here, and `changed()` only reports values
+    // sent AFTER the receiver was created.
+    loop {
+        let current = rx.borrow().clone();
+        if let Some(outcome) = current {
+            return outcome.map_err(AppError::internal_error);
+        }
+        if rx.changed().await.is_err() {
+            // Sender dropped without publishing — only possible if the
+            // leader task itself died (panic / runtime shutdown). Report
+            // it rather than hanging or reporting a success we never saw.
+            return Err(AppError::internal_error(
+                "engine start task ended without reporting an outcome",
+            ));
+        }
     }
-
-    result.map_err(AppError::internal_error)
 }
 
 /// Do the actual spawn + health-wait. Separated so the caller above
@@ -498,12 +682,34 @@ async fn do_start(
         }
     };
 
-    // Poll /health until Ok or timeout.
+    // Poll /health until Ok, the child exits, or the deadline passes.
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
         if dep.health_check(&dr.base_url).await.unwrap_or(false) {
             break;
         }
+
+        // FAIL FAST when the child is already gone. An engine that refuses
+        // the model exits in milliseconds — a corrupt/truncated GGUF gives
+        // `invalid magic characters` and `exiting due to model loading
+        // error` in ~27ms, measured. Polling on to the deadline made the
+        // user wait the FULL auto-start timeout for an answer the engine
+        // had already given, and raising that timeout to a realistic
+        // 180s would have made a fast, certain failure three times worse.
+        //
+        // This is the same `Running`/`Starting`/`Crashed` distinction the
+        // `Liveness` enum draws, applied to the start path: "not healthy
+        // YET" and "not healthy, and never will be" are different states,
+        // and only the first one is worth waiting on.
+        if !dep.status(model_id).await.map(|s| s.running).unwrap_or(true) {
+            let _ = dep.stop(model_id).await;
+            return Err(AppError::internal_error(format!(
+                "auto_start: engine for model {model_id} exited before becoming healthy \
+                 (check the model's runtime logs — a corrupt or unsupported model file \
+                 is the usual cause)"
+            )));
+        }
+
         if tokio::time::Instant::now() >= deadline {
             // Best-effort: stop the engine to free resources.
             let _ = dep.stop(model_id).await;

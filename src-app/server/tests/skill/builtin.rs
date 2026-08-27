@@ -11,7 +11,7 @@ const A_BUILTIN: &str = "io.github.ziee/configure-llm-providers";
 
 /// Poll GET /skills until the boot-synced built-ins show up (the sync is a
 /// spawned task on server init), then return the parsed list.
-async fn wait_for_builtins(server: &crate::common::TestServer, token: &str) -> Vec<Json> {
+pub async fn wait_for_builtins(server: &crate::common::TestServer, token: &str) -> Vec<Json> {
     for _ in 0..40 {
         let list: Json = reqwest::Client::new()
             .get(server.api_url("/skills"))
@@ -62,13 +62,61 @@ async fn builtin_skills_are_synced_listed_and_not_deletable() {
         "built-in description carries its frontmatter: {builtin}"
     );
 
-    // All 13 ziee capability skills are present (3 life-science skills were
-    // added to the embedded `resources/builtin-skills/` set).
-    let builtin_count = skills.iter().filter(|s| s["scope"] == "built_in").count();
+    // TEST-9 — the shipped built-in set, by NAME.
+    //
+    // This used to be `assert_eq!(builtin_count, 13)`. A bare count fails with
+    // an arithmetic mismatch that says nothing about WHICH skill appeared or
+    // vanished, and it cannot distinguish "we removed one on purpose" from "one
+    // silently failed to sync" — `sync_builtin_skills` warns and continues on a
+    // per-skill error, so a broken SKILL.md subtracts from the count exactly
+    // like a deliberate removal does.
+    //
+    // The three names asserted ABSENT below are the paws removals (design items
+    // 6 = workflow, 11 = hub). Their absence here is the fresh-install half of
+    // INV-3; the upgraded-install half is TEST-8 in `paws_hidden_skills_test.rs`,
+    // because on a DB that already synced them this assertion passes while the
+    // rows are still live.
+    let mut synced: Vec<&str> = skills
+        .iter()
+        .filter(|s| s["scope"] == "built_in")
+        .filter_map(|s| s["name"].as_str())
+        .collect();
+    synced.sort_unstable();
+
+    // Assert the REMOVALS first, so a regression that re-ships one of them
+    // fails with its name rather than with an opaque whole-set mismatch. This
+    // ordering is deliberate: placed AFTER the set equality below, the loop
+    // could never fire — the equality already covers it — and it would read as
+    // coverage it does not provide.
+    for removed in [
+        "io.github.ziee/create-workflow",
+        "io.github.ziee/troubleshoot-workflow-run",
+        "io.github.ziee/hub-installation",
+    ] {
+        assert!(
+            !synced.contains(&removed),
+            "{removed} documents a paws-hidden feature and must not ship; got {synced:?}"
+        );
+    }
+
+    let expected = [
+        "io.github.ziee/configure-code-sandbox",
+        "io.github.ziee/configure-llm-providers",
+        "io.github.ziee/configure-mcp-servers",
+        "io.github.ziee/create-skill",
+        "io.github.ziee/install-samtools-bcftools",
+        "io.github.ziee/manage-projects",
+        "io.github.ziee/rnaseq-toolkit",
+        "io.github.ziee/set-up-memory",
+        "io.github.ziee/setup-datascience-env",
+        "io.github.ziee/use-assistants",
+    ];
     assert_eq!(
-        builtin_count, 13,
-        "all 13 built-in capability skills synced; got {builtin_count}"
+        synced, expected,
+        "the synced built-in set must be exactly the shipped one"
     );
+
+
 
     // Not uninstallable: DELETE /skills/{id} is rejected (not user-scope / owner).
     let id = builtin["id"].as_str().expect("id");
