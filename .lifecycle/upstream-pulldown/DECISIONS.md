@@ -100,7 +100,7 @@ the code was still broken, which is the strongest form of that.
 **Resolution:** No, and its absence is checked rather than presumed. None of the nine
 picks changes a `JsonSchema` type or a route signature. A non-empty diff in
 `src-app/ui/openapi/openapi.json` or either `api-client/types.ts` is treated as
-evidence that an out-of-scope hunk was dragged in (TEST-31), not as a regen to run.
+evidence that an out-of-scope hunk was dragged in (hygiene rule H2), not as a regen to run.
 **Basis:** codebase — the picks change handler-internal validation, client transport
 framing, and repository SQL only. Note `just` is not installed on this box, so a regen
 would have to use the raw two-command form at `justfile:550-554`.
@@ -119,3 +119,31 @@ and this worker must not, the strip has to happen on the branch.
 **Opened, never merged; nothing pushed to `main`.**
 **Basis:** user — the worker brief's §"How (B) lands" and its standing rules on
 worktree placement and merge authority.
+
+### DEC-13: ITEM-7 and ITEM-8 were mis-modelled as plan items. Keep, descope, or reclassify?
+**Resolution:** **Reclassify** as hygiene rules H1/H2 under a dedicated PLAN section,
+and verify them by command in TEST_RESULTS.md's *Controls* section. They are not
+implementable work with observable behaviour — they are assertions ABOUT the resulting
+diff (nothing out-of-scope was staged; no submodule gitlink moved). The phase-3 gate
+requires every ITEM to be covered by a TEST, and the only ways to satisfy it were to
+invent a hollow test (the exact failure this process exists to prevent) or to mark them
+`[DESCOPED]`, which would be false — they were done, not cut.
+**Basis:** convention — the skill's phase-5 rule that a plan wrong about its own shape
+is amended (`impl-wins`) rather than worked around, and its standing refusal of tests
+that exist only to satisfy a mapping.
+
+### DEC-14: Four TEST-IDs were recorded PASS that this branch did not earn. Fix how?
+**Resolution:** The A11 gate caught TEST-28/29/30/31. Two different causes, two
+different fixes:
+- **TEST-28** was a real miss of my own making: I wrote its `file:` as a brace
+  expression naming two paths, which is not a path, so the gate could not match it
+  against the files the branch touched. Both files ARE touched by the `beae7c7fb` pick.
+  Fixed by naming one real path.
+- **TEST-29/30/31** are genuinely NOT this feature's tests. They are the pre-existing
+  paws `migration_immutability` guard, the paws-only `default_model_seed_test`, and a
+  shell hygiene assertion. I ran all three and all three pass — but claiming an earned
+  PASS for a test this branch did not author is exactly what A11 exists to refuse, and
+  it is right. They are now recorded as **Controls** in TEST_RESULTS.md, with their
+  commands and observed results, and removed from the enumerated set.
+**Basis:** convention — A11's stated remedy is "earn it or admit it", and the honest
+third reading for a PORT is that a pre-existing guard is a control, not coverage.

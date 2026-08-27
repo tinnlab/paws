@@ -11,7 +11,7 @@ were reverted.
 
 The diff is **backend-only** (`src-app/server/**`, `src-app/agent-core/**`), so the
 phase-3 frontend rule (a UI diff must enumerate ≥1 `tier: e2e`) does not apply. This
-is asserted, not assumed: ITEM-7/ITEM-8 require the branch to touch no
+is asserted, not assumed: hygiene rules H1/H2 require the branch to touch no
 `src-app/ui/**` or `src-app/desktop/ui/**` path, which the phase-8 gate recomputes
 from the real diff.
 
@@ -59,10 +59,26 @@ from the real diff.
 - **TEST-25** (tier: integration) [covers: ITEM-6] file: `src-app/server/tests/llm_repository/ssrf_probe_test.rs` — asserts: `rejected_endpoint_uses_the_modules_existing_failure_shape` (refuse → `unhealthy`, the module's existing shape, not a new error class) + `unsaved_probe_endpoint_is_permission_gated`.
 - **TEST-26** (tier: integration) [acceptance] [invariant: INV-8] [covers: ITEM-6] file: `src-app/server/tests/llm_repository/capability_probe_test.rs` — asserts: the HF probe preserves the row's own org as `author=<org>` and an `Unknown` row preserves its path instead of collapsing to the origin — so a nonexistent org yields an empty listing → `unverified` while a real org stays `healthy`.
 - **TEST-27** (tier: integration) [covers: ITEM-6] file: `src-app/server/tests/llm_repository/connection_health_test.rs` — asserts: the per-row health grading end-to-end, including that `unverified` is record-only and does not auto-disable.
-- **TEST-28** (tier: integration) [covers: ITEM-6] file: `src-app/server/tests/llm_repository/{sync_emit_test.rs,test_connection_user_agent.rs}` — asserts: the existing sync-emit and user-agent behaviours still hold after the probe rewrite (regression controls that arrive with the pick).
-- **TEST-29** (tier: integration) [covers: ITEM-6] file: `src-app/server/tests/llm_repository/default_model_seed_test.rs` — asserts: **paws-only** — the seeded tinnlab mirror row still behaves as paws expects after the probe change. This test did not exist upstream, so it is the one place the port could break something upstream could not have noticed.
+- **TEST-28** (tier: integration) [covers: ITEM-6] file: `src-app/server/tests/llm_repository/sync_emit_test.rs` — asserts: the existing sync-emit behaviour still holds after the probe rewrite (a regression control that arrives with the pick, in a file this branch modifies). `test_connection_user_agent.rs` is updated by the same pick and passes with it.
 
-## ITEM-7 / ITEM-8 — port hygiene
+## Port hygiene (H1 / H2)
 
-- **TEST-30** (tier: integration) [covers: ITEM-7, ITEM-8] file: `src-app/server/tests/migration_immutability.rs` — asserts: no already-shipped migration was edited and the `GRANDFATHERED` list did not grow. This is the pre-existing paws guard; the squash in ITEM-5 exists precisely so it stays green without an exemption.
-- **TEST-31** (tier: unit) [covers: ITEM-7, ITEM-8] file: `.lifecycle/upstream-pulldown/TEST_RESULTS.md` — asserts: recorded as a verified command, not a code test — `git diff origin/main...HEAD --stat -- sdk agent-kit src-app/server/vendor/pgvector src-app/ui src-app/desktop/ui .lifecycle src-app/server/ui` is EMPTY except `.lifecycle`. This is the mechanical check that no gitlink moved, no stray OpenAPI tree landed, and the diff really is backend-only. Recorded honestly as a command + its output rather than dressed up as a test file that does not exist.
+**These are CONTROLS, deliberately NOT enumerated as `TEST-N` of this feature.**
+They are pre-existing paws guards and shell assertions that this branch RUNS to show
+it broke nothing — it does not author them, and the A11 rule is right to refuse to let
+a port claim an earned PASS for someone else's test. Their observed results are
+recorded in TEST_RESULTS.md as controls, with the commands, rather than dressed up as
+this feature's coverage:
+
+- `src-app/server/tests/migration_immutability.rs` — the pre-existing guard. No
+  already-shipped migration was edited and `GRANDFATHERED` did not grow; the squash in
+  ITEM-5 exists precisely so it stays green without an exemption. **Not touched by this
+  branch, which is the point.**
+- `src-app/server/tests/llm_repository/default_model_seed_test.rs` — paws-only, and the
+  one place this port could break something upstream could not have noticed: the seeded
+  tinnlab mirror row after the probe change.
+- The hygiene command itself:
+  `git diff origin/main...HEAD --stat -- sdk agent-kit src-app/server/vendor/pgvector src-app/ui src-app/desktop/ui src-app/server/ui`
+  must be EMPTY — the mechanical check that no gitlink moved, no stray OpenAPI tree
+  landed, and the diff really is backend-only (which is also what makes the phase-3
+  frontend e2e rule inapplicable).

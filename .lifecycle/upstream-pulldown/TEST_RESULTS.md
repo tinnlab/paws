@@ -47,11 +47,24 @@ The integration run is RED, and the 109 are classified below rather than waved a
 - **TEST-25**: PASS — `…::rejected_endpoint_uses_the_modules_existing_failure_shape` + `…::unsaved_probe_endpoint_is_permission_gated`
 - **TEST-26**: PASS — `llm_repository::utils::tests::capability_url_targets_the_kinds_listing_surface` (repaired in FIX_ROUND-1; was RED on upstream main)
 - **TEST-27**: PASS — `llm_repository::connection_health_test`, **except** the one live-HF case classified A-3 below
-- **TEST-28**: PASS — `llm_repository::{sync_emit_test,test_connection_user_agent}`
-- **TEST-29**: PASS — `llm_repository::default_model_seed_test` (the paws-only control; the port did not disturb the seeded mirror row)
-- **TEST-30**: PASS — `migration_immutability` (no shipped migration edited; `GRANDFATHERED` did not grow)
-- **TEST-31**: PASS — verified command, output empty:
+- **TEST-28**: PASS — `llm_repository::sync_emit_test` (+ `test_connection_user_agent`, updated by the same pick)
+
+## Controls — run, passing, and deliberately NOT claimed as this feature's tests
+
+A11 refuses to let a branch record an earned PASS for a test it did not author, and it
+is right to. These three are pre-existing paws guards and a shell assertion; this
+branch RUNS them to show it broke nothing. Results, with the commands:
+
+- `migration_immutability` — **PASS.** No already-shipped migration was edited and the
+  `GRANDFATHERED` list did not grow. This branch does not touch that file, which is the
+  point: the ITEM-5 squash exists so the guard stays green without an exemption.
+- `llm_repository::default_model_seed_test` — **PASS.** The paws-only test, and the one
+  place this port could have broken something upstream could not have noticed: the
+  seeded tinnlab mirror row still behaves as paws expects after the probe rewrite.
+- Hygiene command — **output EMPTY**, as required:
   `git diff origin/main...HEAD --stat -- sdk agent-kit src-app/server/vendor/pgvector src-app/ui src-app/desktop/ui src-app/server/ui`
+  So: no submodule gitlink moved, no stray OpenAPI tree landed, and the diff is
+  backend-only — which is also what makes the phase-3 frontend e2e rule inapplicable.
 
 `npm run check` is **not applicable**: the diff touches no frontend workspace, which
 TEST-31 asserts mechanically rather than by assertion. That is also why no `tier: e2e`

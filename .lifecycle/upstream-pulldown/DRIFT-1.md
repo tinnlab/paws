@@ -65,4 +65,21 @@ commit made, and if so, was that deliberate?
   `agent-core`'s new `TaskStatus::Abandoned` variant and every construction site
   build, and no sqlx macro failed against the migrated per-worktree build DB.
 
+- **DRIFT-1.10** — verdict: impl-wins — **the plan mis-modelled two of its own items.**
+  ITEM-7 (strip out-of-scope paths) and ITEM-8 (assert no gitlink moved) are not units
+  of implementable work with observable behaviour; they are assertions ABOUT the
+  resulting diff. The phase-3 gate rightly demands a covering TEST for every ITEM, and
+  the only ways to satisfy it were to invent a hollow test — the exact failure this
+  process exists to prevent — or to mark them [DESCOPED], which would be false since
+  they were DONE, not cut. Amended: PLAN gains a `## Port hygiene` section carrying
+  them as rules H1/H2, verified by command in TEST_RESULTS.md. Recorded as DEC-13.
+
+- **DRIFT-1.11** — verdict: impl-wins — the A11 gate caught four TEST-IDs recorded PASS
+  that this branch had not earned. TEST-28 was my own error (its `file:` was a brace
+  expression naming two paths, which is not a path the gate can match); TEST-29/30/31
+  are genuinely not this feature's tests but pre-existing paws guards and a shell
+  assertion, which I ran and which pass. Reclassified as **Controls** with their
+  commands and results, rather than claiming coverage for someone else's test.
+  Recorded as DEC-14.
+
 **Unresolved drifts:** 0
