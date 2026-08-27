@@ -21,7 +21,12 @@ is required. The new migration deletes data and grants nothing.
 ## Item 2 — one row, both layouts
 
 - **TEST-5** (tier: e2e) [acceptance] [invariant: INV-2] [covers: ITEM-4, ITEM-5] file: `src-app/ui/tests/e2e/llm/sidebar-icon-row.spec.ts` — asserts: with a download in flight, the notification bell and the download indicator share a horizontal band (their rects overlap vertically) and do NOT stack (neither rect's top is below the other's bottom) — one row, side by side; and with no download in flight the bell alone still renders inside that row at the same vertical position, which is the COMMON case since the download widget self-hides.
-- **TEST-6** — **REMOVED. Not written, not skipped, not shipped.** An owner decision, and the honest one.
+**WITHDRAWN — the desktop one-row geometry spec (the slot formerly numbered 6).**
+**Not written, not skipped, not shipped.** An owner decision, and the honest one.
+It is deliberately no longer enumerated as a test above: it does not exist, so
+carrying an ID that the phase-8 gate must then be told to excuse would be a way
+of keeping credit for coverage nobody has. The ID is retired, not reused —
+TEST-6b is a separate test and still runs.
 
   The spec existed and was correct, but it could never run here: the desktop e2e config never brings its Vite dev server up on the port it then navigates to (`playwright.config.ts` and `desktop/ui/vite.config.ts` each call `pickBindablePort` independently and disagree), so `page.goto` gets `ERR_CONNECTION_REFUSED`. **Control: the untouched `desktop-real-backend-smoke.spec.ts` fails identically**, so the defect is pre-existing and not caused by this branch; pinning `VITE_DEV_PORT` to a port verified free immediately beforehand did not help. Per B3 the shared harness was not edited to route around it.
 

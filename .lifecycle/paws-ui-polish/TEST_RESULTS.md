@@ -30,7 +30,6 @@ green by soft-skip.
 | **TEST-3**: PASS | unit | CSS truncation, full name preserved, percent not displaced | `npx vitest run src/modules/llm-provider` |
 | **TEST-4**: PASS | e2e | gallery renders the Downloads popover OPEN and populated | `npx playwright test tests/e2e/visual/gallery-download-popover.spec.ts --config=playwright.visual.config.ts --workers=1` |
 | **TEST-5**: PASS | e2e | bell + download share one horizontal band; degrades to one child | `npx playwright test tests/e2e/llm/sidebar-icon-row.spec.ts --workers=1` |
-| **TEST-6**: NOT VERIFIED | e2e | **Spec removed on an owner decision** — the desktop e2e harness fails to connect for a PRE-EXISTING reason (an untouched sibling spec fails identically), so the spec could not run. Not skipped, not ignored: deleted, with the uncovered surface stated in TESTS.md and the PR body. | — |
 | **TEST-6b**: PASS | unit | desktop module graph keeps both widgets, drops `user-profile` | `npx vitest run src/modules` |
 | **TEST-7**: PASS | unit | `sidebarBottom` row survives an empty `sidebarTools` slot | `npx vitest run src/modules/layouts` |
 | **TEST-8**: PASS | integration | the UPGRADE case — seeded lingering rows cannot reach the model after the migration | `cargo test --test integration_tests skill::` |
@@ -43,6 +42,15 @@ green by soft-skip.
 | **TEST-15**: PASS | integration | validator's terminal transition publishes BOTH sync entities | `cargo test --test integration_tests llm_model::sync_emit` |
 | **TEST-16**: PASS | unit | forced refresh during a load; burst coalescing; joiner isolation (a–f) | `npx vitest run src/modules/llm-provider` |
 | **TEST-17**: PASS | unit | `endpoint_resolve_tests` — INV-5's resolve contract | `cargo test --lib -p ziee llm_local_runtime::proxy_handlers` |
+
+**The withdrawn desktop geometry spec** (the slot formerly numbered 6) has no
+result line because it is no longer enumerated as a test in TESTS.md — it does
+not exist. The desktop e2e harness fails to connect for a PRE-EXISTING reason (an
+untouched sibling spec fails identically), so on the owner's decision the spec was
+DELETED rather than left skipped or ignored. What is therefore uncovered — the
+rendered pixel arrangement of the one-row layout under the desktop module set
+specifically — is stated in TESTS.md and in the PR body. TEST-5 covers the row's
+geometry in a real browser and TEST-6b covers the desktop module graph.
 
 Frontend unit sweep: `npx vitest run src/modules/llm-provider src/modules/layouts`
 → **6 files, 35 tests, all pass.**
