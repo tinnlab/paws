@@ -27,9 +27,11 @@ pub enum McpServerEvent {
     /// Group assignments for an MCP server changed
     GroupAssignmentChanged { server_id: Uuid },
     /// An enabled MCP server failed a connection probe and was
-    /// auto-disabled by the connection-health subsystem (boot-time
-    /// check, or save-time downgrade on a fresh create). UI listens
-    /// to this to refresh the server list and surface a toast.
+    /// auto-disabled by the connection-health subsystem. Emitted only
+    /// from the CREATE / ENABLE paths, where a human just acted and sees
+    /// the result — the boot sweep records health but never disables, so
+    /// it is not an emitter. UI listens to this to refresh the server
+    /// list and surface a toast.
     AutoDisabled { server_id: Uuid, reason: String },
     /// The global MCP user-policy singleton was edited by an admin.
     /// Subscribers: future audit log; UI cache invalidation (the FE
@@ -79,9 +81,9 @@ impl McpServerEvent {
         crate::core::AppEvent::McpServer(McpServerEvent::GroupAssignmentChanged { server_id })
     }
 
-    /// Create an auto-disabled event (boot health check or save-time
-    /// downgrade flipped `enabled: false` because the connection
-    /// probe failed).
+    /// Create an auto-disabled event (a save-time downgrade on create /
+    /// enable flipped `enabled: false` because the connection probe
+    /// failed). The boot sweep does not disable and does not emit this.
     pub fn auto_disabled(server_id: Uuid, reason: String) -> crate::core::AppEvent {
         crate::core::AppEvent::McpServer(McpServerEvent::AutoDisabled { server_id, reason })
     }

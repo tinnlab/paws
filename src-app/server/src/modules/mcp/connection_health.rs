@@ -11,13 +11,43 @@
 //!    `enabled: true` and the probe fails, downgrade to
 //!    `enabled: false` and return a warning so the row is preserved
 //!    for the user to edit + retry.
-//! 3. Boot — every enabled non-built-in MCP server is probed on
-//!    server startup; failures flip to `enabled: false` automatically
-//!    so users don't see broken servers in their tool lists.
+//! 3. Boot — every enabled non-built-in, non-sandboxed MCP server is
+//!    probed on server startup and its verdict RECORDED. Unlike (1) and
+//!    (2), the boot sweep never changes `enabled`: it runs with no human
+//!    present, against whatever transient state the machine booted into,
+//!    so flipping the flag there silently undoes an admin's
+//!    configuration. The health badge carries the failure instead.
 //!
 //! Built-in servers (files, memory, code_sandbox, memory_mcp)
 //! are SKIPPED — they're owned by the platform, not by user config,
 //! and their reachability is the platform's responsibility.
+//!
+//! **Boot ordering is settled by the skip, not by a wait.** `mcp` is module
+//! `order: 65` and `code_sandbox` is `order: 70`, and `mcp::init` spawns the
+//! boot sweep fire-and-forget, so the sweep can run before `code_sandbox::init`
+//! publishes its state. That race USED to decide the outcome: `should_sandbox()`
+//! saw no state, routed a sandboxed row down the host path, and false-failed it
+//! against the host allowlist. It no longer can, because the sweep never probes
+//! a `run_in_sandbox` row at all — and `should_sandbox()` requires
+//! `run_in_sandbox`, so no row the sweep still probes ever consults sandbox
+//! state. The guarantee is structural rather than timing-dependent, which is why
+//! there is deliberately no readiness wait here: one would be pure boot latency
+//! that cannot change a single verdict.
+//!
+//! That claim is about the SKIP, and only about the skip. The wording recorded
+//! alongside it does still depend on init order — at boot, `code_sandbox` has
+//! usually not published a status yet — so `sandbox_skip_reason` is written to
+//! be honest in that case rather than to guess, and points the operator at Test
+//! Connection, which runs in request context and can reach a real answer.
+//!
+//! **`run_in_sandbox` servers are skipped by ALL THREE.** Their
+//! connectivity requires the code_sandbox runtime, which initialises
+//! lazily on first use; probing them anyway either routes through an
+//! un-mounted sandbox or — if the sandbox state is not yet installed —
+//! falls back to the HOST path and false-fails any guest-only command
+//! against the host allowlist. That is not hypothetical: it is what
+//! auto-disabled a working `Rscript` server and told its admin to enable
+//! a `run_in_sandbox` flag the row already had.
 
 use crate::common::AppError;
 use crate::core::Repos;
@@ -83,6 +113,38 @@ pub async fn enforce_on_create(
     // "Connectivity probe only — never routed through the code_sandbox"
     // rule the explicit Test Connection path already follows.
     if !server.enabled || server.is_built_in || server.run_in_sandbox {
+        // A skipped SANDBOXED row explains itself. Without this it lands on the
+        // column default `untested` with a NULL reason, and the card falls back
+        // to "Click Test Connection or toggle Enabled to run a probe" — two
+        // actions that are both no-ops for this row. It also gives an operator
+        // whose row carries a stale `unhealthy` badge a way to clear it:
+        // toggling Enabled now records a true verdict instead of silently
+        // leaving the old one on screen.
+        //
+        // `server.enabled` is part of the guard because this arm is also entered
+        // for a DISABLED row, where the probe was skipped for that reason and
+        // not because the row is sandboxed. Writing "its connection is
+        // established on the first real tool call" plus a fresh
+        // `last_health_check_at` onto a disabled server would imply a probe ran
+        // and promise a connection nothing will attempt.
+        let mut server = server;
+        if server.enabled && server.run_in_sandbox && !server.is_built_in {
+            if let Err(e) =
+                record_health_check_on(pool, server.id, "untested", Some(&sandbox_skip_reason()))
+                    .await
+            {
+                tracing::warn!(error = ?e, server_id = %server.id, "mcp::health: failed to record sandbox skip (non-fatal)");
+            } else if let Ok(Some(refetched)) = Repos.mcp.get_any_server(server.id).await {
+                // Re-fetch so the RESPONSE carries what was just written, the
+                // same as every other arm of this function. Returning the
+                // pre-write struct hands the client the row's previous health
+                // columns — on the enable path that is precisely the stale
+                // `unhealthy` + host-allowlist reason this write exists to
+                // replace, and the drawer would render its red Alert from it
+                // next to the success toast.
+                server = refetched;
+            }
+        }
         return Ok(McpServerWithHealthWarning {
             server,
             connection_warning: None,
@@ -186,6 +248,33 @@ pub async fn enforce_on_update_transition(
     // (their connectivity needs the lazy code_sandbox runtime; the real
     // sandboxed connect surfaces genuine errors at use time).
     if !transitioned_to_enabled || persisted.is_built_in || persisted.run_in_sandbox {
+        // See enforce_on_create: a skipped sandboxed row records why, so the
+        // badge stops showing a stale verdict the operator cannot clear.
+        //
+        // NOT gated on `transitioned_to_enabled`. `run_in_sandbox` is mutable on
+        // a system row, so an admin can flip an already-enabled server between
+        // runtimes — and the health columns then describe the runtime it USED to
+        // use. That is worse now than before, because the untested branch
+        // deliberately surfaces the recorded reason: the product would state
+        // that a row runs in the sandbox when it no longer does. Re-recording on
+        // every update of a sandboxed row keeps the explanation and the runtime
+        // in agreement.
+        if persisted.run_in_sandbox && !persisted.is_built_in {
+            if let Err(e) = record_health_check_on(
+                pool,
+                persisted.id,
+                "untested",
+                Some(&sandbox_skip_reason()),
+            )
+            .await
+            {
+                tracing::warn!(error = ?e, server_id = %persisted.id, "mcp::health: failed to record sandbox skip (non-fatal)");
+            } else if let Ok(Some(refetched)) = Repos.mcp.get_any_server(persisted.id).await {
+                // See enforce_on_create: the response must carry the write, or
+                // the drawer rebinds to the stale verdict it just replaced.
+                return Ok(refetched);
+            }
+        }
         return Ok(persisted);
     }
 
@@ -287,9 +376,62 @@ pub async fn probe(pool: &PgPool, server: &McpServer) -> Result<(), ProbeFailure
     }
 }
 
+/// The single explanation every sandboxed-skip site gives, so one row cannot be
+/// described two different ways depending on which path wrote last.
+///
+/// It consults the sandbox's own published status rather than asserting. Saying
+/// "it connects on the first real tool call" on a deployment where code_sandbox
+/// is disabled is a reassuring falsehood about a permanently broken row, and the
+/// operator has no other surface that would tell them.
+pub(super) fn sandbox_skip_reason() -> String {
+    use crate::modules::code_sandbox::config::SandboxAvailability as A;
+    match crate::modules::code_sandbox::config::init_status() {
+        A::Ready => "Not connection-tested: this server runs in the code sandbox, whose \
+                     runtime is fetched and mounted lazily. Its connection is established \
+                     on the first real tool call."
+            .to_string(),
+        // NOT a hedge that reads as reassurance. The boot sweep is spawned from
+        // `mcp::init` (module order 65) and `code_sandbox::init` (order 70) has
+        // not published a status yet, so at boot this arm is the COMMON one —
+        // which means it must not say "if the sandbox is available, it will
+        // connect". It points at the one action that produces a current answer
+        // instead: Test Connection runs in request context, long after init, so
+        // it reaches a real verdict here.
+        A::NotInitialized => "Not connection-tested: this server runs in the code sandbox. \
+                              Whether the sandbox is available on this deployment was not \
+                              known when this was recorded — use Test Connection on the \
+                              server for a current answer."
+            .to_string(),
+        // Operator-facing text, so describe the situation rather than printing
+        // the internal variant name.
+        other => format!(
+            "Not connection-tested, and it cannot connect on this deployment: this server \
+             runs in the code sandbox, but the sandbox is unavailable here ({}). Enable and \
+             repair the code sandbox, or switch this server to a command that can run on \
+             the host.",
+            match other {
+                A::DisabledInConfig => "it is disabled in the server configuration",
+                A::HostUnsupported => "this host does not support it",
+                A::CloudImdsRefused => "startup checks refused to enable it on this cloud host",
+                A::WorkspaceInitFailed => "its workspace could not be initialised",
+                A::PoolMissing => "its runtime pool is missing",
+                A::Ready | A::NotInitialized => unreachable!("handled above"),
+            }
+        ),
+    }
+}
+
 /// Boot-time health check. Iterates every `enabled = true` MCP server
-/// that's not built-in, probes it, and flips `enabled = false` on
-/// any failure. Logs each transition.
+/// that's not built-in and records a health verdict for each.
+///
+/// It does **not** change `enabled`. A background sweep runs with no human
+/// present, against whatever transient state the machine booted into, and
+/// flipping `enabled = false` there silently undoes an admin's configuration —
+/// which is exactly what happened to a sandboxed `Rscript` server that was
+/// never broken in the first place. Recording `unhealthy` + the reason keeps the
+/// signal (the badge still shows it) without the destructive side effect.
+/// `enforce_on_create` / `enforce_on_update` still auto-disable, because there a
+/// human just acted and sees the result immediately.
 ///
 /// Runs as a fire-and-forget background task spawned from `mcp::init`
 /// — should NOT block boot. Built-in servers are owned by their
@@ -299,10 +441,10 @@ pub async fn probe(pool: &PgPool, server: &McpServer) -> Result<(), ProbeFailure
 /// No event emission here: the `EventBus` is built AFTER module
 /// init, so it's not in scope at this stage. The on-save handlers
 /// (which DO have access via Axum Extension) emit the AutoDisabled
-/// event when they downgrade a server. UI pages re-fetch on mount,
-/// so a boot-time auto-disable is visible the next time the user
-/// opens the MCP servers list — no event channel needed for the
-/// boot path specifically.
+/// event when they downgrade a server. The boot sweep never downgrades,
+/// so it has nothing to announce; UI pages re-fetch on mount, which is
+/// how a boot-recorded health verdict reaches the badge — no event
+/// channel is needed for the boot path specifically.
 pub async fn run_startup_health_check(pool: PgPool) {
     // Test-only escape hatch (debug builds) — the SAME seam `enforce_on_create` /
     // `enforce_on_update` already honor. A test that seeds a fake-URL MCP server
@@ -319,11 +461,11 @@ pub async fn run_startup_health_check(pool: PgPool) {
         return;
     }
 
-    // Use the passed `pool` for every DB op (list / record / disable) rather
+    // Use the passed `pool` for every DB op (list / record) rather
     // than the process-global `Repos`. In production the two are the same pool
     // (`init_repositories` runs once at boot), but `run_startup_health_check`
     // takes a `pool` param and must be self-consistent: reading the server list
-    // via a different pool than the one it writes disables through is a latent
+    // via a different pool than the one it writes verdicts through is a latent
     // bug. It also makes the boot path independent of `Repos` init ordering
     // (e.g. the in-process test harness, where sibling tests re-`init_repositories`
     // the global factory concurrently — this is what let the boot-recovery unit
@@ -349,6 +491,34 @@ pub async fn run_startup_health_check(pool: PgPool) {
     for server in servers {
         let server_id = server.id;
         let server_name = server.name.clone();
+
+        // Skip `run_in_sandbox` servers — the SAME guard `enforce_on_create`
+        // (see its rationale above) and `enforce_on_update` already apply, and
+        // the reason it gives is precisely this bug: "if we probed the raw
+        // command on the host, false-fail any guest-only command". `Rscript` is
+        // a guest-only command; this sweep was the one call site missing the
+        // guard, so it probed on the host, false-failed, and disabled the row.
+        //
+        // Their connectivity genuinely requires the code_sandbox runtime (lazy
+        // rootfs fetch/mount + bwrap spawn), which is not ready at boot by
+        // design — it is fetched on first use. Record the skip rather than
+        // leaving a stale badge from a previous run.
+        if server.run_in_sandbox {
+            tracing::debug!(
+                server_id = %server_id,
+                server_name = %server_name,
+                "mcp::health: skipping sandboxed server (connectivity requires the \
+                 code_sandbox runtime, which initialises lazily on first use)",
+            );
+            if let Err(e) =
+                record_health_check_on(&pool, server_id, "untested", Some(&sandbox_skip_reason()))
+                    .await
+            {
+                tracing::warn!(error = ?e, server_id = %server_id, "mcp::health: failed to record skipped status (non-fatal)");
+            }
+            continue;
+        }
+
         match probe(&pool, &server).await {
             Ok(()) => {
                 tracing::debug!(
@@ -361,21 +531,16 @@ pub async fn run_startup_health_check(pool: PgPool) {
                 }
             }
             Err(failure) => {
+                // Recorded, NOT disabled — see this function's doc comment.
+                // The row stays as the admin configured it; the badge carries
+                // the failure.
                 tracing::warn!(
                     server_id = %server_id,
                     server_name = %server_name,
                     reason = %failure.reason,
-                    "mcp::health: auto-disabling unreachable MCP server",
+                    "mcp::health: MCP server unreachable at startup (recorded; \
+                     the server is left enabled)",
                 );
-                // Best-effort flip; if the UPDATE itself fails, log
-                // and keep going — next boot will retry.
-                if let Err(e) = disable_for_health_failure(&pool, server_id).await {
-                    tracing::error!(
-                        server_id = %server_id,
-                        error = ?e,
-                        "mcp::health: failed to auto-disable server",
-                    );
-                }
                 if let Err(e) = record_health_check_on(&pool, server_id, "unhealthy", Some(&failure.reason)).await {
                     tracing::warn!(error = ?e, server_id = %server_id, "mcp::health: failed to record unhealthy status (non-fatal)");
                 }
@@ -404,8 +569,8 @@ async fn disable_for_health_failure(
 
 /// Record a boot-probe health result against an explicit `pool` — the
 /// pool-taking twin of `McpRepository::record_health_check` (which writes via
-/// the global `Repos` pool). `run_startup_health_check` uses this so its list /
-/// record / disable all go through the one pool it was handed.
+/// the global `Repos` pool). `run_startup_health_check` uses this so its list
+/// and record both go through the one pool it was handed.
 async fn record_health_check_on(
     pool: &PgPool,
     server_id: Uuid,
@@ -435,11 +600,11 @@ mod tests {
 
     /// Drives the REAL boot-time `run_startup_health_check` — the
     /// restart/resume-after-crash recovery path (audit all-19618bab49c1):
-    /// on every server (re)start it re-probes each enabled, non-built-in
-    /// MCP server and auto-disables the ones that no longer connect, so a
-    /// process that crashed (or whose upstream MCP servers died while it was
-    /// down) recovers a coherent health state at the next boot instead of
-    /// leaving dead servers `enabled` in users' tool lists.
+    /// on every server (re)start it re-probes each enabled, non-built-in,
+    /// non-sandboxed MCP server and RECORDS the verdict, so a process that
+    /// crashed (or whose upstream MCP servers died while it was down)
+    /// recovers a coherent health state at the next boot rather than
+    /// rendering a badge left over from before the crash.
     ///
     /// This is the genuinely durable recovery seam: the in-memory pieces
     /// (`elicitation::registry` oneshot channels, live connection handles in
@@ -449,15 +614,23 @@ mod tests {
     ///
     /// The test seeds an enabled HTTP server pointing at a closed loopback
     /// port (instant connection-refused, no network egress), simulates a boot
-    /// by calling `run_startup_health_check`, and asserts the unreachable
-    /// server was flipped to `enabled = false` with a persisted `unhealthy`
-    /// health record — exactly the recovery a real restart performs.
+    /// by calling `run_startup_health_check`, and asserts the failure was
+    /// RECORDED as `unhealthy`.
+    ///
+    /// It used to additionally assert the row was flipped to `enabled = false`.
+    /// That assertion was REMOVED, not weakened, because the behaviour it
+    /// pinned was itself the defect: a background sweep with no human present
+    /// silently undid an admin's configuration, and did so for servers it
+    /// should never have probed. The recovery this seam is responsible for is
+    /// the persisted HEALTH state — which is still asserted, and is what the
+    /// badge renders. Disabling remains the create/enable paths' job, where a
+    /// human just acted and sees the result. See DEC-2.
     ///
     /// DB-gated soft-skip (mirrors the suite's env-gated real-stack tests) so
     /// `cargo test --lib` without Postgres stays green; runs for real wherever
     /// `DATABASE_URL` points at a migrated DB.
     #[tokio::test]
-    async fn startup_health_check_auto_disables_unreachable_server_on_boot() {
+    async fn startup_health_check_records_unhealthy_without_disabling_on_boot() {
         let url = match std::env::var("DATABASE_URL") {
             Ok(u) => u,
             Err(_) => {
@@ -504,9 +677,8 @@ mod tests {
         // Simulate the boot recovery pass.
         run_startup_health_check(pool.clone()).await;
 
-        // Recovery outcome: the unreachable server was auto-disabled and its
-        // failure was recorded — the persisted health state the next-boot
-        // recovery is responsible for.
+        // Recovery outcome: the failure was recorded, and the row was left as
+        // the admin configured it.
         let (enabled_after, status): (bool, Option<String>) = sqlx::query_as(
             "SELECT enabled, last_health_check_status FROM mcp_servers WHERE id = $1",
         )
@@ -515,14 +687,16 @@ mod tests {
         .await
         .expect("re-read server after startup health check");
 
-        assert!(
-            !enabled_after,
-            "run_startup_health_check must auto-disable an unreachable server on boot"
-        );
         assert_eq!(
             status.as_deref(),
             Some("unhealthy"),
             "the boot probe failure must be recorded as an unhealthy health-check"
+        );
+        assert!(
+            enabled_after,
+            "run_startup_health_check must NOT disable a server: a background \
+             sweep runs with no human present and must not undo an admin's \
+             configuration. It records; create/enable disable. See DEC-2."
         );
 
         // Cleanup so repeated runs + sibling lib tests stay isolated.

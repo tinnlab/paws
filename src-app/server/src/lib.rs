@@ -92,6 +92,14 @@ pub use modules::elicitation_mcp::repository::ElicitationMcpRepository;
 pub mod llm_repository_health {
     pub use crate::modules::llm_repository::connection_health::run_startup_health_check;
 }
+// Same rationale for the MCP boot sweep: the integration tests drive the REAL
+// `run_startup_health_check` against the test DB rather than reimplementing its
+// skip/record logic, which is the only way a test can prove the sweep leaves a
+// sandboxed server alone.
+#[doc(hidden)]
+pub mod mcp_connection_health {
+    pub use crate::modules::mcp::connection_health::run_startup_health_check;
+}
 // Re-export the memory extraction prompt so integration tests can assert its
 // anti-injection / PII guards against the real runtime constant.
 #[doc(hidden)]
