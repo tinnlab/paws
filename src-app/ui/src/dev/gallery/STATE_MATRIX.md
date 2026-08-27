@@ -4002,8 +4002,8 @@ Required states: `error`
 | branch | `!value` | 91 |
 | branch | `model` | 97 |
 | error | `error && providers.length === 0` | 118 |
-| branch | `opt` | 180 |
-| branch | `pendingProviderForKey` | 200 |
+| branch | `opt` | 205 |
+| branch | `pendingProviderForKey` | 225 |
 
 ### `modules/user-llm-providers/chat-extension/components/ProviderApiKeyModal`
 

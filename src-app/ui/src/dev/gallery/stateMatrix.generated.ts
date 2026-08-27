@@ -3662,8 +3662,8 @@ export const STATE_MATRIX: Record<string, SurfaceStateMatrix> = {
       { kind: "branch", condition: "!value", line: 91 },
       { kind: "branch", condition: "model", line: 97 },
       { kind: "error", condition: "error && providers.length === 0", line: 118 },
-      { kind: "branch", condition: "opt", line: 180 },
-      { kind: "branch", condition: "pendingProviderForKey", line: 200 },
+      { kind: "branch", condition: "opt", line: 205 },
+      { kind: "branch", condition: "pendingProviderForKey", line: 225 },
     ],
   },
   "modules/user-llm-providers/chat-extension/components/ProviderApiKeyModal": {
