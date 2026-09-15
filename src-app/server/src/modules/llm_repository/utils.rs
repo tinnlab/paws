@@ -130,11 +130,19 @@ pub(crate) fn validate_test_endpoint(endpoint: &Option<String>) -> Result<(), Ap
                 "auth_test_api_endpoint exceeds 2048 chars",
             ));
         }
-        crate::utils::url_validator::validate_outbound_url(
-            url,
-            &crate::utils::url_validator::OutboundUrlPolicy::DEV_LOCAL,
-        )
-        .map_err(|e| {
+        // Match the sibling `validate_url`: DEV_LOCAL only under debug (so the
+        // loopback test seams + wiremock fixtures keep working), PUBLIC_HTTP_OR_HTTPS
+        // in release — which blocks loopback/RFC1918/link-local. The previous
+        // unconditional DEV_LOCAL permitted loopback in a RELEASE build, and the
+        // handler comment claiming loopback was blocked was simply false. Link-local
+        // (169.254.0.0/16, the IMDS range) is blocked under BOTH policies, so an IMDS
+        // endpoint is refused in debug and release alike.
+        let policy = if cfg!(debug_assertions) {
+            crate::utils::url_validator::OutboundUrlPolicy::DEV_LOCAL
+        } else {
+            crate::utils::url_validator::OutboundUrlPolicy::PUBLIC_HTTP_OR_HTTPS
+        };
+        crate::utils::url_validator::validate_outbound_url(url, &policy).map_err(|e| {
             AppError::bad_request(
                 "VALIDATION_ERROR",
                 format!("auth_test_api_endpoint invalid: {}", e),
@@ -353,8 +361,7 @@ pub fn repository_kind(url: &str) -> RepositoryKind {
 /// and it shares the `.github.com` suffix that decides the kind — so without
 /// this the capability probe would confirm the API and call the row verified.
 fn is_clonable_github_origin(url: &str) -> bool {
-    host_of(url).is_some_and(|h| h == "github.com" || h == "www.github.com")
-        && has_no_path(url)
+    host_of(url).is_some_and(|h| h == "github.com" || h == "www.github.com") && has_no_path(url)
 }
 
 /// Does this URL carry no meaningful path — i.e. is it an ORIGIN?
@@ -371,15 +378,17 @@ fn has_no_path(url: &str) -> bool {
 
 /// Is this URL a usable BASE for the kind's clone/download convention?
 ///
-/// The capability probe for a hosted kind necessarily queries that kind's fixed
-/// API host (`huggingface.co/api/models`, `api.github.com`), NOT the row's own
-/// URL — so on its own it would confirm the HOST's capability and attribute it
-/// to any row sharing that host. That is how `https://huggingface.co/custom`
-/// and `https://api.github.com` — two of the three reported rows — could still
-/// read `healthy` while being unable to serve a single model.
+/// This guard constrains the row's URL SHAPE. It is no longer the only thing
+/// standing between a bogus row and `healthy`: `capability_probe_url` now grades
+/// the row rather than the host — HuggingFace filters the listing by the row's own
+/// org (`?author=<org>`) and `Unknown` probes the row's own PATH — so a row for a
+/// nonexistent org yields an empty listing and reads `unverified`. Before that, the
+/// probe queried each kind's fixed API host and attributed the HOST's capability to
+/// any row sharing it, which is how `https://huggingface.co/custom` and
+/// `https://api.github.com` could read `healthy` while unable to serve a model.
 ///
-/// `Unknown` is deliberately unconstrained: a self-hosted mirror may legitimately
-/// live under a path, its probe already targets its own origin, and reporting it
+/// `Unknown` stays unconstrained here: a self-hosted mirror may legitimately live
+/// under a path, that path is what its probe now targets, and reporting it
 /// unverified would risk auto-disabling a working deployment (INV-4).
 fn is_usable_repository_base(kind: RepositoryKind, url: &str) -> bool {
     match kind {
@@ -389,15 +398,12 @@ fn is_usable_repository_base(kind: RepositoryKind, url: &str) -> bool {
         // repository_path of `<model>` builds `huggingface.co/<org>/<model>`,
         // which is a real model URL — and two pre-existing tests rely on it.
         //
-        // KNOWN GAP (recorded, not silently accepted): because the HF
-        // capability probe necessarily queries the FIXED `huggingface.co/api/models`
-        // rather than the row's own URL, a row naming a NON-EXISTENT org — the
-        // reported `https://huggingface.co/custom` — is still confirmed on the
-        // strength of the hub's catalogue. Closing it needs a per-row existence
-        // probe (e.g. `…/api/models?author=<org>`), which is a real behavioural
-        // change to a live third-party call and is out of scope here. An
-        // origin-only guard was tried and rejected: it would report every
-        // legitimate org-scoped row unverified.
+        // The gap this used to record — a row naming a NON-EXISTENT org still
+        // confirmed on the strength of the hub's whole catalogue — is CLOSED, by
+        // the per-row existence probe `…/api/models?limit=1&author=<org>` that
+        // `capability_probe_url` now builds. It is closed there rather than here
+        // on purpose: an origin-only guard at this layer was tried and rejected,
+        // because it reports every legitimate org-scoped row unverified.
         RepositoryKind::HuggingFace => true,
         RepositoryKind::Unknown => true,
     }
@@ -435,27 +441,59 @@ fn github_api_base() -> String {
 
 /// The URL whose response proves this repository can serve models.
 ///
-/// * Hugging Face — `/api/models?limit=1`, the model listing itself.
+/// * Hugging Face — `/api/models?limit=1`, the model listing itself, FILTERED by
+///   the org the row names in its own path (`&author=<org>`) when it names one.
+///   A row with no path segment (the built-in HF Hub) keeps the unfiltered probe
+///   and so confirms the host itself.
 /// * GitHub — the REST API root, whose catalog carries the
 ///   `repository_url` template the download path (`fetch_github_files`)
 ///   uses to read repo trees. A repository row carries no `owner/repo`
 ///   (that arrives per-download), so the host-level capability is the most
 ///   that can honestly be asserted here.
-/// * Unknown — the Hugging-Face-compatible `/api/models` convention on the
-///   repository's OWN origin, so a self-hosted mirror can still confirm
-///   itself.
+/// * Unknown — the Hugging-Face-compatible `/api/models` convention appended to
+///   the repository's OWN PATH (not merely its origin), because that path is the
+///   base the download path actually uses; a mirror serving only at its root
+///   would otherwise read `healthy` for a row pointing at a subpath.
 ///
 /// `None` when the URL does not parse well enough to build an origin.
 pub fn capability_probe_url(kind: RepositoryKind, repo_url: &str) -> Option<String> {
+    // Derive the org a HF-style row names in its OWN URL path (first non-empty
+    // segment). Filtering the listing by `author=<org>` turns the global-catalogue
+    // check into a PER-ROW existence check: a nonexistent org returns an EMPTY
+    // listing -> is_model_listing() false -> `unverified`, while a real org lists
+    // models -> `healthy`. A row with no path segment (the built-in HF Hub) keeps
+    // the global probe and correctly confirms the host itself. This ASKS whether
+    // the org lists models rather than assuming a path is illegitimate, so
+    // `huggingface.co/<org>` stays healthy — avoiding the origin-only guard a
+    // prior attempt was reverted for — and it costs no extra request.
+    let author = url::Url::parse(repo_url).ok().and_then(|u| {
+        u.path_segments()
+            .and_then(|mut s| s.find(|seg| !seg.is_empty()).map(str::to_owned))
+    });
     match kind {
-        RepositoryKind::HuggingFace => Some(format!("{}/api/models?limit=1", hf_api_base())),
+        RepositoryKind::HuggingFace => {
+            let mut u = url::Url::parse(&format!("{}/api/models", hf_api_base())).ok()?;
+            u.query_pairs_mut().append_pair("limit", "1");
+            if let Some(a) = &author {
+                u.query_pairs_mut().append_pair("author", a);
+            }
+            Some(u.into())
+        }
         RepositoryKind::Github => Some(format!("{}/", github_api_base())),
         RepositoryKind::Unknown => {
-            let origin = url::Url::parse(repo_url)
+            // A self-hosted mirror carries no `author` concept — its PATH is the
+            // base the download path uses. Probe `<row-url>/api/models`, preserving
+            // that path; collapsing to the origin (the old behaviour) graded a URL
+            // the download path never touches, so a mirror serving only at its root
+            // read `healthy` for a row pointing at a subpath.
+            let mut u = url::Url::parse(repo_url)
                 .ok()
-                .map(|u| u.origin().ascii_serialization())
-                .filter(|o| o != "null")?;
-            Some(format!("{origin}/api/models?limit=1"))
+                .filter(|u| u.origin().ascii_serialization() != "null")?;
+            let base = u.path().trim_end_matches('/').to_string();
+            u.set_path(&format!("{base}/api/models"));
+            u.set_query(None);
+            u.query_pairs_mut().append_pair("limit", "1");
+            Some(u.into())
         }
     }
 }
@@ -1010,7 +1048,7 @@ mod tests {
         assert!(!is_github_api_catalog(&serde_json::json!({"ok": true})));
     }
 
-        /// The reported `https://api.github.com` row. It shares the `.github.com`
+    /// The reported `https://api.github.com` row. It shares the `.github.com`
     /// suffix that selects the GitHub kind, and the GitHub REST catalogue it
     /// probes genuinely answers — so without an origin guard the capability
     /// probe CONFIRMS it and the row reads "Verified as a model repository",
@@ -1094,25 +1132,34 @@ mod tests {
     #[test]
     fn capability_url_targets_the_kinds_listing_surface() {
         assert_eq!(
-            capability_probe_url(RepositoryKind::HuggingFace, "https://huggingface.co")
-                .as_deref(),
+            capability_probe_url(RepositoryKind::HuggingFace, "https://huggingface.co").as_deref(),
             Some("https://huggingface.co/api/models?limit=1"),
         );
-        // NOTE the probe URL is the same for `https://huggingface.co/custom`,
-        // because it is derived from the KIND, not the row. That is exactly why
-        // the usable-base guard exists and is asserted separately below — on its
-        // own this derivation would attribute huggingface.co's catalogue to any
-        // row sharing the host, which is how the reported `/custom` row passed.
+        // A row WITH a path segment is filtered by that segment as the org, so
+        // it no longer inherits huggingface.co's whole catalogue. This is the
+        // property that stops a row for a nonexistent org reading `healthy`
+        // against a listing the download path never uses.
+        assert_eq!(
+            capability_probe_url(RepositoryKind::HuggingFace, "https://huggingface.co/custom")
+                .as_deref(),
+            Some("https://huggingface.co/api/models?limit=1&author=custom"),
+        );
         assert_eq!(
             capability_probe_url(RepositoryKind::Github, "https://github.com").as_deref(),
             Some("https://api.github.com/"),
         );
-        // Unknown hosts are probed on their OWN origin, so a self-hosted
-        // mirror can confirm itself — and the reported Vite case resolves
-        // to that dev server's `/api/models`, which is not a listing.
+        // An Unknown row is probed on its OWN path, not its origin: the path is
+        // the base the download path actually uses, so collapsing to the origin
+        // graded a URL that path never touches — a mirror serving only at its
+        // root read `healthy` for a row pointing at a subpath.
         assert_eq!(
             capability_probe_url(RepositoryKind::Unknown, "http://127.0.0.1:1520/models")
                 .as_deref(),
+            Some("http://127.0.0.1:1520/models/api/models?limit=1"),
+        );
+        // A row with no path keeps the bare-origin probe.
+        assert_eq!(
+            capability_probe_url(RepositoryKind::Unknown, "http://127.0.0.1:1520").as_deref(),
             Some("http://127.0.0.1:1520/api/models?limit=1"),
         );
         assert_eq!(
