@@ -8,7 +8,7 @@
 ## Summary
 
 - **353** surfaces carry at least one renderable-state signal.
-- **2187** signals total: 1722 branch, 140 empty, 125 error, 93 loading, 102 overlay, 5 panel.
+- **2188** signals total: 1723 branch, 140 empty, 125 error, 93 loading, 102 overlay, 5 panel.
 - **5** right-panel renderers registered (each a right-panel-open state).
 - **34** slot registrations (sidebar / settings / chat mount points).
 
@@ -3048,23 +3048,23 @@ Required states: _(branch-only — proven via dynamic coverage)_
 
 | kind | condition | line |
 |---|---|---|
-| branch | `server.is_built_in` | 181 |
-| branch | `!isEditable && server.is_system` | 186 |
-| branch | `server.supports_sampling` | 201 |
-| branch | `server.usage_mode === 'always'` | 206 |
-| branch | `status === 'unhealthy'` | 218 |
-| branch | `status === 'healthy'` | 241 |
-| branch | `canViewHistory` | 269 |
-| branch | `isEditable` | 285 |
-| branch | `canEdit` | 287 |
-| branch | `canTest` | 300 |
-| branch | `canEdit` | 316 |
-| branch | `canDelete && !server.is_built_in` | 328 |
-| branch | `server.last_health_check_status === 'unhealthy'` | 372 |
-| branch | `server.url` | 395 |
-| branch | `server.command` | 412 |
-| branch | `Array.isArray(server.args) && server.args.length > 0` | 416 |
-| branch | `bordered` | 432 |
+| branch | `server.is_built_in` | 191 |
+| branch | `!isEditable && server.is_system` | 196 |
+| branch | `server.supports_sampling` | 211 |
+| branch | `server.usage_mode === 'always'` | 216 |
+| branch | `status === 'unhealthy'` | 228 |
+| branch | `status === 'healthy'` | 251 |
+| branch | `canViewHistory` | 302 |
+| branch | `isEditable` | 318 |
+| branch | `canEdit` | 320 |
+| branch | `canTest` | 333 |
+| branch | `canEdit` | 349 |
+| branch | `canDelete && !server.is_built_in` | 361 |
+| branch | `server.last_health_check_status === 'unhealthy'` | 405 |
+| branch | `server.url` | 428 |
+| branch | `server.command` | 445 |
+| branch | `Array.isArray(server.args) && server.args.length > 0` | 449 |
+| branch | `bordered` | 465 |
 
 ### `modules/mcp/components/common/McpServerDrawer`
 
@@ -3072,38 +3072,39 @@ Required states: `error`, `open`
 
 | kind | condition | line |
 |---|---|---|
-| branch | `cancelled` | 195 |
-| branch | `!Array.isArray(parsed)` | 369 |
-| error | `hasError` | 481 |
-| branch | `args === null` | 484 |
-| branch | `clientId && !clientSecret && !hasExistingOAuth` | 612 |
-| branch | `!saved` | 643 |
-| branch | `!saved` | 708 |
-| branch | `!open` | 855 |
-| branch | `mode === 'create' \|\| mode === 'create-system'` | 897 |
-| branch | `v === false` | 898 |
-| branch | `missingRequired` | 913 |
-| branch | `!editingServer` | 970 |
-| branch | `v === false` | 974 |
-| branch | `!saved` | 999 |
-| branch | `(mode === 'edit' \|\| mode === 'edit-system') && editingServer?.last_health_check_status === 'unhealthy'` | 1069 |
-| branch | `(mode === 'create' \|\| mode === 'create-system')` | 1094 |
-| branch | `(!!editingServer \|\| mode === 'create' \|\| mode === 'create-system')` | 1117 |
-| branch | `prefillTransportSwapped` | 1149 |
-| branch | `transportType === 'stdio'` | 1184 |
-| branch | `(transportType === 'http' \|\| transportType === 'sse')` | 1230 |
-| branch | `transportType === 'http' && isUserMode` | 1256 |
-| branch | `oauthEnabled` | 1276 |
-| branch | `supportsSampling` | 1334 |
-| branch | `transportType === 'stdio' && (mode === 'create-system' \|\| mode === 'edit-system')` | 1365 |
-| branch | `runInSandbox` | 1386 |
-| branch | `isUserMode && transportType === 'stdio'` | 1400 |
-| overlay | `<Drawer open>` | 1430 |
-| branch | `canManage && !!transportType` | 1438 |
-| branch | `canManage` | 1454 |
-| branch | `isHistoryMode && editingServer` | 1468 |
-| branch | `isEditMode && editingServer` | 1472 |
-| branch | `isSystemMode` | 1501 |
+| branch | `cancelled` | 196 |
+| branch | `!Array.isArray(parsed)` | 370 |
+| error | `hasError` | 482 |
+| branch | `args === null` | 485 |
+| branch | `clientId && !clientSecret && !hasExistingOAuth` | 613 |
+| branch | `!saved` | 644 |
+| branch | `!saved` | 710 |
+| branch | `!open` | 857 |
+| branch | `mode === 'create' \|\| mode === 'create-system'` | 899 |
+| branch | `v === false` | 900 |
+| branch | `missingRequired` | 915 |
+| branch | `sandboxed` | 948 |
+| branch | `!editingServer` | 1007 |
+| branch | `v === false` | 1011 |
+| branch | `!saved` | 1036 |
+| branch | `(mode === 'edit' \|\| mode === 'edit-system') && editingServer?.last_health_check_status === 'unhealthy'` | 1139 |
+| branch | `(mode === 'create' \|\| mode === 'create-system')` | 1164 |
+| branch | `(!!editingServer \|\| mode === 'create' \|\| mode === 'create-system')` | 1187 |
+| branch | `prefillTransportSwapped` | 1219 |
+| branch | `transportType === 'stdio'` | 1254 |
+| branch | `(transportType === 'http' \|\| transportType === 'sse')` | 1300 |
+| branch | `transportType === 'http' && isUserMode` | 1326 |
+| branch | `oauthEnabled` | 1346 |
+| branch | `supportsSampling` | 1404 |
+| branch | `transportType === 'stdio' && (mode === 'create-system' \|\| mode === 'edit-system')` | 1435 |
+| branch | `runInSandbox` | 1456 |
+| branch | `isUserMode && transportType === 'stdio'` | 1470 |
+| overlay | `<Drawer open>` | 1500 |
+| branch | `canManage && !!transportType` | 1508 |
+| branch | `canManage` | 1524 |
+| branch | `isHistoryMode && editingServer` | 1538 |
+| branch | `isEditMode && editingServer` | 1542 |
+| branch | `isSystemMode` | 1571 |
 
 ### `modules/mcp/components/common/McpServerRuntimeTab`
 

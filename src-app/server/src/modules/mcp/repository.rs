@@ -515,9 +515,12 @@ impl McpRepository {
 
     /// Update one server's `last_health_check_*` columns. Called by
     /// every probe site (boot, create, update-enable-transition,
-    /// explicit Test Connection button). `status` is "healthy" or
-    /// "unhealthy"; on healthy `reason` should be None, on unhealthy
-    /// it's the verbatim probe failure message.
+    /// explicit Test Connection button). `status` is "healthy",
+    /// "unhealthy", or "untested"; on healthy `reason` should be None,
+    /// on unhealthy it's the verbatim probe failure message, and
+    /// "untested" is written when a path DECLINED to judge the row
+    /// (a `run_in_sandbox` server, which no probe path can validate)
+    /// and carries that explanation as its reason.
     pub async fn record_health_check(
         &self,
         server_id: Uuid,

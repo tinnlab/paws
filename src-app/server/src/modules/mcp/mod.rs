@@ -80,9 +80,12 @@ impl AppModule for McpModule {
             .map_err(|e| format!("Failed to extract MCP embedded binaries: {}", e))?;
         tracing::info!("MCP: Embedded binaries ready");
 
-        // Boot health check — probe every enabled non-built-in MCP
-        // server and auto-disable unreachable ones. Fire-and-forget
-        // so it doesn't block boot; the next `cargo run` retries.
+        // Boot health check — probe every enabled, non-built-in,
+        // non-sandboxed MCP server and RECORD its verdict. It does not
+        // change `enabled`: a background sweep runs with no human present
+        // and must not undo an admin's configuration (see
+        // `connection_health`'s module docs). Fire-and-forget so it
+        // doesn't block boot; the next start retries.
         let health_pool = (*ctx.db_pool).clone();
         tokio::spawn(async move {
             connection_health::run_startup_health_check(health_pool).await;

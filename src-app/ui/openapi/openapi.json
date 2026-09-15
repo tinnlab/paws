@@ -36111,7 +36111,7 @@
             "default": null
           },
           "last_health_check_reason": {
-            "description": "Human reason on unhealthy. `None` on healthy / untested.",
+            "description": "Human reason for the current status. Set on \"unhealthy\", and on the\n declined-probe form of \"untested\". `None` on \"healthy\" and on a\n never-probed row.",
             "type": [
               "string",
               "null"
@@ -36119,7 +36119,7 @@
             "default": null
           },
           "last_health_check_status": {
-            "description": "\"untested\" | \"healthy\" | \"unhealthy\". Defaults to \"untested\"\n for freshly-created rows that have never been probed.",
+            "description": "\"untested\" | \"healthy\" | \"unhealthy\". \"untested\" means NO VERDICT:\n either the row was never probed (the column default), or a probe path\n declined to judge it. Sandboxed rows are always the second case today:\n Test Connection is structurally host-only, and the create, enable and\n boot paths deliberately skip them because the sandbox runtime is\n fetched and mounted lazily on the first real tool call.",
             "type": "string",
             "default": "untested"
           },
@@ -36397,7 +36397,7 @@
             "default": null
           },
           "last_health_check_reason": {
-            "description": "Human reason on unhealthy. `None` on healthy / untested.",
+            "description": "Human reason for the current status. Set on \"unhealthy\", and on the\n declined-probe form of \"untested\". `None` on \"healthy\" and on a\n never-probed row.",
             "type": [
               "string",
               "null"
@@ -36405,7 +36405,7 @@
             "default": null
           },
           "last_health_check_status": {
-            "description": "\"untested\" | \"healthy\" | \"unhealthy\". Defaults to \"untested\"\n for freshly-created rows that have never been probed.",
+            "description": "\"untested\" | \"healthy\" | \"unhealthy\". \"untested\" means NO VERDICT:\n either the row was never probed (the column default), or a probe path\n declined to judge it. Sandboxed rows are always the second case today:\n Test Connection is structurally host-only, and the create, enable and\n boot paths deliberately skip them because the sandbox runtime is\n fetched and mounted lazily on the first real tool call.",
             "type": "string",
             "default": "untested"
           },

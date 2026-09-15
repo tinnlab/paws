@@ -30,6 +30,7 @@ import { McpUserPolicy } from '@/modules/mcp/stores/mcpUserPolicy'
 import { McpServer as McpServerStore } from '@/modules/mcp/stores/mcpServer'
 import { McpServerDrawer as McpServerDrawerStore } from '@/modules/mcp/stores/mcpServerDrawer'
 import { SandboxFlavors as SandboxFlavorsStore } from '@/modules/code-sandbox/stores/sandboxFlavors'
+import { showConnectionTestResult } from './connectionTestToast'
 
 /// Form-state row shape for env vars and HTTP headers in this drawer.
 /// `_was_saved_secret` is a hidden field set by the form initializer
@@ -668,11 +669,12 @@ export function McpServerDrawer() {
       const result = saved.is_system
         ? await SystemMcpServer.testSystemServerConnection(payload)
         : await McpServerStore.testMcpServerConnection(payload)
-      if (result.success) {
-        message.success(result.message || 'Connection successful')
-      } else {
-        message.error(result.message || 'Connection failed')
-      }
+      // Third arg is `notTestable`: Test Connection probes on the host and
+      // cannot reach a sandboxed server at all, so the backend answers
+      // `success: false` with an explanation and records the row `untested`
+      // rather than `unhealthy`. Routed through the shared helper rather than
+      // inlined — three copies of this branch is how they drift apart.
+      showConnectionTestResult(message, result, saved.run_in_sandbox)
 
       // The probe (sent with `id`) is recorded onto the persisted row's
       // `last_health_check_*` by the backend. Re-fetch + re-bind the drawer to
@@ -918,6 +920,41 @@ export function McpServerDrawer() {
 
       setTogglingEnable(true)
       try {
+        // A sandboxed row is not probed here at all, and must not be.
+        //
+        // Test Connection always probes on the HOST (the request type carries
+        // no run-in-sandbox flag and the ephemeral server hardcodes it false),
+        // so for a guest-only command it fails with the host allowlist as the
+        // reason and the advice "Enable run-in-sandbox" — which the operator
+        // has just ticked. That is the exact misdirection this whole area was
+        // fixed for, and on the create screen it is the first thing an admin
+        // meets.
+        //
+        // Skipping is not a workaround, it is agreement with the server:
+        // `enforce_on_create` skips the probe for a run_in_sandbox row too, so
+        // a verdict gathered here would be discarded on save regardless.
+        //
+        // The predicate is NOT the raw `run_in_sandbox` field. That field is
+        // only rendered for the system modes, so in USER mode it is always
+        // false — while user policy force-sandboxes every user stdio server.
+        // Keying on the raw field left the worse half of the bug in place: a
+        // non-admin creating `Rscript` got the host-allowlist message telling
+        // them to enable a toggle their screen does not even show. This is the
+        // same predicate the command validator already uses (see `isSandboxed`
+        // above); the two must agree, which is why it is spelled the same way.
+        const sandboxed =
+          vals.transport_type === 'stdio' &&
+          (!isSystemMode || vals.run_in_sandbox === true)
+        if (sandboxed) {
+          setEnabledValue(true)
+          form.setValue('enabled' as any, true)
+          message.info(
+            'Enabled in form. A sandboxed server cannot be connection-tested ' +
+              'from here — it connects on the first real tool call, when the ' +
+              'sandbox is fetched and mounted.',
+          )
+          return
+        }
         // Build a no-id TestMcpConnectionRequest from form values.
         // No `id` field → backend treats it as a one-shot ephemeral probe.
         const oauth = vals.oauth_enabled
@@ -1003,7 +1040,15 @@ export function McpServerDrawer() {
           return
         }
         McpServerDrawerStore.openMcpServerDrawer(saved, mode)
-        message.success('Server enabled — connection test passed')
+        // Only claim a test passed when one actually ran. The enable path
+        // skips the probe for a sandboxed row, so the unconditional wording
+        // asserted a passing test while the drawer could still be rendering a
+        // failure Alert for the same row from an older verdict.
+        message.success(
+          saved.run_in_sandbox
+            ? 'Server enabled. It is not connection-tested from here — a sandboxed server connects on the first real tool call.'
+            : 'Server enabled — connection test passed',
+        )
       } catch (error) {
         // Most likely cause: MCP_ENABLE_FAILED_HEALTH_CHECK from
         // the probe. Surface the reason verbatim, then refresh from
@@ -1043,9 +1088,34 @@ export function McpServerDrawer() {
   const healthStatus = editingServer?.last_health_check_status
   const healthReason = editingServer?.last_health_check_reason
   const formatHealthTooltip = () => {
+    // A sandboxed row gets its own baseline in BOTH directions. The generic
+    // "a connection test will run first" is false for it (enable skips the
+    // probe), and the generic "the server is reachable" asserts exactly what
+    // no probe path has established — which would then be followed, in the
+    // same hover, by a recorded reason saying reachability was never checked.
+    const sandboxed = editingServer?.run_in_sandbox === true
+    // "reachable" is a claim about the last verdict, not about the row's kind.
+    // Assert it only when a probe actually established it: a sandboxed row has
+    // no verdict, and an `unhealthy` row has the opposite one — and since the
+    // boot sweep no longer disables, an unreachable row now STAYS enabled and
+    // would otherwise take the "reachable" baseline while the same tooltip goes
+    // on to print the failure underneath it.
+    const claimReachable = !sandboxed && healthStatus !== 'unhealthy'
     const baseline = enabledValue
-      ? 'Enabled — the server is reachable and queried by the LLM. Click to disable.'
-      : 'Disabled — the server is not started or queried. Click to enable (a connection test will run first).'
+      ? claimReachable
+        ? 'Enabled — the server is reachable and queried by the LLM. Click to disable.'
+        : 'Enabled — the server is offered to the LLM. Click to disable.'
+      : sandboxed
+        ? 'Disabled — the server is not started or queried. Click to enable.'
+        : 'Disabled — the server is not started or queried. Click to enable (a connection test will run first).'
+    // `untested` WITH a recorded reason means the probe was deliberately
+    // skipped and the backend said why (a `run_in_sandbox` server, whose
+    // connection is established lazily on the first real tool call). Surface
+    // that — dropping it leaves the admin with no explanation for a server
+    // that never gets a verdict.
+    if (healthStatus === 'untested' && healthReason) {
+      return `${baseline}\n\n${healthReason}`
+    }
     if (!healthAt || healthStatus === 'untested') {
       return baseline
     }

@@ -3690,11 +3690,19 @@ export interface McpServer {
    *  See migration 82.
    */
   last_health_check_at?: string
-  /** Human reason on unhealthy. `None` on healthy / untested. */
+  /**
+   * Human reason for the current status. Set on "unhealthy", and on the
+   *  declined-probe form of "untested". `None` on "healthy" and on a
+   *  never-probed row.
+   */
   last_health_check_reason?: string
   /**
-   * "untested" | "healthy" | "unhealthy". Defaults to "untested"
-   *  for freshly-created rows that have never been probed.
+   * "untested" | "healthy" | "unhealthy". "untested" means NO VERDICT:
+   *  either the row was never probed (the column default), or a probe path
+   *  declined to judge it. Sandboxed rows are always the second case today:
+   *  Test Connection is structurally host-only, and the create, enable and
+   *  boot paths deliberately skip them because the sandbox runtime is
+   *  fetched and mounted lazily on the first real tool call.
    */
   last_health_check_status?: string
   max_concurrent_sessions?: number
@@ -3821,11 +3829,19 @@ export interface McpServerWithHealthWarning {
    *  See migration 82.
    */
   last_health_check_at?: string
-  /** Human reason on unhealthy. `None` on healthy / untested. */
+  /**
+   * Human reason for the current status. Set on "unhealthy", and on the
+   *  declined-probe form of "untested". `None` on "healthy" and on a
+   *  never-probed row.
+   */
   last_health_check_reason?: string
   /**
-   * "untested" | "healthy" | "unhealthy". Defaults to "untested"
-   *  for freshly-created rows that have never been probed.
+   * "untested" | "healthy" | "unhealthy". "untested" means NO VERDICT:
+   *  either the row was never probed (the column default), or a probe path
+   *  declined to judge it. Sandboxed rows are always the second case today:
+   *  Test Connection is structurally host-only, and the create, enable and
+   *  boot paths deliberately skip them because the sandbox runtime is
+   *  fetched and mounted lazily on the first real tool call.
    */
   last_health_check_status?: string
   max_concurrent_sessions?: number
