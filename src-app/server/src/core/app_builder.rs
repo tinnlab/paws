@@ -19,6 +19,44 @@ pub use ziee_framework::app_builder::{
     apply_rate_limit_layer, build_api_router, create_modules, initialize_modules,
 };
 
+/// Install the MCP session manager onto a server assembly: build it (which also
+/// publishes the process-wide `manager::global()` handle) and layer it onto the
+/// router as a request `Extension`. Returns the layered router plus the handle.
+///
+/// **Called from BOTH `lib.rs::setup_server` and `main.rs`** so the two server
+/// assemblies cannot drift apart. That drift is not hypothetical: this helper
+/// exists because only `main.rs` used to install the manager, so every MCP
+/// runtime route — the whole `runtime.rs` family plus both Test Connection
+/// routes — answered `500 Missing request extension: Arc<McpSessionManager>` on
+/// the desktop build, which boots through `setup_server` instead. `global()` was
+/// unset there too, which additionally hard-failed workflow `kind: tool` /
+/// `kind: agent` steps and the agent-core chat host with "MCP session manager
+/// not initialized".
+///
+/// This is the only place the `Extension` is layered and the only place
+/// `set_global` is reached. It lives here, next to `apply_rate_limit_layer` and
+/// `create_cors_layer`, because router assembly is this layer's job: the MCP
+/// client module produces a value, the assembly layer does the layering — the
+/// same shape as `build_auth_context` / `build_file_context` /
+/// `ZieeIdentityResolver` at the sibling `.layer(...)` call sites.
+///
+/// NOT the only place an `McpSessionManager` is CONSTRUCTED:
+/// `modules::mcp::chat_extension::McpChatExtension::new` builds a private one
+/// for the chat path. That is harmless only while `McpSessionManager::sessions`
+/// is never populated (see `spawn_idle_reaper`'s note); if pooling is rewired,
+/// the chat extension must be folded onto `manager::global()` or its sessions
+/// will be invisible to `McpSessionCleanupHandler`.
+pub fn install_mcp_session_manager(
+    router: axum::Router,
+    config: Arc<crate::core::config::Config>,
+) -> (
+    axum::Router,
+    Arc<crate::modules::mcp::client::manager::McpSessionManager>,
+) {
+    let manager = crate::modules::mcp::client::manager::build_session_manager(config);
+    (router.layer(axum::Extension(manager.clone())), manager)
+}
+
 /// Every custom request header ziee's API READS, assembled from the constants the
 /// handlers themselves use — never re-spelled as a literal, so a rename cannot
 /// leave the allowlist silently stale.

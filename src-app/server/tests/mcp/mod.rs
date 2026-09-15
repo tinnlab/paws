@@ -42,6 +42,9 @@ mod list_tools_for_builder_test;
 // ============================================================================
 
 mod runtime;
+// Non-regression: the standalone binary keeps the MCP session-manager
+// extension after it moved to the shared `manager::install` site.
+mod session_manager_extension_test;
 // Stdio transport tests (18 tests)
 mod http_transport_test;
 // HTTP transport tests (12 tests)

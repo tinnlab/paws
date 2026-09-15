@@ -19,4 +19,5 @@ mod common;
 mod auto_assign_mcp;
 mod backend_lifecycle;
 mod host_mount_tests;
+mod mcp_routes;
 mod remote_access;
