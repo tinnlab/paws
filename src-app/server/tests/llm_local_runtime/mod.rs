@@ -22,6 +22,7 @@ mod proxy_auth_test;
 mod proxy_forward_test;
 mod reaper_drain_test;
 mod settings_test;
+mod start_races_test;
 mod sse_logs_test;
 mod supervision_test;
 mod sync_emit_test;

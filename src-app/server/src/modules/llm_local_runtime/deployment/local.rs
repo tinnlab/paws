@@ -921,11 +921,45 @@ impl Deployment for LocalDeployment {
         model_path: &str,
         config: &serde_json::Value,
     ) -> AppResult<DeploymentResult> {
-        // Check if already running
+        // Refuse a SECOND engine for a model that already has a LIVE one — but
+        // only if it really is live.
+        //
+        // This used to be a bare `contains_key`, which conflated "an engine is
+        // running" with "a map entry exists". Those diverge the moment a child
+        // dies without going through `stop()` — an OOM kill, a segfault, an
+        // operator's `kill`, or an engine that rejects the model file and exits
+        // on its own. The entry survives as a corpse and then permanently
+        // refuses every restart with `Model instance already running`.
+        //
+        // That is a BRICKING path, not an inconvenience: `ensure_running` counts
+        // each failed start as a crash, so a user pressing send a few times
+        // after one out-of-band death trips the flap cap (5 crashes / 60s) and
+        // the model is marked `failed` until an admin clears it — permanently
+        // unusable because of a corpse in a HashMap. Found by the out-of-band
+        // kill test in `tests/llm_local_runtime/start_races_test.rs`, which went
+        // from `in restart backoff` to `marked failed (flap protection)` while
+        // retrying a model whose file was perfectly good.
+        //
+        // So: reap first, and let a dead entry be replaced rather than obstruct.
         {
-            let processes = self.processes.read().await;
-            if processes.contains_key(&model_id) {
-                return Err(AppError::conflict("Model instance already running"));
+            let mut processes = self.processes.write().await;
+            if let Some(existing) = processes.get_mut(&model_id) {
+                let alive = match existing.child.try_wait() {
+                    Ok(Some(_exited)) => false,
+                    Ok(None) => true,
+                    // Can't tell — treat as alive, the conservative choice: a
+                    // spurious conflict is recoverable, a second engine on the
+                    // same model is not.
+                    Err(_) => true,
+                };
+                if alive {
+                    return Err(AppError::conflict("Model instance already running"));
+                }
+                tracing::warn!(
+                    "local deployment: model {model_id} had a stale process entry for an \
+                     engine that already exited; replacing it"
+                );
+                processes.remove(&model_id);
             }
         }
 
@@ -1116,6 +1150,27 @@ impl Deployment for LocalDeployment {
             .remove(&model_id)
             .ok_or_else(|| AppError::not_found("Process not found"))?;
 
+        // Is it already gone? Ask before killing.
+        //
+        // `status()` reaps an exited child (that is how it avoids reporting a
+        // zombie as running), and the auto-start fail-fast path calls `status()`
+        // and then this. Killing an already-reaped child fails with
+        // `InvalidInput`, which the old code logged as
+        // `Failed to kill process for model …` — a WARN that reads like the
+        // teardown went wrong, on the one path where the engine had in fact
+        // already exited cleanly on its own. Since that path is the corrupt-model
+        // case this branch is about, the misleading line would land in exactly
+        // the logs someone reads while diagnosing it.
+        let already_exited = matches!(proc_info.child.try_wait(), Ok(Some(_)));
+
+        if already_exited {
+            tracing::info!(
+                "Process for model {} had already exited; nothing to kill",
+                model_id
+            );
+            return Ok(());
+        }
+
         // Try graceful shutdown first
         if let Err(e) = proc_info.child.kill().await {
             tracing::warn!("Failed to kill process for model {}: {}", model_id, e);
@@ -1143,16 +1198,39 @@ impl Deployment for LocalDeployment {
     }
 
     async fn status(&self, model_id: Uuid) -> AppResult<InstanceStatus> {
-        let processes = self.processes.read().await;
+        // WRITE lock, deliberately: `try_wait()` needs `&mut Child`, and
+        // reaping is the only way to answer this question honestly.
+        //
+        // `Child::id()` alone is NOT a liveness test. It keeps returning
+        // `Some` for a child that has exited but not been waited on — a
+        // zombie — so this used to report a dead engine as `running: true`.
+        // Observed directly: an engine handed a corrupt model file exited
+        // in 27ms, sat as `Z (defunct)`, and `status()` still said running,
+        // which is what let callers wait out the full auto-start timeout on
+        // a process that was already gone. `try_wait()` reaps it, so the
+        // zombie is also cleaned up rather than accumulating.
+        let mut processes = self.processes.write().await;
 
-        if let Some(proc_info) = processes.get(&model_id) {
+        if let Some(proc_info) = processes.get_mut(&model_id) {
             let uptime = proc_info.started_at.elapsed().as_secs() as i64;
 
-            // Try to get actual PID (may have changed or process may have died)
-            let pid = proc_info.child.id().map(|id| id as i32);
+            let running = match proc_info.child.try_wait() {
+                // Exited (and now reaped).
+                Ok(Some(_status)) => false,
+                // Still alive.
+                Ok(None) => true,
+                // Can't tell — assume alive rather than declaring a
+                // possibly-healthy engine dead on a transient errno.
+                Err(_) => true,
+            };
+            let pid = if running {
+                proc_info.child.id().map(|id| id as i32)
+            } else {
+                None
+            };
 
             Ok(InstanceStatus {
-                running: pid.is_some(),
+                running,
                 pid,
                 port: Some(proc_info.port),
                 uptime_seconds: Some(uptime),

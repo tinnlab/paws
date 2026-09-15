@@ -283,7 +283,14 @@ export const STATE_COVERAGE = {
   "modules/llm-provider/components/llm-models/AddRemoteLlmModelDrawer:open": { skip: true, reason: "static surface — rendered within its page; 'open' branch proven by Part 2 runtime coverage" },
   "modules/llm-provider/components/llm-models/EditLlmModelDrawer:open": { skip: true, reason: "static surface — rendered within its page; 'open' branch proven by Part 2 runtime coverage" },
   "modules/llm-provider/components/widgets/DownloadIndicatorWidget:empty": { skip: true, reason: "via surface — rendered within its page; 'empty' branch proven by Part 2 runtime coverage" },
-  "modules/llm-provider/components/widgets/DownloadIndicatorWidget:open": { skip: true, reason: "via surface — rendered within its page; 'open' branch proven by Part 2 runtime coverage" },
+  // Delivered, and deliberately no longer skipped. This cell used to read
+  // "proven by Part 2 runtime coverage", which was true of the BRANCH and
+  // useless for the surface: the popover's contents were never rendered with
+  // rows in them, so 52px of every row painting outside the panel was invisible
+  // to every gate. The `open-downloads` interaction opens it for real, with an
+  // active AND a failed download and a long display name — the state the defect
+  // lived in.
+  "modules/llm-provider/components/widgets/DownloadIndicatorWidget:open": { via: 'interaction:open-downloads' },
   "modules/llm-provider/widgets/LLMProviderGroupWidget:delayed": { skip: true, reason: "via surface — rendered within its page; 'delayed' branch proven by Part 2 runtime coverage" },
   "modules/llm-provider/widgets/LLMProviderGroupWidget:empty": { skip: true, reason: "via surface — rendered within its page; 'empty' branch proven by Part 2 runtime coverage" },
   "modules/llm-provider/widgets/LLMProviderGroupWidget:error": { skip: true, reason: "via surface — rendered within its page; 'error' branch proven by Part 2 runtime coverage" },

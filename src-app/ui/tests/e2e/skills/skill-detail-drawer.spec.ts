@@ -10,22 +10,39 @@ import { byTestId } from '../testid.ts'
  * "Couldn't load skill content." on failure.
  */
 
-const SEED_SKILL_HUB_ID = 'io.github.ziee/effective-prompting'
-
-async function installSeedSkill(apiURL: string, token: string) {
-  const res = await fetch(`${apiURL}/api/skills/install-from-hub`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ hub_id: SEED_SKILL_HUB_ID }),
-  })
-  if (!res.ok) throw new Error(`install skill failed: ${res.status}`)
+/**
+ * Wait for a skill to exist that the drawer can open.
+ *
+ * This used to install `io.github.ziee/effective-prompting` from the hub seed.
+ * paws removed that entry — the hub UI is hidden on this instance
+ * (`docs/design/paws-feature-surface.md` item 11), so a hub-only skill ships as
+ * dead weight — and the install then 404'd, failing this spec for a reason
+ * unrelated to the drawer.
+ *
+ * The built-in capability skills are a better fixture anyway: they are synced
+ * on boot with a real `extracted_path` + `entry_point`, which is exactly what
+ * the body endpoint under test reads, and they remove this spec's dependency on
+ * the hub entirely. The sync is a spawned task, so poll rather than assume.
+ */
+async function waitForAnInstalledSkill(apiURL: string, token: string) {
+  for (let i = 0; i < 40; i++) {
+    const res = await fetch(`${apiURL}/api/skills`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (res.ok) {
+      const body = await res.json()
+      if ((body.skills ?? []).length > 0) return
+    }
+    await new Promise(r => setTimeout(r, 250))
+  }
+  throw new Error('no skills appeared within ~10s — the boot sync never ran')
 }
 
 test.describe('Skills — detail drawer', () => {
   test('opening a skill loads its SKILL.md body', async ({ page, testInfra }) => {
     const { baseURL, apiURL } = testInfra
     await loginAsAdmin(page, baseURL)
-    await installSeedSkill(apiURL, await getAdminToken(apiURL))
+    await waitForAnInstalledSkill(apiURL, await getAdminToken(apiURL))
 
     await page.goto(`${baseURL}/settings/skills`)
     const card = page.locator('[data-testid^="skill-list-card-"]').first()
@@ -47,7 +64,7 @@ test.describe('Skills — detail drawer', () => {
   }) => {
     const { baseURL, apiURL } = testInfra
     await loginAsAdmin(page, baseURL)
-    await installSeedSkill(apiURL, await getAdminToken(apiURL))
+    await waitForAnInstalledSkill(apiURL, await getAdminToken(apiURL))
 
     // Force the body fetch to fail so the drawer's error branch renders.
     await page.route(/\/api\/skills\/[^/]+\/body$/, async (route, req) => {

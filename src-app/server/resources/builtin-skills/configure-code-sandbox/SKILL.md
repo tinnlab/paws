@@ -31,10 +31,6 @@ The sandbox is exposed as `execute_command` via the code_sandbox MCP server. The
 
 **Can't**: read host files outside the workspace, escape to host shell, see other conversations' data, persist files beyond the conversation. `--clearenv` wipes the host environment (no DATABASE_URL, no JWT secret, no API keys leak in).
 
-## Workflows that use sandbox
-
-Workflows with `kind: sandbox` steps need the sandbox enabled. The workflow declares its required `sandbox.flavor`; first-run triggers the flavor fetch if not pre-installed.
-
 ## Permissions
 
 - `code_sandbox::environments::manage` -- pre-fetch / evict rootfs flavors.

@@ -1,6 +1,6 @@
 {
  "schema_version": 2,
- "hub_version": "2.0.0",
+ "hub_version": "2.1.0",
  "generated_at": "2026-06-15T04:23:16Z",
  "items": [
   {
@@ -472,24 +472,6 @@
    "min_ziee_version": null,
    "version": "1.0.0",
    "manifest_path": "workflows/io.github.ziee/web-page-to-markdown/1.0.0.json"
-  },
-  {
-   "name": "io.github.ziee/effective-prompting",
-   "category": "skill",
-   "title": "Effective Prompting",
-   "summary": "Model-agnostic techniques for clearer, more reliable LLM prompts \u2014 structure, output shaping, few-shot, and hallucination control.",
-   "tags": [
-    "prompting",
-    "prompt-engineering",
-    "llm",
-    "output-format",
-    "hallucination"
-   ],
-   "verified": true,
-   "added_at": "2026-06-15",
-   "min_ziee_version": null,
-   "version": "1.0.0",
-   "manifest_path": "skills/io.github.ziee/effective-prompting/1.0.0.json"
   },
   {
    "name": "io.github.ziee/sr-review",

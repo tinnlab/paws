@@ -144,6 +144,15 @@ export function ModelSelector() {
     )
   }
 
+  // Nothing to pick from, and not because we are still fetching. Distinguishing
+  // this from "loading" is the whole point: an empty dropdown is the one state
+  // that reads identically to a broken one, so it must say which it is.
+  //
+  // The trigger's own label carries it too, not just the popup. A trigger that
+  // reads "Select Model" and opens onto a single line of prose still invites a
+  // click that cannot succeed; saying it up front is the honest affordance.
+  const hasNoModels = !loading && availableModels.length === 0
+
   return (
     // `min-w-0`: this wrapper is a flex item in the composer's right toolbar
     // group. Without it its automatic minimum is the trigger's min-content —
@@ -157,11 +166,27 @@ export function ModelSelector() {
         data-testid="ullm-model-select"
         value={selectedModelId ?? undefined}
         onChange={handleChange}
-        placeholder={loading && providers.length === 0 ? 'Loading…' : 'Select Model'}
+        placeholder={
+          loading && providers.length === 0
+            ? 'Loading…'
+            : hasNoModels
+              ? 'No models'
+              : 'Select Model'
+        }
         aria-label="Model"
         loading={loading && providers.length === 0}
-        disabled={sending}
         options={availableModels}
+        // What the popup says instead of rendering blank. Worded for THIS
+        // surface rather than left to the kit's generic default: the reader is
+        // in a chat composer, and the actionable fact is that a model has to be
+        // added or enabled before they can send anything.
+        emptyText="No models available — add or enable one in Settings"
+        // NOT disabled when there are no models, deliberately. The kit passes
+        // `disabled` straight through to `SelectRoot`, and a disabled root will
+        // not open — which would make the sentence above unreachable and leave
+        // the user with a dead control and no explanation. The empty popup IS
+        // the explanation, so it has to stay openable.
+        disabled={sending}
         // Render the SELECTED label as a block-level truncating span. The kit
         // trigger sets both `line-clamp-1` and `flex` on the value slot, and
         // Tailwind orders `display` after `line-clamp`, so `display:flex` wins
