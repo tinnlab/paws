@@ -261,19 +261,37 @@ export function LeftSidebar({ rootStyle, rootClassName }: LeftSidebarProps = {})
             onSelect={handleToolsMenuClick}
             className="px-2"
           />
+        </div>
+      )}
 
-          {/* Bottom Widgets (hidden in icon-only mode) */}
-          {!isIconOnly && bottomWidgets.length > 0 && (
-            <div className="px-2 mt-2">
-              {bottomWidgets
-                .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-                .map(widget => (
-                  <div key={widget.id}>
-                    <LazyComponentRenderer component={widget.component} />
-                  </div>
-                ))}
-            </div>
-          )}
+      {/* Bottom Widgets — ONE row, side by side (hidden in icon-only mode).
+          Two things here are deliberate:
+
+          1. This block is a SIBLING of the Tools section, not a child of it. It
+             used to be nested inside `toolsItems.length > 0`, so an empty Tools
+             section took the notification bell and the download indicator with
+             it. Only three modules register `sidebarTools` and one of them
+             (`hub`) is hidden on paws, so the margin was a single module.
+
+          2. `flex` — not a stack of block `<div>`s. Each widget supplies its own
+             trigger padding, so the row only owns direction and alignment. It
+             must read correctly with ONE child as well as two: the download
+             indicator self-hides whenever nothing is downloading, which is its
+             normal state, so one child is the COMMON case rather than an edge
+             one. `justify-start` keeps the single icon where the first of two
+             would sit, instead of letting it drift. */}
+      {!isIconOnly && bottomWidgets.length > 0 && (
+        <div
+          className="px-2 mt-2 flex flex-row items-center justify-start"
+          data-testid="layout-sidebar-bottom-widgets"
+        >
+          {bottomWidgets
+            .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+            .map(widget => (
+              <div key={widget.id} className="shrink-0">
+                <LazyComponentRenderer component={widget.component} />
+              </div>
+            ))}
         </div>
       )}
 

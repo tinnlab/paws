@@ -175,6 +175,102 @@ export const gallery: ModuleGallery = {
         )
       },
     },
+    // ── DownloadIndicatorWidget: the popover OPEN, with data. This is the state
+    //    the panel-overflow defect lived in, and its absence is exactly why the
+    //    gate never saw it: the only story was the EMPTY one, which renders
+    //    nothing at all, and the state matrix's `:open` cell was skipped. A
+    //    popover that is never opened with rows in it cannot show a row painting
+    //    outside the panel.
+    //
+    //    Seeded with BOTH an active and a failed download (the failed arm adds
+    //    the Clear/Retry buttons, which are the widest things in the panel) and
+    //    with a deliberately long display name, because a short name fits at any
+    //    width and would have hidden the second, independent overflow inside the
+    //    row. ────────────────────────────────────────────────────────────────────
+    {
+      slug: 'seeded-download-indicator-open',
+      title: 'Download indicator — open, active + failed',
+      note: 'popover open with one downloading + one failed row (panel-containment state)',
+      path: '/',
+      initialPath: '/',
+      component: lazyNamed(
+        () => import('@/modules/llm-provider/components/widgets/DownloadIndicatorWidget'),
+        'DownloadIndicatorWidget',
+      ),
+      setup: async () => {
+        const { LlmModelDownloadStore } = await import(
+          '@/modules/llm-provider/stores/llmModelDownload'
+        )
+        // holdForever, not holdPatch: the interaction below runs after the fixed
+        // hold window would have elapsed, and the rows must still be there when
+        // the popover opens (mirrors seeded-s3-local-provider-loading).
+        holdForever(() =>
+          LlmModelDownloadStore.setState({
+            downloads: [
+              {
+                id: 'dl-open-active',
+                provider_id: 'p-local',
+                repository_id: 'r-hf',
+                status: 'downloading',
+                created_at: NOW,
+                started_at: NOW,
+                updated_at: NOW,
+                progress_data: {
+                  current: 3_650_722_201,
+                  total: 6_100_000_000,
+                  phase: 'downloading',
+                  message: 'Fetching weights…',
+                  speed_bps: 5_242_880,
+                  eta_seconds: 468,
+                },
+                request_data: {
+                  model_name: 'qwen3.5-9b-instruct-q4km',
+                  display_name:
+                    'Qwen3.5 9B Instruct — Q4_K_M (unsloth mirror, tinnlab)',
+                  repository_path: 'Qwen3.5-9B-GGUF',
+                  main_filename: 'Qwen3.5-9B-Q4_K_M.gguf',
+                  file_format: 'gguf',
+                },
+              },
+              {
+                id: 'dl-open-failed',
+                provider_id: 'p-local',
+                repository_id: 'r-hf',
+                status: 'failed',
+                created_at: NOW,
+                started_at: NOW,
+                updated_at: NOW,
+                error_message: 'connection reset by peer after 2.1 GB',
+                progress_data: {
+                  current: 2_100_000_000,
+                  total: 6_100_000_000,
+                  phase: 'downloading',
+                  message: 'connection reset by peer',
+                },
+                request_data: {
+                  model_name: 'mistral-small-3-24b-instruct',
+                  display_name: 'Mistral Small 3 24B Instruct — Q5_K_M',
+                  repository_path: 'Mistral-Small-3-24B-GGUF',
+                  main_filename: 'Mistral-Small-3-24B-Q5_K_M.gguf',
+                  file_format: 'gguf',
+                },
+              },
+            ],
+          } as any),
+        )
+      },
+      interactions: [
+        {
+          name: 'open-downloads',
+          note: 'click the download badge → the Downloads panel opens with both rows (panel-containment state)',
+          steps: async d => {
+            await d.click('llm-download-indicator-badge')
+            await d.waitFor('llm-download-item-card', 3000)
+            await d.wait(300)
+          },
+        },
+      ],
+    },
     // ── LlmModelsSection: models loading. The section early-returns unless a
     // REAL provider (from the loaded cassette) matches the route param, so pin the
     // param to the first enabled provider id and key llmModelsLoading to it. ─────

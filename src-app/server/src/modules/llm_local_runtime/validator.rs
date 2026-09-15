@@ -1,7 +1,8 @@
 //! Background validation queue for local model files.
 //!
 //! Tier-2 default (engine load probe): spawn the engine with the
-//! model, wait for `/health` = Ok within 90s, then SIGTERM. Catches
+//! model, wait for `/health` = Ok within the admin-configured
+//! `auto_start_timeout_secs` (plus slack), then SIGTERM. Catches
 //! corruption past the GGUF header, version mismatches, insufficient
 //! VRAM, broken chat templates that prevent load.
 //!
@@ -21,9 +22,61 @@ use tokio::sync::Mutex;
 
 use crate::common::AppError;
 use crate::modules::llm_model::permissions::LlmModelsRead;
+use crate::modules::llm_provider::permissions::UserLlmProvidersRead;
 use crate::modules::sync::{Audience, SyncAction, SyncEntity, publish as sync_publish};
 
-const TIER2_HEALTH_DEADLINE_SECS: u64 = 90;
+/// Announce a model change to BOTH the admin view and the user-facing one.
+///
+/// Every other model mutation publishes this pair — see
+/// `llm_model/handlers/models.rs` (create / update / enable / disable / delete)
+/// and the download path's `create_model_with_files`. The validator published
+/// only `LlmModel`, whose audience is `llm_models::read` (admins), so the
+/// TERMINAL transition — the one that writes the final `validation_status` AND
+/// the extracted `capabilities` — never reached the user-facing
+/// `user_llm_provider` view that backs the chat model picker.
+///
+/// On desktop the single user is an admin, so the omission was invisible there;
+/// on a server deployment an ordinary user's picker kept the capabilities the
+/// row had at CREATE time until something else happened to refetch.
+///
+/// Notify-and-refetch, so the payload carries nothing sensitive either way, and
+/// `origin = None` because this runs on a detached worker with no request
+/// context — the tab that started the download should hear about it too.
+fn publish_model_change(model_id: Uuid) {
+    sync_publish(
+        SyncEntity::LlmModel,
+        SyncAction::Update,
+        model_id,
+        Audience::perm::<LlmModelsRead>(),
+        None,
+    );
+    sync_publish(
+        SyncEntity::UserLlmProvider,
+        SyncAction::Update,
+        model_id,
+        Audience::perm::<UserLlmProvidersRead>(),
+        None,
+    );
+}
+
+/// Slack added on top of the admin-configured `auto_start_timeout_secs`
+/// for the validator's own outer deadline.
+///
+/// The outer deadline MUST NOT be shorter than the inner bound it wraps.
+/// It used to be a flat 90s while `ensure_running` bounded itself by
+/// `auto_start_timeout_secs`; once that default became realistic (180s),
+/// every load slower than 90s hit the outer timeout FIRST. That is not a
+/// cosmetic ordering problem — the outer timeout cancels the shared start,
+/// which is half of what made a chat sent right after a download fail.
+/// `ensure_running` already returns on its own deadline, so this exists
+/// only as a backstop against it never returning at all.
+const TIER2_DEADLINE_SLACK_SECS: u64 = 30;
+
+/// The validator's outer deadline: the auto-start bound plus slack.
+async fn tier2_health_deadline() -> Duration {
+    super::auto_start::get_auto_start_timeout().await
+        + Duration::from_secs(TIER2_DEADLINE_SLACK_SECS)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValidationTier {
@@ -90,7 +143,7 @@ pub fn spawn_worker(pool: Arc<PgPool>) -> tokio::task::JoinHandle<()> {
 /// row so the UI doesn't show "Validating…" forever).
 ///
 /// Use case: E2E tests that drive the engine themselves cannot race
-/// against the validator's 90s spawn/kill cycle (the engine spawned
+/// against the validator's spawn/kill cycle (the engine spawned
 /// for validation conflicts with the test's Start click → 409
 /// "already running" + UI sees an unstable Stop button). The env
 /// read is compiled out of release builds via `cfg!(debug_assertions)`
@@ -198,7 +251,7 @@ pub async fn validate_remote_model(
 
     // Detached validation path: notify admin devices that the model's
     // validation_status changed (LlmModel is permission-scoped → owner None).
-    sync_publish(SyncEntity::LlmModel, SyncAction::Update, model_id, Audience::perm::<LlmModelsRead>(), None);
+    publish_model_change(model_id);
 
     Ok(result)
 }
@@ -220,7 +273,7 @@ async fn run_validation(
     .await;
     // Surface the "Validating…" transition to other admin devices (this runs
     // seconds-to-90s after the trigger handler already returned 202).
-    sync_publish(SyncEntity::LlmModel, SyncAction::Update, model_id, Audience::perm::<LlmModelsRead>(), None);
+    publish_model_change(model_id);
 
     let outcome = run_tier_internal(pool, model_id, tier, started_at).await;
     let elapsed_ms = started_at.elapsed().as_millis() as u64;
@@ -263,7 +316,7 @@ async fn run_validation(
 
     // Terminal transition (validation_status + capabilities now written) —
     // notify admin devices to refresh the model row.
-    sync_publish(SyncEntity::LlmModel, SyncAction::Update, model_id, Audience::perm::<LlmModelsRead>(), None);
+    publish_model_change(model_id);
 
     outcome
 }
@@ -277,11 +330,11 @@ async fn run_tier_internal(
     tier: ValidationTier,
     started_at: std::time::Instant,
 ) -> Result<ValidationOutcome, AppError> {
-    let start_res =
-        tokio::time::timeout(Duration::from_secs(TIER2_HEALTH_DEADLINE_SECS), async {
-            super::auto_start::ensure_running(pool, model_id).await
-        })
-        .await;
+    let deadline = tier2_health_deadline().await;
+    let start_res = tokio::time::timeout(deadline, async {
+        super::auto_start::ensure_running(pool, model_id).await
+    })
+    .await;
 
     match start_res {
         Ok(Ok(())) => {}
@@ -305,7 +358,7 @@ async fn run_tier_internal(
                 "phase": "engine_load",
                 "reason": format!(
                     "engine did not reach Healthy in {}s",
-                    TIER2_HEALTH_DEADLINE_SECS
+                    deadline.as_secs()
                 ),
                 "elapsed_ms": started_at.elapsed().as_millis() as u64,
                 "detected_at": chrono::Utc::now().to_rfc3339(),
@@ -350,7 +403,72 @@ async fn teardown_validation_instance(pool: &PgPool, model_id: Uuid) {
         )
         .await
     {
-        let _ = dep.stop(model_id).await;
+        // DRAIN before stopping — the same sequence the reaper uses, and the
+        // fix for the reported "a freshly downloaded model can't be chatted
+        // with" bug.
+        //
+        // This used to be a bare `dep.stop(model_id)`. Validation spawns the
+        // engine, probes it and stops it, so a chat send that had ALREADY
+        // resolved a live engine had it killed underneath — and because
+        // `LocalDeployment::stop` drops the per-instance bearer BEFORE the
+        // instance row leaves `status='running'`, the send failed with
+        // `missing per-instance bearer token` while `POST /messages` returned
+        // 200 and the assistant message stayed empty. Reproduced live against a
+        // real download; see this feature's INFRA_INTEGRATION.md.
+        //
+        // `drain_and_stop` sets `InstanceFlag::Draining` (so the proxy front
+        // door stops admitting NEW requests), waits for the in-flight counter
+        // to reach zero, and only then stops. An in-flight send therefore
+        // completes against a live engine and a live bearer.
+        //
+        // The drain bound is the admin-configurable `drain_timeout_secs` — the
+        // same knob the reaper honours, deliberately reused rather than a
+        // second constant for the same question.
+        // HAND OFF rather than tear down when someone is USING this engine.
+        //
+        // Draining closed the window where a send was already forwarding, but
+        // not the one before it: a chat that is inside `ensure_running`,
+        // waiting on the very engine validation just brought up, holds an
+        // in-flight guard but has not issued its request yet. Draining that
+        // engine means waiting for a counter its own waiter is holding, timing
+        // out, and then killing the engine at the instant the waiter was told
+        // it was ready. Reproduced live: the engine went healthy at 28s and
+        // `stopped gracefully` 0.4ms before the chat's `Finalize called`, and
+        // the user got an empty assistant message.
+        //
+        // Draining is the wrong tool here because validation's stop is not a
+        // reclaim — it is only tidiness. The engine is healthy; that is exactly
+        // what validation just proved. If a user is waiting for it, the correct
+        // action is to leave it running and let them have it. The idle reaper
+        // already owns eviction, and will collect it on its normal schedule if
+        // the user goes away.
+        //
+        // So: stop ONLY when nobody wants it. This is what makes "wait for the
+        // in-flight validation and reuse the engine" true end to end, instead
+        // of racing a teardown that was never necessary.
+        let inflight = super::proxy::inflight_count(model_id).await;
+        if inflight > 0 {
+            tracing::info!(
+                "validator: model {model_id} validated and has {inflight} in-flight \
+                 request(s) — leaving the engine running for them; the idle reaper \
+                 will evict it"
+            );
+            return;
+        }
+
+        // Nobody waiting: drain (for the request that may arrive in this
+        // instant) and stop. The drain bound is the admin-configurable
+        // `drain_timeout_secs` — the same knob the reaper honours, deliberately
+        // reused rather than a second constant for the same question.
+        let drain_secs = crate::core::Repos
+            .local_runtime
+            .get_runtime_settings()
+            .await
+            .map(|s| s.drain_timeout_secs)
+            .unwrap_or(30);
+        if let Err(e) = super::reaper::drain_and_stop(model_id, drain_secs, &dep).await {
+            tracing::warn!("validator: drain_and_stop({model_id}) failed: {e}");
+        }
     }
 
     // Reconcile the DB row: validation isn't a persistent run.

@@ -16,6 +16,13 @@
 //!                       proxy rewrote the bearer to the per-instance token.
 //! - any path argument containing the substring `stub-unhealthy` makes
 //!   `/health` return 503 forever (drives the auto-start-timeout → 504 test).
+//! - any path argument containing the substring `stub-dies-on-load` makes the
+//!   process EXIT immediately, before binding. This is the corrupt/unsupported
+//!   model file case: a real llama.cpp handed a bad GGUF logs `invalid magic
+//!   characters` and exits in ~27ms (measured). Distinct from `stub-unhealthy`
+//!   on the axis that matters — that one stays ALIVE and merely unhealthy, this
+//!   one is GONE — which is exactly the distinction `Liveness::Starting` vs
+//!   `Crashed` and the `do_start` fail-fast are built on.
 //! - request-body field `"stub_hang_ms": N` on `/v1/chat/completions` sleeps
 //!   N ms before responding (drives the drain / in-flight-blocks-reaper test).
 //! - the full received argv is echoed to stdout as `stub-engine: argv: …`
@@ -93,6 +100,25 @@ async fn main() {
     // deployment clears).
     let unhealthy = args.iter().any(|a| a.contains("stub-unhealthy"));
 
+    // Sibling sentinel: BIND, then die — the way a real engine fails on a
+    // corrupt or unsupported model file.
+    //
+    // The bind-then-die ORDER is load-bearing and is taken from an observed
+    // llama.cpp failure, not guessed. Its own log puts `srv start: binding
+    // port with default address family` BEFORE `srv llama_server: loading
+    // model`, so by the time the GGUF is rejected the socket already exists:
+    //
+    //     srv    start: binding port with default address family
+    //     srv  llama_server: loading model
+    //     gguf_init_from_reader: invalid magic characters: 'vers', expected 'GGUF'
+    //     srv  llama_server: exiting due to model loading error
+    //
+    // An earlier version of this sentinel exited BEFORE binding. That made the
+    // spawn itself fail, so the caller never reached the health-poll loop, and
+    // the test built on it passed with the fix under test REVERTED — a vacuous
+    // gate. The fixture has to fail the way the real thing fails.
+    let dies_on_load = args.iter().any(|a| a.contains("stub-dies-on-load"));
+
     // Echo the full received argv (everything after the binary path) so
     // integration tests can assert the deployment passed the model's
     // engine_settings through. Captured by the deployment's stdout ring.
@@ -121,12 +147,23 @@ async fn main() {
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/embeddings", post(embeddings))
         .route("/v1/rerank", post(rerank))
+
         .with_state(state);
 
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .expect("stub-engine: bind 127.0.0.1");
+
+    // Bound, and now die — see the `dies_on_load` comment above. The delay is
+    // long enough for the spawner to observe a listening socket and short
+    // enough that the death is unambiguous. `/health` is never served.
+    if dies_on_load {
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        eprintln!("stub-engine: simulated model load failure; exiting");
+        std::process::exit(3);
+    }
+
     axum::serve(listener, app)
         .await
         .expect("stub-engine: serve");

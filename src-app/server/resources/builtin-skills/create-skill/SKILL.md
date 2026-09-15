@@ -35,9 +35,9 @@ See [references/advanced.md](references/advanced.md) for details.
 
 ## Distribute
 
-**Local install for dev**: `POST /api/skills/import` (multipart upload of the dir as a tarball) -- installs with `is_dev: true` for fast iteration.
+**Install**: `POST /api/skills/import` (multipart upload of the dir as a tarball). Add `is_dev: true` for fast iteration while you are still writing it.
 
-**Publish to hub**: open a PR in `github.com/ziee-ai/hub` under `skills/io.github.<your-handle>/<skill-name>/`. Required: `_hub_curation.yaml` (title, tags, contributor, summary, license) + `SKILL.md` + (optional) `references/`. Publisher CI validates schema + license; merged PRs publish to hub via GitHub Pages.
+Skills can also be imported from the Skills settings page.
 
 ## Best practices
 
